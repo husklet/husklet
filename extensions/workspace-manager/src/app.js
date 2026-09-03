@@ -709,6 +709,7 @@ export function Networks({ api, resource, networkDetails }) {
     } catch (cause) { setOperation({ state: 'error', request: null, error: cause }); }
   };
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
     creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating network ${creation.name}…` })) : null,
@@ -719,9 +720,16 @@ export function Networks({ api, resource, networkDetails }) {
     operation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `${title(operation.request.verb)}ing immutable endpoint…` })) : null,
     operation.state === 'error' ? h(Row, { gap: 1, wrap: true }, h(Text, { label: boundedMessage(operation.error), color: 'danger', wrap: true }), operation.request ? h(Button, { label: `Retry ${operation.request.verb}`, onInvoke: () => { void attach(operation.request).catch(() => {}); } }) : null) : null,
     operation.state === 'success' ? h(Text, { label: `${operation.request.verb === 'connect' ? 'Connected' : 'Disconnected'} container ${operation.request.container} ${operation.request.verb === 'connect' ? 'to' : 'from'} network ${operation.request.network}${operation.request.aliases.length ? ` with ${operation.request.aliases.length} endpoint alias${operation.request.aliases.length === 1 ? '' : 'es'}` : ''}.`, color: 'positive', wrap: true }) : null,
-    h(ErrorText, { error: error ?? resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
-    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
+    h(ErrorText, { error }),
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading networks…',
+      emptyLabel: 'No networks',
+      emptyDetail: 'Create a network above to connect workspace containers.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry networks',
+      onRetry: resource.reload,
+    }, ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: operation.state !== 'loading' && container.trim().length > 0, onInvoke: () => begin(network, 'connect') }), h(Button, {
         label: 'Disconnect', enabled: operation.state !== 'loading' && container.trim().length > 0, tone: 'danger', onInvoke: () => begin(network, 'disconnect'),
@@ -741,7 +749,7 @@ export function Networks({ api, resource, networkDetails }) {
             : inspection.count === 0
               ? h(EmptyState, { label: 'No network details', detail: 'The host returned no inspectable fields.' })
               : h(StructuredDetail, { value: inspection.detail })) : null)),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted })));
 }
 
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }
