@@ -41,6 +41,7 @@ enum Mode {
     Interpreter,
     Translated,
     CacheCold,
+    CacheNestedLaunchOnly,
     CacheFreshRollover,
     CacheSemanticMap,
     CacheSemanticOwner,
@@ -84,6 +85,7 @@ impl Mode {
             "interpreter" => Ok(Self::Interpreter),
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
+            "cache-nested-launch-only" => Ok(Self::CacheNestedLaunchOnly),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
             "cache-semantic-map" => Ok(Self::CacheSemanticMap),
             "cache-semantic-owner" => Ok(Self::CacheSemanticOwner),
@@ -159,6 +161,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
     if matches!(
         mode,
         Mode::CacheCold
+            | Mode::CacheNestedLaunchOnly
             | Mode::CacheAuthorityReuse
             | Mode::CacheUpperOverride
             | Mode::CacheThreadCold
@@ -709,6 +712,24 @@ int main(void) {
         Process::new("/bin/sh").args(["-c", "/bin/true & /bin/true & wait"])
     } else if matches!(mode, Mode::CacheThreadCold | Mode::CacheThreadValid) {
         Process::new("/work/thread_warm")
+    } else if mode == Mode::CacheNestedLaunchOnly {
+        // The product admits only the launch image to persistent translation caching. Run two
+        // sequential compiler execs beneath a shell so the first would have time to publish before
+        // the second starts if nested images were admitted; identical output proves both executions
+        // completed while the cache census below proves neither nested image reached persistence.
+        let compiler = |output: &str| {
+            format!(
+                "{CC1} -quiet /work/src/unit_127.c -quiet -dumpdir /tmp/ \
+                 -dumpbase unit_127.c -dumpbase-ext .c -mtune=generic \
+                 -march=x86-64 -g -O2 -o {output}"
+            )
+        };
+        let command = format!(
+            "{} && {} && cmp /tmp/first.s /tmp/second.s && cat /tmp/first.s",
+            compiler("/tmp/first.s"),
+            compiler("/tmp/second.s")
+        );
+        Process::new("/bin/sh").args(["-c".to_owned(), command])
     } else {
         Process::new(CC1).args([
             "-quiet",
@@ -800,7 +821,10 @@ int main(void) {
         (waited, logs)
     };
     let elapsed = started.elapsed();
-    if mode.translated() {
+    // The nested arm ends in its shell parent after two forked compiler children. The backend's
+    // process-local report belongs to those child exits and is not part of the parent's guest log;
+    // its cache-directory receipts below are the durable assertion for that lifecycle instead.
+    if mode.translated() && mode != Mode::CacheNestedLaunchOnly {
         let stderr = String::from_utf8_lossy(&logs.stderr);
         let receipt = stderr
             .lines()
@@ -953,6 +977,36 @@ int main(void) {
                         "cold cache owner census exceeds 75% of publication capacity",
                     )?;
                 }
+            }
+            Mode::CacheNestedLaunchOnly => {
+                let artifacts = entries
+                    .iter()
+                    .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                    .count();
+                let publications = entries
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(11)
+                            .any(|part| part == b".published-")
+                    })
+                    .count();
+                let hits = entries
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(5)
+                            .any(|part| part == b".hit-")
+                    })
+                    .count();
+                require(
+                    artifacts == 1 && publications == 1 && hits == 0,
+                    "launch-only policy cached or restored a nested compiler execution",
+                )?;
             }
             Mode::CacheUpperOverride => require(
                 entries
