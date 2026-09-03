@@ -85,6 +85,49 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false) {
     : '');
 }
 
+async function runPackedStarterDenied(consumer, starter) {
+  const socket = path.join(consumer, 'starter-interface-denied.sock');
+  const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const requests = [];
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind === wire.KIND.request) requests.push(frame.payload);
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'react-starter', granted: [] },
+    }));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed React starter did not report denied interface authority')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.deepEqual(requests, [], 'denied starter must not send an unauthorized interface request');
+    assert.equal(stderr, 'react-starter: startup failed: extension lacks negotiated capability interface\n');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 function packageStageFiles(dockerfile, destination) {
   const packageStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\}$/m, 1)[0];
   for (const line of packageStage.matchAll(/^COPY ([^\n]+)$/gm)) {
@@ -183,6 +226,7 @@ try {
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM');
   await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', true);
+  await runPackedStarterDenied(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);
