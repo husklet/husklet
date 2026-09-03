@@ -54,6 +54,7 @@ import { DEPENDENCY_GRAPH_STORY, DependencyGraphStory } from './dependency-graph
 import { QUERY_PLAN_STORY, QueryPlanStory } from './query-plan.js';
 import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from './terminal-transcript.js';
 import { COMMAND_PALETTE_STORY, CommandPaletteStory } from './command-palette.js';
+import { JSON_TREE_STORY, JsonTreeStory } from './json-tree.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -71,7 +72,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
     || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
     || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
     || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY
-    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY || selected === TERMINAL_TRANSCRIPT_STORY || selected === COMMAND_PALETTE_STORY;
+    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY || selected === TERMINAL_TRANSCRIPT_STORY || selected === COMMAND_PALETTE_STORY || selected === JSON_TREE_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -109,6 +110,7 @@ export function Sidebar({ families, selected, onSelect }) {
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
       h(ListItemButton, { key: COMMAND_PALETTE_STORY, label: COMMAND_PALETTE_STORY, selected: selected === COMMAND_PALETTE_STORY, onInvoke: () => onSelect(COMMAND_PALETTE_STORY) }),
+      h(ListItemButton, { key: JSON_TREE_STORY, label: JSON_TREE_STORY, selected: selected === JSON_TREE_STORY, onInvoke: () => onSelect(JSON_TREE_STORY) }),
       h(ListItemButton, { key: TERMINAL_TRANSCRIPT_STORY, label: TERMINAL_TRANSCRIPT_STORY, selected: selected === TERMINAL_TRANSCRIPT_STORY, onInvoke: () => onSelect(TERMINAL_TRANSCRIPT_STORY) }),
       h(ListItemButton, { key: QUERY_PLAN_STORY, label: QUERY_PLAN_STORY, selected: selected === QUERY_PLAN_STORY, onInvoke: () => onSelect(QUERY_PLAN_STORY) }),
       h(ListItemButton, { key: DEPENDENCY_GRAPH_STORY, label: DEPENDENCY_GRAPH_STORY, selected: selected === DEPENDENCY_GRAPH_STORY, onInvoke: () => onSelect(DEPENDENCY_GRAPH_STORY) }),
@@ -237,6 +239,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
         ? h(QueryPlanStory)
         : name === COMMAND_PALETTE_STORY
         ? h(CommandPaletteStory)
+        : name === JSON_TREE_STORY
+        ? h(JsonTreeStory)
         : name === TERMINAL_TRANSCRIPT_STORY
         ? h(TerminalTranscriptStory)
         : name === DEPENDENCY_GRAPH_STORY

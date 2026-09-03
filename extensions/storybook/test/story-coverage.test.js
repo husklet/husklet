@@ -27,6 +27,7 @@ import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src
 import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
 import { NetworkWaterfallStory, boundedRequests, REQUEST_LIMIT, PHASE_LIMIT } from '../src/network-waterfall.js';
 import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependency-graph.js';
+import { JsonTreeStory } from '../src/json-tree.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -57,6 +58,7 @@ test('every catalogue contract has a meaningful selectable state and family cove
 
 test('every composed story has a readable root and a bounded initial wire frame', () => {
   const stories = [
+    ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
     ['keyboard accessibility', h(KeyboardAccessibilityStory)],

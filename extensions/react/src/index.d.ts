@@ -79,6 +79,22 @@ export type Edges = Length | { top?: Length; end?: Length; bottom?: Length; star
 /** An exact extent, or a floor and a ceiling. */
 export type Bounds = Length | { minimum?: Length; maximum?: Length };
 
+export interface JsonTreeEvent { path: string; type: string; value?: unknown; text?: string; }
+export interface JsonTreeProps {
+  value: unknown;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxStringLength?: number;
+  initiallyExpanded?: string[];
+  height?: Length | Bounds;
+  grow?: number | boolean;
+  onSelect?: (event: JsonTreeEvent) => void;
+  onCopy?: (event: JsonTreeEvent) => void;
+}
+export const JsonTree: import('react').ComponentType<JsonTreeProps>;
+export const ObjectInspector: typeof JsonTree;
+export function inspectJson(value: unknown, options?: Pick<JsonTreeProps, 'maxDepth' | 'maxNodes' | 'maxStringLength'>): { rows: Array<Record<string, unknown>>; limits: Record<string, number>; truncated: boolean };
+
 /** One selectable option offered by a choice control. */
 export interface Choice {
   value: string;
