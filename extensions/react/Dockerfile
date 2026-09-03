@@ -37,11 +37,11 @@ ARG NPM_VERSION=10.9.8
 # prunes anything npm did not put there itself.
 WORKDIR /app
 COPY --from=package /out /opt/husklet-sdk
+COPY react/image-runtime/package.json react/image-runtime/package-lock.json ./
 RUN test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(npm --version)" = "${NPM_VERSION}" \
-    && npm init -y \
-    && npm pkg set type=module \
-    && npm install --no-audit --no-fund --save-exact react@18.3.1 react-reconciler@0.29.2 /opt/husklet-sdk/*.tgz \
+    && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+    && npm install --ignore-scripts --no-save --package-lock=false --offline --no-audit --no-fund /opt/husklet-sdk/*.tgz \
     && test "$(node -p "require('@husklet/client/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && npm cache clean --force

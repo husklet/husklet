@@ -250,7 +250,9 @@ try {
   assert.match(dockerfile, /^ARG NPM_VERSION=10\.9\.8$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
-  assert.match(dockerfile, /npm init -y \\\n+    && npm pkg set type=module \\/, 'base /app must classify copied extension .js entrypoints as ESM');
+  assert.match(dockerfile, /COPY react\/image-runtime\/package\.json react\/image-runtime\/package-lock\.json \.\//);
+  assert.match(dockerfile, /npm ci --ignore-scripts --omit=dev/);
+  assert.match(dockerfile, /npm install --ignore-scripts --no-save --package-lock=false --offline/);
   assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /test "\$\(node --version\)" = "v\$\{NODE_VERSION\}"/);
@@ -274,19 +276,48 @@ try {
   packageStageFiles(dockerfile, baseSource);
   execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'client'), stdio: 'pipe' });
   execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'react'), stdio: 'pipe' });
+  execFileSync('npm', ['pkg', 'set', 'dependencies.@husklet/client=9.8.7'], { cwd: path.join(baseSource, 'react'), stdio: 'pipe' });
   const baseStarterManifest = path.join(baseSource, 'react/examples/starter/extension.toml');
   fs.writeFileSync(baseStarterManifest, fs.readFileSync(baseStarterManifest, 'utf8')
     .replace(/^version = .*$/m, 'version = "9.8.7"'));
   assert.match(fs.readFileSync(baseStarterManifest, 'utf8'), /^version = "9\.8\.7"$/m);
   const basePack = JSON.parse(execFileSync('npm', [
-    'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
+    'pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
   ], { cwd: path.join(baseSource, 'react'), encoding: 'utf8' }));
   const baseNames = new Set(basePack[0].files.map(({ path: name }) => name));
   assert.deepEqual(baseNames, names, 'base image must install the complete published SDK package');
   const baseClient = JSON.parse(execFileSync('npm', [
-    'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
+    'pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
   ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
   assert(baseClient.files.some(({ path: name }) => name === 'src/index.js'), 'base image must include the framework-neutral client');
+  assert(baseClient.files.some(({ path: name }) => name === 'src/generated-protocol.js'), 'base image must include generated protocol validation');
+  assert(baseClient.files.some(({ path: name }) => name === 'src/generated-protocol.d.ts'), 'base image must include generated protocol types');
+  const repeatedOutput = path.join(scratch, 'base-package-output-repeat');
+  fs.mkdirSync(repeatedOutput);
+  const repeatedReact = JSON.parse(execFileSync('npm', [
+    'pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput,
+  ], { cwd: path.join(baseSource, 'react'), encoding: 'utf8' }))[0];
+  const repeatedClient = JSON.parse(execFileSync('npm', [
+    'pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput,
+  ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
+  assert.equal(repeatedReact.integrity, basePack[0].integrity, 'React SDK tarball assembly is not reproducible');
+  assert.equal(repeatedClient.integrity, baseClient.integrity, 'client SDK tarball assembly is not reproducible');
+  const imageRuntime = path.join(scratch, 'image-runtime');
+  fs.cpSync(path.join(root, 'image-runtime'), imageRuntime, { recursive: true });
+  const locked = fs.readFileSync(path.join(imageRuntime, 'package-lock.json'));
+  execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--offline', '--no-audit', '--no-fund'], {
+    cwd: imageRuntime, stdio: 'pipe',
+  });
+  execFileSync('npm', [
+    'install', '--ignore-scripts', '--no-save', '--package-lock=false', '--offline', '--no-audit', '--no-fund',
+    path.join(baseOutput, baseClient.filename), path.join(baseOutput, basePack[0].filename),
+  ], { cwd: imageRuntime, stdio: 'pipe' });
+  assert.deepEqual(fs.readFileSync(path.join(imageRuntime, 'package-lock.json')), locked, 'offline SDK install changed the committed third-party lock');
+  execFileSync(process.execPath, ['--input-type=module', '--eval', `
+    import { Session as ClientSession } from '@husklet/client';
+    import { Session, connect, render } from '@husklet/react';
+    if (Session !== ClientSession || typeof connect !== 'function' || typeof render !== 'function') process.exit(1);
+  `], { cwd: imageRuntime, stdio: 'pipe' });
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
