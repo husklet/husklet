@@ -14,7 +14,6 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const requests = [];
   const received = [];
   let peer;
-  let tearingDown = false;
   let executed = false;
   let containerInspectAttempts = 0;
   let imageInspectAttempts = 0;
@@ -26,7 +25,9 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer = socket;
     const reader = new Reader();
     socket.on('error', (error) => {
-      if (!tearingDown) throw error;
+      // A child closing its Unix socket may race the peer's final read and be
+      // reported as ECONNRESET before Node delivers the child's close event.
+      // The workflow assertions below still detect any premature disconnect.
       assert.equal(error.code, 'ECONNRESET');
     });
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
@@ -180,15 +181,27 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const containerResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 202);
     assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
-    peer.write(encode({ channel: 29, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON', '["sh","-lc","printf hello world"]') }));
-    peer.write(encode({ channel: 32, kind: KIND.event, payload: changeInvocation(requests, 'Run as user (optional)', '1000:1000') }));
-    peer.write(encode({ channel: 33, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/work tree') }));
-    await until(() => ['["sh","-lc","printf hello world"]', '1000:1000', '/work tree'].every((value) =>
-      requests.some((request) => request.call === 'interface_render_at'
-        && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === value))));
-    peer.write(encode({ channel: 30, kind: KIND.event, payload: invocation(requests, 'Execute') }));
-    await until(() => calls.includes('container_exec') && requests.some((request) => request.call === 'interface_render_at'
-      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === `Execution ${executionId} created.`)));
+    await barrier(peer, received, 'container-details-ready');
+    const execute = invocation(requests, 'Execute');
+    const changes = [
+      [29, 'Command argv JSON', '["sh","-lc","printf hello world"]'],
+      [32, 'Run as user (optional)', '1000:1000'],
+      [33, 'Working directory (optional)', '/work tree'],
+    ];
+    peer.write(Buffer.concat(changes.map(([channel, placeholder, value]) =>
+      encode({ channel, kind: KIND.event, payload: changeInvocation(requests, placeholder, value) }))));
+    await until(() => changes.every(([, , value]) => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === value))));
+    // Seeing the render call precedes the extension receiving its reply. A
+    // control-channel ping is an ordered barrier proving it consumed that reply.
+    await barrier(peer, received, 'execution-form-ready');
+    peer.write(encode({ channel: 30, kind: KIND.event, payload: execute }));
+    try {
+      await until(() => calls.includes('container_exec') && requests.some((request) => request.call === 'interface_render_at'
+        && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === `Execution ${executionId} created.`)));
+    } catch (error) {
+      throw new Error(`${error.message}; tail=${JSON.stringify(calls.slice(-12))}; stderr=${JSON.stringify(stderr)}`);
+    }
     assert.deepEqual(requests.find((request) => request.call === 'container_exec').with, {
       id: containerId, command: ['sh', '-lc', 'printf hello world'], user: '1000:1000', working_directory: '/work tree',
     });
@@ -290,7 +303,6 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.deepEqual(volumeResize.with.mutation.Length, { source: 205, version: 1, rows: 2 });
     assert.equal(stderr, '');
   } finally {
-    tearingDown = true;
     const closed = child.exitCode === null && child.signalCode === null
       ? new Promise((resolve) => child.once('close', resolve))
       : Promise.resolve();
@@ -305,20 +317,48 @@ test('the production entrypoint handshakes and renders through a real Unix socke
 function invocation(requests, label) {
   const patches = requests.filter((request) => request.call === 'interface_render_at')
     .flatMap((request) => request.with.frame.patches);
+  const active = activeNodes(patches);
   const labelled = patches.filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label);
   assert.ok(labelled.length, `${label} is present on the live socket surface`);
-  const handler = patches.findLast((patch) => patch.SetHandler?.handler?.trigger === 'Invoke'
-    && labelled.some((candidate) => candidate.SetProp.id === patch.SetHandler.id));
+  const handler = labelled.toReversed().map((candidate) => {
+    const node = candidate.SetProp.id;
+    const installed = patches.findLastIndex((patch) => patch.SetHandler?.handler?.trigger === 'Invoke'
+      && patch.SetHandler.id === node);
+    return installed >= 0 && active(node) ? patches[installed] : undefined;
+  }).find(Boolean);
   assert.ok(handler, `${label} advertises Invoke`);
   return { slot: 'workspace-resources', event: 'Invoke', node: handler.SetHandler.id, id: handler.SetHandler.handler.id };
 }
 
 function changeInvocation(requests, placeholder, value) {
   const patches = requests.filter((request) => request.call === 'interface_render_at').flatMap((request) => request.with.frame.patches);
-  const node = patches.findLast((patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder)?.SetProp.id;
+  const active = activeNodes(patches);
+  const node = patches.filter((patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder)
+    .toReversed().find((patch) => active(patch.SetProp.id))?.SetProp.id;
   const handler = patches.findLast((patch) => patch.SetHandler?.id === node && patch.SetHandler.handler?.trigger === 'Change');
   assert.ok(handler, `${placeholder} advertises Change`);
   return { slot: 'workspace-resources', event: 'Change', node, id: handler.SetHandler.handler.id, value };
+}
+
+function activeNodes(patches) {
+  const parents = new Map();
+  const removed = new Set();
+  for (const patch of patches) {
+    if (patch.Insert) { parents.set(patch.Insert.child, patch.Insert.parent); removed.delete(patch.Insert.child); }
+    if (patch.Remove) removed.add(patch.Remove.id);
+  }
+  return (node) => {
+    for (let current = node; current !== undefined; current = parents.get(current)) {
+      if (removed.has(current)) return false;
+    }
+    return true;
+  };
+}
+
+async function barrier(peer, received, token) {
+  const payload = Buffer.from(token);
+  peer.write(encode({ channel: 0, kind: KIND.ping, payload }));
+  await until(() => received.some((frame) => frame.channel === 0 && frame.kind === KIND.pong && frame.payload.equals(payload)));
 }
 
 async function until(done) {
