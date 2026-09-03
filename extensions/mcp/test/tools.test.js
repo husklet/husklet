@@ -124,6 +124,13 @@ test('every MCP slot-targeted terminal mutation requires the complete pane curso
     assert.ok(schema.shape.generation, `${name} lacks generation`);
     assert.ok(schema.shape.revision, `${name} lacks revision`);
   }
+  const withObservation = fake().api;
+  withObservation.watchPaneChanges = async () => async () => {};
+  for (const name of ['husklet_terminal_write_wait', 'husklet_terminal_write_bytes_wait']) {
+    const schema = tools(withObservation).find((tool) => tool.name === name).inputSchema;
+    assert.ok(schema.shape.generation, `${name} lacks generation`);
+    assert.ok(schema.shape.revision, `${name} lacks revision`);
+  }
 });
 
 test('workspace create and confirmed update preserve the complete typed configuration', async () => {
@@ -868,6 +875,46 @@ test('concurrent pane waits advance independently from exact generation and revi
   assert.equal(JSON.parse((await second).content[0].text).change.revision, 9);
   assert.equal(disposed, 2);
   assert.equal(listeners.size, 0);
+});
+
+test('composite terminal and semantic mutations subscribe before authority and always dispose', async () => {
+  const { api, calls } = fake();
+  let listener;
+  let disposed = 0;
+  api.watchPaneChanges = async (next) => {
+    calls.push(['watch.armed']);
+    listener = next;
+    return async () => { disposed += 1; };
+  };
+  api.terminal.writeInput = async (...args) => {
+    calls.push(['terminal.writeInput', ...args]);
+    listener({ slot: args[0], kind: 'terminal', generation: args[1], revision: args[2] + 1, coalesced: 0 });
+  };
+  api.terminal.semantics = async () => ({ slot: 'ui', generation: 4, revision: 7, truncated: false, root: {
+    id: 0, role: 'root', disabled: false, destructive: false, actions: [], children: [
+      { id: 2, role: 'button', label: 'Refresh', disabled: false, destructive: false, actions: ['invoke'], children: [] },
+    ],
+  }});
+  api.terminal.act = async (...args) => {
+    calls.push(['terminal.act', ...args]);
+    listener({ slot: args[0], kind: 'native', generation: 4, revision: 8, coalesced: 0 });
+  };
+
+  const terminal = tools(api).find(({ name }) => name === 'husklet_terminal_write_wait');
+  const terminalResult = JSON.parse((await terminal.run({
+    slot: 'term', generation: 3, revision: 9, input: 'status\n', timeout_ms: 1000,
+  })).content[0].text);
+  assert.deepEqual(calls.slice(0, 2).map(([name]) => name), ['watch.armed', 'terminal.writeInput']);
+  assert.equal(terminalResult.observation.change.revision, 10);
+  assert.equal(disposed, 1);
+
+  const action = tools(api).find(({ name }) => name === 'husklet_pane_action_wait');
+  const actionResult = JSON.parse((await action.run({
+    slot: 'ui', generation: 4, revision: 7, node: 2, action: 'invoke', timeout_ms: 1000,
+  })).content[0].text);
+  assert.deepEqual(calls.slice(2, 4).map(([name]) => name), ['watch.armed', 'terminal.act']);
+  assert.equal(actionResult.observation.change.revision, 8);
+  assert.equal(disposed, 2);
 });
 
 test('workspace event wait filters one bounded batch and always disposes', async () => {

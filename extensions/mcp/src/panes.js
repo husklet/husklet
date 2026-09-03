@@ -153,7 +153,51 @@ const findNode = (node, id) => {
   return undefined;
 };
 
-export function paneTools(terminal) {
+export async function observePaneMutation(watchPaneChanges, { slot, generation, revision, timeout }, mutate) {
+  let resolveChange;
+  const changed = new Promise((resolve) => { resolveChange = resolve; });
+  let settled = false;
+  const dispose = await watchPaneChanges((change) => {
+    const newer = change.generation > generation
+      || (change.generation === generation && change.revision > revision);
+    if (!settled && change.slot === slot && newer) {
+      settled = true;
+      resolveChange({ changed: true, change });
+    }
+  });
+  const timer = setTimeout(() => {
+    if (!settled) { settled = true; resolveChange({ changed: false }); }
+  }, timeout);
+  try {
+    const mutation = await mutate();
+    return { mutation, observation: await changed };
+  } finally {
+    settled = true;
+    clearTimeout(timer);
+    await dispose();
+  }
+}
+
+export async function performSemanticAction(terminal, { slot, confirm, ...action }) {
+  const tree = await terminal.semantics(slot);
+  const node = findNode(tree.root, action.node);
+  if (!node) throw new Error(`semantic node ${action.node} is absent from revision ${tree.revision}`);
+  if (tree.generation !== action.generation) {
+    throw new Error(`stale pane generation ${action.generation}; current is ${tree.generation}`);
+  }
+  if (tree.revision !== action.revision) {
+    throw new Error(`stale semantic revision ${action.revision}; current is ${tree.revision}`);
+  }
+  if (node.disabled === true) throw new Error(`semantic node ${action.node} is disabled`);
+  if (!Array.isArray(node.actions) || !node.actions.includes(action.action)) {
+    throw new Error(`semantic node ${action.node} does not advertise ${action.action}`);
+  }
+  if (node?.destructive === true && confirm !== true) throw new Error('destructive pane action requires confirm: true');
+  await terminal.act(slot, action);
+  return { done: true };
+}
+
+export function paneTools(terminal, watchPaneChanges) {
   if (typeof terminal?.semantics !== 'function' || typeof terminal?.act !== 'function') return [];
   const tools = [
     ['husklet_pane_read', 'Read any pane as one bounded occupant-aware XML document.', paneSchema,
@@ -161,25 +205,18 @@ export function paneTools(terminal) {
     ['husklet_pane_snapshot', 'Read the bounded semantic tree exposed by a pane.', z.object({ slot: z.string().min(1).max(256) }).strict(),
       async ({ slot }) => xmlResult(await terminal.semantics(slot)), true],
     ['husklet_pane_action', 'Act on a semantic node from a matching pane generation and tree revision.', semanticAction,
-      async ({ slot, confirm, ...action }) => {
-        const tree = await terminal.semantics(slot);
-        const node = findNode(tree.root, action.node);
-        if (!node) throw new Error(`semantic node ${action.node} is absent from revision ${tree.revision}`);
-        if (tree.generation !== action.generation) {
-          throw new Error(`stale pane generation ${action.generation}; current is ${tree.generation}`);
-        }
-        if (tree.revision !== action.revision) {
-          throw new Error(`stale semantic revision ${action.revision}; current is ${tree.revision}`);
-        }
-        if (node.disabled === true) throw new Error(`semantic node ${action.node} is disabled`);
-        if (!Array.isArray(node.actions) || !node.actions.includes(action.action)) {
-          throw new Error(`semantic node ${action.node} does not advertise ${action.action}`);
-        }
-        if (node?.destructive === true && confirm !== true) throw new Error('destructive pane action requires confirm: true');
-        await terminal.act(slot, action);
-        return { done: true };
-      }],
+      (action) => performSemanticAction(terminal, action)],
   ];
+  if (typeof watchPaneChanges === 'function') tools.push([
+    'husklet_pane_action_wait',
+    'Atomically arm pane observation, perform one revision-fenced semantic action, and return the matching change.',
+    semanticAction.extend({ timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ timeout_ms: timeout, ...action }) => observePaneMutation(
+      watchPaneChanges,
+      { slot: action.slot, generation: action.generation, revision: action.revision, timeout },
+      () => performSemanticAction(terminal, action),
+    ),
+  ]);
   return tools.map(([name, description, inputSchema, run, formatted = false]) => ({
     name, description, inputSchema,
     run: async (input) => formatted ? run(input) : result(await run(input)),

@@ -297,8 +297,10 @@ omitting them selects the first compatible pane. It reads at most 100 terminal l
 reads either a native or extension semantic tree, and invokes a node using the
 revision returned with that same tree. It writes the supplied bytes through the
 canonical-base64 tool, using the generation/revision returned by the terminal
-read rather than an older inventory cursor. It arms one `husklet_pane_wait`
-before terminal input and another before the semantic action so fast changes are not lost;
+read rather than an older inventory cursor. It uses
+`husklet_terminal_write_bytes_wait` and `husklet_pane_action_wait`, which establish
+observation inside the same MCP handler before mutation, so concurrent MCP request
+scheduling cannot lose a fast change;
 the host's credit-controlled subscription either reports a coalesced change or
 times out. Only a reported change causes one fresh snapshot. There is no polling
 loop. Terminal text is the bounded interpreted screen/history snapshot (with

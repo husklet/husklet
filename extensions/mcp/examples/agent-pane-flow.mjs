@@ -67,29 +67,20 @@ export async function runPaneAgentTurn(client, {
   }
   const node = nodeForLabel(semanticBefore, actionLabel);
 
-  const terminalWaiting = call(client, 'husklet_pane_wait', {
-    slot: terminal.slot, after_generation: terminalGeneration, after_revision: terminalRevision, timeout_ms: waitMs,
-  });
-  await call(client, 'husklet_terminal_write_bytes', {
+  const terminalMutation = JSON.parse(await call(client, 'husklet_terminal_write_bytes_wait', {
     slot: terminal.slot, generation: terminalGeneration, revision: terminalRevision,
-    input_base64: Buffer.from(terminalBytes).toString('base64'),
-  });
-  const terminalChanged = JSON.parse(await terminalWaiting);
+    input_base64: Buffer.from(terminalBytes).toString('base64'), timeout_ms: waitMs,
+  }));
+  const terminalChanged = terminalMutation.observation;
   const terminalAfter = terminalChanged.changed
     ? await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 })
     : null;
   // Arm the one-shot subscription first; request ordering prevents a fast UI
   // update from racing past observation.
-  const waiting = call(client, 'husklet_pane_wait', {
-    slot: semantic.slot,
-    after_generation: generation,
-    after_revision: revision,
-    timeout_ms: waitMs,
-  });
-  await call(client, 'husklet_pane_action', {
-    slot: semantic.slot, generation, revision, node, action: 'invoke',
-  });
-  const changed = JSON.parse(await waiting);
+  const semanticMutation = JSON.parse(await call(client, 'husklet_pane_action_wait', {
+    slot: semantic.slot, generation, revision, node, action: 'invoke', timeout_ms: waitMs,
+  }));
+  const changed = semanticMutation.observation;
   const semanticAfter = changed.changed
     ? await call(client, 'husklet_pane_snapshot', { slot: semantic.slot })
     : null;

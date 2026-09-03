@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
 import { FILE_BYTES_LIMIT, detailResult, fileRangeResult, fileResult, inventoryResult, logResult, publicError, result } from './bounds.js';
-import { paneTools } from './panes.js';
+import { observePaneMutation, paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
@@ -366,6 +366,10 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
+  if (typeof api.watchPaneChanges === 'function') definitions.push(
+    define('husklet_terminal_write_wait', 'Atomically arm pane observation, write UTF-8 input to one exact terminal cursor, and return the matching change.', z.object({ slot: id, generation: acquisitionRevision, revision: acquisitionRevision, input: terminalText, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ slot: value, generation, revision, input, timeout_ms: timeout }) => observePaneMutation(api.watchPaneChanges.bind(api), { slot: value, generation, revision, timeout }, async () => { await api.terminal.writeInput(value, generation, revision, input); return { done: true }; })),
+    define('husklet_terminal_write_bytes_wait', 'Atomically arm pane observation, write canonical-base64 bytes to one exact terminal cursor, and return the matching change.', terminalBytes.extend({ generation: acquisitionRevision, revision: acquisitionRevision, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ slot: value, generation, revision, input_base64: encoded, timeout_ms: timeout }) => observePaneMutation(api.watchPaneChanges.bind(api), { slot: value, generation, revision, timeout }, async () => { await api.terminal.writeInput(value, generation, revision, decodeTerminalBytes(encoded)); return { done: true }; })),
+  );
   if (typeof api.watchWorkspaceEvents === 'function') definitions.push(define(
     'husklet_workspace_event_wait',
     'Wait once for a bounded permission-gated window keyboard, focus, or pane-addressed pointer event batch.',
@@ -524,7 +528,7 @@ export function tools(api) {
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));
-  return definitions.concat(paneTools(api.terminal));
+  return definitions.concat(paneTools(api.terminal, api.watchPaneChanges?.bind(api)));
 }
 
 export function createServer(session) {
