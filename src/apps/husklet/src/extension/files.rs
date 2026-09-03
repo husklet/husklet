@@ -2,14 +2,14 @@
 
 use std::ffi::{CStr, CString};
 use std::fs::File;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hl_extension::port::{Entry, HostError, WorkspaceFiles};
 use hl_extension::RelativePath;
+use hl_extension::port::{Entry, FileRange, HostError, WorkspaceFiles};
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -184,12 +184,55 @@ impl WorkspaceFiles for WorkspaceDirectory {
         read_bounded(file).map_err(|error| absence(path, &error))
     }
 
+    fn read_range(
+        &self,
+        path: &RelativePath,
+        offset: u64,
+        limit: usize,
+        observed: Option<&str>,
+    ) -> Result<FileRange, HostError> {
+        let mut file = self.opened(path)?;
+        let before = file.metadata().map_err(|error| absence(path, &error))?;
+        if !before.is_file() {
+            return Err(HostError::Conflict(format!("{path} is not a regular file")));
+        }
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| absence(path, &error))?;
+        let mut contents = Vec::with_capacity(limit);
+        std::io::Read::by_ref(&mut file)
+            .take(limit as u64)
+            .read_to_end(&mut contents)
+            .map_err(|error| absence(path, &error))?;
+        let after = file.metadata().map_err(|error| absence(path, &error))?;
+        let identity = file_identity(&before);
+        if observed.is_some_and(|value| value != identity) {
+            return Err(HostError::Conflict(format!(
+                "{path} no longer matches the observed identity"
+            )));
+        }
+        if identity != file_identity(&after) {
+            return Err(HostError::Conflict(format!("{path} changed while it was read")));
+        }
+        let total = before.len();
+        let eof = offset.saturating_add(contents.len() as u64) >= total;
+        Ok(FileRange {
+            path: path.clone(),
+            identity,
+            offset,
+            total,
+            eof,
+            truncated: !eof,
+            contents,
+        })
+    }
+
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
         let metadata = self.opened(path)?.metadata().map_err(|error| absence(path, &error))?;
         Ok(Entry {
             path: path.clone(),
             directory: metadata.is_dir(),
             size: metadata.len(),
+            identity: Some(file_identity(&metadata)),
         })
     }
 
@@ -200,6 +243,17 @@ impl WorkspaceFiles for WorkspaceDirectory {
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError> {
         let target = self.publication(path)?;
         atomic_write(&target, contents).map_err(|error| absence(path, &error))
+    }
+
+    fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
+        let target = self.publication(path)?;
+        atomic_create(&target, contents).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                HostError::Conflict(format!("{path} no longer matches the observed identity"))
+            } else {
+                absence(path, &error)
+            }
+        })
     }
 
     fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
@@ -294,7 +348,44 @@ impl Drop for Temporary {
 }
 
 fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
-    atomic_write_with(target, contents, || Ok(()), |_| Ok(()))
+    atomic_write_with(target, contents, || Ok(()), |_, _, _| Ok(false))
+}
+
+fn atomic_create(target: &Path, contents: &[u8]) -> io::Result<String> {
+    let mut identity = None;
+    atomic_write_with(
+        target,
+        contents,
+        || Ok(()),
+        |directory, temporary, file| {
+            let target = c_name(target)?;
+            rustix::fs::renameat_with(
+                directory,
+                temporary,
+                directory,
+                target,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+            .map_err(io::Error::from)?;
+            identity = Some(file_identity(&file.metadata()?));
+            directory.sync_all()?;
+            Ok(true)
+        },
+    )?;
+    identity.ok_or_else(|| io::Error::other("atomic creation did not publish"))
+}
+
+fn file_identity(metadata: &std::fs::Metadata) -> String {
+    format!(
+        "v1:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    )
 }
 
 fn atomic_write_before_publish(
@@ -302,14 +393,23 @@ fn atomic_write_before_publish(
     contents: &[u8],
     before_publish: impl FnOnce(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
-    atomic_write_with(target, contents, || Ok(()), before_publish)
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("file has no parent directory"))?
+        .to_owned();
+    atomic_write_with(
+        target,
+        contents,
+        || Ok(()),
+        |_, temporary, _| before_publish(&parent.join(temporary.to_string_lossy().as_ref())).map(|()| false),
+    )
 }
 
 fn atomic_write_with(
     target: &Path,
     contents: &[u8],
     before_open: impl FnOnce() -> io::Result<()>,
-    before_publish: impl FnOnce(&Path) -> io::Result<()>,
+    before_publish: impl FnOnce(&File, &CStr, &File) -> io::Result<bool>,
 ) -> io::Result<()> {
     let parent = target
         .parent()
@@ -349,7 +449,9 @@ fn atomic_write_with(
         .ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not reserve atomic write temporary"))?;
     file.write_all(contents)?;
     file.sync_all()?;
-    before_publish(&parent.join(temporary.name.to_string_lossy().as_ref()))?;
+    if before_publish(&directory, &temporary.name, &file)? {
+        return Ok(());
+    }
     rename_at(&directory, &temporary.name, &target_name)?;
     directory.sync_all()?;
     Ok(())
@@ -463,14 +565,24 @@ fn described_at(parent: &RelativePath, directory: &File, entry: &rustix::fs::Dir
         path,
         directory: rustix::fs::FileType::from_raw_mode(metadata.st_mode) == rustix::fs::FileType::Directory,
         size: metadata.st_size.try_into().unwrap_or(u64::MAX),
+        identity: Some(format!(
+            "v1:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime,
+            metadata.st_mtime_nsec,
+            metadata.st_ctime,
+            metadata.st_ctime_nsec
+        )),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::WorkspaceDirectory;
-    use hl_extension::port::{HostError, WorkspaceFiles};
     use hl_extension::RelativePath;
+    use hl_extension::port::{HostError, WorkspaceFiles};
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -571,6 +683,36 @@ mod tests {
     }
 
     #[test]
+    fn observed_ranges_reject_replacements_and_observed_creation_never_overwrites() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let target = path("state.bin");
+
+        let created = files
+            .create_observed(&target, b"first-page/second-page")
+            .expect("create against observed absence");
+        let first = files.read_range(&target, 0, 10, None).expect("first page");
+        assert_eq!(first.identity, created);
+        assert_eq!(first.contents, b"first-page");
+        assert!(!first.eof);
+
+        files.write(&target, b"replacement").expect("concurrent replacement");
+        assert!(matches!(
+            files.read_range(&target, 10, 10, Some(&first.identity)),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(
+            std::fs::read(root.join("state.bin")).expect("replacement"),
+            b"replacement"
+        );
+        assert!(matches!(
+            files.create_observed(&target, b"second create"),
+            Err(HostError::Conflict(_))
+        ));
+    }
+
+    #[test]
     fn failed_publication_preserves_the_old_entry_and_cleans_its_temporary() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let root = temporary.path().join("workspace");
@@ -600,15 +742,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
-        assert!(std::fs::read_dir(temporary.path())
-            .expect("directory listing")
-            .all(|entry| {
-                !entry
-                    .expect("entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".husklet-write-")
-            }));
+        assert!(
+            std::fs::read_dir(temporary.path())
+                .expect("directory listing")
+                .all(|entry| {
+                    !entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".husklet-write-")
+                })
+        );
     }
 
     #[test]
@@ -631,7 +775,7 @@ mod tests {
                 std::os::unix::fs::symlink(&outside, &parent)?;
                 Ok(())
             },
-            |_| Ok(()),
+            |_, _, _| Ok(false),
         );
 
         assert!(result.is_err());
@@ -668,10 +812,12 @@ mod tests {
         .expect("atomic publication");
 
         assert_eq!(std::fs::read(&target).expect("published contents"), b"new bytes");
-        assert!(!std::fs::symlink_metadata(&target)
-            .expect("published metadata")
-            .file_type()
-            .is_symlink());
+        assert!(
+            !std::fs::symlink_metadata(&target)
+                .expect("published metadata")
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(std::fs::read(&outside).expect("outside contents"), b"outside bytes");
     }
 
@@ -728,10 +874,12 @@ mod tests {
 
         assert_eq!(std::fs::read(&outside).expect("outside"), b"outside");
         assert!(!root.join("remove-link").exists());
-        assert!(std::fs::symlink_metadata(root.join("renamed-link"))
-            .expect("renamed link")
-            .file_type()
-            .is_symlink());
+        assert!(
+            std::fs::symlink_metadata(root.join("renamed-link"))
+                .expect("renamed link")
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

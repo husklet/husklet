@@ -548,6 +548,19 @@ pub struct Entry {
     pub path: RelativePath,
     pub directory: bool,
     pub size: u64,
+    #[serde(default)]
+    pub identity: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileRange {
+    pub path: RelativePath,
+    pub identity: String,
+    pub offset: u64,
+    pub total: u64,
+    pub contents: Vec<u8>,
+    pub eof: bool,
+    pub truncated: bool,
 }
 
 /// One installed extension and its durable lifecycle policy.
@@ -1052,6 +1065,10 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
+    fn read_range(&self, _path: &RelativePath, _offset: u64, _limit: usize, _observed: Option<&str>) -> Result<FileRange, HostError> {
+        Err(HostError::Unsupported("observed filesystem reads are unavailable".into()))
+    }
+
     /// Reads metadata for exactly one confined workspace-relative path.
     fn stat(&self, _path: &RelativePath) -> Result<Entry, HostError> {
         Err(HostError::Unsupported("filesystem metadata is unavailable".into()))
@@ -1060,6 +1077,10 @@ pub trait WorkspaceFiles {
     /// # Errors
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
+
+    fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
+        Err(HostError::Unsupported("observed filesystem creation is unavailable".into()))
+    }
 
     fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("directory creation is unavailable".into()))

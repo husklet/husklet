@@ -368,8 +368,16 @@ export function workspace(session) {
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
+      readRange: async (path, offset = 0, limit = 65536, observed = null) => expect(
+        await session.call('filesystem_read_range', { path, offset, limit, observed }),
+        'file_range',
+      ),
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
+      createObserved: async (path, contents) => expect(
+        await session.call('filesystem_create_observed', { path, contents: [...contents] }),
+        'identity',
+      ),
       mkdir: (path) => done('filesystem_mkdir', { path }),
       rename: (from, to) => done('filesystem_rename', { from, to }),
       remove: (path) => done('filesystem_remove', { path }),
@@ -594,7 +602,7 @@ export const protocolCoverage = Object.freeze({
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
-    files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
+    files: ['list', 'stat', 'read', 'readRange', 'write', 'createObserved', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],

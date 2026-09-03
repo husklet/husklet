@@ -5571,7 +5571,8 @@ export type LayoutNode =
   | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
 export interface TabTopology { id: string; title: string; root: LayoutNode }
 export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
-export interface FileEntry { path: string; directory: boolean; size: number }
+export interface FileEntry { path: string; directory: boolean; size: number; identity?: string | null }
+export interface FileRange { path: string; identity: string; offset: number; total: number; contents: number[]; eof: boolean; truncated: boolean }
 export type WorkspaceEvent =
   | { event: 'key'; key: string; modifiers: string[]; pressed: boolean; slot?: string | null; generation?: number | null }
   | { event: 'focus'; active: boolean; slot?: string | null; generation?: number | null }
@@ -5744,7 +5745,9 @@ export interface WorkspaceApi {
     list(path: string): Promise<FileEntry[]>;
     stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
+    readRange(path: string, offset?: number, limit?: number, observed?: string | null): Promise<FileRange>;
     write(path: string, contents: Iterable<number>): Promise<void>;
+    createObserved(path: string, contents: Iterable<number>): Promise<string>;
     mkdir(path: string): Promise<void>;
     rename(from: string, to: string): Promise<void>;
     remove(path: string): Promise<void>;

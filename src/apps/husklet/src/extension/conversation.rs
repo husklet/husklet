@@ -1131,6 +1131,7 @@ mod tests {
                 path: path.clone(),
                 directory: true,
                 size: 0,
+                identity: None,
             }])
         }
 
@@ -1145,6 +1146,7 @@ mod tests {
                 path: path.clone(),
                 directory: false,
                 size: 8,
+                identity: None,
             })
         }
 

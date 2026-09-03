@@ -256,12 +256,13 @@ or remove one file or empty directory. All paths remain relative to declared
 roots; removal requires `confirm: true`, and recursive deletion is unavailable.
 `husklet_file_read` returns its legacy byte array only when the complete file
 fits the 12,000-byte MCP whole-read limit, and otherwise fails closed.
-`husklet_file_read_range` returns `path`, `offset`, `total`, `contents`, `eof`,
-and `truncated` for explicit paging within the host's 1,040,384-byte read limit.
-The host securely confines each relative path, but files have no immutable
-generation: every page is a separate observation and a concurrent write can
-change later pages. Re-read or use an application-level immutable file when
-cross-page consistency matters.
+`husklet_file_read_range` returns `path`, opaque `identity`, `offset`, `total`,
+`contents`, `eof`, and `truncated`. Pass the first page's identity as `observed`
+on every later page; a replacement or in-place metadata change then fails
+instead of mixing versions. `husklet_file_create_observed` atomically publishes
+only while the path remains absent. Atomic compare-and-replace of an existing
+workspace file is deliberately unavailable because the host filesystem has no
+primitive that can bind rename to an inode precondition without a race.
 
 Terminal layout tools use the same `beside`/`below` vocabulary as the host and
 can focus, split, resize, rebalance, and close panes. Grid sizes and split ratios

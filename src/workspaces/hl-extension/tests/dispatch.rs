@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, GridSize, HostError,
+    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange, GridSize, HostError,
     ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree,
     PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface,
     TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
@@ -652,6 +652,7 @@ impl WorkspaceFiles for Host {
             path: path.clone(),
             directory: true,
             size: 0,
+            identity: None,
         }])
     }
 
@@ -659,18 +660,27 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.read");
         Ok(b"contents".to_vec())
     }
+    fn read_range(&self, path: &RelativePath, offset: u64, _limit: usize, _observed: Option<&str>) -> Result<FileRange, HostError> {
+        self.ledger.note("files.read_range");
+        Ok(FileRange { path: path.clone(), identity: "v1:1:2:3:4:5:6:7".into(), offset, total: 8, contents: b"contents".to_vec(), eof: true, truncated: false })
+    }
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
         self.ledger.note("files.stat");
         Ok(Entry {
             path: path.clone(),
             directory: false,
             size: 7,
+            identity: None,
         })
     }
 
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         self.ledger.note("files.write");
         Ok(())
+    }
+    fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
+        self.ledger.note("files.create_observed");
+        Ok("v1:1:2:3:4:5:6:7".into())
     }
 
     fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
@@ -1139,6 +1149,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemRead,
         ),
         (
+            Request::FilesystemReadRange { path: path("logs/app.log"), offset: 0, limit: 8, observed: None },
+            Capability::FilesystemRead,
+        ),
+        (
             Request::FilesystemStat {
                 path: path("logs/app.log"),
             },
@@ -1149,6 +1163,10 @@ fn calls() -> Vec<(Request, Capability)> {
                 path: path("logs/app.log"),
                 contents: b"x".to_vec(),
             },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemCreateObserved { path: path("logs/new.log"), contents: b"x".to_vec() },
             Capability::FilesystemWrite,
         ),
         (

@@ -315,10 +315,20 @@ pub enum Request {
     FilesystemRead {
         path: RelativePath,
     },
+    FilesystemReadRange {
+        path: RelativePath,
+        offset: u64,
+        limit: usize,
+        observed: Option<String>,
+    },
     FilesystemStat {
         path: RelativePath,
     },
     FilesystemWrite {
+        path: RelativePath,
+        contents: Vec<u8>,
+    },
+    FilesystemCreateObserved {
         path: RelativePath,
         contents: Vec<u8>,
     },
@@ -448,10 +458,11 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => {
+            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemReadRange { .. } | Self::FilesystemStat { .. } => {
                 Capability::FilesystemRead
             }
             Self::FilesystemWrite { .. }
+            | Self::FilesystemCreateObserved { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
             | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
@@ -473,8 +484,10 @@ impl Request {
         match self {
             Self::FilesystemList { path }
             | Self::FilesystemRead { path }
+            | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }
+            | Self::FilesystemCreateObserved { path, .. }
             | Self::FilesystemMkdir { path }
             | Self::FilesystemRemove { path } => Some(path),
             Self::FilesystemRename { from, .. } => Some(from),
@@ -590,6 +603,7 @@ pub enum Reply {
     Entries(Vec<Entry>),
     Entry(Entry),
     Contents(Vec<u8>),
+    FileRange(crate::port::FileRange),
     Identity(String),
     Done,
 }

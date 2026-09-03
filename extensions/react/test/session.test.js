@@ -693,6 +693,21 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('observed filesystem ranges and creation preserve exact identities on the wire', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const files = workspace(stage.session).files;
+  const range = files.readRange('logs/app.log', 12, 34, 'v1:1:2:3:4:5:6:7');
+  assert.deepEqual((await next()).payload, { call: 'filesystem_read_range', with: { path: 'logs/app.log', offset: 12, limit: 34, observed: 'v1:1:2:3:4:5:6:7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'file_range', with: { path: 'logs/app.log', identity: 'v1:1:2:3:4:5:6:7', offset: 12, total: 14, contents: [111, 107], eof: true, truncated: false } } }));
+  assert.equal((await range).identity, 'v1:1:2:3:4:5:6:7');
+
+  const write = files.createObserved('logs/new.log', [110, 101, 119]);
+  assert.deepEqual((await next()).payload, { call: 'filesystem_create_observed', with: { path: 'logs/new.log', contents: [110, 101, 119] } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:7' } }));
+  assert.equal(await write, 'v1:1:8:3:4:5:6:7');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane semantics and actions preserve revision and node identity', async () => {
   const stage = await pair();
   const next = frames(stage.host);

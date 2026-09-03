@@ -248,8 +248,10 @@ impl Session {
             }
             Request::FilesystemList { .. }
             | Request::FilesystemRead { .. }
+            | Request::FilesystemReadRange { .. }
             | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
+            | Request::FilesystemCreateObserved { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
             | Request::FilesystemRemove { .. } => self.files(request, services),
@@ -692,16 +694,34 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
             }
+            Request::FilesystemReadRange { path, offset, limit, observed } => {
+                if *limit == 0 || *limit > 64 * 1024 || *offset > 1_040_384
+                    || observed.as_ref().is_some_and(|value| value.len() > 256) {
+                    return Err(Failure::Failed { detail: "filesystem range exceeds protocol bounds".into() });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::FileRange(port.read_range(path, *offset, *limit, observed.as_deref())?))
+            }
             Request::FilesystemStat { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entry(port.stat(path)?))
             }
             Request::FilesystemWrite { path, contents } => {
+                if contents.len() > 64 * 1024 {
+                    return Err(Failure::Failed { detail: "filesystem write exceeds 65536 bytes".into() });
+                }
                 let port = self
                     .peer
                     .authority()
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.write(path, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemCreateObserved { path, contents } => {
+                if contents.len() > 64 * 1024 {
+                    return Err(Failure::Failed { detail: "filesystem creation exceeds 65536 bytes".into() });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
+                Ok(Reply::Identity(port.create_observed(path, contents)?))
             }
             Request::FilesystemMkdir { path } => {
                 let port = self
