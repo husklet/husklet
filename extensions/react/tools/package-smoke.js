@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, starter) {
-  const socket = path.join(consumer, 'starter.sock');
+async function runPackedStarter(consumer, starter, signal) {
+  const socket = path.join(consumer, `starter-${signal}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
@@ -62,7 +62,7 @@ async function runPackedStarter(consumer, starter) {
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
     assert.equal(stderr, '');
   } finally {
-    if (child.exitCode === null) child.kill('SIGTERM');
+    if (child.exitCode === null) child.kill(signal);
     exit = child.exitCode === null
       ? await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
       : { code: child.exitCode, signal: child.signalCode };
@@ -166,7 +166,8 @@ try {
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
   assert.equal(starterLock.packages['node_modules/@husklet/client'].version, manifest.version);
   assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
-  await runPackedStarter(consumer, standaloneStarter);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM');
+  await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);
