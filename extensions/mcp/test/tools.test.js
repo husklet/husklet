@@ -755,16 +755,14 @@ test('unified pane XML projects arbitrary native slots and explicitly rejects un
   await assert.rejects(() => paneXml(terminal, 'shot'), /unsupported occupant "screenshot"/);
 });
 
-test('results redact secrets and remain bounded', async () => {
+test('generic results redact secrets and whole-file reads fail closed instead of clipping', async () => {
   const { api } = fake();
   const info = tools(api).find(({ name }) => name === 'husklet_workspace_info');
   const answer = await info.run({});
   assert.equal(answer.content[0].text, '{"name":"demo","token":"[redacted]"}');
   api.files.read = async () => 'x'.repeat(100_000);
   const read = tools(api).find(({ name }) => name === 'husklet_file_read');
-  const bounded = await read.run({ path: 'notes.txt' });
-  assert(bounded.content[0].text.length <= 64 * 1024);
-  assert.match(bounded.content[0].text, /truncated/);
+  await assert.rejects(() => read.run({ path: 'notes.txt' }), /use husklet_file_read_range/);
 });
 
 test('pane tools are capability-shaped and only appear for the real typed methods', async () => {

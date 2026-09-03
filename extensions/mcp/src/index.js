@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
-import { logResult, result } from './bounds.js';
+import { FILE_BYTES_LIMIT, fileRangeResult, fileResult, logResult, result } from './bounds.js';
 import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
@@ -302,7 +302,13 @@ export function tools(api) {
     define('husklet_terminal_close', 'Close only the exact observed pane generation and revision after explicit confirmation.', z.object({ slot: id, generation: acquisitionRevision, revision: acquisitionRevision, confirm: z.literal(true) }).strict(), async ({ slot: value, generation, revision }) => { await api.terminal.closeObserved(value, generation, revision); return { done: true }; }),
     define('husklet_file_list', 'List a workspace-relative directory.', z.object({ path }).strict(), ({ path: value }) => api.files.list(value)),
     define('husklet_file_stat', 'Read bounded metadata for one workspace-relative path without reading contents.', z.object({ path }).strict(), ({ path: value }) => api.files.stat(value)),
-    define('husklet_file_read', 'Read one bounded workspace-relative file.', z.object({ path }).strict(), ({ path: value }) => api.files.read(value)),
+    define('husklet_file_read', `Read one workspace-confined file only when its complete contents fit the ${FILE_BYTES_LIMIT}-byte MCP whole-read limit; larger successful host reads fail closed.`, z.object({ path }).strict(), ({ path: value }) => api.files.read(value), fileResult),
+    define('husklet_file_read_range', `Read at most ${FILE_BYTES_LIMIT} bytes from one workspace-confined file with explicit offset, total, eof, and truncation metadata. Each call is an independent observation because files have no immutable snapshot identity.`, z.object({ path, offset: z.number().int().nonnegative().max(1_040_384).default(0), limit: z.number().int().min(1).max(FILE_BYTES_LIMIT).default(FILE_BYTES_LIMIT) }).strict(), async ({ path: value, offset, limit }) => {
+      const contents = await api.files.read(value);
+      const bytes = contents.slice(offset, offset + limit);
+      const eof = offset + bytes.length >= contents.length;
+      return { path: value, offset, total: contents.length, contents: bytes, eof, truncated: !eof };
+    }, fileRangeResult),
     define('husklet_file_write', 'Write at most 65536 UTF-8 bytes to a workspace-relative file.', z.object({ path, contents: fileContents }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
     define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
     define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),

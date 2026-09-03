@@ -3,6 +3,7 @@ const STRING_LIMIT = 8192;
 const ARRAY_LIMIT = 200;
 export const OUTPUT_LIMIT = 64 * 1024;
 const LOG_STREAM_LIMIT = 7_500;
+export const FILE_BYTES_LIMIT = 12_000;
 
 function safe(value, key = '', depth = 0) {
   if (SECRET.test(key)) return '[redacted]';
@@ -40,4 +41,18 @@ export function logResult(value) {
     stderr_truncated: stderrTruncated,
     eof: value?.eof === true,
   }) }] };
+}
+
+/** Legacy whole-file result: exact or rejected, never silently shortened. */
+export function fileResult(value) {
+  const length = typeof value === 'string' ? new TextEncoder().encode(value).byteLength : value?.length;
+  if ((!Array.isArray(value) && typeof value !== 'string') || length > FILE_BYTES_LIMIT) {
+    throw new RangeError(`file exceeds the ${FILE_BYTES_LIMIT}-byte MCP whole-read limit; use husklet_file_read_range`);
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+/** A single explicitly incomplete file observation. */
+export function fileRangeResult(value) {
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
 }
