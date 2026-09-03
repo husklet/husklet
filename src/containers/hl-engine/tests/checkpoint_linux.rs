@@ -2739,6 +2739,9 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     assert_eq!(output.matches("FAR-MOVSD phase=0 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("FAR-MOVSD phase=1 value=42").count(), 1, "{output}");
     assert_eq!(output.matches("FAR-MOVSD phase=2 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("ADDR32-CALL phase=0 value=42").count(), 1, "{output}");
+    assert_eq!(output.matches("ADDR32-CALL phase=1 value=43").count(), 1, "{output}");
+    assert_eq!(output.matches("ADDR32-CALL phase=2 value=44").count(), 1, "{output}");
     if translit {
         let diagnostic_text = [
             capture_terminal.text(),
@@ -2765,6 +2768,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                     field("mixed_sse_executed_transitions="),
                     field("mixed_sse_disabled_boundaries="),
                     field("fall_sse_riprel="),
+                    !line.contains("key=618475323624"),
                 )
             })
             .collect::<Vec<_>>();
@@ -2780,7 +2784,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             assert!(
                 shapes
                     .iter()
-                    .all(|(_, _, capacity, descriptors, transitions, boundaries, _sse_riprel)| *capacity > 0
+                    .all(|(_, _, capacity, descriptors, transitions, boundaries, _sse_riprel, _addr32_lowered)| *capacity > 0
                         && *descriptors > 0
                         && *transitions >= *descriptors
                         && *boundaries == 0),
@@ -2789,6 +2793,10 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             assert!(
                 shapes[0].6 <= 7 && shapes[1..].iter().all(|shape| shape.6 <= 2),
                 "the dedicated far MOVSD must not add an SSE RIP-relative fallback in any generation: {shapes:?}\n{diagnostic_text}"
+            );
+            assert!(
+                shapes.iter().all(|shape| shape.7),
+                "the address-size relative CALL fell back in a checkpoint generation: {shapes:?}\n{diagnostic_text}"
             );
         }
     }
