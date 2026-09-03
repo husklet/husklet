@@ -30,6 +30,7 @@ import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependenc
 import { JsonTreeStory } from '../src/json-tree.js';
 import { ConfirmationStory } from '../src/confirmation.js';
 import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
+import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -62,6 +63,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
   const stories = [
     ['safe destructive confirmation', h(ConfirmationStory)],
     ['container operations', h(ContainerOperationsStory)],
+    ['workspace layout', h(WorkspaceLayoutStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -110,6 +112,28 @@ test('container operations bounds and sanitizes every host-sized projection', ()
   assert.equal(bounded[0].state, 'unknown');
   assert(!bounded[0].name.includes('\n'));
   assert.equal(bounded[0].processes[0].command.length, 160);
+});
+
+test('workspace layout bounds slots and interactively splits by stable identity', () => {
+  const source = Array.from({ length: PANE_LIMIT + 4 }, (_, index) => ({
+    slot: `pane-${index}`, title: `title-${index}\n${'x'.repeat(TITLE_LIMIT)}`, occupant: 'invented',
+  }));
+  const bounded = boundedPanes(source);
+  assert.equal(bounded.length, PANE_LIMIT);
+  assert.equal(bounded[0].occupant, 'empty');
+  assert.equal(bounded[0].title.length, TITLE_LIMIT);
+  assert(!bounded[0].title.includes('\n'));
+
+  const stage = host();
+  const first = stage.render(h(WorkspaceLayoutStory));
+  const split = node(first.patches, 'Button', 'Split below');
+  assert(split);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: split, id: `${split}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.prop === 'Orientation'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Split pane-terminal-1 below into pane-new-4.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'pane-new-4 · terminal'));
 });
 test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 
