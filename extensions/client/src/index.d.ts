@@ -203,6 +203,12 @@ export interface WorkspaceApi {
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string }
     >;
+    retry(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory, retry this exact faulted digest, then verify durable duty. */
+    retryAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
     remove(name: string, generation: string): Promise<void>;
     /** Arm inventory, remove this exact digest, then prove that digest is durably absent. */
     removeAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<

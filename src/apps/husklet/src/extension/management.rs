@@ -85,6 +85,14 @@ impl ExtensionStore for ExtensionManagement {
         self.changed(result)
     }
 
+    fn retry(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let result = self
+            .roster()?
+            .retry_if_digest(&Self::name(name)?, image_digest)
+            .map_err(failure);
+        self.changed(result)
+    }
+
     fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
         let result = self
             .roster()?

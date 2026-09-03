@@ -140,6 +140,7 @@ wrong caller.
 - `host.extensions.inspect(...)` — `extension_inspect`, requires `extension-read`.
 - `host.extensions.enable(...)` — `extension_enable`, requires `extension-control`.
 - `host.extensions.disable(...)` — `extension_disable`, requires `extension-control`.
+- `host.extensions.retry(...)` — `extension_retry`, requires `extension-control`.
 - `host.extensions.remove(...)` — `extension_remove`, requires `extension-control`.
 - `host.extensions.startAcquisition(...)` — `extension_acquisition_start`, requires `extension-install`.
 - `host.extensions.acquisition(...)` — `extension_acquisition_status`, requires `extension-install`.
@@ -149,6 +150,7 @@ wrong caller.
 - `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.
 - `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extension-read` and `extension-control`.
 - `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extension-read` and `extension-control`.
+- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extension-read` and `extension-control`.
 - `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extension-read` and `extension-control`.
 
 ## Semantics

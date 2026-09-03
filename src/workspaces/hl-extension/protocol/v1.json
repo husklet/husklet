@@ -6113,6 +6113,10 @@
     },
     {
       "capability": "extension-control",
+      "request": "extension_retry"
+    },
+    {
+      "capability": "extension-control",
       "request": "extension_remove"
     },
     {
@@ -6524,6 +6528,10 @@
     {
       "reply": "done",
       "request": "extension_disable"
+    },
+    {
+      "reply": "done",
+      "request": "extension_retry"
     },
     {
       "reply": "done",
@@ -7559,6 +7567,28 @@
         },
         {
           "name": "extension_disable",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_retry",
           "payload": {
             "fields": [
               {
@@ -10550,7 +10580,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:5ee42f69016b4a73",
+  "source_fingerprint": "fnv1a64:08a8e87118fc8ccf",
   "specification_version": 1,
   "topics": [
     {

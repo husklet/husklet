@@ -47,6 +47,9 @@ const enabled = await host.extensions.enableAndWait(extension.name, extension.im
 if (enabled.changed) console.log(enabled.extension.status);
 
 const disabled = await host.extensions.disableAndWait(extension.name, extension.image_digest);
+
+// Retry a faulted installation. Inventory is armed before authority is invoked.
+const retried = await host.extensions.retryAndWait(extension.name, extension.image_digest);
 if (disabled.changed) console.log(disabled.extension.status); // durable standby; provider withdrawal is observed separately
 
 const removed = await host.extensions.removeAndWait(extension.name, extension.image_digest);

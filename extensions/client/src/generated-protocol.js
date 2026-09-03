@@ -213,6 +213,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "extension_inspect": "extension",
   "extension_enable": "done",
   "extension_disable": "done",
+  "extension_retry": "done",
   "extension_remove": "done",
   "extension_acquisition_start": "extension_acquisition_job",
   "extension_acquisition_status": "extension_acquisition",
@@ -318,6 +319,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_inspect": "extension-read",
   "extension_enable": "extension-control",
   "extension_disable": "extension-control",
+  "extension_retry": "extension-control",
   "extension_remove": "extension-control",
   "extension_acquisition_start": "extension-install",
   "extension_acquisition_status": "extension-install",
@@ -6945,6 +6947,28 @@ const roots = {
       },
       {
         "name": "extension_disable",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "extension_retry",
         "payload": {
           "fields": [
             {

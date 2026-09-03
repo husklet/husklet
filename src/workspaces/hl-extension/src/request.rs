@@ -65,6 +65,10 @@ pub enum Request {
         name: String,
         image_digest: String,
     },
+    ExtensionRetry {
+        name: String,
+        image_digest: String,
+    },
     ExtensionRemove {
         name: String,
         image_digest: String,
@@ -391,7 +395,7 @@ impl Request {
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
             Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
-            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRemove { .. } => {
+            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRetry { .. } | Self::ExtensionRemove { .. } => {
                 Capability::ExtensionControl
             }
             Self::ExtensionAcquisitionStart { .. }

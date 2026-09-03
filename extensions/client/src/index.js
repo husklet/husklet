@@ -164,6 +164,7 @@ export function workspace(session, { signal } = {}) {
       inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
       enable: (name, imageDigest) => done('extension_enable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       disable: (name, imageDigest) => done('extension_disable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
+      retry: (name, imageDigest) => done('extension_retry', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       remove: (name, imageDigest) => done('extension_remove', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
@@ -662,6 +663,36 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.extensions.retryAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension retry wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current) reject(new Error(`extension ${name} disappeared while retrying`));
+        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while retrying`));
+        else if (current.enabled && current.status === 'duty') resolve(current);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.retry(name, digest);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.extensions.removeAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
     const digest = immutableDigest(imageDigest, 'extension image');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
@@ -812,7 +843,7 @@ export const protocolCoverage = Object.freeze({
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
-    extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
+    extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,

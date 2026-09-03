@@ -287,6 +287,35 @@ test('real Unix extension remove arms inventory before authority and observes ab
   }
 });
 
+test('real Unix extension retry arms inventory before digest-bound authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-retry-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'f'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'extension_retry') socket.write(encode({ channel: 17, kind: KIND.event, payload: {
+        snapshot: 'extensions', of: [{ name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [] }],
+      } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'retry-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.retryAndWait('manager', digest);
+    assert.equal(result.changed, true); assert.deepEqual(calls, ['event_subscribe', 'extension_retry', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
   const socketPath = path.join(directory, 'host.sock');
