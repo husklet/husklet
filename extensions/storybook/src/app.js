@@ -59,12 +59,13 @@ import { CONFIRMATION_STORY, ConfirmationStory } from './confirmation.js';
 import { CONTAINER_OPERATIONS_STORY, ContainerOperationsStory } from './container-operations.js';
 import { WORKSPACE_LAYOUT_STORY, WorkspaceLayoutStory } from './workspace-layout.js';
 import { EXTENSION_LIFECYCLE_STORY, ExtensionLifecycleStory } from './extension-lifecycle.js';
+import { WORKSPACE_FILE_EDIT_STORY, WorkspaceFileEditStory } from './workspace-file-edit.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
 const INTERACTION_HISTORY = 5;
 export const FLOW_STORIES = Object.freeze([
-  EXTENSION_LIFECYCLE_STORY, WORKSPACE_LAYOUT_STORY, CONTAINER_OPERATIONS_STORY, CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
+  WORKSPACE_FILE_EDIT_STORY, EXTENSION_LIFECYCLE_STORY, WORKSPACE_LAYOUT_STORY, CONTAINER_OPERATIONS_STORY, CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
   QUERY_PLAN_STORY, DEPENDENCY_GRAPH_STORY, NETWORK_WATERFALL_STORY, COVERAGE_STORY,
   TEST_REPORT_STORY, TIMELINE_VIEW_STORY, DISASSEMBLY_STORY, MEMORY_STORY, PROFILE_STORY,
   FILE_BROWSER_STORY, METRICS_STORY, BINARY_STORY, ACQUISITION_STORY, KEYBOARD_STORY,
@@ -157,6 +158,8 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
       { key: 'stage', pad: 4, grow: true },
       name === QUERY_PLAN_STORY
         ? h(QueryPlanStory)
+        : name === WORKSPACE_FILE_EDIT_STORY
+        ? h(WorkspaceFileEditStory)
         : name === EXTENSION_LIFECYCLE_STORY
         ? h(ExtensionLifecycleStory)
         : name === WORKSPACE_LAYOUT_STORY

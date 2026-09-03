@@ -32,6 +32,7 @@ import { ConfirmationStory } from '../src/confirmation.js';
 import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
 import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
 import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
+import { WorkspaceFileEditStory, boundedFiles, FILE_LIMIT, PATH_LIMIT, CONTENT_LIMIT } from '../src/workspace-file-edit.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -66,6 +67,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['container operations', h(ContainerOperationsStory)],
     ['workspace layout', h(WorkspaceLayoutStory)],
     ['extension lifecycle', h(ExtensionLifecycleStory)],
+    ['workspace file edit', h(WorkspaceFileEditStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -158,6 +160,28 @@ test('extension lifecycle bounds authority and controls the selected immutable g
   const changed = stage.since(before);
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Start extension'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped workspace-manager at sha256:manager-generation-14.'));
+});
+
+test('workspace file review independently bounds paths, content, and interactive writes', () => {
+  const source = Array.from({ length: FILE_LIMIT + 3 }, (_, index) => ({
+    path: index === 1 ? '../escape' : `src/${'p'.repeat(PATH_LIMIT)}-${index}.js`,
+    content: 'x'.repeat(CONTENT_LIMIT + 20),
+  }));
+  const bounded = boundedFiles(source);
+  assert.equal(bounded.length, FILE_LIMIT - 1);
+  assert.equal(bounded[0].path.length, PATH_LIMIT);
+  assert.equal(bounded[0].content.length, CONTENT_LIMIT);
+  assert(!bounded.some(({ path }) => path.includes('..')));
+
+  const stage = host();
+  const first = stage.render(h(WorkspaceFileEditStory));
+  const rename = node(first.patches, 'Button', 'Rename for review');
+  assert(rename);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: rename, id: `${rename}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Renamed src/server.js to src/server.review.js.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text?.startsWith('src/server.review.js · ')));
 });
 test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 
