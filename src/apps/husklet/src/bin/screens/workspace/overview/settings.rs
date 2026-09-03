@@ -106,6 +106,7 @@ impl Overview<'_> {
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let image = gtk::Label::new(Some(&self.workspace.image));
         image.add_css_class("settings-image");
+        image.set_selectable(true);
         image.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         image.set_tooltip_text(Some(&self.workspace.image));
         values.append(&name);
@@ -675,6 +676,15 @@ mod tests {
                 text.iter().any(|line| line == "ghcr.io/acme/dev:2026.09"),
                 "image identity is visible"
             );
+            let image_identity = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .find(|label| label.has_css_class("settings-image"))
+                .expect("workspace image identity label");
+            assert!(image_identity.is_selectable(),
+                "keyboard users can select and copy the exact ellipsized image reference");
+            assert_eq!(image_identity.ellipsize(), gtk::pango::EllipsizeMode::Middle,
+                "copyability does not sacrifice compact visual hierarchy");
             assert!(
                 text.iter()
                     .any(|line| line.contains("Running tabs keep their current settings")),
