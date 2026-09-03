@@ -1382,6 +1382,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
         return -ENOMEM;
     }
     int status = 0;
+    int identity_changed = 0;
     fdvis_lock();
     for (size_t index = 0; index < plan->count; ++index) {
         journal[index].identity = &g_fdvis[plan->entries[index].slot];
@@ -1389,7 +1390,6 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
         journal[index].owner_start_ns = child_start;
         journal[index].reservation_owned = journal[index].identity->key == UINT64_MAX;
     }
-    fdvis_index_begin_locked();
     for (size_t index = 0; index < plan->count; ++index) {
         struct fdvis_fork_entry *entry = &plan->entries[index];
         struct fdvis_slot *copy = &g_fdvis[entry->slot];
@@ -1403,6 +1403,10 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
         if (!journal[index].reservation_owned && !token_upgrade) {
             status = -EAGAIN;
             break;
+        }
+        if (!identity_changed) {
+            fdvis_index_begin_locked();
+            identity_changed = 1;
         }
         if (token_upgrade) {
             journal[index].previous_identity = *copy;
@@ -1446,7 +1450,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
             g_fdvis_fork_parent_start = child_start;
         }
     }
-    (void)fdvis_index_rebuild_locked();
+    if (identity_changed) (void)fdvis_index_rebuild_locked();
     fdvis_unlock();
     if (status != 0 && !in_child) proc_fdvis_fork_parent_clear_timeout(plan, child);
     free(journal);
@@ -1583,15 +1587,46 @@ static int fdvis_after_fork_rollback_test(void) {
                                   identities[0].generation == 11 && identities[1].key == second_key &&
                                   identities[1].generation == 12 && committed_path &&
                                   strcmp(committed_path->path, entries[0].path) == 0;
+    /* A child's post-fork pass normally observes the complete batch already published by its parent.
+       Preserve a harmless tombstone to prove that this read-only transaction does not rebuild the whole
+       index. Reinstating the unconditional dirty/rebuild pair clears the tombstone and reddens this arm. */
+    struct fdvis_index_slot *fork_index = calloc(FDVIS_INDEX_N, sizeof *fork_index);
+    int read_only_preserved_index = 0;
+    if (fork_index) {
+        memset(identities, 0, sizeof *identities * FDVIS_N);
+        memset(paths, 0, sizeof *paths * FDPATH_N);
+        memset(control, 0, sizeof *control);
+        identities[0] = (struct fdvis_slot){.key = first_key,
+                                            .owner_start_ns = child_start,
+                                            .generation = 13,
+                                            .kind = entries[0].kind,
+                                            .device = entries[0].device,
+                                            .object = entries[0].object};
+        struct fdpath_slot *read_only_path = fdpath_find(first_key, child_start, 1);
+        if (read_only_path) {
+            read_only_path->path_is_guest = entries[0].path_is_guest;
+            snprintf(read_only_path->path, sizeof read_only_path->path, "%s", entries[0].path);
+        }
+        g_fdvis_index = fork_index;
+        int published = fdvis_index_publish_locked(&identities[0]);
+        unsigned tombstone = 0;
+        while (tombstone < FDVIS_INDEX_N && fork_index[tombstone].key != 0) ++tombstone;
+        if (tombstone < FDVIS_INDEX_N) fork_index[tombstone].key = FDVIS_INDEX_TOMBSTONE;
+        int read_only_status = proc_fdvis_after_fork(&first_only, child, 0);
+        read_only_preserved_index = published && tombstone < FDVIS_INDEX_N && read_only_status == 0 &&
+                                    fork_index[tombstone].key == FDVIS_INDEX_TOMBSTONE &&
+                                    atomic_load_explicit(&control->index_dirty, memory_order_relaxed) == 0;
+    }
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
     g_fdvis_index = saved_index;
+    free(fork_index);
     free(identities);
     free(paths);
     free(control);
     return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly &&
-           commit_survived_timeout;
+           commit_survived_timeout && read_only_preserved_index;
 }
 
 #if !defined(_WIN32)
