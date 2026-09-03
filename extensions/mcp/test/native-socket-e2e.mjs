@@ -23,18 +23,26 @@ let terminal = inventory.panes?.find((pane) => pane.slot === terminalSlot && pan
 if (!terminal) {
   throw new Error(`real terminal absent from pane discovery: ${listed.content[0].text}`);
 }
+const advertised = inventory.panes?.find((pane) => pane.kind === 'surface' && pane.provider?.extension && pane.provider?.provider);
+if (!advertised) throw new Error(`no discoverable provider identity in pane inspection: ${JSON.stringify(inventory)}`);
+const discovered = { extension: advertised.provider.extension, provider: advertised.provider.provider };
 const topologyBefore = await client.callTool({ name: 'husklet_terminal_topology', arguments: {} });
 const settledInventory = JSON.parse((await client.callTool({ name: 'husklet_pane_list', arguments: {} })).content[0].text);
 terminal = settledInventory.panes.find((pane) => pane.slot === terminalSlot && pane.kind === 'terminal');
 const switched = await client.callTool({
   name: 'husklet_terminal_switch_occupant',
-  arguments: { slot: terminalSlot, generation: terminal.generation, target: { kind: 'surface', extension: 'containers', provider: 'main' } },
+  arguments: { slot: terminalSlot, generation: terminal.generation, target: { kind: 'surface', ...discovered } },
 });
 if (switched.isError) throw new Error(`surface switch failed: ${switched.content?.[0]?.text}; terminal=${JSON.stringify(terminal)} inventory=${JSON.stringify(inventory)}`);
 const afterSwitch = JSON.parse((await client.callTool({ name: 'husklet_pane_list', arguments: {} })).content[0].text);
 const mounted = afterSwitch.panes.find((pane) => pane.slot === terminalSlot);
-if (mounted.kind !== 'surface' || mounted.provider?.extension !== 'containers' || mounted.provider?.provider !== 'main') {
+if (mounted.kind !== 'surface' || mounted.provider?.extension !== discovered.extension || mounted.provider?.provider !== discovered.provider) {
   throw new Error(`wrong switched occupant: ${JSON.stringify(mounted)}`);
+}
+const mountedSnapshot = await client.callTool({ name: 'husklet_pane_snapshot', arguments: { slot: terminalSlot } });
+if (mountedSnapshot.isError || !mountedSnapshot.content?.[0]?.text?.includes(`<pane slot="${terminalSlot}"`)
+  || !mountedSnapshot.content?.[0]?.text?.includes('generation="')) {
+  throw new Error(`discovered provider semantics absent after switch: ${mountedSnapshot.content?.[0]?.text}`);
 }
 const stale = await client.callTool({
   name: 'husklet_terminal_switch_occupant',
@@ -43,7 +51,7 @@ const stale = await client.callTool({
 if (!stale.isError) throw new Error('stale generation unexpectedly switched the pane');
 const afterStale = JSON.parse((await client.callTool({ name: 'husklet_pane_list', arguments: {} })).content[0].text);
 const stillMounted = afterStale.panes.find((pane) => pane.slot === terminalSlot);
-if (stillMounted.kind !== 'surface' || stillMounted.provider?.extension !== 'containers') {
+if (stillMounted.kind !== 'surface' || stillMounted.provider?.extension !== discovered.extension) {
   throw new Error(`stale refusal mutated occupant: ${JSON.stringify(stillMounted)}`);
 }
 const restored = await client.callTool({

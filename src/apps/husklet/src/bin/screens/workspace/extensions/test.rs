@@ -2564,6 +2564,16 @@ mod panes {
         Window::exhibit(&bench.window, gallery.clone());
         let surface_slot = Console::surface(&bench.window, Some("containers"), &terminal_slot, Division::Beside)
             .expect("mount reference extension surface beside the terminal");
+        Console::switch_occupant(
+            &bench.window,
+            &surface_slot,
+            0,
+            &hl_extension::port::PaneOccupantTarget::Surface {
+                extension: "containers".into(),
+                provider: "main".into(),
+            },
+        )
+        .expect("fixture advertises its provider through typed pane inspection");
         let frame = extension::Extension::new()
             .observe(Vec::new())
             .into_iter()
