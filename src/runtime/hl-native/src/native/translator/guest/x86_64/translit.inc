@@ -945,8 +945,7 @@ static uint64_t translit_jitdump_now(void) {
 
 static void translit_jitdump_open(const char *directory, pid_t pid) {
     if (translit_jitdump_marker != NULL) (void)munmap(translit_jitdump_marker, 4096);
-    if (translit_jitdump_file != NULL) fclose(translit_jitdump_file);
-    translit_jitdump_file = NULL;
+    translit_profile_stream_close(&translit_jitdump_file);
     translit_jitdump_marker = NULL;
     char path[PATH_MAX];
     /* perf's jitdump protocol identifies one process-lifetime stream by this
@@ -959,9 +958,15 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
         translit_profile_output_failed("jitdump create-exclusive");
         return;
     }
+    descriptor = hl_host_process_fd_private_adopt(descriptor);
+    if (descriptor < 0) {
+        translit_profile_output_failed("jitdump private descriptor");
+        return;
+    }
     translit_jitdump_file = fdopen(descriptor, "w+b");
     if (translit_jitdump_file == NULL) {
         int saved = errno;
+        hl_host_process_fd_private_remove(descriptor);
         close(descriptor);
         errno = saved;
         translit_profile_output_failed("jitdump stream");
@@ -970,16 +975,14 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
     translit_jitdump_header header = {UINT32_C(0x4A695444), 1, sizeof header, 62, 0, (uint32_t)pid,
                                       translit_jitdump_now(), 0};
     if (fwrite(&header, sizeof header, 1, translit_jitdump_file) != 1 || fflush(translit_jitdump_file) != 0) {
-        fclose(translit_jitdump_file);
-        translit_jitdump_file = NULL;
+        translit_profile_stream_close(&translit_jitdump_file);
         return;
     }
     translit_jitdump_marker = mmap(NULL, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE,
                                    fileno(translit_jitdump_file), 0);
     if (translit_jitdump_marker == MAP_FAILED) {
         translit_jitdump_marker = NULL;
-        fclose(translit_jitdump_file);
-        translit_jitdump_file = NULL;
+        translit_profile_stream_close(&translit_jitdump_file);
         return;
     }
     (void)setvbuf(translit_jitdump_file, NULL, _IOFBF, 64u * 1024u);
