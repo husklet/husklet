@@ -390,19 +390,25 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p hl-gui-gtk --tests --locked --offline
 
-      - name: Test the engine composition root
+      # The receipt assertion is written only inside native_supervised.c's reap path and binds the
+      # observed ISA, status and signal. Requiring its exact verdict on this host prevents a translated
+      # fallback, a cfg-to-zero target, or a renamed test from certifying AMD64 native execution.
+      - name: Test engine composition and AMD64 native execution receipt
         run: |
           set -o pipefail
           .github/scripts/cargo-test-named.sh "engine composition root" \
             nix --extra-experimental-features 'nix-command flakes' develop . --command \
             cargo test -p hl-engine --all-targets --locked --offline 2>&1 | \
             tee "$RUNNER_TEMP/engine-composition-root.log"
-          verdict='test a_peer_that_exited_before_joining_does_not_stall_or_fail_the_capture_on_both_isas ... ok'
-          count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/engine-composition-root.log" || true)
-          if [ "$count" -ne 1 ]; then
-            echo "::error title=Linux checkpoint verdict missing::$verdict appeared $count times, expected exactly once."
-            exit 1
-          fi
+          for verdict in \
+            'test a_peer_that_exited_before_joining_does_not_stall_or_fail_the_capture_on_both_isas ... ok' \
+            'test diagnostics_receipt_proves_success_signal_and_pre_exec_absence ... ok'; do
+            count=$(grep -Fxc "$verdict" "$RUNNER_TEMP/engine-composition-root.log" || true)
+            if [ "$count" -ne 1 ]; then
+              echo "::error title=Linux engine verdict missing::$verdict appeared $count times, expected exactly once."
+              exit 1
+            fi
+          done
 
       # `engine` is the worker application crate, not `hl-engine`. Its Linux direct-worker
       # regressions are integration tests, so neither the composition-root command above nor
