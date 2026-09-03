@@ -659,6 +659,30 @@ fn unsupported_census_records_successful_interpreter_steps() {
 }
 
 #[test]
+fn address_size_relative_calls_translate_across_an_executable_page_boundary() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "addr32_call");
+    let (interpreted, interpreted_status, interpreted_report) = run(&executable, "0");
+    let (translated, translated_status, translated_report) = run(&executable, "1");
+    let native = std::process::Command::new(&executable)
+        .output()
+        .expect("native address-size relative-call fixture");
+
+    assert_eq!(native.status.code(), Some(0));
+    assert_eq!(interpreted_status, 0);
+    assert_eq!(translated_status, interpreted_status);
+    assert_eq!(interpreted, native.stdout);
+    assert_eq!(translated, interpreted);
+    assert_eq!(interpreted_report.shape_direct_call, 0, "{}", interpreted_report.shape_line);
+    assert!(translated_report.shape_direct_call > 0, "{}", translated_report.shape_line);
+    assert!(
+        !translated_report.unsupported_line.contains("90000080e8:"),
+        "address-size E8 fell back instead of using direct-CALL lowering: {}",
+        translated_report.unsupported_line
+    );
+}
+
+#[test]
 fn executed_jmem_div_and_idiv_families_have_dedicated_completed_counts() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), "executed_families");

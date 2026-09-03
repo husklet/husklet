@@ -1402,7 +1402,12 @@ static int translit_classify(const struct insn *insn) {
     // apply to a 64-bit host address. VEX/EVEX/0F38/0F3A and x87: guest xmm/ST live in cpu->v/cpu->st and
     // are never loaded into host registers by this backend.
     if (insn->len <= 0 || insn->vex || insn->evex || insn->map3) return TL_NO;
-    if (insn->addr32) return TL_NO;
+    // In 64-bit mode the address-size override does not change a near relative CALL: E8 still carries a
+    // sign-extended rel32 target, pushes the 64-bit next RIP through the 64-bit stack pointer, and ignores
+    // address calculation entirely.  GCC's driver emits this `67 e8` spelling heavily (the real compiler
+    // workload's largest unsupported form), so let the existing direct-CALL lowering handle it.  Keep the
+    // blanket refusal for every instruction that actually has an effective address to wrap to 32 bits.
+    if (insn->addr32 && (insn->two || insn->op != 0xE8)) return TL_NO;
     // First TLS family: exactly `64 REX.W 8b|2b mod00 r/m=100 sib=25 disp32`.  This is the dominant
     // compiler TLS form and has no guest base/index register to project.  Everything wider (GS, an
     // address-size or other prefix, a real SIB operand, stores) remains in the authoritative interpreter.
