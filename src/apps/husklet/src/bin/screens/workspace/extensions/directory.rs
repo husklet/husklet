@@ -434,6 +434,9 @@ impl Catalogue {
                     "{} was updated from {} at {}",
                     candidate.manifest.name, candidate.reference, candidate.digest
                 ));
+                if restore_focus {
+                    self.focus_installed_action(super::settings::UPDATE);
+                }
             }
         }
     }

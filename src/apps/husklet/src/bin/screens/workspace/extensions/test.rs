@@ -1387,6 +1387,8 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         .child_by_name("sample")
         .expect("installed surface");
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     let before = fixture.view.semantic_snapshot();
     let update = before
         .root
@@ -1467,7 +1469,23 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     }));
     container_control.set_active(true);
 
-    page.consent();
+    let consent = fixture.view.semantic_snapshot();
+    let accept = consent.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("reviewed update exposes consent");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: consent.revision, node: accept.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("update consent receives focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: consent.revision, node: accept.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused update consent is invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(gtk::prelude::RootExt::focus(&window)
+        .is_some_and(|widget| widget.has_css_class(super::settings::UPDATE)),
+        "accepted update hands focus to the next Update action");
     let entry = fixture
         .roster
         .borrow()
@@ -1488,6 +1506,8 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         }),
         "the lifecycle card identifies the active version"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
