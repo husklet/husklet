@@ -92,7 +92,30 @@ fn a_handler_reports_exactly_the_identity_it_is_currently_bound_to() {
     }
     a_rebound_handler_replaces_the_previous_one();
     a_cleared_handler_reports_nothing();
+    queued_interaction_is_withdrawn_when_its_handler_is_cleared();
+    queued_interaction_is_withdrawn_when_its_node_is_removed();
     a_handler_bound_again_after_clearing_reports_once_more();
+}
+
+fn queued_interaction_is_withdrawn_when_its_handler_is_cleared() {
+    let mut session = Session::new();
+    session.apply(handler(session.button, "stale"));
+    session.button().emit_clicked();
+    session.apply(Patch::ClearHandler {
+        id: session.button,
+        trigger: Trigger::Invoke,
+    });
+
+    assert!(session.surface.reports().is_empty(), "clearing authority also retires its queued action");
+}
+
+fn queued_interaction_is_withdrawn_when_its_node_is_removed() {
+    let mut session = Session::new();
+    session.apply(handler(session.button, "stale"));
+    session.button().emit_clicked();
+    session.apply(Patch::Remove { id: session.button });
+
+    assert!(session.surface.reports().is_empty(), "removing a node retires its queued action");
 }
 
 fn a_rebound_handler_replaces_the_previous_one() {

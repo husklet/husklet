@@ -132,6 +132,7 @@ impl Surface {
     fn discard(&mut self, id: NodeId) -> Result<(), Failure> {
         let widget = self.registry.remove(id).ok_or(Failure::Unmapped(id))?;
         self.bindings.forget(id);
+        self.reports.withdraw(id, None);
         build::detach(&widget);
         Ok(())
     }
@@ -197,6 +198,7 @@ impl Renderer for Surface {
             }
             Patch::ClearHandler { id, trigger } => {
                 self.bindings.clear(*id, *trigger);
+                self.reports.withdraw(*id, Some(*trigger));
                 Ok(())
             }
             Patch::Remove { id } => self.discard(*id),

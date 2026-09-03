@@ -46,6 +46,15 @@ impl Reports {
         queue.push_back(event);
     }
 
+    /// Drops interaction whose producer authority was withdrawn before the
+    /// host had a chance to drain it.
+    pub(crate) fn withdraw(&self, node: NodeId, trigger: Option<Trigger>) {
+        self.queue.borrow_mut().retain(|event| {
+            event_authority(event)
+                .is_none_or(|(held, kind)| held != node || trigger.is_some_and(|wanted| wanted != kind))
+        });
+    }
+
     /// Takes everything reported since the previous drain.
     #[must_use]
     pub fn drain(&self) -> Vec<Event> {
@@ -56,6 +65,24 @@ impl Reports {
     pub fn is_empty(&self) -> bool {
         self.queue.borrow().is_empty()
     }
+}
+
+fn event_authority(event: &Event) -> Option<(NodeId, Trigger)> {
+    Some(match event {
+        Event::Invoke { node, .. } => (*node, Trigger::Invoke),
+        Event::Change { node, .. } => (*node, Trigger::Change),
+        Event::Submit { node, .. } => (*node, Trigger::Submit),
+        Event::Select { node, .. } => (*node, Trigger::Select),
+        Event::Scroll { node, .. } => (*node, Trigger::Scroll),
+        Event::Close { node, .. } => (*node, Trigger::Close),
+        Event::Context { node, .. } => (*node, Trigger::Context),
+        Event::Key { node, .. } => (*node, Trigger::Key),
+        Event::Focus { node, .. } => (*node, Trigger::Focus),
+        Event::Pointer { node, .. } => (*node, Trigger::Pointer),
+        Event::Drag { node, .. } => (*node, Trigger::Drag),
+        Event::Drop { node, .. } => (*node, Trigger::Drop),
+        _ => return None,
+    })
 }
 
 fn replaceable(event: &Event) -> bool {
