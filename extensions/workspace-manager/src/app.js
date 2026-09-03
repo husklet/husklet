@@ -408,10 +408,18 @@ export function Executions({ api, resource, executionDetails, truncated = false,
   };
   const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
   const view = bounded(resource.data);
+  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
-    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No executions', detail: 'Commands executed in containers will appear here.' }),
-    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading executions…',
+      emptyLabel: 'No executions',
+      emptyDetail: 'Commands executed in containers will appear here.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry executions',
+      onRetry: resource.reload,
+    }, ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
       h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
         selected !== item.id ? null : h(ResourceState, {
@@ -439,7 +447,7 @@ export function Executions({ api, resource, executionDetails, truncated = false,
         h(ConfirmAction, { authorityKey: `execution:${item.id}:SIGTERM`, label: 'Terminate', confirmLabel: 'Confirm SIGTERM', pendingLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
         h(ConfirmAction, { authorityKey: `execution:${item.id}:remove`, label: 'Remove record', confirmLabel: 'Confirm removal', pendingLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
     h(Omitted, { count: view.omitted }),
-    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
+    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null));
 }
 
 const IMAGE_DETAIL_SCHEMA = Object.freeze([
