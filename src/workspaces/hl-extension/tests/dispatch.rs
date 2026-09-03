@@ -1012,12 +1012,12 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ExecutionRemove { id: "e1".into() },
+            Request::ExecutionRemove { id: "e".repeat(32) },
             Capability::ContainerControl,
         ),
         (
             Request::ContainerExec {
-                id: "c1".into(),
+                id: "c".repeat(64),
                 command: vec!["worker".into()],
                 user: None,
                 working_directory: None,
