@@ -747,6 +747,7 @@ static uint64_t translit_jitdump_index;
 enum { TRANSLIT_SAMPLING_RECORD_CAP = 131072, TRANSLIT_SAMPLING_FLUSH_BATCH = 4096 };
 typedef struct translit_sampling_record {
     uint64_t address;
+    uint64_t timestamp;
     uint32_t length;
     char name[256];
 } translit_sampling_record;
@@ -761,7 +762,6 @@ static _Atomic uint32_t translit_sampling_pause, translit_sampling_pause_ready, 
 typedef struct translit_profile_generation {
     pid_t pid;
     uint64_t generation;
-    uint64_t timestamp;
     const uint8_t *rw, *rx;
     uint64_t size;
 } translit_profile_generation;
@@ -883,7 +883,6 @@ static void translit_profile_output_failed(const char *what) {
 
 static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, const char *name,
                                            size_t name_length) {
-    if (translit_profile_active.timestamp == 0) translit_profile_active.timestamp = translit_jitdump_now();
     if (translit_sampling_records == NULL)
         translit_sampling_records = calloc(TRANSLIT_SAMPLING_RECORD_CAP, sizeof *translit_sampling_records);
     if (translit_sampling_records == NULL || translit_sampling_record_count == TRANSLIT_SAMPLING_RECORD_CAP) {
@@ -898,6 +897,7 @@ static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, 
 #endif
     translit_sampling_record *record = &translit_sampling_records[translit_sampling_record_count++];
     record->address = address;
+    record->timestamp = translit_jitdump_now();
     record->length = host_len;
     memcpy(record->name, name, name_length + 1u);
     if (translit_sampling_record_count == 1) translit_sampling_receipt("enqueue-first");
@@ -907,7 +907,7 @@ static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, 
 
 static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
                                                uint64_t size) {
-    translit_profile_generation next = {getpid(), generation, 0, rw, rx, size};
+    translit_profile_generation next = {getpid(), generation, rw, rx, size};
     if (translit_profile_active.pid == next.pid && translit_profile_active.generation == generation &&
         translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
         return;
@@ -1164,7 +1164,7 @@ static void translit_sampling_flush(void) {
                                (record->address - (uint64_t)(uintptr_t)translit_profile_active.rx);
         translit_jitdump_publish_at(translit_profile_options.directory, translit_profile_active.pid,
                                     record->name, strlen(record->name), start, record->length,
-                                    record->address, translit_profile_active.timestamp);
+                                    record->address, record->timestamp);
     }
     free(text);
     translit_sampling_record_count = 0;
@@ -1208,15 +1208,21 @@ static int translit_jitdump_lifecycle_test(void) {
         g_emit.cursor = code + 12;
         g_emit.rx_delta = 0;
         char path[PATH_MAX];
-        uint64_t boundaries[3] = {0};
+        uint64_t boundaries[4] = {0};
+        uint32_t boundary_count = 0;
         snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)getpid());
         for (uint64_t generation = 0; generation != 3; ++generation) {
             g_cache_gen = generation;
             translit_perf_map_generation_bind(generation, g_cache, J_RX(g_cache), CACHE_SZ);
             struct timespec tick = {0, 1000000};
             (void)nanosleep(&tick, NULL);
-            boundaries[generation] = translit_jitdump_now();
+            boundaries[boundary_count++] = translit_jitdump_now();
             translit_perf_map_publish_named("hl_jitdump_lifecycle", code, 4);
+            if (generation == 1) {
+                (void)nanosleep(&tick, NULL);
+                boundaries[boundary_count++] = translit_jitdump_now();
+                translit_perf_map_publish_named("hl_jitdump_lifecycle_second", code + 4, 4);
+            }
             if (generation == 0 && access(path, F_OK) == 0) _exit(3);
             /* Repeated flush/quiescence boundaries retain both private streams;
                the third generation must continue the same process lifetime. */
@@ -1233,11 +1239,11 @@ static int translit_jitdump_lifecycle_test(void) {
                  header.magic == UINT32_C(0x4A695444) && header.pid == (uint32_t)getpid();
         if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle header failed: input=%p errno=%d\n", (void *)input, errno);
         uint64_t previous_timestamp = 0;
-        for (uint64_t index = 1; ok && index <= 3; ++index) {
+        for (uint64_t index = 1; ok && index <= 4; ++index) {
             translit_jitdump_load load;
             ok = fread(&load, sizeof load, 1, input) == 1 && load.id == 0 && load.pid == (uint32_t)getpid() &&
                  load.code_index == index &&
-                 load.code_addr == (uint64_t)(uintptr_t)J_RX(code) && load.timestamp != 0 &&
+                 load.code_addr == (uint64_t)(uintptr_t)J_RX(code + (index == 3 ? 4 : 0)) && load.timestamp != 0 &&
                  load.timestamp >= boundaries[index - 1] && load.timestamp >= previous_timestamp &&
                  load.total_size >= sizeof load;
             if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle record %llu failed: id=%u pid=%u index=%llu address=%llx size=%u\n",
