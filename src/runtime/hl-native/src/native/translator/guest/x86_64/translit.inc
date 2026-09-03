@@ -160,7 +160,18 @@ static uint64_t translit_jcc_fall_admitted;
 static uint64_t translit_jcc_fall_page_refused;
 static uint64_t translit_jcc_fall_successor_page_refused;
 static uint64_t translit_jcc_fall_decode_refused;
+/* Translation-construction receipt. Updated only when diagnostics are enabled, so ordinary launches
+   pay no atomic cost. `decode_results` counts loop iterations receiving a decoded result; before the
+   successor lookahead, every admitted stitch made `decode_calls - decode_results` grow by one. */
+static uint64_t translit_decode_calls;
+static uint64_t translit_decode_results;
+static uint64_t translit_decode_successor_probes;
+static uint64_t translit_decode_lookahead_consumed;
 #if defined(HL_NATIVE_TEST_HOOKS)
+static _Thread_local uint64_t translit_test_decode_calls;
+static _Thread_local uint64_t translit_test_decode_results;
+static _Thread_local uint64_t translit_test_decode_successor_probes;
+static _Thread_local uint64_t translit_test_decode_lookahead_consumed;
 static uint64_t translit_jcc_fall_executed;
 static _Atomic uint64_t translit_jcc_link_admitted;
 static _Atomic uint64_t translit_jcc_live_forward_admitted;
@@ -3610,7 +3621,8 @@ static void *translit_sampling_flush_worker(void *opaque) {
     return NULL;
 }
 #endif
-static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next, struct insn *successor);
+static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next,
+                                  struct insn *successor, uint8_t successor_bytes[HL_X86_MAX_INSN]);
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 typedef struct {
@@ -4039,7 +4051,9 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         uint64_t next = (uint64_t)(uintptr_t)code;
         struct insn successor;
         translit_test_decode_refuse_pc = next;
-        int refused = translit_jcc_successor(NULL, next, next, &successor) == TL_SUCCESSOR_DECODE_REFUSED;
+        uint8_t successor_bytes[HL_X86_MAX_INSN];
+        int refused = translit_jcc_successor(NULL, next, next, &successor, successor_bytes) ==
+                      TL_SUCCESSOR_DECODE_REFUSED;
         translit_test_decode_refuse_pc = 0;
         return refused ? 0 : 23;
     }
@@ -5000,6 +5014,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 228) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_mixed_fixture_test(scenario));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario >= 101 && scenario <= 111) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -5101,12 +5124,20 @@ static int translit_condition(const struct insn *insn) {
     return insn->op & 0xF;
 }
 
+typedef struct {
+    uint64_t pc;
+    struct insn insn;
+    uint8_t bytes[HL_X86_MAX_INSN];
+    int decoded;
+    int valid;
+} translit_decode_lookahead;
+
 static int translit_jcc_successor(hl_x86_hot_context *context, uint64_t source, uint64_t next,
-                                  struct insn *successor) {
+                                  struct insn *successor, uint8_t successor_bytes[HL_X86_MAX_INSN]) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (next == translit_test_decode_refuse_pc) return TL_SUCCESSOR_DECODE_REFUSED;
 #endif
-    int decoded = context != NULL ? hl_x86_decode_context(context, next, successor) : hl_x86_decode(next, successor);
+    int decoded = hl_x86_decode_transaction_bytes(context, next, successor, successor_bytes);
     if (decoded <= 0 || successor->len <= 0) return TL_SUCCESSOR_DECODE_REFUSED;
     if (next > UINT64_MAX - (uint64_t)successor->len ||
         ((next + (uint64_t)successor->len - 1) >> 12) != (source >> 12))
@@ -5185,6 +5216,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     struct insn first_insn;
     uint8_t first_bytes[HL_X86_MAX_INSN];
     int first_decoded = hl_x86_decode_transaction_bytes(context, gpc, &first_insn, first_bytes);
+    uint64_t decode_calls = 1, decode_results = 0, successor_probes = 0, lookahead_consumed = 0;
     int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (first_decoded <= 0)
@@ -5323,6 +5355,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t attempt_direct_jmp_ibtc_sites = direct_jmp_ibtc_sites;
     uint64_t attempt_linked_page_lo = linked_page_lo, attempt_linked_page_hi = linked_page_hi;
     translit_attempt_telemetry attempt_telemetry = {0};
+    translit_decode_lookahead lookahead = {0};
 
     while (count < TL_MAX_INSNS && !a->overflow) {
         struct insn insn;
@@ -5330,9 +5363,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (count == 0 && pc == gpc) {
             insn = first_insn;
             decoded = first_decoded;
+        } else if (lookahead.valid && lookahead.pc == pc) {
+            insn = lookahead.insn;
+            decoded = lookahead.decoded;
+            memcpy(bytes, lookahead.bytes, (size_t)decoded);
+            lookahead.valid = 0;
+            ++lookahead_consumed;
         } else {
             decoded = hl_x86_decode_transaction_bytes(context, pc, &insn, bytes);
+            ++decode_calls;
         }
+        ++decode_results;
         if (count == 0 && pc == gpc && first_decoded > 0)
             memcpy(bytes, first_bytes, (size_t)first_insn.len);
         if (decoded > 0) {
@@ -5695,7 +5736,10 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             TL_ATTEMPT_ADD(translit_jcc_fall_candidates, jcc_candidates);
             if (stitched < TL_STITCH_MAX_JMPS) {
                 struct insn successor;
-                int successor_status = translit_jcc_successor(context, pc, next, &successor);
+                uint8_t successor_bytes[HL_X86_MAX_INSN];
+                ++decode_calls;
+                ++successor_probes;
+                int successor_status = translit_jcc_successor(context, pc, next, &successor, successor_bytes);
                 if (successor_status == TL_SUCCESSOR_DECODE_REFUSED) {
                     TL_ATTEMPT_ADD(translit_jcc_fall_decode_refused, jcc_decode_refused);
                 } else if (successor_status == TL_SUCCESSOR_PAGE_REFUSED) {
@@ -5748,6 +5792,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     stitched++;
                     jcc_fall_stitched++;
                     previous_kind = kind;
+                    lookahead.pc = next;
+                    lookahead.insn = successor;
+                    memcpy(lookahead.bytes, successor_bytes, (size_t)successor.len);
+                    lookahead.decoded = successor.len;
+                    lookahead.valid = 1;
                     TL_ATTEMPT_ADD(translit_jcc_fall_admitted, jcc_admitted);
                     continue;
                 }
@@ -5764,8 +5813,15 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (target > next && (target >> 12) == (pc >> 12)) {
                 TL_ATTEMPT_ADD(translit_stitch_candidates, stitch_candidates);
                 struct insn successor;
-                if (stitched < TL_STITCH_MAX_JMPS && hl_x86_decode_context(context, target, &successor) > 0 &&
-                    successor.len > 0) {
+                uint8_t successor_bytes[HL_X86_MAX_INSN];
+                int successor_decoded = -1;
+                if (stitched < TL_STITCH_MAX_JMPS) {
+                    ++decode_calls;
+                    ++successor_probes;
+                    successor_decoded =
+                        hl_x86_decode_transaction_bytes(context, target, &successor, successor_bytes);
+                }
+                if (successor_decoded > 0 && successor.len > 0) {
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)(direct_jmp_stitched + 1),
                                         (unsigned)jcc_fall_stitched, source_page_delta);
                     if (a->overflow) {
@@ -5788,6 +5844,11 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     stitched++;
                     direct_jmp_stitched++;
                     previous_kind = kind;
+                    lookahead.pc = target;
+                    lookahead.insn = successor;
+                    memcpy(lookahead.bytes, successor_bytes, (size_t)successor.len);
+                    lookahead.decoded = successor.len;
+                    lookahead.valid = 1;
                     TL_ATTEMPT_ADD(translit_stitch_admitted, stitch_admitted);
                     continue;
                 }
@@ -6260,8 +6321,18 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     block->profile_insns = (uint16_t)count;
     translit_perf_map_publish(block, start, block->host_len, (uint32_t)count, readonly_riprel_count);
 #if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_decode_calls = decode_calls;
+    translit_test_decode_results = decode_results;
+    translit_test_decode_successor_probes = successor_probes;
+    translit_test_decode_lookahead_consumed = lookahead_consumed;
     block->profile_jcc_fall_stitches = (uint8_t)jcc_fall_stitched;
 #endif
+    if (g_prof) {
+        (void)__atomic_fetch_add(&translit_decode_calls, decode_calls, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_decode_results, decode_results, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_decode_successor_probes, successor_probes, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_decode_lookahead_consumed, lookahead_consumed, __ATOMIC_RELAXED);
+    }
     g_cp = a->cursor;
     if (jcc_ibtc_sites_out != NULL) *jcc_ibtc_sites_out = jcc_ibtc_sites;
     translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_EMITTED, direct_jmp_ibtc_sites);
@@ -7366,6 +7437,12 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         0x66, 0x0f, 0xef, 0xc9,       // pxor xmm1,xmm1
         0x0f, 0x0b,                   // deterministic tail
     };
+    static const uint8_t jcc_stitch[] = {
+        0x75, 0x02,                   // jne +2; translate the fall-through inline
+        0x90,                         // fall-through successor
+        0x90,                         // second fall-through instruction
+        0x0f, 0x0b,                   // taken target and deterministic tail
+    };
     uint8_t overflow[96 * 5 + 2];
     uint8_t normal_cap[TL_MAX_INSNS + 2];
     for (unsigned i = 0; i < 96; i++) {
@@ -7378,9 +7455,11 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     normal_cap[TL_MAX_INSNS] = 0x0f;
     normal_cap[TL_MAX_INSNS + 1] = 0x0b;
     const uint8_t *bytes = scenario == 81 ? overflow : scenario == 84 ? normal_cap
+                                                      : scenario == 228 ? jcc_stitch
                                                       : scenario == 85 ? direct_stitch
                                                                        : alternating;
     size_t length = scenario == 81 ? sizeof overflow : scenario == 84 ? sizeof normal_cap
+                                                           : scenario == 228 ? sizeof jcc_stitch
                                                            : scenario == 85 ? sizeof direct_stitch
                                                                             : sizeof alternating;
     uint8_t *saved_cache = g_cache;
@@ -7410,6 +7489,11 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     uint64_t admitted_before = __atomic_load_n(&translit_mixed_sse_admitted, __ATOMIC_RELAXED);
     uint64_t transitions_before = __atomic_load_n(&translit_mixed_sse_transitions, __ATOMIC_RELAXED);
     uint64_t stitches_before = __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED);
+    uint64_t jcc_before = __atomic_load_n(&translit_jcc_fall_admitted, __ATOMIC_RELAXED);
+    translit_test_decode_calls = 0;
+    translit_test_decode_results = 0;
+    translit_test_decode_successor_probes = 0;
+    translit_test_decode_lookahead_consumed = 0;
     void *body = translit_build(context, block, translit_fall_fixture_guest, NULL);
     jit_body_owner_entry *entries = atomic_load_explicit(&set->entry, memory_order_acquire);
 
@@ -7515,7 +7599,10 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     } else if (scenario == 85) {
         uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
         int exact = body != NULL && block->profile_insns == 5 && published == 6 &&
-                    __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED) == stitches_before + 1;
+                    __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED) == stitches_before + 1 &&
+                    translit_test_decode_calls == translit_test_decode_results &&
+                    translit_test_decode_successor_probes == 1 &&
+                    translit_test_decode_lookahead_consumed == 1;
         for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
             uint64_t owner_guest = 0, instruction_guest = 0;
             exact = jit_body_owner_lookup((uint64_t)(uintptr_t)body + offset, &owner_guest) &&
@@ -7523,6 +7610,13 @@ static int translit_mixed_fixture_test(unsigned scenario) {
                     owner_guest == instruction_guest;
         }
         result = exact ? 0 : 129;
+    } else if (scenario == 228) {
+        int exact = body != NULL && block->profile_insns == 3 &&
+                    __atomic_load_n(&translit_jcc_fall_admitted, __ATOMIC_RELAXED) == jcc_before + 1 &&
+                    translit_test_decode_calls == translit_test_decode_results &&
+                    translit_test_decode_successor_probes == 1 &&
+                    translit_test_decode_lookahead_consumed == 1;
+        result = exact ? 0 : 131;
     } else if (scenario == 86) {
         uint64_t old_generation = g_cache_gen;
         atomic_store_explicit(&set->count, JIT_BODY_OWNER_N - (TL_MAX_OWNER_RANGES - 1), memory_order_relaxed);
@@ -9341,6 +9435,12 @@ static int translit_report(char *out, size_t size) {
     uint64_t jcc_fall_successor_page_refused =
         __atomic_load_n(&translit_jcc_fall_successor_page_refused, __ATOMIC_RELAXED);
     uint64_t jcc_fall_decode_refused = __atomic_load_n(&translit_jcc_fall_decode_refused, __ATOMIC_RELAXED);
+    uint64_t decode_calls = __atomic_load_n(&translit_decode_calls, __ATOMIC_RELAXED);
+    uint64_t decode_results = __atomic_load_n(&translit_decode_results, __ATOMIC_RELAXED);
+    uint64_t decode_successor_probes =
+        __atomic_load_n(&translit_decode_successor_probes, __ATOMIC_RELAXED);
+    uint64_t decode_lookahead_consumed =
+        __atomic_load_n(&translit_decode_lookahead_consumed, __ATOMIC_RELAXED);
 #if defined(HL_NATIVE_TEST_HOOKS)
     uint64_t jcc_fall_executed = __atomic_load_n(&translit_jcc_fall_executed, __ATOMIC_RELAXED);
     uint64_t jcc_link_admitted = __atomic_load_n(&translit_jcc_link_admitted, __ATOMIC_RELAXED);
@@ -9537,6 +9637,8 @@ static int translit_report(char *out, size_t size) {
                     " natural_lea_lowered=%llu natural_load_bridge_lowered=%llu"
                     " jcc_fall_candidates=%llu jcc_fall_admitted=%llu jcc_fall_page_refused=%llu"
                     " jcc_fall_successor_page_refused=%llu jcc_fall_decode_refused=%llu"
+                    " decode_calls=%llu decode_results=%llu decode_successor_probes=%llu"
+                    " decode_lookahead_consumed=%llu"
                     " jcc_fall_executed=%llu jcc_link_admitted=%llu jcc_link_taken=%llu"
                     " jcc_link_irq_fallback=%llu jcc_link_dispatcher=%llu"
                     " mixed_sse_encounters=%llu mixed_sse_admitted=%llu mixed_sse_transitions=%llu"
@@ -9565,7 +9667,11 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)jcc_fall_candidates, (unsigned long long)jcc_fall_admitted,
                     (unsigned long long)jcc_fall_page_refused,
                     (unsigned long long)jcc_fall_successor_page_refused,
-                    (unsigned long long)jcc_fall_decode_refused, (unsigned long long)jcc_fall_executed,
+                    (unsigned long long)jcc_fall_decode_refused,
+                    (unsigned long long)decode_calls, (unsigned long long)decode_results,
+                    (unsigned long long)decode_successor_probes,
+                    (unsigned long long)decode_lookahead_consumed,
+                    (unsigned long long)jcc_fall_executed,
                     (unsigned long long)jcc_link_admitted, (unsigned long long)jcc_link_taken,
                     (unsigned long long)jcc_link_irq_fallback, (unsigned long long)jcc_link_dispatcher,
                     (unsigned long long)mixed_sse_encounters, (unsigned long long)mixed_sse_admitted,
