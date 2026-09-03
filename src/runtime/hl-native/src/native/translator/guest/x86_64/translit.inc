@@ -1368,9 +1368,8 @@ static int translit_classify_two(const struct insn *insn) {
         return TL_SSE2;
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
-        if (op == 0x6F ||
-            ((op == 0x6C || op == 0x6E || op == 0xDB || op == 0xDF || op == 0xEB || op == 0xEF) &&
-             insn->mod == 3))
+        if (op == 0x6F || op == 0xDB ||
+            ((op == 0x6C || op == 0x6E || op == 0xDF || op == 0xEB || op == 0xEF) && insn->mod == 3))
             return TL_SSE2;
         // First landing keeps 7E to its register destination: a guest-memory store has separate SMC and
         // store-observer retirement requirements and is not silently treated as an ordinary host store.
@@ -4172,6 +4171,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                                {0x66, 0x0F, 0x6E, 0xC1}, {0x66, 0x4D, 0x0F, 0x6E, 0xD9},
                                                {0x66, 0x0F, 0xEF, 0xC1}, {0x66, 0x45, 0x0F, 0xEF, 0xC1},
                                                {0x66, 0x0F, 0x6F, 0x00}, {0xF3, 0x0F, 0x6F, 0x01},
+                                               {0x66, 0x0F, 0xDB, 0x00},
                                                {0x0F, 0x10, 0xC1}, {0x0F, 0x28, 0x01}, {0x0F, 0x12, 0xC1},
                                                {0x45, 0x0F, 0x12, 0xFF},
                                                {0x66, 0x0F, 0x73, 0xDA, 0}, {0x66, 0x0F, 0xEB, 0xC1},
@@ -4191,7 +4191,6 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
                                               {0xF2, 0x0F, 0x6F, 0xC1},
                                               {0x67, 0x66, 0x0F, 0xEB, 0xC1}, // address-size override
                                               {0x66, 0x0F, 0x73, 0x18, 1},    // group form requires mod=3
-                                              {0x66, 0x0F, 0xDB, 0x00},       // aligned-memory contract deferred
                                               {0x66, 0x0F, 0x6C, 0x00},       // PUNPCKLQDQ memory source deferred
                                               {0x66, 0x0F, 0x6E, 0x00},       // MOVD/Q memory source deferred
                                               {0x66, 0x0F, 0xEF, 0x00},       // PXOR memory source deferred
