@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
+node "$root/extensions/client/tools/protocol-spec.js"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/husklet-extension-contracts.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 

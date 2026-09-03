@@ -78,7 +78,7 @@ function packageStageFiles(dockerfile, destination) {
       const output = target === './'
         ? path.join(destination, path.basename(source))
         : path.join(destination, target.replace(/^\.\//, ''));
-      fs.cpSync(path.join(root, source), output, { recursive: true });
+      fs.cpSync(path.join(root, '..', source), output, { recursive: true });
     }
   }
 }
@@ -101,10 +101,13 @@ try {
     cwd: root, encoding: 'utf8',
   });
   const filename = JSON.parse(tarball)[0].filename;
+  const clientTarball = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
+    cwd: path.join(root, '..', 'client'), encoding: 'utf8',
+  }))[0].filename;
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, filename), 'react@18.3.1'], {
+  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1'], {
     cwd: consumer, stdio: 'pipe',
   });
   const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
@@ -127,6 +130,7 @@ try {
   assert.equal(starterPackage.type, 'module');
   assert.equal(starterPackage.scripts.start, 'node main.js');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
+  assert.equal(starterPackage.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterPackage.dependencies.react, '18.3.1');
   assert.match(
     starterDockerfile,
@@ -139,10 +143,11 @@ try {
   const standaloneStarter = path.join(scratch, 'standalone-starter');
   fs.cpSync(installedStarter, standaloneStarter, { recursive: true });
   execFileSync('npm', [
-    'install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, filename), 'react@18.3.1',
+    'install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1',
   ], { cwd: standaloneStarter, stdio: 'pipe' });
   const starterLock = JSON.parse(fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'));
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
+  assert.equal(starterLock.packages['node_modules/@husklet/client'].version, manifest.version);
   assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
   await runPackedStarter(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
@@ -244,7 +249,7 @@ try {
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
   assert.match(dockerfile, /npm init -y \\\n+    && npm pkg set type=module \\/, 'base /app must classify copied extension .js entrypoints as ESM');
-  assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" examples/starter/extension.toml'));
+  assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
@@ -263,16 +268,21 @@ try {
   fs.mkdirSync(baseSource);
   fs.mkdirSync(baseOutput);
   packageStageFiles(dockerfile, baseSource);
-  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: baseSource, stdio: 'pipe' });
-  const baseStarterManifest = path.join(baseSource, 'examples/starter/extension.toml');
+  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'client'), stdio: 'pipe' });
+  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'react'), stdio: 'pipe' });
+  const baseStarterManifest = path.join(baseSource, 'react/examples/starter/extension.toml');
   fs.writeFileSync(baseStarterManifest, fs.readFileSync(baseStarterManifest, 'utf8')
     .replace(/^version = .*$/m, 'version = "9.8.7"'));
   assert.match(fs.readFileSync(baseStarterManifest, 'utf8'), /^version = "9\.8\.7"$/m);
   const basePack = JSON.parse(execFileSync('npm', [
     'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
-  ], { cwd: baseSource, encoding: 'utf8' }));
+  ], { cwd: path.join(baseSource, 'react'), encoding: 'utf8' }));
   const baseNames = new Set(basePack[0].files.map(({ path: name }) => name));
   assert.deepEqual(baseNames, names, 'base image must install the complete published SDK package');
+  const baseClient = JSON.parse(execFileSync('npm', [
+    'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
+  ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
+  assert(baseClient.files.some(({ path: name }) => name === 'protocol.json'), 'base image must include the framework-neutral protocol manifest');
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

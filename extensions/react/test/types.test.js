@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
 const declarations = fs.readFileSync(path.resolve(here, '../src/index.d.ts'), 'utf8');
+const clientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/index.d.ts'), 'utf8');
 
 /** The body of one component's interface, as generated. */
 function shape(name) {
@@ -71,15 +72,15 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
 });
 
 test('host events type the pane chooser identity as well as subscribed snapshots', () => {
-  assert.match(declarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
-  assert.match(declarations, /export type InterfaceEvent =/);
-  assert.match(declarations, /InterfaceEventBase<'key', 'Key'> & \{ key: string; keycode: number; modifiers: number; pressed: boolean \}/);
-  assert.match(declarations, /phase: 'enter' \| 'motion' \| 'leave' \| 'press' \| 'release';/);
-  assert.match(declarations, /x: number \| null; y: number \| null; button: number; modifiers: number;/);
-  assert.match(declarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
-  assert.match(declarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
+  assert.match(clientDeclarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
+  assert.match(clientDeclarations, /export type InterfaceEvent =/);
+  assert.match(clientDeclarations, /InterfaceEventBase<'key', 'Key'> & \{ key: string; keycode: number; modifiers: number; pressed: boolean \}/);
+  assert.match(clientDeclarations, /phase: 'enter' \| 'motion' \| 'leave' \| 'press' \| 'release';/);
+  assert.match(clientDeclarations, /x: number \| null; y: number \| null; button: number; modifiers: number;/);
+  assert.match(clientDeclarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
+  assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
   assert.doesNotMatch(
-    declarations,
+    clientDeclarations,
     /onEvent\?: \(event: SnapshotEvent/,
     'strict consumers are incorrectly told that provider selections cannot arrive',
   );

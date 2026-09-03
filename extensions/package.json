@@ -3,11 +3,10 @@
   "private": true,
   "type": "module",
   "description": "The base image every extension builds from, and the extensions built on it.",
-  "workspaces": ["react", "mcp", "storybook", "workspace-manager"],
+  "workspaces": ["client", "react", "storybook", "workspace-manager"],
   "scripts": {
     "prepublish:check": "node tools/prepublish-check.js",
-    "postpublish:check": "node tools/postpublish-check.js",
-    "postpublish:check:test": "node tools/test-postpublish-check.js"
+    "postpublish:check": "node tools/postpublish-check.js"
   },
   "engines": { "node": ">=20" }
 }

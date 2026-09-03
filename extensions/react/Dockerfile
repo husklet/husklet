@@ -7,16 +7,15 @@ ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE} AS package
 ARG HUSKLET_REACT_VERSION
 WORKDIR /source
-COPY package.json README.md LICENSE ./
-COPY catalogue.json ./
-COPY examples/starter ./examples/starter
-COPY src ./src
+COPY client ./client
+COPY react ./react
 RUN test -n "${HUSKLET_REACT_VERSION}" \
-    && npm pkg set "version=${HUSKLET_REACT_VERSION}" \
-    && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" examples/starter/extension.toml \
-    && test "$(sed -n 's/^version = "\([^"]*\)"$/\1/p' examples/starter/extension.toml)" = "${HUSKLET_REACT_VERSION}" \
-    && test "$(node -p "require('./package.json').version")" = "${HUSKLET_REACT_VERSION}" \
-    && npm pack --ignore-scripts --pack-destination /out
+    && npm pkg set "version=${HUSKLET_REACT_VERSION}" --prefix client \
+    && npm pack --ignore-scripts --pack-destination /out --prefix client \
+    && npm pkg set "version=${HUSKLET_REACT_VERSION}" --prefix react \
+    && npm pkg set "dependencies.@husklet/client=${HUSKLET_REACT_VERSION}" --prefix react \
+    && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" react/examples/starter/extension.toml \
+    && npm pack --ignore-scripts --pack-destination /out --prefix react
 
 FROM ${NODE_IMAGE}
 ARG HUSKLET_REACT_VERSION
@@ -34,6 +33,7 @@ COPY --from=package /out /opt/husklet-sdk
 RUN npm init -y \
     && npm pkg set type=module \
     && npm install --no-audit --no-fund --save-exact react@18.3.1 react-reconciler@0.29.2 /opt/husklet-sdk/*.tgz \
+    && test "$(node -p "require('@husklet/client/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && npm cache clean --force
 
