@@ -876,6 +876,10 @@ impl Catalogue {
         self.widget.append(&self.listing);
         self.widget.append(&text("Register an image", "dhead"));
         self.reference.add_css_class(REFERENCE);
+        // GTK entries otherwise contribute the full placeholder as their
+        // minimum width, clipping the whole page beside compact navigation.
+        self.reference.set_width_chars(1);
+        self.reference.set_hexpand(true);
         self.reference
             .set_placeholder_text(Some("OCI image, e.g. registry.example.com/team/extension:1.2.3"));
         self.semantics.register(
@@ -1004,5 +1008,6 @@ fn text(said: &str, class: &str) -> gtk::Label {
     label.add_css_class(class);
     label.set_xalign(0.0);
     label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     label
 }

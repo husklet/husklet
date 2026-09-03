@@ -674,6 +674,26 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         fixture._catalogue.viewport().vadjustment().upper() > fixture._catalogue.viewport().vadjustment().page_size(),
         "the narrow catalogue scrolls instead of imposing its full natural height"
     );
+    assert!(
+        fixture._catalogue.viewport().hadjustment().upper()
+            <= fixture._catalogue.viewport().hadjustment().page_size() + 1.0,
+        "the image field and registry guidance reflow instead of clipping the compact catalogue"
+    );
+    let reference = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::REFERENCE))
+        .expect("extension image reference field");
+    assert_eq!(
+        reference.downcast_ref::<gtk::Entry>().expect("reference is an entry").width_chars(),
+        1,
+        "the placeholder must not become the image field's minimum width"
+    );
+    assert!(
+        reference.width() <= fixture._catalogue.viewport().width(),
+        "image field must fit its compact viewport: field={} viewport={}",
+        reference.width(),
+        fixture._catalogue.viewport().width()
+    );
     let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
         .into_iter()
         .filter(|widget| {
