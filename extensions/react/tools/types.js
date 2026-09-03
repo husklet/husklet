@@ -294,7 +294,7 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
 export interface ProcessList {
-  titles: string[]; processes: string[][]; observed_at_ms: number;
+  container_id: string; titles: string[]; processes: string[][]; observed_at_ms: number;
   scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
 }
 export interface ContainerOutput {

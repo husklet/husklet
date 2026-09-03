@@ -364,7 +364,7 @@ test('container execution inspection is a strict bounded read through the typed 
 
 test('process inspection exposes its finite initial-process scope and snapshot PID identity', async () => {
   const { api, calls } = fake();
-  const snapshot = { titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+  const snapshot = { container_id: 'c'.repeat(64), titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
     processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
     scope: 'initial', pid_identity: 'snapshot', truncated: false };
   api.containers.processes = async (...args) => { calls.push(['containers.processes', ...args]); return snapshot; };

@@ -49,13 +49,18 @@ impl ContainerInventory for ContainerCatalog {
 
     fn processes(&self, id: &str) -> Result<ProcessList, HostError> {
         let client = self.bridge.client();
+        let container = self
+            .bridge
+            .wait(client.containers().inspect(id))
+            .map_err(|error| failure(&error))?;
+        let container_id = container.metadata.id.clone();
         let table = self
             .bridge
             // The daemon currently projects only PID 1. Request the executable
             // name, not argv, so read authority does not reveal argument secrets.
-            .wait(client.containers().top_with(id, Some("-eo pid,ppid,user,stat,comm")))
+            .wait(client.containers().top_with(&container_id, Some("-eo pid,ppid,user,stat,comm")))
             .map_err(|error| failure(&error))?;
-        Ok(process_snapshot(table.titles, table.processes))
+        Ok(process_snapshot(container_id, table.titles, table.processes))
     }
 
     fn logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
@@ -160,7 +165,7 @@ const PROCESS_ROWS: usize = 1024;
 const PROCESS_COLUMNS: usize = 16;
 const PROCESS_CELL_BYTES: usize = 4096;
 
-fn process_snapshot(mut titles: Vec<String>, mut processes: Vec<Vec<String>>) -> ProcessList {
+fn process_snapshot(container_id: String, mut titles: Vec<String>, mut processes: Vec<Vec<String>>) -> ProcessList {
     let mut truncated = titles.len() > PROCESS_COLUMNS || processes.len() > PROCESS_ROWS;
     titles.truncate(PROCESS_COLUMNS);
     processes.truncate(PROCESS_ROWS);
@@ -181,6 +186,7 @@ fn process_snapshot(mut titles: Vec<String>, mut processes: Vec<Vec<String>>) ->
         }
     }
     ProcessList {
+        container_id,
         titles,
         processes,
         observed_at_ms: std::time::SystemTime::now()
@@ -263,6 +269,7 @@ mod tests {
         epoch_seconds, inspection, output, process_snapshot, summary,
     };
     use hl_client::model::{Container, InspectContainer};
+    use hl_extension::port::ContainerInventory as _;
 
     fn listing() -> Container {
         serde_json::from_value(serde_json::json!({
@@ -376,6 +383,7 @@ mod tests {
     #[test]
     fn process_projection_is_finite_timestamped_and_truthful_about_pid_scope() {
         let snapshot = process_snapshot(
+            "f".repeat(64),
             (0..PROCESS_COLUMNS + 1).map(|index| format!("C{index}")).collect(),
             (0..PROCESS_ROWS + 1)
                 .map(|_| vec!["1".into(), "x".repeat(PROCESS_CELL_BYTES + 1)])
@@ -386,8 +394,46 @@ mod tests {
         assert!(snapshot.processes.iter().all(|row| row.len() <= snapshot.titles.len()));
         assert!(snapshot.processes[0][1].len() <= PROCESS_CELL_BYTES);
         assert!(snapshot.truncated);
+        assert_eq!(snapshot.container_id, "f".repeat(64));
         assert_eq!(snapshot.scope, hl_extension::port::ProcessScope::Initial);
         assert_eq!(snapshot.pid_identity, hl_extension::port::ProcessPidIdentity::Snapshot);
         assert!(snapshot.observed_at_ms > 0);
+    }
+
+    #[test]
+    fn process_lookup_resolves_once_then_samples_the_immutable_container() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc;
+
+        fn exchange(listener: &UnixListener, body: &str) -> String {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 2048];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..read]);
+            }
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8(request).unwrap()
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let id = "a".repeat(64);
+        let expected = id.clone();
+        let serving = std::thread::spawn(move || {
+            let inspect = format!(r#"{{"Id":"{expected}","Image":"alpine","Mounts":[],"Path":"/bin/sh","Args":[],"Name":"/worker","Created":"2023-11-14T22:13:20Z","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{{}},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"bridge","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#);
+            let first = exchange(&listener, &inspect);
+            let second = exchange(&listener, r#"{"Titles":["PID","COMM"],"Processes":[["1","init"]]}"#);
+            (first, second)
+        });
+        let catalogue = super::ContainerCatalog::new(Arc::new(super::super::Bridge::new(socket).unwrap()));
+        let snapshot = catalogue.processes("worker").unwrap();
+        let (inspect_request, top_request) = serving.join().unwrap();
+        assert!(inspect_request.starts_with("GET /v1.43/containers/worker/json?size=false HTTP/1.1"), "{inspect_request}");
+        assert!(top_request.starts_with(&format!("GET /v1.43/containers/{id}/top?ps_args=")), "{top_request}");
+        assert_eq!(snapshot.container_id, id);
     }
 }

@@ -147,6 +147,7 @@ impl ContainerInventory for Host {
     fn processes(&self, _id: &str) -> Result<ProcessList, HostError> {
         self.ledger.note("containers.processes");
         Ok(ProcessList {
+            container_id: "c".repeat(64),
             titles: vec!["PID".into(), "CMD".into()],
             processes: vec![vec!["7".into(), "server".into()]],
             observed_at_ms: 1_700_000_000_000,

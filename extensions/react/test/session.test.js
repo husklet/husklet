@@ -474,7 +474,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
   const replies = [
-    { reply: 'processes', with: { titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
+    { reply: 'processes', with: { container_id: containerId, titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
       processes: [['1', '0', 'root', '?', '/usr/bin/server']], observed_at_ms: 1_700_000_000_000,
       scope: 'initial', pid_identity: 'snapshot', truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: false } },
@@ -491,8 +491,8 @@ test('deep container methods and subscriptions use exact protocol request shapes
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const results = await Promise.all(operations);
   assert.deepEqual(
-    { scope: results[0].scope, pidIdentity: results[0].pid_identity, truncated: results[0].truncated },
-    { scope: 'initial', pidIdentity: 'snapshot', truncated: false },
+    { containerId: results[0].container_id, scope: results[0].scope, pidIdentity: results[0].pid_identity, truncated: results[0].truncated },
+    { containerId, scope: 'initial', pidIdentity: 'snapshot', truncated: false },
   );
   assert.equal(results[1].eof, false, 'empty output from a running initial process remains open');
   assert.deepEqual(

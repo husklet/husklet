@@ -77,7 +77,8 @@ Volume removal requires the canonical name, its complete 32-hex observed
 generation, and confirmation. The host atomically rejects a generation that no
 longer names the current same-name volume.
 Container process inspection is a timestamped, bounded snapshot of the initial
-process only. Its PID is explicitly snapshot-local and may be reused; the host
+process only, bound to the complete immutable container ID actually sampled. Its
+PID is explicitly snapshot-local and may be reused; the host
 does not expose argv or environment values, and does not claim child-process,
 CPU, or memory coverage that its current daemon sampler cannot provide.
 

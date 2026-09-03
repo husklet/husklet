@@ -50,6 +50,9 @@ pub struct ContainerSummary {
 /// pretending all hosts can report one fixed process schema.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ProcessList {
+    /// Complete immutable identity of the container actually sampled.
+    #[serde(default)]
+    pub container_id: String,
     pub titles: Vec<String>,
     pub processes: Vec<Vec<String>>,
     /// Host wall-clock time at which this point-in-time view was produced.
