@@ -1209,6 +1209,77 @@ fn calls() -> Vec<(Request, Capability)> {
     ]
 }
 
+/// Every authoritative request variant. `calls` is the subset whose happy
+/// path is independent of prior session state; this inventory also includes
+/// stateful interface calls and the remaining resource operations so denial
+/// is proven before any authority-bearing port is reached.
+fn all_calls() -> Vec<(Request, Capability)> {
+    let mut requests = calls();
+    requests.extend([
+        (Request::ContainerAttachTerminal { id: "c".repeat(64), command: vec!["sh".into()] }, Capability::ContainerAttach),
+        (Request::ImagePullStart { reference: "alpine".into() }, Capability::ImageWrite),
+        (Request::ImagePullStatus { job: "job".into() }, Capability::ImageWrite),
+        (Request::ImagePullCancel { job: "job".into() }, Capability::ImageWrite),
+        (Request::VolumeList, Capability::VolumeRead),
+        (Request::VolumeInspect { name: "cache".into() }, Capability::VolumeRead),
+        (Request::VolumeCreate { name: "cache".into() }, Capability::VolumeWrite),
+        (Request::VolumeRemove { name: "cache".into(), generation: "a".repeat(32) }, Capability::VolumeWrite),
+        (Request::NetworkList, Capability::NetworkRead),
+        (Request::NetworkInspect { reference: "bridge".into() }, Capability::NetworkRead),
+        (Request::NetworkCreate { name: "private".into() }, Capability::NetworkWrite),
+        (Request::NetworkRemove { reference: "private".into() }, Capability::NetworkWrite),
+        (Request::NetworkConnect { reference: "private".into(), container: "c".repeat(64), aliases: Vec::new() }, Capability::NetworkWrite),
+        (Request::NetworkDisconnect { reference: "private".into(), container: "c".repeat(64) }, Capability::NetworkWrite),
+        (Request::TerminalReadPane { slot: "s1".into(), lines: None }, Capability::TerminalOutput),
+        (Request::PaneSemanticRead { slot: "s1".into() }, Capability::PaneSemanticRead),
+        (Request::PaneSemanticAction { slot: "s1".into(), action: PaneSemanticAction { generation: 0, revision: 1, node: 1, action: SemanticActionKind::Invoke, value: None } }, Capability::PaneSemanticControl),
+        (Request::TerminalResizeGridObserved { slot: "s1".into(), generation: 0, revision: 1, columns: 80, rows: 24 }, Capability::TerminalControl),
+        (Request::TerminalClosePane { slot: "s1".into() }, Capability::TerminalControl),
+        (Request::TerminalClosePaneObserved { slot: "s1".into(), generation: 0, revision: 1 }, Capability::TerminalControl),
+        (Request::TerminalFocusPane { slot: "s1".into() }, Capability::TerminalControl),
+        (Request::TerminalFocusPaneObserved { slot: "s1".into(), generation: 0, revision: 1 }, Capability::TerminalControl),
+        (Request::TerminalRetitlePaneObserved { slot: "s1".into(), generation: 0, revision: 1, title: "Build".into() }, Capability::TerminalControl),
+        (Request::TerminalRatio { slot: "s1".into(), ratio: 0.5 }, Capability::TerminalControl),
+        (Request::TerminalRatioObserved { slot: "s1".into(), generation: 0, revision: 1, ratio: 0.5 }, Capability::TerminalControl),
+        (Request::InterfaceSplit { slot: "s1".into(), division: Division::Beside }, Capability::Interface),
+        (Request::InterfaceWithdraw { slot: "s1".into() }, Capability::Interface),
+        (Request::InterfaceRender { frame: hl_gui::Frame::new(0) }, Capability::Interface),
+        (Request::InterfaceRenderAt { slot: "s1".into(), frame: hl_gui::Frame::new(0) }, Capability::Interface),
+        (Request::SourceResize { mutation: hl_gui::SourceMutation::Length { source: hl_gui::SourceId::new(1), version: hl_gui::Version::new(1), rows: 1 } }, Capability::Interface),
+        (Request::SourceResizeAt { slot: "s1".into(), mutation: hl_gui::SourceMutation::Length { source: hl_gui::SourceId::new(1), version: hl_gui::Version::new(1), rows: 1 } }, Capability::Interface),
+        (Request::EventSubscribe { topic: Topic::WorkspaceEvents }, Capability::WorkspaceEvents),
+        (Request::EventUnsubscribe { topic: Topic::WorkspaceEvents }, Capability::WorkspaceEvents),
+    ]);
+    requests
+}
+
+#[test]
+fn every_authoritative_request_has_one_explicit_capability_and_is_denied_before_work() {
+    let specification: serde_json::Value =
+        serde_json::from_str(&hl_extension::specification::document()).expect("specification");
+    let authoritative = specification["roots"]["request"]["variants"]
+        .as_array()
+        .expect("request variants")
+        .iter()
+        .map(|variant| variant["name"].as_str().expect("variant name").to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    let requests = all_calls();
+    let represented = requests
+        .iter()
+        .map(|(request, _)| serde_json::to_value(request).expect("request JSON")["call"].as_str().expect("call tag").to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(represented, authoritative, "authority inventory must exhaust Request");
+    assert_eq!(requests.len(), represented.len(), "each Request variant must appear exactly once");
+
+    for (request, capability) in requests {
+        assert_eq!(request.capability(), capability, "wrong authority for {request:?}");
+        let host = Host::new();
+        let mut denied = session(&[], &["logs"]);
+        assert!(matches!(denied.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+        assert!(host.ledger.reached().is_empty(), "{request:?} reached authority before denial");
+    }
+}
+
 #[test]
 fn every_call_succeeds_with_its_capability_and_fails_without_it() {
     for (request, capability) in calls() {
