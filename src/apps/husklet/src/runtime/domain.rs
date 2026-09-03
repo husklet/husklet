@@ -440,6 +440,8 @@ impl Domain {
         let (containers, platform) = Runtime::open(workspace).await?;
         let mut failures = Runtime::remove_stale_executions(&containers).await?;
         failures.extend(Runtime::ensure_container(&containers, workspace).await?);
+        #[cfg(feature = "gui-checkpoint-e2e")]
+        Runtime::start_checkpoint_journey_container(&containers, workspace).await?;
         failures.extend(Runtime::restore_checkpoints(&containers).await?);
         Self::publish_restore_summary(workspace, &mut failures)?;
         let configuration = PublishedConfiguration::new(&owner.directory);

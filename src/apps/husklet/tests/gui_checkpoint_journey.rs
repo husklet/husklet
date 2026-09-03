@@ -5,7 +5,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PRIMARY: &str = "while :; do sleep 1000; done";
+const PRIMARY: &str = "cd /root; sleep 1000 & child=$!; \
+printf 'primary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
+while kill -0 \"$child\"; do printf p >> /tmp/husklet-container-progress; sleep .05; done; exit 91";
+const SECONDARY: &str = "cd /var; sleep 1000 & child=$!; \
+printf 'secondary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
+while kill -0 \"$child\"; do printf s >> /tmp/husklet-container-progress; sleep .05; done; exit 92";
 
 struct RunningJourney {
     application: std::process::Child,
@@ -35,11 +40,22 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     let cache = temporary.path().join("cache");
     let storage = temporary.path().join("workspace");
     let rootfs = temporary.path().join("rootfs");
+    let secondary_rootfs = temporary.path().join("rootfs-secondary");
     std::fs::create_dir_all(&cache).unwrap();
     unpack(&Path::new(&archive), &rootfs);
+    unpack(&Path::new(&archive), &secondary_rootfs);
     let seeded = hl::runtime::domain::test_workspace::seed(&home, &storage, &rootfs, hl_ws::Arch::Amd64, PRIMARY)
         .await
         .unwrap();
+    let secondary = hl::runtime::domain::test_workspace::seed_additional(
+        &storage,
+        &secondary_rootfs,
+        &seeded.workspace,
+        "workspace-secondary",
+        SECONDARY,
+    )
+    .await
+    .unwrap();
     let evidence = std::env::var_os("HL_GUI_CHECKPOINT_EVIDENCE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| temporary.path().to_owned());
@@ -76,6 +92,23 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "initial_topology_typed tabs=2 panes=3 selected=split focused=1 geometry=913x617",
         Duration::from_secs(60),
     );
+    assert_eq!(
+        container_inventory(&storage),
+        vec!["workspace", secondary.name.as_str()]
+    );
+    let containers_before = container_states(&rootfs, &secondary.rootfs);
+    assert_ne!(
+        containers_before[0], containers_before[1],
+        "containers did not carry distinct state"
+    );
+    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
+    wait_for_container_growth(
+        &rootfs,
+        &secondary.rootfs,
+        container_progress,
+        &secondary.state,
+        Duration::from_secs(5),
+    );
     let before = slot_state(&rootfs, "before");
     let initial_progress = progress_sizes(&rootfs);
     wait_for_all_growth(&rootfs, initial_progress, Duration::from_secs(5));
@@ -89,6 +122,19 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     );
     let after = slot_state(&rootfs, "after-1");
     assert_eq!(before, after, "reopen lost per-pane shell state or cwd");
+    assert_eq!(containers_before, container_states(&rootfs, &secondary.rootfs));
+    assert_eq!(
+        container_inventory(&storage),
+        vec!["workspace", secondary.name.as_str()]
+    );
+    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
+    wait_for_container_growth(
+        &rootfs,
+        &secondary.rootfs,
+        container_progress,
+        &secondary.state,
+        Duration::from_secs(5),
+    );
     let first_progress = progress_sizes(&rootfs);
     wait_for_all_growth(&rootfs, first_progress, Duration::from_secs(5));
     let events = std::fs::read_to_string(&receipt).unwrap();
@@ -103,6 +149,19 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     );
     let after_second = slot_state(&rootfs, "after-2");
     assert_eq!(before, after_second, "second reopen lost per-pane shell state or cwd");
+    assert_eq!(containers_before, container_states(&rootfs, &secondary.rootfs));
+    assert_eq!(
+        container_inventory(&storage),
+        vec!["workspace", secondary.name.as_str()]
+    );
+    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
+    wait_for_container_growth(
+        &rootfs,
+        &secondary.rootfs,
+        container_progress,
+        &secondary.state,
+        Duration::from_secs(5),
+    );
     let second_progress = progress_sizes(&rootfs);
     wait_for_all_growth(&rootfs, second_progress, Duration::from_secs(5));
 
@@ -152,13 +211,85 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     std::fs::write(
         evidence.join("result.receipt"),
         format!(
-            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second:?}\nbackground=3/3-progressing\ntabs=2\npanes=3\nselected=split\nfocused=1\ngeometry=913x617\ncycles=2\n"
+            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second:?}\ncontainer_continuity={containers_before:?}\ncontainers=2/2-progressing\nbackground=5/5-progressing\ntabs=2\npanes=3\nselected=split\nfocused=1\ngeometry=913x617\ncycles=2\n"
         ),
     )
     .unwrap();
     eprintln!(
         "gui-checkpoint close_ms={close_ms} restored_ready_ms={restored_ready_ms} close_second_ms={close_second_ms} restored_second_ready_ms={restored_second_ready_ms} continuity={after_second:?}"
     );
+}
+
+fn container_states(primary: &Path, secondary: &Path) -> [String; 2] {
+    [primary, secondary].map(|root| wait_text(&root.join("tmp/husklet-container-state"), Duration::from_secs(10)))
+}
+
+fn container_progress_sizes(primary: &Path, secondary: &Path) -> [u64; 2] {
+    [primary, secondary].map(|root| {
+        let path = root.join("tmp/husklet-container-progress");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                if metadata.len() > 0 {
+                    break metadata.len();
+                }
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {}", path.display());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    })
+}
+
+fn wait_for_container_growth(
+    primary: &Path,
+    secondary: &Path,
+    initial: [u64; 2],
+    secondary_state: &Path,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let growing = [primary, secondary].into_iter().enumerate().all(|(index, root)| {
+            std::fs::metadata(root.join("tmp/husklet-container-progress"))
+                .is_ok_and(|metadata| metadata.len() > initial[index])
+        });
+        if growing {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "not every restored container resumed progress: initial={initial:?} current={:?} state={}",
+            [primary, secondary].map(|root| {
+                std::fs::metadata(root.join("tmp/husklet-container-progress"))
+                    .map(|metadata| metadata.len())
+                    .ok()
+            }),
+            std::fs::read_to_string(secondary_state)
+                .unwrap_or_else(|error| format!("<secondary state unreadable: {error}>"))
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn container_inventory(storage: &Path) -> Vec<String> {
+    let directory = storage.join("containers/state/containers");
+    let mut names = std::fs::read_dir(directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "json"))
+        .map(|entry| {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value["container"]["spec"]["name"].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names.len(),
+        2,
+        "workspace inventory duplicated or lost a container: {names:?}"
+    );
+    names
 }
 
 fn unpack(archive: &Path, destination: &Path) {

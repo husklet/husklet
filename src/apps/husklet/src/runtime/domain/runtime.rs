@@ -87,6 +87,26 @@ impl PrimaryLifecycle for Containers {
 }
 
 impl Runtime {
+    #[cfg(feature = "gui-checkpoint-e2e")]
+    pub(super) async fn start_checkpoint_journey_container(
+        containers: &Containers,
+        workspace: &WorkspaceConfig,
+    ) -> io::Result<()> {
+        let control = workspace
+            .storage_dir(&paths::hl_root())
+            .join("state/gui-checkpoint-secondary");
+        let name = match std::fs::read_to_string(control) {
+            Ok(name) => name.trim().to_owned(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let container = containers.inspect(&name).await.map_err(io::Error::other)?;
+        if !container.state.is_active() && container.checkpoint.is_none() {
+            containers.start(&name).await.map_err(io::Error::other)?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn checkpoint(
         containers: &Containers,
         docker: Option<&crate::runtime::resources::Daemon>,
