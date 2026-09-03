@@ -5674,6 +5674,12 @@ export interface WorkspaceApi {
     cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Wait for an actually mounted provider occupant, or its removal, using an exact prior pane cursor. */
+    waitForProviderMount(extension: string, provider: string, options?: {
+      state?: 'mounted' | 'unmounted';
+      after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null;
+      timeoutMs?: number;
+    }): Promise<{ changed: boolean; state: 'mounted' | 'unmounted'; pane?: InspectablePane | null; truncated?: false; after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null }>;
   };
   containers: {
     list(): Promise<ContainerSummary[]>;

@@ -181,6 +181,14 @@ enable receipt proves only that the exact installed digest was accepted. Read or
 wait for the installed record, then use pane inventory to discover a provider
 that is actually mounted; MCP does not claim that successful enablement has
 already created or exposed a pane.
+`husklet_extension_provider_wait` makes that mounted state waitable without
+polling. It arms the pane-change subscription before reading inventory, matches
+the exact extension/provider pair, and accepts an optional prior
+`{slot,generation,revision}` cursor so an unchanged occupant cannot satisfy a
+post-mutation wait. `state: unmounted` waits for removal. A truncated inventory
+cannot prove absence and therefore fails explicitly. The public React
+`extensions.waitForProviderMount` method exposes the same contract. This observes
+only providers occupying panes; protocol 1 has no global enabled-provider registry.
 
 `husklet_pane_wait` applies the same rule to a specific pane: pass the last
 observed generation and revision, and the wait ignores the host's unchanged

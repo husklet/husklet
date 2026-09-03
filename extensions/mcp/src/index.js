@@ -28,6 +28,11 @@ const extensionInventoryCursor = z.object({
   image_digest: imageDigest,
   status: extensionStatus,
 }).strict();
+const providerMountCursor = z.object({
+  slot: z.string().min(1).max(256),
+  generation: z.number().int().nonnegative().safe(),
+  revision: z.number().int().nonnegative().safe(),
+}).strict();
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
 const extensionGrant = z.array(extensionCapability).max(24).superRefine((granted, context) => {
@@ -264,6 +269,7 @@ export function tools(api) {
     define('husklet_extension_acquisition_cancel', 'Cancel one observed acquisition revision after explicit confirmation.', z.object({ job: extensionJob, revision: acquisitionRevision, confirm: z.literal(true) }).strict(), async ({ job, revision }) => { await api.extensions.cancelAcquisition(job, revision); return { done: true, job, revision }; }),
     define('husklet_extension_install', 'Re-read and consent to the exact ready job/revision/digest, refuse grants outside its manifest request, atomically install, and verify the returned immutable identity.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => commitExtension(api, 'install', job, revision, granted), detailResult),
     define('husklet_extension_update', 'Re-read and consent to the exact ready job/revision/digest, refuse grants outside its manifest request, atomically update, and verify the returned immutable identity.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => commitExtension(api, 'update', job, revision, granted), detailResult),
+    define('husklet_extension_provider_wait', 'Wait for an actually mounted extension/provider occupant, or its removal, using exact pane generation/revision fencing; this does not claim enablement alone registered or mounted a provider.', z.object({ extension: extensionName, provider: extensionName, state: z.enum(['mounted', 'unmounted']).default('mounted'), after: providerMountCursor.nullable().default(null), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ extension, provider, state, after, timeout_ms }) => api.extensions.waitForProviderMount(extension, provider, { state, after, timeoutMs: timeout_ms }), detailResult),
     define('husklet_container_list', 'List containers, failing closed if MCP cannot return the complete host inventory.', empty, () => api.containers.list(), inventory()),
     define('husklet_container_inspect', 'Inspect one complete container record without local clipping.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value), detailResult),
     define('husklet_container_processes', 'Read a bounded timestamped process snapshot bound to the complete immutable container ID actually sampled; scope says initial or full namespace, and PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),

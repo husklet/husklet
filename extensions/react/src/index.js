@@ -399,6 +399,45 @@ export function workspace(session) {
     try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
     return async () => { off(); await api.unsubscribe('pane-changes'); };
   };
+  api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
+    const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+    if (!providerName(extension) || !providerName(provider)) throw new TypeError('provider wait requires exact bounded extension and provider names');
+    if (!['mounted', 'unmounted'].includes(state)) throw new TypeError('provider wait state must be mounted or unmounted');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('provider wait timeout must be between 1 and 30000ms');
+    if (after != null && (typeof after.slot !== 'string' || after.slot.length === 0
+      || !Number.isSafeInteger(after.generation) || after.generation < 0
+      || !Number.isSafeInteger(after.revision) || after.revision < 0)) throw new TypeError('provider wait cursor requires slot, generation, and revision');
+    let dispose; let timer; let settled = false; let checking = false; let pending = false;
+    return new Promise((resolve, reject) => {
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const check = async () => {
+        if (checking) { pending = true; return; }
+        checking = true;
+        try {
+          do {
+            pending = false;
+            const inventory = await api.terminal.panes();
+            const pane = inventory.panes.find((item) => item.kind === 'surface'
+              && item.provider?.extension === extension && item.provider?.provider === provider);
+            if (!pane && inventory.truncated) throw new Error('provider mount cannot be resolved from a truncated pane inventory');
+            const unchanged = pane != null && after != null && pane.slot === after.slot
+              && pane.generation === after.generation && pane.revision === after.revision;
+            if ((state === 'mounted' && pane && !unchanged) || (state === 'unmounted' && !pane)) {
+              finish({ changed: true, state, pane: pane ?? null, truncated: false }); return;
+            }
+          } while (pending && !settled);
+        } catch (error) { finish(undefined, error); } finally { checking = false; }
+      };
+      api.watchPaneChanges(() => { void check(); }).then((stop) => {
+        dispose = stop;
+        if (settled) void stop(); else void check();
+      }, (error) => finish(undefined, error));
+      timer = setTimeout(() => finish({ changed: false, state, after }), timeoutMs);
+    });
+  };
   api.watchExecutions = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('execution listener must be a function');
     const off = session.onEvent((event) => { if (event?.snapshot === 'executions') listener(event.of); });
