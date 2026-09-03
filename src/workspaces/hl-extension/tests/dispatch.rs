@@ -1111,6 +1111,15 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
+            Request::TerminalSwitchOccupantObserved {
+                slot: "s1".into(),
+                generation: 7,
+                revision: 11,
+                target: hl_extension::port::PaneOccupantTarget::Terminal,
+            },
+            Capability::TerminalControl,
+        ),
+        (
             Request::FilesystemList { path: path("logs") },
             Capability::FilesystemRead,
         ),

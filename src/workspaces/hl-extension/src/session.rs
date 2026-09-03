@@ -208,7 +208,8 @@ impl Session {
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRetitlePane { .. }
             | Request::TerminalRatio { .. }
-            | Request::TerminalSwitchOccupant { .. } => self.terminal(request, services),
+            | Request::TerminalSwitchOccupant { .. }
+            | Request::TerminalSwitchOccupantObserved { .. } => self.terminal(request, services),
             Request::PaneList => {
                 let port = self.peer.authority().port(Capability::PaneObserve, services.terminal)?;
                 Ok(Reply::Panes(port.pane_inventory()?))
@@ -632,7 +633,8 @@ impl Session {
                 slot,
                 generation,
                 target,
-            } => {
+            }
+            | Request::TerminalSwitchOccupantObserved { slot, generation, target, .. } => {
                 if let crate::port::PaneOccupantTarget::Surface { extension, provider } = target {
                     crate::ExtensionName::new(extension.clone()).map_err(|_| Failure::Conflict {
                         detail: "invalid extension name".into(),

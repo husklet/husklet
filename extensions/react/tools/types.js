@@ -493,6 +493,8 @@ export interface WorkspaceApi {
     focus(slot: string): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
+    switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
+    switchOccupantObserved(slot: string, generation: number, revision: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
   };
   files: {
     list(path: string): Promise<FileEntry[]>;

@@ -207,6 +207,10 @@ test('terminal occupant switching validates and preserves the exact CAS wire sha
   const second = api.terminal.switchOccupant('pane-1', 8, { kind: 'terminal' });
   assert.deepEqual((await next()).payload, { call: 'terminal_switch_occupant', with: { slot: 'pane-1', generation: 8, target: { kind: 'terminal' } } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await second;
+  const observed = api.terminal.switchOccupantObserved('pane-1', 9, 12, surface);
+  assert.deepEqual((await next()).payload, { call: 'terminal_switch_occupant_observed', with: { slot: 'pane-1', generation: 9, revision: 12, target: surface } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); await observed;
+  assert.throws(() => api.terminal.switchOccupantObserved('pane-1', 9, -1, surface), /generation and revision/);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

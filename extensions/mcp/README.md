@@ -60,6 +60,8 @@ the legacy `close(slot)` call remains available for source compatibility.
 `husklet_terminal_split` requires the same cursor and refuses to split a pane
 that was replaced after observation. React retains legacy `split` for source
 compatibility and exposes the safe path as `splitObserved`.
+Occupant switching likewise requires both cursor fields, so an old provider
+selection cannot replace a pane whose observed revision has since changed.
 
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one

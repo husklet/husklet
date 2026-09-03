@@ -166,6 +166,8 @@ through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
 the exact pane snapshot returned by inventory/read; legacy `close(slot)` remains
 for compatibility. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.
+Use `terminal.switchOccupantObserved(slot, generation, revision, target)` for an
+observe-then-switch workflow; the generation-only method remains for compatibility.
 
 `protocolCoverage` is the machine-readable inventory of what this protocol
 version really supports. Its image inventory includes the implemented bounded

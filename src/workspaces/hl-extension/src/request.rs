@@ -279,6 +279,13 @@ pub enum Request {
         generation: u64,
         target: crate::port::PaneOccupantTarget,
     },
+    /// Switches only the exact pane occupant snapshot the caller observed.
+    TerminalSwitchOccupantObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        target: crate::port::PaneOccupantTarget,
+    },
     FilesystemList {
         path: RelativePath,
     },
@@ -405,7 +412,8 @@ impl Request {
             | Self::TerminalFocusPane { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRatio { .. }
-            | Self::TerminalSwitchOccupant { .. } => Capability::TerminalControl,
+            | Self::TerminalSwitchOccupant { .. }
+            | Self::TerminalSwitchOccupantObserved { .. } => Capability::TerminalControl,
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.

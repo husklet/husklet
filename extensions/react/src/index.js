@@ -324,6 +324,14 @@ export function workspace(session) {
         if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
         return done('terminal_switch_occupant', { slot, generation, target: { ...target } });
       },
+      switchOccupantObserved: (slot, generation, revision, target) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
+        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
+        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
+        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
+        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
+        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: { ...target } });
+      },
     },
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
@@ -553,7 +561,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],
