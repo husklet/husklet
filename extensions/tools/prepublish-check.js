@@ -38,6 +38,9 @@ const mcpPublish = 'npm publish --workspace @husklet/mcp --access public --prove
 assert.equal(job.split(reactPublish).length - 1, 1, 'React must have one public provenance publish');
 assert.equal(job.split(mcpPublish).length - 1, 1, 'MCP must have one public provenance publish');
 assert(job.indexOf(reactPublish) < job.indexOf(mcpPublish), 'React must publish before its MCP dependent');
+const postpublish = 'npm run postpublish:check';
+assert.equal(job.split(postpublish).length - 1, 1, 'release must install the public package pair after publishing');
+assert(job.indexOf(mcpPublish) < job.indexOf(postpublish), 'public install verification must follow both publishes');
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-release-pack-'));
 try {

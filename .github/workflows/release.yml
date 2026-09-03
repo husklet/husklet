@@ -162,6 +162,11 @@ jobs:
       - name: Publish MCP with npm trusted publishing
         run: npm publish --workspace @husklet/mcp --access public --provenance
 
+      - name: Install and import the published package pair from npm
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run postpublish:check
+
   react-extension-base:
     name: Publish React extension base / multi-architecture
     needs: [smoke, native-linux-reproducibility]
