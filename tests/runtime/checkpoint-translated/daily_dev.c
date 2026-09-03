@@ -146,7 +146,9 @@ static double checkpoint_movsd_check(void) {
 }
 
 static long checkpoint_addr32_call_check(int phase) {
-    return checkpoint_addr32_call(phase);
+    long value = 0;
+    for (int iteration = 0; iteration < 256; ++iteration) value = checkpoint_addr32_call(phase);
+    return value;
 }
 #else
 static long checkpoint_link_check(int phase) {
