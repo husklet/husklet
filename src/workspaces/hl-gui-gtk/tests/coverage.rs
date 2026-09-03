@@ -103,11 +103,34 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     coverage_is_bounded_selectable_and_marks_misses();
     network_waterfall_is_selectable_hierarchical_and_status_styled();
     dependency_graph_is_selectable_nested_and_conflict_styled();
+    query_plan_is_nested_selectable_and_hot();
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+fn query_plan_is_nested_selectable_and_hot() {
+    let mut s = Session::new();
+    let p = s.producer.create(Tag::QueryPlan);
+    let n = s.producer.create(Tag::QueryPlanNode);
+    let m = s.producer.create(Tag::QueryPlanMetric);
+    s.producer.append(NodeId::ROOT, p);
+    s.producer.append(p, n);
+    s.producer.append(n, m);
+    s.producer.set(n, Prop::Value, PropValue::text("id=j state=hot"));
+    s.producer.set(m, Prop::Label, PropValue::text("duration_us"));
+    s.producer.set(m, Prop::Value, PropValue::text("42"));
+    s.flush().unwrap();
+    let node = s.tagged(Tag::QueryPlanNode).unwrap();
+    assert!(node.has_css_class("query-plan-hot"));
+    assert!(
+        subtree(&node)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
+    assert!(s.tagged(Tag::QueryPlanMetric).is_some())
 }
 fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     let mut s = Session::new();
@@ -1082,6 +1105,7 @@ fn principal(tag: Tag) -> Aspect {
         Tag::CoverageView => Aspect::Value,
         Tag::NetworkRequest | Tag::NetworkPhase => Aspect::Value,
         Tag::DependencyNode | Tag::DependencyEdge | Tag::DependencyCycleMember => Aspect::Value,
+        Tag::QueryPlanNode | Tag::QueryPlanMetric => Aspect::Value,
         _ => structural(tag),
     }
 }
