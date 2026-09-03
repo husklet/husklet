@@ -1907,7 +1907,7 @@ fn entry_record(entry: &hl::extension::Entry, manifest: &Manifest) -> Record {
 }
 
 /// What the fake extension heard, in order.
-type Heard = Arc<Mutex<Vec<String>>>;
+type Heard = Arc<Mutex<Vec<serde_json::Value>>>;
 
 #[cfg(feature = "native-test-hooks")]
 struct ProcessSupply {
@@ -2063,8 +2063,15 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool
     {
         return;
     }
-    let described = hl_gui::Element::column()
-        .child(hl_gui::Element::button("Restart", hl_gui::EventId::new("restart")).key("restart"));
+    let described = hl_gui::Element::column().child(
+        hl_gui::Element::new(hl_gui::Tag::Button)
+            .label("Restart")
+            .on(
+                hl_gui::Trigger::Activate,
+                hl_gui::EventId::new("arbitrary/id:do-not-parse"),
+            )
+            .key("restart"),
+    );
     let frame = hl_gui::Reconciliation::new().reconcile(&described);
     if wire
         .send(
@@ -2080,10 +2087,10 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool
         let Ok(said) = serde_json::from_slice::<serde_json::Value>(&frame.payload) else {
             continue;
         };
-        let Some(id) = said.get("id").and_then(serde_json::Value::as_str) else {
+        if said.get("id").and_then(serde_json::Value::as_str).is_none() {
             continue;
-        };
-        heard.lock().expect("heard").push(id.to_owned());
+        }
+        heard.lock().expect("heard").push(said);
     }
     ended.store(true, Ordering::Release);
 }
@@ -2252,11 +2259,13 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     button.emit_clicked();
     page.tick();
 
-    assert!(
-        until(|| heard.lock().expect("heard").iter().any(|id| id == "restart")),
-        "the click reached the extension, it heard {:?}",
-        heard.lock().expect("heard")
-    );
+    assert!(until(|| !heard.lock().expect("heard").is_empty()), "the click reached the extension");
+    let heard = heard.lock().expect("heard");
+    let event = heard.last().expect("framed GTK interaction");
+    assert_eq!(event["interaction"], "invoke", "Activate uses the button interaction family");
+    assert_eq!(event["trigger"], "Activate", "the producer's actual bound trigger survives GTK and framing");
+    assert_eq!(event["id"], "arbitrary/id:do-not-parse", "the producer-owned identity is opaque");
+    assert_eq!(event["node"], 2, "the exact rendered button node is retained");
     drop(host);
 }
 
