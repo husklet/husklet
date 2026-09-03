@@ -676,9 +676,9 @@ fn address_size_relative_calls_translate_across_an_executable_page_boundary() {
     assert_eq!(interpreted_report.shape_direct_call, 0, "{}", interpreted_report.shape_line);
     assert!(translated_report.shape_direct_call > 0, "{}", translated_report.shape_line);
     assert!(
-        !translated_report.unsupported_line.contains("90000080e8:"),
+        !translated_report.shape_line.contains("key=618475323624"),
         "address-size E8 fell back instead of using direct-CALL lowering: {}",
-        translated_report.unsupported_line
+        translated_report.shape_line
     );
 }
 
