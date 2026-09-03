@@ -1,13 +1,6 @@
 use crate::*;
 
-mod process;
-mod resources;
 mod settings;
-mod summary;
-mod table;
-
-pub(crate) use process::*;
-pub(crate) use resources::*;
 
 use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, PendingInspection, Shelf, Surfaces};
 

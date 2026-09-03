@@ -19,21 +19,6 @@ impl ProcessGroup {
 }
 
 impl ProcessId {
-    pub fn parse(value: &str, workspace: &str) -> Option<Self> {
-        value.parse().ok().filter(|value| *value > 1).map(|value| Self {
-            value,
-            workspace: workspace.to_owned(),
-        })
-    }
-
-    pub fn terminate(&self) -> std::io::Result<()> {
-        self.signal(ffi::Signal::terminate)
-    }
-
-    pub fn kill(&self) -> std::io::Result<()> {
-        self.signal(ffi::Signal::kill)
-    }
-
     fn close(&self) -> std::io::Result<()> {
         self.signal(|process| ffi::Signal::close_tree(process, std::time::Duration::from_millis(200)))
     }
@@ -201,14 +186,6 @@ mod ffi {
             })
         }
 
-        pub(super) fn terminate(process: i32) -> io::Result<()> {
-            Self::send(process, libc::SIGTERM)
-        }
-
-        pub(super) fn kill(process: i32) -> io::Result<()> {
-            Self::send(process, libc::SIGKILL)
-        }
-
         fn send(process: i32, signal: i32) -> io::Result<()> {
             Self::send_with(process, signal, |target, signal| {
                 // SAFETY: `kill` consumes only integers and no Rust storage. The kernel
@@ -325,16 +302,11 @@ mod tests {
     use super::{ProcessGroup, ProcessId, Processes};
 
     #[test]
-    fn invalid_identity() {
-        assert!(ProcessId::parse("42", "runtime").is_some());
-        for value in ["", "not-a-pid", "-1", "0", "1"] {
-            assert!(ProcessId::parse(value, "runtime").is_none(), "{value}");
-        }
-    }
-
-    #[test]
     fn snapshot_identity() {
-        let process = ProcessId::parse("42", "design%20system").unwrap();
+        let process = ProcessId {
+            value: 42,
+            workspace: "design%20system".into(),
+        };
         assert!(process.matches("42 1 00:01 /x/husklet --worker launch design%20system pane"));
         assert!(!process.matches("42 1 00:01 /usr/bin/python unrelated.py"));
         assert!(!process.matches("42 1 00:01 /x/husklet --worker launch design pane"));
