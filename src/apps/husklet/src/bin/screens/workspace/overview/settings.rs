@@ -165,6 +165,7 @@ impl Overview<'_> {
         let group = gtk::Box::new(gtk::Orientation::Vertical, 10);
         group.add_css_class("settings-group");
         let heading = gtk::Label::new(Some(title));
+        heading.set_accessible_role(gtk::AccessibleRole::Heading);
         heading.add_css_class("settings-group-title");
         heading.set_xalign(0.0);
         group.append(&heading);
@@ -685,6 +686,18 @@ mod tests {
                     .collect::<Vec<_>>(),
                 ["Terminal defaults", "Workspace runtime"],
                 "settings cards are split into two plainly named groups"
+            );
+            let group_headings: Vec<_> = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .filter(|label| matches!(label.text().as_str(), "Terminal defaults" | "Workspace runtime"))
+                .collect();
+            assert_eq!(group_headings.len(), 2);
+            assert!(
+                group_headings
+                    .iter()
+                    .all(|heading| heading.accessible_role() == gtk::AccessibleRole::Heading),
+                "visual settings groups must also be announced as headings"
             );
 
             let grids: Vec<_> = widgets
