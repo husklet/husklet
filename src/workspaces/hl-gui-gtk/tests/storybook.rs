@@ -251,6 +251,12 @@ mod unix {
         );
         tree.apply(&rerender, &mut surface)
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        if story == "Navigation and transient UI" {
+            assert!(
+                !find::<gtk::Expander>(&root, |_| true).is_expanded(),
+                "the controlled disclosure did not acknowledge the native collapse"
+            );
+        }
         if story == "DataTable" {
             surface
                 .resize(hl_gui::SourceId::new(100), hl_gui::Version::new(2), 100_000)
@@ -480,6 +486,21 @@ mod unix {
             "{story} emitted {reports:?} instead of a bounded event"
         );
         let event = reports.into_iter().next().expect("one report");
+        if story == "Navigation and transient UI" {
+            let hl_gui::Event::Expand { node, id, value } = &event else {
+                panic!("native Expander did not emit its typed Expand interaction: {event:?}")
+            };
+            assert_eq!(
+                tree.handler(*node, hl_gui::Trigger::Expand),
+                Some(id),
+                "native Expander must preserve the producer-owned Expand handler identity"
+            );
+            assert_eq!(
+                value,
+                &hl_gui::PropValue::Flag(false),
+                "native Expander must report the collapsed state"
+            );
+        }
         if story == "Keyboard and semantic actions" {
             let hl_gui::Event::Change { node, .. } = event else {
                 panic!("entry did not emit Change")
