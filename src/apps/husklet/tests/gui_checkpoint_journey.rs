@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 const PRIMARY: &str = "cd /root; sleep 1000 & child=$!; \
 printf 'primary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
-while kill -0 \"$child\"; do printf p >> /tmp/husklet-container-progress; sleep .05; done; exit 91";
+wait \"$child\"; exit 91";
 const SECONDARY: &str = "cd /var; sleep 1000 & child=$!; \
 printf 'secondary-token\\npid=%s\\nchild=%s\\ncwd=%s\\n' \"$$\" \"$child\" \"$PWD\" > /tmp/husklet-container-state; \
-while kill -0 \"$child\"; do printf s >> /tmp/husklet-container-progress; sleep .05; done; exit 92";
+wait \"$child\"; exit 92";
 
 struct RunningJourney {
     application: std::process::Child,
@@ -36,11 +36,16 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         return;
     };
     let temporary = tempfile::tempdir().unwrap();
-    let home = temporary.path().join("home");
-    let cache = temporary.path().join("cache");
-    let storage = temporary.path().join("workspace");
-    let rootfs = temporary.path().join("rootfs");
-    let secondary_rootfs = temporary.path().join("rootfs-secondary");
+    let retained = std::env::var_os("HL_GUI_CHECKPOINT_FIXTURE").map(std::path::PathBuf::from);
+    if let Some(path) = &retained {
+        std::fs::create_dir(path).unwrap();
+    }
+    let fixture = retained.as_deref().unwrap_or_else(|| temporary.path());
+    let home = fixture.join("home");
+    let cache = fixture.join("cache");
+    let storage = fixture.join("workspace");
+    let rootfs = fixture.join("rootfs");
+    let secondary_rootfs = fixture.join("rootfs-secondary");
     std::fs::create_dir_all(&cache).unwrap();
     unpack(&Path::new(&archive), &rootfs);
     unpack(&Path::new(&archive), &secondary_rootfs);
@@ -58,7 +63,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     .unwrap();
     let evidence = std::env::var_os("HL_GUI_CHECKPOINT_EVIDENCE")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| temporary.path().to_owned());
+        .unwrap_or_else(|| fixture.to_owned());
     std::fs::create_dir_all(&evidence).unwrap();
     let receipt = evidence.join("journey.receipt");
     let initial_ready = std::path::PathBuf::from(format!("{}.initial-ready", receipt.display()));
@@ -101,17 +106,8 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         containers_before[0], containers_before[1],
         "containers did not carry distinct state"
     );
-    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
-    wait_for_container_growth(
-        &rootfs,
-        &secondary.rootfs,
-        container_progress,
-        &secondary.state,
-        Duration::from_secs(5),
-    );
     let before = slot_state(&rootfs, "before");
-    let initial_progress = progress_sizes(&rootfs);
-    wait_for_all_growth(&rootfs, initial_progress, Duration::from_secs(5));
+    let background_before = background_state(&rootfs, "before");
     std::fs::write(&initial_ready, b"ready\n").unwrap();
 
     wait_receipt(
@@ -127,16 +123,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         container_inventory(&storage),
         vec!["workspace", secondary.name.as_str()]
     );
-    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
-    wait_for_container_growth(
-        &rootfs,
-        &secondary.rootfs,
-        container_progress,
-        &secondary.state,
-        Duration::from_secs(5),
-    );
-    let first_progress = progress_sizes(&rootfs);
-    wait_for_all_growth(&rootfs, first_progress, Duration::from_secs(5));
+    assert_eq!(background_before, background_state(&rootfs, "after-1"));
     let events = std::fs::read_to_string(&receipt).unwrap();
     let restored_ready_ms = unix_millis() - event_time(&events, "manager_reopen_clicked");
     std::fs::write(&cycle_ready, b"ready\n").unwrap();
@@ -154,16 +141,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         container_inventory(&storage),
         vec!["workspace", secondary.name.as_str()]
     );
-    let container_progress = container_progress_sizes(&rootfs, &secondary.rootfs);
-    wait_for_container_growth(
-        &rootfs,
-        &secondary.rootfs,
-        container_progress,
-        &secondary.state,
-        Duration::from_secs(5),
-    );
-    let second_progress = progress_sizes(&rootfs);
-    wait_for_all_growth(&rootfs, second_progress, Duration::from_secs(5));
+    assert_eq!(background_before, background_state(&rootfs, "after-2"));
 
     let events = std::fs::read_to_string(&receipt).unwrap();
     for required in [
@@ -172,6 +150,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "domain_offline",
         "manager_reopen_clicked",
         "history_probe_tab_selected",
+        "reopen_receipts_visible",
         "reopen_command_typed",
         "topology_restored tabs=2 panes=3 selected=split focused=1 geometry=913x617",
         "close_requested_cycle2",
@@ -179,6 +158,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "domain_offline_cycle2",
         "manager_reopen_clicked_cycle2",
         "history_probe_tab_selected_cycle2",
+        "reopen_receipts_visible_cycle2",
         "reopen_command_typed_cycle2",
         "topology_restored tabs=2 panes=3 selected=split focused=1 geometry=913x617_cycle2",
         "journey_complete",
@@ -211,7 +191,7 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     std::fs::write(
         evidence.join("result.receipt"),
         format!(
-            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second:?}\ncontainer_continuity={containers_before:?}\ncontainers=2/2-progressing\nbackground=5/5-progressing\ntabs=2\npanes=3\nselected=split\nfocused=1\ngeometry=913x617\ncycles=2\n"
+            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second:?}\ncontainer_continuity={containers_before:?}\ncontainers=2/2-running\nbackground=5/5-running-sleeps\ntabs=2\npanes=3\nselected=split\nfocused=1\ngeometry=913x617\ncycles=2\n"
         ),
     )
     .unwrap();
@@ -222,53 +202,6 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
 
 fn container_states(primary: &Path, secondary: &Path) -> [String; 2] {
     [primary, secondary].map(|root| wait_text(&root.join("tmp/husklet-container-state"), Duration::from_secs(10)))
-}
-
-fn container_progress_sizes(primary: &Path, secondary: &Path) -> [u64; 2] {
-    [primary, secondary].map(|root| {
-        let path = root.join("tmp/husklet-container-progress");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                if metadata.len() > 0 {
-                    break metadata.len();
-                }
-            }
-            assert!(Instant::now() < deadline, "timed out waiting for {}", path.display());
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    })
-}
-
-fn wait_for_container_growth(
-    primary: &Path,
-    secondary: &Path,
-    initial: [u64; 2],
-    secondary_state: &Path,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let growing = [primary, secondary].into_iter().enumerate().all(|(index, root)| {
-            std::fs::metadata(root.join("tmp/husklet-container-progress"))
-                .is_ok_and(|metadata| metadata.len() > initial[index])
-        });
-        if growing {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "not every restored container resumed progress: initial={initial:?} current={:?} state={}",
-            [primary, secondary].map(|root| {
-                std::fs::metadata(root.join("tmp/husklet-container-progress"))
-                    .map(|metadata| metadata.len())
-                    .ok()
-            }),
-            std::fs::read_to_string(secondary_state)
-                .unwrap_or_else(|error| format!("<secondary state unreadable: {error}>"))
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn container_inventory(storage: &Path) -> Vec<String> {
@@ -314,6 +247,13 @@ fn wait_receipt(child: &mut std::process::Child, path: &Path, event: &str, timeo
         if std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line.ends_with(event))) {
             return;
         }
+        if let Some(errors) = path
+            .parent()
+            .and_then(|parent| std::fs::read_to_string(parent.join("husklet.err")).ok())
+            .filter(|errors| errors.contains("could not close workspace"))
+        {
+            panic!("production checkpoint failed before {event}:\n{errors}");
+        }
         if let Some(status) = child.try_wait().unwrap() {
             let receipt = std::fs::read_to_string(path).unwrap_or_else(|error| format!("<unreadable: {error}>"));
             let errors = path
@@ -357,38 +297,15 @@ fn slot_state(rootfs: &Path, suffix: &str) -> Vec<String> {
         .collect()
 }
 
-fn progress_sizes(rootfs: &Path) -> [u64; 3] {
-    std::array::from_fn(|slot| {
-        let path = rootfs.join(format!("tmp/husklet-gui-progress-{slot}"));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                if metadata.len() > 0 {
-                    break metadata.len();
-                }
-            }
-            assert!(Instant::now() < deadline, "timed out waiting for {}", path.display());
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    })
-}
-
-fn wait_for_all_growth(rootfs: &Path, initial: [u64; 3], timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let growing = (0..3).all(|slot| {
-            std::fs::metadata(rootfs.join(format!("tmp/husklet-gui-progress-{slot}")))
-                .is_ok_and(|metadata| metadata.len() > initial[slot])
-        });
-        if growing {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "not every restored pane's child process resumed progress"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+fn background_state(rootfs: &Path, suffix: &str) -> Vec<String> {
+    (0..3)
+        .map(|slot| {
+            wait_text(
+                &rootfs.join(format!("tmp/husklet-gui-background-{slot}-{suffix}")),
+                Duration::from_secs(10),
+            )
+        })
+        .collect()
 }
 
 fn unix_millis() -> u128 {

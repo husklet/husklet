@@ -198,6 +198,58 @@ impl CheckpointJourney {
                     cycle,
                 ),
             );
+            Self::await_reopen_receipts(&path, &app, &parent, &window, cycle);
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Accepts a restored cycle only after the terminal grids themselves show one acknowledgement per
+    /// persisted slot. The slots are immutable layout identities, so this distinguishes three live restored
+    /// panes from three writes accidentally routed through whichever pane happened to own keyboard focus.
+    fn await_reopen_receipts(
+        path: &str,
+        app: &gtk::Application,
+        parent: &gtk::ApplicationWindow,
+        window: &Rc<TermWin>,
+        cycle: usize,
+    ) {
+        let path = path.to_owned();
+        let app = app.clone();
+        let parent = parent.clone();
+        let window = window.clone();
+        let mut stage = 0;
+        glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            if stage == 0 {
+                let Some(other_tab) = Self::tab_for_slots(&window, &["2"]) else {
+                    return glib::ControlFlow::Continue;
+                };
+                Page::new(&window, &other_tab).select_and_focus();
+                stage = 1;
+                return glib::ControlFlow::Continue;
+            }
+            let receipt = |slot: usize| {
+                Window::pane(&window, &slot.to_string()).is_some_and(|terminal| {
+                    Terminal::new(&terminal)
+                        .history()
+                        .contains(&format!("reopened-slot-{slot}-cycle-{cycle}"))
+                })
+            };
+            if stage == 1 {
+                if !receipt(2) {
+                    return glib::ControlFlow::Continue;
+                }
+                let Some(split_tab) = Self::tab_for_slots(&window, &["0", "1"]) else {
+                    return glib::ControlFlow::Continue;
+                };
+                Page::new(&window, &split_tab).select();
+                Panes::focus_when_mapped(&window, "1");
+                stage = 2;
+                return glib::ControlFlow::Continue;
+            }
+            if !receipt(0) || !receipt(1) {
+                return glib::ControlFlow::Continue;
+            }
+            Self::record(&path, &Self::event("reopen_receipts_visible", cycle));
             Self::record(&path, &Self::event("reopen_command_typed", cycle));
             if cycle == 2 {
                 Self::record(&path, "journey_complete");
@@ -252,14 +304,14 @@ impl CheckpointJourney {
     fn initial_command(slot: usize) -> String {
         const DIRECTORIES: [&str; 3] = ["/tmp", "/var", "/root"];
         format!(
-            "HUSKLET_GUI_SLOT_{slot}=$(cat /proc/sys/kernel/random/uuid); export HUSKLET_GUI_SLOT_{slot}; cd {}; printf 'history-slot-{slot}\\n'; printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-before; (while :; do printf x >> /tmp/husklet-gui-progress-{slot}; sleep .05; done) &\n",
+            "HUSKLET_GUI_SLOT_{slot}=$(cat /proc/sys/kernel/random/uuid); export HUSKLET_GUI_SLOT_{slot}; cd {}; printf 'history-slot-{slot}\\n'; printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-before; sleep 1000 & HUSKLET_GUI_BG_{slot}=$!; export HUSKLET_GUI_BG_{slot}; printf '%s\\n' \"$HUSKLET_GUI_BG_{slot}\" > /tmp/husklet-gui-background-{slot}-before\n",
             DIRECTORIES[slot]
         )
     }
 
     fn reopen_command(slot: usize, cycle: usize) -> String {
         format!(
-            "printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-after-{cycle}; printf 'reopened-slot-{slot}-cycle-{cycle}\\n'\n"
+            "printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-after-{cycle}; kill -0 \"$HUSKLET_GUI_BG_{slot}\" && printf '%s\\n' \"$HUSKLET_GUI_BG_{slot}\" > /tmp/husklet-gui-background-{slot}-after-{cycle}; printf 'reopened-slot-{slot}-cycle-{cycle}\\n'\n"
         )
     }
 

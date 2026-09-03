@@ -87,6 +87,11 @@ impl PrimaryLifecycle for Containers {
 }
 
 impl Runtime {
+    /// Starts the journey's pre-seeded second member inside the production domain process.
+    ///
+    /// This is deliberately a feature-gated test hook, not a simulation of a user creating a second
+    /// container through the GUI: that product action does not exist yet. Once seeded, both members use
+    /// the ordinary workspace-wide capture, publication, restore, and inventory paths.
     #[cfg(feature = "gui-checkpoint-e2e")]
     pub(super) async fn start_checkpoint_journey_container(
         containers: &Containers,
