@@ -68,6 +68,55 @@ async function runPackedStarter(starter, installedClient, architecture, signal, 
   }
 }
 
+async function runPackedProtocolRefusal(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host-protocol-refusal.sock');
+  let spoke = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      spoke = true;
+      for (const frame of reader.take(chunk)) {
+        if (frame.payload?.call === 'workspace_info') stream.write(wire.encode({
+          channel: frame.channel,
+          kind: wire.KIND.response,
+          payload: { reply: 'workspace', with: { name: 'project', architecture: 'x86_64', image: 'alpine:3.20' } },
+        }));
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 2, extension: 'client-starter', granted: ['workspace-read'] },
+    }));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not refuse incompatible protocol')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(spoke, false, 'incompatible protocol must be refused before the starter sends a request');
+    assert.equal(stdout, '');
+    assert.equal(stderr, 'client-starter: startup failed: host speaks protocol 2, this extension speaks 1\n');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -137,6 +186,7 @@ try {
     await runPackedStarter(starter, starterClient, architecture, 'SIGINT');
   }
   await runPackedStarter(starter, starterClient, 'x86_64', 'SIGTERM', true);
+  await runPackedProtocolRefusal(starter, starterClient);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
