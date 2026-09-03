@@ -347,18 +347,19 @@ export function tools(api) {
       if ((slot != null || phase != null) && kind !== 'pointer') context.addIssue({ code: z.ZodIssueCode.custom, message: 'slot and phase filters require kind pointer' });
     }),
     ({ kind, slot, phase, timeout_ms: timeout }) => new Promise((resolve, reject) => {
-      let stop; let settled = false;
+      let stop; let settled = false; let dropped = 0;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
         Promise.resolve(stop?.()).then(() => error ? reject(error) : resolve(value), reject);
       };
       const timer = setTimeout(() => finish({ observed: false }), timeout);
       api.watchWorkspaceEvents((batch) => {
+        dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + Math.max(0, Number(batch?.dropped) || 0));
         const event = batch?.events?.find((candidate) =>
           (kind == null || candidate?.event === kind)
           && (slot == null || candidate?.slot === slot)
           && (phase == null || candidate?.phase === phase));
-        if (event) finish({ observed: true, event, dropped: batch.dropped ?? 0 });
+        if (event) finish({ observed: true, event, dropped });
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),
   ));

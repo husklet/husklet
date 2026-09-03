@@ -769,7 +769,7 @@ test('workspace event wait filters one bounded batch and always disposes', async
   listener({ events: [{ event: 'pointer', phase: 'press', slot: 'pane-1', generation: 2, x: 1, y: 2, button: 1, modifiers: [], delta_x: null, delta_y: null }], dropped: 3 });
   listener({ events: [{ event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 4, y: 5, button: 1, modifiers: ['shift'], delta_x: null, delta_y: null }], dropped: 4 });
   const answer = JSON.parse((await pending).content[0].text);
-  assert.equal(answer.observed, true); assert.equal(answer.event.slot, 'pane-2'); assert.equal(answer.event.generation, 7); assert.equal(answer.dropped, 4);
+  assert.equal(answer.observed, true); assert.equal(answer.event.slot, 'pane-2'); assert.equal(answer.event.generation, 7); assert.equal(answer.dropped, 9);
   assert.equal(disposed, 1);
 });
 

@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
@@ -96,13 +96,21 @@ pub enum Order {
 /// A non-blocking, bounded bridge from a workspace window to its extension.
 #[derive(Clone, Default)]
 pub struct Events {
-    inner: Arc<Mutex<EventQueue>>,
+    inner: Arc<EventBuffer>,
 }
 
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct WeakEvents {
-    inner: Weak<Mutex<EventQueue>>,
+    inner: Weak<EventBuffer>,
+}
+
+#[derive(Default)]
+struct EventBuffer {
+    queue: Mutex<EventQueue>,
+    /// GTK callbacks must never wait for the consumer. Count contention loss
+    /// separately so the next credited batch makes the observation gap visible.
+    contended: AtomicU64,
 }
 
 #[derive(Default)]
@@ -123,7 +131,10 @@ impl Events {
 
     /// Records activity without ever waiting for the GTK main loop.
     pub fn observe(&self, event: hl_extension::WorkspaceEvent) {
-        let Ok(mut queue) = self.inner.try_lock() else { return };
+        let Ok(mut queue) = self.inner.queue.try_lock() else {
+            self.inner.contended.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
         let replaces_motion = matches!(
             (&event, queue.pending.back()),
             (
@@ -152,15 +163,16 @@ impl Events {
     }
 
     pub(crate) fn drain(&self) -> Option<hl_extension::WorkspaceEventBatch> {
-        let Ok(mut queue) = self.inner.try_lock() else {
+        let Ok(mut queue) = self.inner.queue.try_lock() else {
             return None;
         };
-        if queue.pending.is_empty() && queue.dropped == 0 {
+        let contended = self.inner.contended.swap(0, Ordering::Relaxed);
+        if queue.pending.is_empty() && queue.dropped == 0 && contended == 0 {
             return None;
         }
         Some(hl_extension::WorkspaceEventBatch {
             events: queue.pending.drain(..).collect(),
-            dropped: std::mem::take(&mut queue.dropped),
+            dropped: std::mem::take(&mut queue.dropped).saturating_add(contended),
         })
     }
 }
@@ -233,6 +245,19 @@ mod event_buffer_tests {
         let batch = events.drain().unwrap();
         assert_eq!(batch.events.len(), Events::LIMIT);
         assert_eq!(batch.dropped, 7);
+    }
+
+    #[test]
+    fn callback_contention_never_waits_and_reports_the_loss() {
+        let events = Events::default();
+        let held = events.inner.queue.lock().unwrap();
+        events.observe(WorkspaceEvent::Focus { active: true });
+        drop(held);
+
+        let batch = events.drain().expect("contention loss remains observable");
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.dropped, 1);
+        assert!(events.drain().is_none(), "loss is reported exactly once");
     }
 
     #[test]

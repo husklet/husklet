@@ -164,7 +164,9 @@ those names deliberately are not callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send. Interface handlers
 receive bounded key, focus, and pointer details, while the credit-controlled
 `workspace-events` subscription carries workspace-level key, focus, and pointer
-events. Pointer events identify the exact pane slot and occupant generation,
+activity. Its `dropped` count includes queue pressure, motion coalescing, and
+native callback contention, so consumers can detect every observation gap.
+Pointer events identify the exact pane slot and occupant generation,
 use pane-local coordinates, and distinguish motion, boundary, button, context,
 and scroll phases with bounded modifiers and deltas. Neither is a promise that
 every global workspace snapshot is published.

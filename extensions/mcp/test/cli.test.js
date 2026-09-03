@@ -24,6 +24,7 @@ async function fakeHost(context, { greet = true } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-mcp-cli-'));
   const socketPath = path.join(scratch, 'host.sock');
   const calls = [];
+  let credits = 0;
   const connections = new Set();
   const host = net.createServer((socket) => {
     connections.add(socket);
@@ -31,10 +32,11 @@ async function fakeHost(context, { greet = true } = {}) {
     if (!greet) return;
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'container-attach', 'extension-install', 'network-write', 'terminal-control'],
+      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'workspace-events', 'container-attach', 'extension-install', 'network-write', 'terminal-control'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.credit) { credits += 1; continue; }
         if (frame.channel === CONTROL || frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
         const payload = frame.payload.call === 'workspace_info'
@@ -47,9 +49,19 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'identity', with: 'terminal-default' }
             : frame.payload.call === 'network_connect'
               ? { reply: 'done' }
+            : frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe'
+              ? { reply: 'done' }
             : null;
         if (!payload) throw new Error(`unexpected host call ${frame.payload.call}`);
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+        if (frame.payload.call === 'event_subscribe' && frame.payload.with?.topic === 'workspace-events') setImmediate(() => {
+          socket.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
+            events: [{ event: 'focus', active: true }], dropped: 2,
+          } } }));
+          socket.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
+            events: [{ event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 4, y: 5, button: 1, modifiers: [], delta_x: null, delta_y: null }], dropped: 3,
+          } } }));
+        });
       }
     });
   });
@@ -59,7 +71,7 @@ async function fakeHost(context, { greet = true } = {}) {
     await new Promise((resolve) => host.close(resolve));
     fs.rmSync(scratch, { recursive: true, force: true });
   });
-  return { socketPath, calls, connections };
+  return { socketPath, calls, connections, credits: () => credits };
 }
 
 test('CLI arguments require one bounded socket and workspace without accepting extras', () => {
@@ -134,6 +146,24 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   await client.close();
   await until(() => connections.size === 0);
   assert.equal(diagnostics, '');
+});
+
+test('spawned CLI preserves loss across filtered workspace event batches and returns credit', async (context) => {
+  const { socketPath, calls, credits } = await fakeHost(context);
+  const transport = new StdioClientTransport({ command: process.execPath, args: [cli, '--socket', socketPath, '--workspace', 'dev'], stderr: 'pipe' });
+  const client = new Client({ name: 'workspace-event-loss-test', version: '1' });
+  await client.connect(transport);
+  const answer = await client.callTool({ name: 'husklet_workspace_event_wait', arguments: {
+    kind: 'pointer', slot: 'pane-2', phase: 'press', timeout_ms: 1_000,
+  } });
+  assert.deepEqual(JSON.parse(answer.content[0].text), {
+    observed: true,
+    event: { event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 4, y: 5, button: 1, modifiers: [], delta_x: null, delta_y: null },
+    dropped: 5,
+  });
+  assert.deepEqual(calls.map(({ call }) => call), ['workspace_info', 'event_subscribe', 'event_unsubscribe']);
+  await until(() => credits() === 2);
+  await client.close();
 });
 
 test('startup handshake timeout is bounded, actionable, and leaves no socket', async (context) => {

@@ -51,7 +51,8 @@ methods.
 
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one
-unit of host credit, reports the host's dropped/coalesced count, and always
+unit of host credit, accumulates dropped/coalesced counts across batches skipped
+by its filters (saturating at JavaScript's safe integer limit), and always
 unsubscribes on a match or timeout. Optional `slot` and `phase` filters select
 an exact pane occupant generation reported by GTK hit-testing. It observes
 window-level input only; owned
