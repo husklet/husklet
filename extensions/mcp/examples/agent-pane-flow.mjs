@@ -11,7 +11,7 @@ const call = async (client, name, args = {}) => text(
 );
 
 const attribute = (xml, name) => {
-  const match = xml.match(new RegExp(`(?:<pane|<node)[^>]*\\b${name}="(\\d+)"`));
+  const match = xml.match(new RegExp(`(?:<husklet-pane|<pane|<node)[^>]*\\b${name}="(\\d+)"`));
   if (!match) throw new Error(`semantic snapshot has no numeric ${name}`);
   return Number(match[1]);
 };
@@ -48,6 +48,8 @@ export async function runPaneAgentTurn(client, {
   if (!terminal || !semantic) throw new Error('one terminal and one semantic pane are required');
 
   const terminalBefore = await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 });
+  const terminalGeneration = attribute(terminalBefore, 'generation');
+  const terminalRevision = attribute(terminalBefore, 'revision');
   const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
   const generation = attribute(semanticBefore, 'generation');
   const revision = attribute(semanticBefore, 'revision');
@@ -57,10 +59,17 @@ export async function runPaneAgentTurn(client, {
   }
   const node = nodeForLabel(semanticBefore, actionLabel);
 
+  const terminalWaiting = call(client, 'husklet_pane_wait', {
+    slot: terminal.slot, after_generation: terminalGeneration, after_revision: terminalRevision, timeout_ms: waitMs,
+  });
   await call(client, 'husklet_terminal_write_bytes', {
-    slot: terminal.slot, generation: terminal.generation, revision: terminal.revision,
+    slot: terminal.slot, generation: terminalGeneration, revision: terminalRevision,
     input_base64: Buffer.from(terminalBytes).toString('base64'),
   });
+  const terminalChanged = JSON.parse(await terminalWaiting);
+  const terminalAfter = terminalChanged.changed
+    ? await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 })
+    : null;
   // Arm the one-shot subscription first; request ordering prevents a fast UI
   // update from racing past observation.
   const waiting = call(client, 'husklet_pane_wait', {
@@ -78,7 +87,8 @@ export async function runPaneAgentTurn(client, {
     : null;
 
   return {
-    terminal: { slot: terminal.slot, snapshot: terminalBefore },
+    terminal: { slot: terminal.slot, generation: terminalGeneration, revision: terminalRevision,
+      before: terminalBefore, changed: terminalChanged, after: terminalAfter },
     semantic: { slot: semantic.slot, generation, revision, node, before: semanticBefore, changed, after: semanticAfter },
   };
 }

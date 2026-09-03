@@ -241,11 +241,13 @@ const observation = await runPaneAgentTurn(client, {
 The turn discovers slots before reading them, reads at most 100 terminal lines,
 reads either a native or extension semantic tree, and invokes a node using the
 revision returned with that same tree. It writes the supplied bytes through the
-canonical-base64 tool. It arms one `husklet_pane_wait` before the action so a
-fast change is not lost;
+canonical-base64 tool, using the generation/revision returned by the terminal
+read rather than an older inventory cursor. It arms one `husklet_pane_wait`
+before terminal input and another before the semantic action so fast changes are not lost;
 the host's credit-controlled subscription either reports a coalesced change or
 times out. Only a reported change causes one fresh snapshot. There is no polling
-loop. A stale-revision error is authoritative: read a fresh tree and reconsider
+loop. Terminal text is the bounded interpreted screen/history snapshot (with
+cursor and grid), not raw or unbounded process stdout/stderr. A stale-revision error is authoritative: read a fresh tree and reconsider
 the action instead of replaying an old node ID.
 
 ## Day-one control workflow
