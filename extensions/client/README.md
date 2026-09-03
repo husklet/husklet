@@ -21,6 +21,12 @@ removes the completed execution record, and restores the container's initial
 stopped state. A failed wait/log operation remains recoverable through
 `ExecutionOperationError.executionId`; the example does not auto-remove it.
 
+`examples/agent-workspace-control.mjs` proves administrative create/start/stop/
+delete for a unique workspace name. It acknowledges lifecycle observation before
+each mutation, requires strictly increasing matching revisions, and deletes with
+the immutable generation returned by creation. It does not operate on the
+extension's hosting workspace.
+
 Every discovered pane has one framework-neutral text projection. Terminal panes
 return their interpreted visible screen and cursor snapshot; native and extension
 UI panes return bounded semantic XML:
