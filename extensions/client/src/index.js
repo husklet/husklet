@@ -442,6 +442,10 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
+  api.watchImages = (listener) => watch('images', 'images', listener, 'image');
+  api.watchVolumes = (listener) => watch('volumes', 'volumes', listener, 'volume');
+  api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');
+  api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
   api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
     const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);

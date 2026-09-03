@@ -295,6 +295,10 @@ export interface WorkspaceApi {
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
+  watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;
+  watchVolumes(listener: (volumes: VolumeSummary[]) => void): Promise<() => Promise<void>>;
+  watchNetworks(listener: (networks: NetworkSummary[]) => void): Promise<() => Promise<void>>;
+  watchTerminal(listener: (tabs: TabSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
   watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;

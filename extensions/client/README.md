@@ -81,6 +81,12 @@ maps every host topic to the typed `subscribe(topic)` / `unsubscribe(topic)`
 API, so extensions do not need to discover normal operations through
 `Session.call()`.
 
+Use the typed inventory watchers when consuming host snapshots: `watchImages`,
+`watchVolumes`, `watchNetworks`, and `watchTerminal` deliver the bounded types
+from the Rust protocol schema and return an async disposer. The disposer sends
+the matching unsubscribe when the final local listener stops; event credit is
+returned only after the validated snapshot has been delivered.
+
 See [API.md](API.md) for the complete schema-checked method and topic reference,
 including capability requirements, observation identities, bounds, errors, and
 short client-only examples.

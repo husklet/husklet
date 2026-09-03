@@ -7,7 +7,7 @@ import test from 'node:test';
 import { connect, Session, workspace } from '../src/index.js';
 import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
 
-test('real Unix stream negotiates grants, correlates a call, and returns event credit', async () => {
+test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-client-'));
   const socketPath = path.join(directory, 'host.sock');
   const observed = [];
@@ -23,29 +23,32 @@ test('real Unix stream negotiates grants, correlates a call, and returns event c
         observed.push(frame);
         if (frame.channel === 7 && frame.kind === KIND.credit) creditSeen();
         if (frame.channel === CONTROL && frame.kind === KIND.response) continue;
-        if (frame.channel === 2 && frame.payload.call === 'event_subscribe') {
+        if (frame.channel === 2 && ['event_subscribe', 'event_unsubscribe'].includes(frame.payload.call)) {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
         }
         if (frame.channel === 2 && frame.payload.call === 'workspace_info') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'demo', image: 'alpine', architecture: 'amd64' } } }));
-          socket.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'containers', of: [] } }));
+          socket.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'images', of: [] } }));
         }
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspace-read', 'container-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspace-read', 'image-read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
-    let pushed;
-    const session = await connect({ path: socketPath, onEvent: (event) => { pushed = event; } });
-    assert.deepEqual(session.granted, ['workspace-read', 'container-read']);
-    await session.call('event_subscribe', { topic: 'containers' });
+    const pushed = [];
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(session.granted, ['workspace-read', 'image-read']);
+    const stop = await workspace(session).watchImages((images) => pushed.push(images));
     assert.equal((await workspace(session).info()).name, 'demo');
     await credit;
-    assert.equal(pushed.snapshot, 'containers');
+    assert.deepEqual(pushed, [[]]);
     assert(observed.some((frame) => frame.channel === CONTROL && frame.kind === KIND.response));
     assert(observed.some((frame) => frame.channel === 7 && frame.kind === KIND.credit && frame.payload === 1));
-    session.close();
+    await stop();
+    assert(observed.some((frame) => frame.payload?.call === 'event_subscribe' && frame.payload.with.topic === 'images'));
+    assert(observed.some((frame) => frame.payload?.call === 'event_unsubscribe' && frame.payload.with.topic === 'images'));
+    await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
     await new Promise((resolve) => server.close(resolve));

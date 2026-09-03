@@ -488,6 +488,32 @@ test('container watcher uses existing snapshot topic and returns credit after de
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('all bounded inventory snapshots have typed watchers with independent disposal and credit', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = { images: [], volumes: [], networks: [], terminal: [] };
+  const definitions = [
+    ['watchImages', 'images', 'images', [{ id: 'sha256:a', reference: 'alpine:3.20', size: 42, created: 7 }]],
+    ['watchVolumes', 'volumes', 'volumes', [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }]],
+    ['watchNetworks', 'networks', 'networks', [{ id: 'b'.repeat(32), name: 'dev', driver: 'bridge', scope: 'local' }]],
+    ['watchTerminal', 'terminal', 'terminal', [{ id: 'tab-1', title: 'Shell', panes: [] }]],
+  ];
+  for (const [method, topic, snapshot, value] of definitions) {
+    const opening = api[method]((payload) => seen[topic].push(payload));
+    assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic } });
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    const stop = await opening;
+    stage.host.write(encode({ channel: 20, kind: KIND.event, payload: { snapshot, of: value } }));
+    const credit = await next();
+    assert.equal(credit.kind, KIND.credit); assert.equal(credit.channel, 20);
+    assert.deepEqual(seen[topic], [value]);
+    const stopping = stop();
+    assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic } });
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    await stopping;
+  }
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('image pull jobs and progress watcher preserve exact typed wire shapes', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const opening = api.watchImagePulls(() => {});
