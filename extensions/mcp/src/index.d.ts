@@ -4,7 +4,14 @@ import type { ZodType } from 'zod';
 
 export interface ToolResult { content: Array<{ type: 'text'; text: string }> }
 /** Arguments for `husklet_terminal_write_bytes`. Base64 must be canonical and decode to at most 65,536 bytes. */
-export interface TerminalWriteBytesInput { slot: string; input_base64: string }
+export interface TerminalWriteBytesInput {
+  slot: string;
+  /** Pane generation returned by the observation used to choose this target. */
+  generation: number;
+  /** Pane revision returned by the observation used to choose this target. */
+  revision: number;
+  input_base64: string;
+}
 export interface ToolDefinition {
   name: string;
   description: string;

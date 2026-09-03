@@ -79,9 +79,11 @@ try {
     declare const session: Session;
     const server = createServer(session);
     const definitions: ToolDefinition[] = tools({} as Parameters<typeof tools>[0]);
-    const bytes: TerminalWriteBytesInput = { slot: 'packed', input_base64: 'AAP//g==' };
+    const bytes: TerminalWriteBytesInput = { slot: 'packed', generation: 1, revision: 1, input_base64: 'AAP//g==' };
+    // @ts-expect-error writes must be bound to an observed pane generation and revision
+    const staleBytes: TerminalWriteBytesInput = { slot: 'packed', input_base64: 'AAP//g==' };
     const xml: string = semanticXml({ slot: 'typed', generation: 1, revision: 1, truncated: false, root: { id: 0, role: 'column', label: null, value: null, disabled: false, destructive: false, actions: [], children: [] } });
-    void server; void definitions; void bytes; void xml;
+    void server; void definitions; void bytes; void staleBytes; void xml;
     // @ts-expect-error a Session is required
     createServer({});
   `);
