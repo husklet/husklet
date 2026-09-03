@@ -724,6 +724,23 @@ mod tests {
     }
 
     #[test]
+    fn wall_clock_stops_before_host_evidence_io_and_output_is_durable_before_publication() {
+        let source = include_str!("developer.rs");
+        let completed = source.find("reader.join().map_err").unwrap();
+        let elapsed = source.find("let elapsed = start.elapsed().as_nanos();").unwrap();
+        let perf_read = source.find("parse_perf(&fs::read_to_string(&perf_path)?").unwrap();
+        assert!(completed < elapsed && elapsed < perf_read);
+
+        let atomic = source.find("fn atomic_bytes(").unwrap();
+        let atomic = &source[atomic..source.find("fn semantic_sha256(").unwrap()];
+        let write = atomic.find("file.write_all(bytes)?").unwrap();
+        let file_sync = atomic.find("file.sync_all()?").unwrap();
+        let rename = atomic.find("fs::rename(&temporary, path)?").unwrap();
+        let directory_sync = atomic.find("File::open(path.parent()").unwrap();
+        assert!(write < file_sync && file_sync < rename && rename < directory_sync);
+    }
+
+    #[test]
     fn perf_counters_are_complete_numeric_and_nonzero() {
         let text = "11\t\tduration_time\n2.5\tmsec\ttask-clock\n31\t\tinstructions\n41\t\tcycles\n5\t\tpage-faults\n";
         let parsed = parse_perf(text).unwrap();
