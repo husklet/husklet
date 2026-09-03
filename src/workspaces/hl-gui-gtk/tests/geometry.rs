@@ -106,6 +106,7 @@ fn geometry_is_what_the_description_asked_for() {
     a_tall_child_pushes_the_next_row_around_it();
     a_removed_child_closes_the_hole_it_left();
     a_wrapping_row_moves_a_child_onto_a_second_line();
+    a_wrapping_row_shares_spare_width_between_growing_children();
     padding_lands_on_the_side_it_names();
     alignment_follows_the_axis_of_its_container();
     a_size_range_becomes_a_floor_the_toolkit_honours();
@@ -268,6 +269,27 @@ fn a_wrapping_row_moves_a_child_onto_a_second_line() {
     let (wide, _, _, _) = widget.measure(gtk::Orientation::Vertical, 400);
     assert_eq!(narrow, CHILD * 2, "three children in two lines");
     assert_eq!(wide, CHILD, "the same three children on one line");
+}
+
+/// A wrapping row replaces GTK's box layout, but `grow` must retain the same
+/// meaning when all children fit on one line.
+fn a_wrapping_row_shares_spare_width_between_growing_children() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    for _ in 0..2 {
+        let pane = stage.producer.create(Tag::Scroll);
+        stage.producer.set(pane, Prop::Width, PropValue::Length(Length::Fill));
+        stage.producer.append(row, pane);
+    }
+    stage.draw();
+    stage.allocate(600, 200);
+
+    let panes = offspring(&stage.tagged(Tag::Row));
+    assert_eq!(panes.len(), 2);
+    assert_eq!(panes[0].width(), 300);
+    assert_eq!(panes[1].width(), 300);
 }
 
 /// One property, four sides, each landing where it was named.

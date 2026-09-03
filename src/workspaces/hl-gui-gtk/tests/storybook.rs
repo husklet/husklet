@@ -143,6 +143,18 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
+            if story == "DataTable" && width == 1_200 {
+                let panes = descendants::<gtk::ScrolledWindow>(&root)
+                    .into_iter()
+                    .filter(|scroll| scroll.has_css_class("hl-scroll"))
+                    .collect::<Vec<_>>();
+                assert_eq!(panes.len(), 2, "Storybook keeps navigation and inspector panes");
+                assert!(
+                    panes.iter().all(|pane| pane.width() >= 150),
+                    "wide Storybook panes were clipped to {:?}",
+                    panes.iter().map(|pane| pane.width()).collect::<Vec<_>>()
+                );
+            }
         }
         if story == "DataTable" {
             settle_toolkit();
@@ -430,6 +442,22 @@ mod unix {
             }
         }
         panic!("expected GTK interaction widget was not rendered")
+    }
+
+    fn descendants<T: IsA<gtk::Widget> + gtk::glib::object::Cast + Clone + 'static>(root: &gtk::Widget) -> Vec<T> {
+        let mut pending = vec![root.clone()];
+        let mut found = Vec::new();
+        while let Some(widget) = pending.pop() {
+            if let Ok(candidate) = widget.clone().downcast::<T>() {
+                found.push(candidate);
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
+        found
     }
 
     fn settle_toolkit() {

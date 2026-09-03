@@ -102,7 +102,7 @@ impl LayoutManagerImpl for Weave {
         let room = if vertical { height } else { width };
         let mut cross = 0;
         for line in self.lines(widget, room) {
-            self.line(&line, cross, vertical);
+            self.line(&line, cross, vertical, room);
             cross += line.cross + spacing;
         }
     }
@@ -130,16 +130,35 @@ impl Weave {
         lines
     }
 
-    /// Places one line's children, each at its natural main size.
-    fn line(&self, line: &Line, cross: i32, vertical: bool) {
+    /// Places one line's children, sharing spare room among children that ask
+    /// to grow just as a non-wrapping box does.
+    fn line(&self, line: &Line, cross: i32, vertical: bool, room: i32) {
         let spacing = self.spacing.get();
+        let expanding = line
+            .children
+            .iter()
+            .filter(|(child, _, _)| if vertical { child.vexpands() } else { child.hexpands() })
+            .count();
+        let expanding = i32::try_from(expanding).unwrap_or(i32::MAX);
+        let spare = room.saturating_sub(line.main);
+        let share = if expanding == 0 { 0 } else { spare / expanding };
+        let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
         let mut main = 0;
         for (child, extent, _) in &line.children {
+            let expands = if vertical { child.vexpands() } else { child.hexpands() };
+            let bonus = if expands {
+                let bonus = share + i32::from(remainder > 0);
+                remainder = remainder.saturating_sub(1);
+                bonus
+            } else {
+                0
+            };
+            let extent = extent + bonus;
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
             let (width, height) = if vertical {
-                (line.cross, *extent)
+                (line.cross, extent)
             } else {
-                (*extent, line.cross)
+                (extent, line.cross)
             };
             let shift = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x as f32, y as f32));
             child.allocate(width, height, -1, Some(shift));
