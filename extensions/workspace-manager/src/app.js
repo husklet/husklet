@@ -148,6 +148,10 @@ function containerCreateOptions(draft) {
       throw new Error('Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.');
     }
   }
+  const network = draft.network;
+  if (network && (bytes(network) > 255 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(network))) {
+    throw new Error('Initial network must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes.');
+  }
   const entrypointText = draft.entrypoint.trim();
   let entrypoint;
   if (entrypointText) {
@@ -233,6 +237,7 @@ function containerCreateOptions(draft) {
     ...(workingDirectory ? { working_directory: workingDirectory } : {}),
     ...(user ? { user } : {}),
     ...(labels ? { labels } : {}),
+    ...(network ? { network } : {}),
     ...(memoryMb === null ? {} : { memory_mb: memoryMb }),
     ...(cpus === null ? {} : { cpus }),
     ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
@@ -261,7 +266,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({
-    image: '', name: '', hostname: '', user: '', labels: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+    image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
   });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -314,7 +319,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
       setCreated(null); setDraft({
-        image: '', name: '', hostname: '', user: '', labels: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+        image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
       });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
@@ -346,6 +351,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.hostname, placeholder: 'Hostname (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, hostname: String(event.value ?? '') })) }),
         h(Entry, { value: draft.user, placeholder: 'Run as user (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, user: String(event.value ?? '') })) }),
         h(Entry, { value: draft.labels, placeholder: 'Labels JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, labels: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.network, placeholder: 'Initial network (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, network: String(event.value ?? '') })) }),
         h(Entry, { value: draft.entrypoint, placeholder: 'Entrypoint argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, entrypoint: String(event.value ?? '') })) }),
         h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
         h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),

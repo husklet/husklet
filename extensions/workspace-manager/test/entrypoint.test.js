@@ -157,6 +157,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 52, kind: KIND.event, payload: changeInvocation(requests, 'Run as user (optional)', '1000:1000') }));
     peer.write(encode({ channel: 53, kind: KIND.event, payload: changeInvocation(requests, 'Labels JSON (optional)', '[["role","worker"],["tier","backend"]]') }));
     peer.write(encode({ channel: 54, kind: KIND.event, payload: changeInvocation(requests, 'Entrypoint argv JSON (optional)', '["/bin/sh","-lc"]') }));
+    peer.write(encode({ channel: 55, kind: KIND.event, payload: changeInvocation(requests, 'Initial network (optional)', 'private_backend.v1') }));
     peer.write(encode({ channel: 43, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON (optional)', '["sh","-lc","printf ready"]') }));
     peer.write(encode({ channel: 44, kind: KIND.event, payload: changeInvocation(requests, 'Environment pairs JSON (optional)', '[["MODE","test"],["EMPTY",""]]') }));
     peer.write(encode({ channel: 45, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/workspace/app') }));
@@ -174,7 +175,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       hostname: 'worker-1.internal', user: '1000:1000', labels: [['role', 'worker'], ['tier', 'backend']], mounts: [
         { volume: 'cache', target: '/cache', read_only: true },
         { volume: 'data', target: '/srv/data', read_only: false },
-      ], network: null, ports: [
+      ], network: 'private_backend.v1', ports: [
         { container: 8080, host: 18080, protocol: 'tcp' },
         { container: 53, host: null, protocol: 'udp' },
       ], memory_mb: 512, cpus: 2, pids_limit: 128,

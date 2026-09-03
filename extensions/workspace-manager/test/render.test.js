@@ -693,6 +693,41 @@ test('container creation validates entrypoint argv and retains it until success'
   assert.equal(fieldValue(stage, placeholder), '');
 });
 
+test('container creation validates an initial network reference and retains it until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('network attachment temporarily unavailable');
+      return 'networked-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'networked');
+  const placeholder = 'Initial network (optional)';
+  const error = 'Initial network must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes.';
+  for (const invalid of ['-private', 'private network', 'prívate', `n${'x'.repeat(255)}`]) {
+    change(stage, placeholder, invalid);
+    assert.ok(labelled(stage, error));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, placeholder, `n${'x'.repeat(254)}`);
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 255-byte boundary is accepted');
+  change(stage, placeholder, 'private_backend.v1');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'network attachment temporarily unavailable'));
+  assert.equal(fieldValue(stage, placeholder), 'private_backend.v1');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'networked', network: 'private_backend.v1' };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'networked-container'], ['reload']]);
+  assert.equal(fieldValue(stage, placeholder), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
