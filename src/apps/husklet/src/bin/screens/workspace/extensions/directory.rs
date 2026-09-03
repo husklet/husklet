@@ -351,6 +351,7 @@ impl Catalogue {
                 }
             }
             Acquisition::Failed(reason) => {
+                let restore_focus = self.consent_focus.replace(false);
                 *self.pending.borrow_mut() = None;
                 self.acquisition_finished();
                 self.progress.set_visible(false);
@@ -360,6 +361,9 @@ impl Catalogue {
                 self.inspect.set_label("Retry");
                 self.say(&reason);
                 self.offer_retry();
+                if restore_focus {
+                    self.inspect.grab_focus();
+                }
             }
             Acquisition::Cancelled => {
                 self.cancelled();

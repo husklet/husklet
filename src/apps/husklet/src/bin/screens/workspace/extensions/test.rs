@@ -1968,10 +1968,14 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "team/tool:latest");
 
-    page.inspect();
     let action = inspect_action(&page);
+    assert!(action.grab_focus());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    action.emit_clicked();
     assert!(
         !action.is_sensitive(),
         "a second pull cannot be started while one is pending"
@@ -1980,6 +1984,10 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     assert!(page.poll());
     assert!(action.is_sensitive());
     assert_eq!(action.label().as_deref(), Some("Retry"));
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Retry".into()),
+        "a failed keyboard-started acquisition hands focus to Retry");
     assert!(page.notice().contains("temporarily unavailable"));
     let notice = descendants(page.widget().upcast_ref())
         .into_iter()
@@ -2006,6 +2014,8 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
         ["docker.io/team/tool:latest", "docker.io/team/tool:latest"],
         "only the two explicit attempts reached the registry"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 #[cfg(feature = "native-test-hooks")]
