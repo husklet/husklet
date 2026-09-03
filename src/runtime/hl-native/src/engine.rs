@@ -759,7 +759,7 @@ mod tests {
             .x86_64_translit_displaced;
         // Selector 148 already belongs to the memory-indirect JMP classifier; 220 exposes the
         // direct-CALL fixture's next internal scenario without stealing that established contract.
-        for scenario in (137..=147).chain([220, 227]) {
+        for scenario in (137..=147).chain([220, 223]) {
             // SAFETY: the hook accepts one bounded scalar selector and isolates mutable engine state in a child.
             assert_eq!(unsafe { hook(scenario) }, 0, "direct CALL IBTC scenario {scenario}");
         }
