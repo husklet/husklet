@@ -1022,6 +1022,10 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
     assert!(page.notice().contains("sample:1 at sha256:bbbb"));
     assert!(
+        page.notice().contains("Choose Enable to start it"),
+        "installation distinguishes sidebar presence from activation"
+    );
+    assert!(
         fixture.view.holds("sample"),
         "and it is on the sidebar without a restart"
     );
@@ -1032,6 +1036,15 @@ fn an_image_is_read_before_anybody_is_asked() {
             .any(|widget| widget.has_css_class(settings::STANDING)),
         "the central catalogue gained the lifecycle card"
     );
+    let installed = fixture.view.semantic_snapshot();
+    let enable = installed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Enable"))
+        .expect("a disabled installation exposes its explicit activation action");
+    assert!(!enable.disabled);
+    assert_eq!(enable.role, "button");
 }
 
 fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
@@ -1880,6 +1893,16 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         Rc::new(move |name| withdrawn.withdraw(name.as_str())),
     );
     shelf.install();
+
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Standby);
+    assert!(
+        !greeted.load(Ordering::Acquire),
+        "installing a disabled record opens no extension socket"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "installing a disabled record advertises no provider"
+    );
 
     std::fs::remove_dir_all(&root).expect("remove durable root");
     std::fs::write(&root, b"jammed").expect("jam durable root");

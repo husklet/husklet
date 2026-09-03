@@ -376,12 +376,15 @@ impl Catalogue {
             .into_iter()
             .find(|entry| entry.name == candidate.manifest.name);
         if let Some(entry) = entry {
-            self.shelf.mount(&entry);
+            // Installation deliberately records a disabled extension. Put the
+            // lifecycle controls in front of the person who just installed it
+            // so appearing in the sidebar cannot be mistaken for activation.
+            self.shelf.refresh(&entry.name);
         }
         self.forget();
         self.refresh();
         self.say(&format!(
-            "{} is installed and disabled from {} at {}",
+            "{} is installed and disabled from {} at {}. Choose Enable to start it",
             candidate.manifest.name, candidate.reference, candidate.digest
         ));
     }
