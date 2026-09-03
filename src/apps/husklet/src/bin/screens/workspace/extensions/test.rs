@@ -1586,8 +1586,21 @@ fn remote_image_progress_precedes_the_consent_prompt() {
         PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
+    while gtk::glib::MainContext::default().iteration(false) {}
     typed(&page, "team/tool:latest");
-    page.inspect();
+    let inspect = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::INSPECT))
+        .and_downcast::<gtk::Button>()
+        .expect("manifest inspection action");
+    assert!(inspect.grab_focus());
+    inspect.emit_clicked();
 
     assert!(page.poll());
     assert_eq!(page.notice(), "checking local images");
@@ -1618,6 +1631,10 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     assert_eq!(page.notice(), "reading extension manifest");
     assert!(page.poll());
     assert!(page.notice().contains("asks for"));
+    assert!(
+        gtk::prelude::RootExt::focus(&window).is_some_and(|focused| focused.is::<gtk::CheckButton>()),
+        "keyboard inspection hands focus to the first revealed consent choice"
+    );
     let capabilities = descendants(page.widget().upcast_ref())
         .into_iter()
         .find(|widget| widget.has_css_class(directory::PROPOSAL_CAPABILITIES))
@@ -1641,6 +1658,7 @@ fn remote_image_progress_precedes_the_consent_prompt() {
         fixture.roster.borrow().entries().is_empty(),
         "a ready image still awaits consent"
     );
+    window.close();
 }
 
 fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {

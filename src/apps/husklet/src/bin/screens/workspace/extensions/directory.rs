@@ -5,7 +5,7 @@
 //! gives records a grant. There is no path on this page from an image's request
 //! to a recorded grant that skips the middle step.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -75,6 +75,7 @@ pub struct Catalogue {
     pending: RefCell<Option<PendingInspection>>,
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Proposal>>,
+    consent_focus: Cell<bool>,
     semantics: super::super::semantic::Registry,
 }
 
@@ -131,6 +132,7 @@ impl Catalogue {
             cancel,
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
+            consent_focus: Cell::new(false),
             semantics,
         });
         page.assemble();
@@ -260,6 +262,7 @@ impl Catalogue {
             }
         };
         self.reference.set_text(&reference);
+        self.consent_focus.set(self.inspect.has_focus());
         self.say(&format!("reading {reference}"));
         self.reference.set_sensitive(false);
         self.inspect.set_sensitive(false);
@@ -339,6 +342,9 @@ impl Catalogue {
                     }
                 } else {
                     self.propose_install(candidate);
+                }
+                if self.consent_focus.replace(false) {
+                    self.proposal.child_focus(gtk::DirectionType::TabForward);
                 }
             }
             Acquisition::Failed(reason) => {
