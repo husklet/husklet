@@ -1742,6 +1742,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     /* Test-only boundary probe. Unlike PEER_EXIT_AFTER_JOIN this participant remains alive and has
        consumed no guest state. A failed generation must release it back into the original tree. */
     int forced_refusal = park && hl_option_get("HL_CKPT_TEST_PEER_REFUSE_AFTER_JOIN") != NULL;
+    int forced_after_dump = park && hl_option_get("HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP") != NULL;
     if (forced_refusal) {
         ckpt_member_refuse(procdir, "pass the pre-self-dump refusal boundary (test hook)");
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
@@ -1778,6 +1779,10 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     g_ckpt_cpu_images = images;
     g_ckpt_cpu_count = count;
     int result = forced_refusal ? -1 : ckpt_dump_self_locked(c, procdir);
+    if (result == 0 && forced_after_dump) {
+        g_ckpt_member_refusal = "pass the post-destructive refusal boundary (test hook)";
+        result = -1;
+    }
     if (result != 0 && !forced_refusal) {
         if (park) ckpt_member_refuse(procdir, g_ckpt_member_refusal ? g_ckpt_member_refusal : "complete its dump");
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
@@ -2228,6 +2233,8 @@ static void ckpt_reap_and_record(const struct ckpt_phase_ledger *phases) {
         int status = 0;
         pid_t child = waitpid(-1, &status, WNOHANG);
         if (child <= 0) break;
+        g_ckpt_capture_destructive = 1;
+        ckpt_stream_mark_irreversible();
         ckpt_record_reaped_child(phases, child, status);
     }
 }

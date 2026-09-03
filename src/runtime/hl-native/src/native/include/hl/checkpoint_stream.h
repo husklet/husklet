@@ -131,7 +131,8 @@ typedef enum hl_ckpt_stream_op {
        so protocol ABI 2 remains wire-compatible. An older broker rejects these
        operations and the engine fails closed instead of resuming. */
     HL_CKPT_OP_REFUSAL_LATCHED = 28,
-    HL_CKPT_OP_SETTLE_REFUSAL = 29
+    HL_CKPT_OP_SETTLE_REFUSAL = 29,
+    HL_CKPT_OP_MARK_IRREVERSIBLE = 30
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)

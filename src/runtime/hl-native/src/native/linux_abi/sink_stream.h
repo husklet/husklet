@@ -69,6 +69,10 @@ static int ckpt_stream_settle_refusal(void) {
                : -1;
 }
 
+static void ckpt_stream_mark_irreversible(void) {
+    (void)ckpt_stream_call(HL_CKPT_OP_MARK_IRREVERSIBLE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0);
+}
+
 // Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture
 // generation this process is running. Returns 1 registered, 0 never registered, -1 unknown.
 //

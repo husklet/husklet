@@ -37,6 +37,14 @@ int main(void) {
         sigemptyset(&action.sa_mask);
         if (sigaction(SIGUSR1, &action, NULL) != 0) _exit(71);
 
+        /* A real buffered pipe makes the member's descriptor dump irreversible: capture drains the byte
+           from the kernel before the post-dump refusal hook fires. Both ends deliberately remain live so
+           the original tree would observe the loss if a broker incorrectly advertised clean recovery. */
+        int shared_pipe[2];
+        if (pipe(shared_pipe) != 0) _exit(80);
+        const char payload = 'x';
+        if (write(shared_pipe[1], &payload, 1) != 1) _exit(81);
+
         pid_t child = fork();
         if (child < 0) _exit(72);
         if (child == 0) _exit(CHILD_STATUS);

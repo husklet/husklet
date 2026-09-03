@@ -5645,6 +5645,64 @@ fn a_pre_self_dump_refusal_resumes_the_original_tree_with_pending_status_on_both
     }
 }
 
+/// A participant that has drained a real inherited pipe cannot be released back into the original tree.
+/// The irreversible mark belongs to the capture generation, not to the coordinator's local process, so a
+/// later refusal by that member must terminalize the complete tree and publish neither a manifest nor the
+/// clean-resume markers used by the pre-dump control above.
+#[test]
+fn a_post_descriptor_dump_refusal_never_advertises_a_resumed_tree_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, refusal_resume_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let port = Arc::new(TestTerminal::default());
+        let capture = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(
+                    &executable,
+                    &release,
+                    &final_release,
+                    &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP"],
+                ),
+                StandardStreams::default().with_terminal(Terminal::new(port.clone(), 24, 80).unwrap()),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        capture.start().unwrap();
+        port.wait_output(b"REFUSAL-MEMBER-ZOMBIE");
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a post-destructive member refusal was reported as a successful checkpoint");
+        port.input(b"\n");
+        let result = wait_result_bounded(&capture, "post-destructive refusal terminalization");
+        assert!(
+            !matches!(result, Ok(exit) if exit.guest_status == 0),
+            "{isa:?} advertised a cleanly resumed tree after a peer drained shared state: {}",
+            port.output()
+        );
+        assert!(
+            !port.output().contains("REFUSAL-MEMBER-REAPED") && !port.output().contains("REFUSAL-COORDINATOR-RESUMED"),
+            "{isa:?} emitted clean-resume markers after irreversible peer work: {}",
+            port.output()
+        );
+        assert!(
+            !store.0.lock().unwrap().contains_key("MANIFEST"),
+            "{isa:?} published a partial checkpoint after irreversible peer refusal"
+        );
+    }
+}
+
 /// A child exit status the capture's own reap destroys survives into the restored tree.
 ///
 /// The coordinator reaps with `waitpid(-1, WNOHANG)` from inside the container init, which IS a guest

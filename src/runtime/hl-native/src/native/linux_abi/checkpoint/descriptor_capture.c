@@ -67,6 +67,7 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
         // postmaster/backend shape this whole path exists for: one identity, six holders, one winner and
         // five processes that would have gone back to running.
         g_ckpt_capture_destructive = 1;
+        ckpt_stream_mark_irreversible();
         return 0;
     }
     if (claimed < 0) {
@@ -82,6 +83,7 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
         return -1;
     }
     g_ckpt_capture_destructive = 1; // winning the claim makes this process the one that CONSUMES the pipe
+    ckpt_stream_mark_irreversible();
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) {
         *reason = "sink refused to open the pipe object";
@@ -197,6 +199,7 @@ static int ckpt_capture_socket_queue(int fd, uint64_t identity, uint32_t type) {
     int claimed = ckpt_sink_claim(sink, name);
     if (claimed != 0) return claimed > 0 ? 0 : -1;
     g_ckpt_capture_destructive = 1; // this process drains the receive queue; the bytes leave the kernel
+    ckpt_stream_mark_irreversible();
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
     struct ckpt_socket_queue_header header = {CKPT_SOCKET_QUEUE_MAGIC, type, 0};

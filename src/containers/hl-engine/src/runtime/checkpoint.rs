@@ -34,10 +34,10 @@ mod transaction;
 use participants::ParticipantLedger;
 use protocol::{
     CLAIM, COMMIT, DECIDES_REFUSAL, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
-    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
-    OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REFUSAL_LATCHED, REGISTER_READY,
-    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP,
-    SETTLE_REFUSAL, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    MARK_IRREVERSIBLE, MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH,
+    OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE,
+    REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply,
+    Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -179,6 +179,7 @@ pub(crate) struct Server {
     running: AtomicBool,
     connections: AtomicUsize,
     next_connection: AtomicU64,
+    irreversible_generation: AtomicU64,
     #[cfg(test)]
     dispatches: AtomicUsize,
     #[cfg(test)]
@@ -243,6 +244,7 @@ impl Server {
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
             next_connection: AtomicU64::new(1),
+            irreversible_generation: AtomicU64::new(0),
             #[cfg(test)]
             dispatches: AtomicUsize::new(0),
             #[cfg(test)]

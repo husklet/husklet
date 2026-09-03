@@ -1,8 +1,8 @@
 use super::{
-    CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
-    MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT,
-    REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply,
-    Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
+    CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MARK_IRREVERSIBLE,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
+    OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
+    REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -193,6 +193,12 @@ impl Server {
                 };
                 let decided = self.decide_refusal(u64::from(request.generation), reason);
                 let reply = decided.map_or_else(|()| Reply::error(), |()| Reply::ok());
+                let _ = reply.write(&mut channel);
+                continue;
+            }
+            if request.op == MARK_IRREVERSIBLE {
+                let marked = self.mark_irreversible(u64::from(request.generation));
+                let reply = marked.map_or_else(|()| Reply::error(), |()| Reply::ok());
                 let _ = reply.write(&mut channel);
                 continue;
             }
@@ -414,6 +420,9 @@ impl Server {
         if std::time::Instant::now() >= deadline {
             return Err(());
         }
+        if self.irreversible_generation.load(Ordering::Acquire) == id {
+            return Err(());
+        }
         let channels = self.channels.lock().map_err(|_| ())?;
         let resumed = self.refusal_resumed.lock().map_err(|_| ())?;
         if self.connections.load(Ordering::Acquire) > channels.len()
@@ -430,6 +439,16 @@ impl Server {
             result: Err(CaptureFailure::Refused),
         };
         self.capture_changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn mark_irreversible(&self, id: u64) -> Result<(), ()> {
+        let capture = self.capture_lock().map_err(|_| ())?;
+        if !matches!(capture.phase, CapturePhase::Active { id: active, .. } | CapturePhase::Refusing { id: active, .. } if active == id)
+        {
+            return Err(());
+        }
+        self.irreversible_generation.store(id, Ordering::Release);
         Ok(())
     }
 

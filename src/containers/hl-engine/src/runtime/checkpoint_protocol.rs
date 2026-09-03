@@ -62,6 +62,8 @@ pub(super) const SEAL_MEMBERSHIP: u32 = 27;
 pub(super) const REFUSAL_LATCHED: u32 = 28;
 /// Completes a latched refusal after every other live channel resumed or ended.
 pub(super) const SETTLE_REFUSAL: u32 = 29;
+/// Marks that one member irreversibly consumed live kernel state in this generation.
+pub(super) const MARK_IRREVERSIBLE: u32 = 30;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

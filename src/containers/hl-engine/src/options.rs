@@ -233,6 +233,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PEER_REFUSE_AFTER_DUMP",
+        "test-only capture peer that refuses after destructively capturing its descriptors",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
         "test-only capture peer that works far longer than the rendezvous stall window before committing",
         Flag

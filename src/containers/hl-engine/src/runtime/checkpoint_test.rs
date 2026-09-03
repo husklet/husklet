@@ -2430,6 +2430,19 @@ fn only_the_connection_that_claimed_a_refusal_may_settle_it() {
     server.settle_refusal(32, 41).expect("coordinator settlement");
 }
 
+#[test]
+fn one_members_irreversible_state_blocks_tree_wide_refusal_settlement() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let _capture = server
+        .begin_capture(33, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    server.mark_irreversible(33).expect("irreversible mark");
+    server.decide_refusal(33, "later refusal".into()).expect("decision");
+    assert!(server.refusal_latched(33, 51, None));
+    assert_eq!(server.settle_refusal(33, 51), Err(()));
+}
+
 fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(8 + executors.len() * 4);
     payload.extend_from_slice(&(executors.len() as u32).to_ne_bytes());
