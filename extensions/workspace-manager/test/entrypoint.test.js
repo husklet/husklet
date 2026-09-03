@@ -17,6 +17,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   let tearingDown = false;
   let executed = false;
   let containerInspectAttempts = 0;
+  let imageInspectAttempts = 0;
   const containerId = 'a'.repeat(32);
   const executionId = 'c'.repeat(32);
   const createdContainerId = 'd'.repeat(32);
@@ -39,6 +40,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
         calls.push(name);
         requests.push(frame.payload);
         const inspectAttempt = name === 'container_inspect' ? ++containerInspectAttempts : 0;
+        const imageInspectAttempt = name === 'image_inspect' ? ++imageInspectAttempts : 0;
         const payload = name === 'interface_open_tab'
           ? { reply: 'identity', with: 'workspace-resources' }
           : name === 'container_list'
@@ -73,7 +75,11 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             : name === 'image_pull_status'
               ? { reply: 'image_pull', with: { job: 'p1', reference: 'alpine:3.20', revision: 2, state: 'pulling', status: 'Downloading', layer: 'layer1', current: 5, total: 10, image: null, error: null } }
             : name === 'image_inspect'
-              ? { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
+              ? imageInspectAttempt === 2
+                ? { error: 'failed', detail: 'image inspect unavailable' }
+                : imageInspectAttempt === 3
+                  ? { reply: 'image_details', with: {} }
+                  : { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }] }
             : name === 'volume_inspect'
@@ -87,8 +93,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               : name === 'network_inspect'
                 ? { reply: 'network', with: { id: networkId, name: 'private', driver: 'bridge', scope: 'local' } }
             : { reply: 'done' };
-        const response = encode({ channel: frame.channel, kind: KIND.response, flags: inspectAttempt === 1 ? 3 : 1, payload });
-        if (name === 'container_inspect') setTimeout(() => socket.write(response), 20);
+        const response = encode({ channel: frame.channel, kind: KIND.response, flags: inspectAttempt === 1 || imageInspectAttempt === 2 ? 3 : 1, payload });
+        if (name === 'container_inspect' || name === 'image_inspect') setTimeout(() => socket.write(response), 20);
         else socket.write(response);
       }
     });
@@ -119,9 +125,29 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 25, kind: KIND.event, payload: invocation(requests, 'Cancel pull') }));
     await until(() => calls.includes('image_pull_cancel') && requests.some((request) => request.call === 'event_unsubscribe' && request.with.topic === 'image-pulls'));
     peer.write(encode({ channel: 10, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
-    await until(() => calls.includes('image_inspect') && calls.includes('source_resize_at'));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Reading image details…')));
+    await until(() => imageInspectAttempts === 1 && requests.some((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 201 && request.with.mutation.Length.rows === 9));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '$.id')));
+    const beforeRefresh = requests.length;
+    peer.write(encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
+    await until(() => requests.slice(beforeRefresh).some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.Create?.tag === 'Progress')));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'image inspect unavailable')));
+    assert(requests.slice(beforeRefresh).some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.Remove)), 'loading removes stale ready detail before failure');
+    peer.write(encode({ channel: 42, kind: KIND.event, payload: invocation(requests, 'Retry inspect') }));
+    await until(() => imageInspectAttempts === 3 && requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'No image details')));
+    peer.write(encode({ channel: 43, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
+    await until(() => imageInspectAttempts === 4 && requests.some((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 201 && request.with.mutation.Length.version === 3
+      && request.with.mutation.Length.rows === 9));
     const resize = requests.findLast((request) => request.call === 'source_resize_at');
-    assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 1, rows: 9 });
+    assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 3, rows: 9 });
     const imageRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 11, kind: KIND.event, payload: invocation(requests, 'Containers') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > imageRenders);

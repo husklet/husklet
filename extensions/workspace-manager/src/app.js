@@ -474,7 +474,8 @@ export function Images({ api, resource, imageDetails }) {
     return () => { disposed = true; if (stop) void stop(); };
   }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
   const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
-  const inspect = (item) => run(`inspect:${item.id}`, async () => {
+  const inspect = async (item) => {
+    setBusy(`inspect:${item.id}`);
     setDetail(null);
     setInspection({ id: item.id, state: 'loading', count: 0, error: null });
     try {
@@ -484,9 +485,10 @@ export function Images({ api, resource, imageDetails }) {
       setInspection({ id: item.id, state: 'ready', count, error: null });
     } catch (cause) {
       setInspection({ id: item.id, state: 'error', count: 0, error: cause });
-      throw cause;
+    } finally {
+      setBusy('');
     }
-  });
+  };
   const remove = (item) => run(`remove:${item.id}`, async () => {
     if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
     await api.images.remove(item.id); setConfirm('');
@@ -514,16 +516,16 @@ export function Images({ api, resource, imageDetails }) {
     h(InventoryEmpty, { resource: { loading: resource.loading, error: error ?? resource.error }, records: view.records, label: 'No images', detail: 'Enter an image reference above to pull one into this workspace.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
-        inspection.id === item.id && inspection.state === 'loading'
-          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading image details…' }))
-          : inspection.id === item.id && inspection.state === 'error'
-            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-            : inspection.id === item.id && inspection.state === 'ready' && inspection.count === 0
-              ? h(EmptyState, { label: 'No image details', detail: 'The host returned no inspectable fields.' })
-              : detail?.id === item.id
-                ? h(StructuredDetail, { value: detail })
-                : null),
-      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
+        inspection.id === item.id ? h(ResourceState, {
+          state: inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+          loadingLabel: 'Reading image details…',
+          emptyLabel: 'No image details',
+          emptyDetail: 'The host returned no inspectable fields.',
+          error: inspection.error?.message ?? String(inspection.error ?? ''),
+          retryLabel: 'Retry inspect',
+          onRetry: () => inspect(item),
+        }, h(StructuredDetail, { value: detail })) : null),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
         ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
     h(Omitted, { count: view.omitted }));
