@@ -102,7 +102,7 @@ pub(crate) struct FloorOptions {
     /// Consecutive quiet seconds required before requesting the box lock.
     #[arg(long, default_value_t = 60)]
     quiet_seconds: u64,
-    /// Bounded wait for quiet and the lock. On expiry the run proceeds and records the load.
+    /// Bounded wait for quiet and the lock. On expiry the run fails without collecting samples.
     #[arg(long, default_value_t = 240)]
     lock_timeout: u64,
     /// Maximum accepted one-minute host load while waiting.
@@ -153,6 +153,27 @@ pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
         )
         .into());
     }
+
+    with_required_measurement(
+        || Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load),
+        |_held| run_locked(&options),
+    )
+}
+
+/// Acquires the exclusive measurement lease before permitting any benchmark work.
+///
+/// Keeping the measured body behind this boundary makes lock failure fail closed: callers cannot
+/// stage inputs, collect samples, or publish a report unless acquisition returned a live guard.
+fn with_required_measurement<Lease>(
+    acquire: impl FnOnce() -> Result<Lease, Error>,
+    measured: impl FnOnce(Lease) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let held =
+        acquire().map_err(|error| format!("floor benchmark requires the exclusive measurement lock: {error}"))?;
+    measured(held)
+}
+
+fn run_locked(options: &FloorOptions) -> Result<(), Error> {
     fs::create_dir_all(&options.results)?;
     let library = engine_library(&options.engine)?;
     let staged = options.rootfs.join("bin/floor");
@@ -181,11 +202,7 @@ pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
         }
     }
 
-    let held = Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load);
-    let lock = match &held {
-        Ok(_) => "box lock HELD exclusive (fd 8 announced, then fd 9)".to_owned(),
-        Err(error) => format!("box lock NOT obtained ({error}); proceeding and recording the load"),
-    };
+    let lock = "box lock HELD exclusive (fd 8 announced, then fd 9)";
     let load = load_average()?;
 
     let mut samples = Samples(BTreeMap::new());
@@ -195,11 +212,10 @@ pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
         }
     }
 
-    let report = report(&options, &samples, &identity, &lock, &load)?;
+    let report = report(options, &samples, &identity, lock, &load)?;
     fs::write(options.results.join("report.txt"), &report)?;
     fs::write(options.results.join("identity.txt"), &identity)?;
     print!("{report}");
-    drop(held);
     Ok(())
 }
 
@@ -401,7 +417,44 @@ fn report(options: &FloorOptions, samples: &Samples, identity: &str, lock: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::{Arm, phase_micros, schedule};
+    use super::{Arm, phase_micros, schedule, with_required_measurement};
+
+    #[test]
+    fn lock_failure_cannot_enter_the_measured_body() {
+        let entered = std::cell::Cell::new(false);
+        let result = with_required_measurement::<()>(
+            || Err("box is busy".to_owned().into()),
+            |_| {
+                entered.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(!entered.get(), "measurement ran without an exclusive lease");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "floor benchmark requires the exclusive measurement lock: box is busy"
+        );
+    }
+
+    #[test]
+    fn successful_lock_receipt_is_passed_into_the_measured_body() {
+        #[derive(Debug, Eq, PartialEq)]
+        struct Lease(&'static str);
+
+        let received = std::cell::Cell::new(false);
+        with_required_measurement(
+            || Ok(Lease("exclusive")),
+            |lease| {
+                assert_eq!(lease, Lease("exclusive"));
+                received.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(received.get(), "successful acquisition did not enter measurement");
+    }
 
     #[test]
     fn a_reused_results_path_is_the_default_refusal() {
