@@ -356,6 +356,11 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
             "{} asks for nothing, so it could not do anything",
             path.display()
         );
+        if path.ends_with("extensions/storybook/extension.toml") {
+            assert_eq!(manifest.pane_providers.len(), 1, "the playground is discoverable from a terminal pane");
+            assert_eq!(manifest.pane_providers[0].id.as_str(), "playground");
+            assert_eq!(manifest.pane_providers[0].title, "Component playground");
+        }
         assert_eq!(
             Manifest::parse(&manifest.document().expect("written"), PROTOCOL).expect("re-read"),
             manifest,

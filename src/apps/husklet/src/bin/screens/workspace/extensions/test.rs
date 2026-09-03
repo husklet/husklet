@@ -72,6 +72,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::providers_are_advertised_only_with_a_readable_projection();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::the_shipped_storybook_is_discoverable_as_a_pane_provider();
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
@@ -3566,7 +3567,6 @@ mod panes {
             }),
             "the popover has a compact minimum rather than forcing a wide pane"
         );
-
         Console::switch_occupant(
             &bench.window,
             &slot,
@@ -3586,6 +3586,50 @@ mod panes {
             original_topology
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+    }
+
+    pub(super) fn the_shipped_storybook_is_discoverable_as_a_pane_provider() {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join("extensions/storybook/extension.toml"),
+        )
+        .expect("shipped Storybook manifest");
+        let manifest = hl_extension::Manifest::parse(&document, hl_extension::PROTOCOL)
+            .expect("host accepts shipped Storybook manifest");
+        let provider = manifest.pane_providers.first().expect("Storybook pane provider").clone();
+
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let playground = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&playground);
+        let generation = gallery.enrol(
+            manifest.name.as_str(),
+            &playground,
+            &home,
+            std::slice::from_ref(&provider),
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, manifest.name.as_str());
+        gallery.ready(manifest.name.as_str(), generation);
+        Window::exhibit(&bench.window, gallery);
+
+        assert!(PaneChooser::provider_in(
+            &bench.window,
+            Some(&slot),
+            manifest.name.as_str(),
+            provider.id.as_str(),
+        ));
+        let pane = Panes::at(&bench.window, &slot).expect("selected Storybook pane");
+        assert_eq!(pane.occupant, Occupant::Surface);
+        assert!(
+            super::descendants(&pane.content)
+                .iter()
+                .any(|widget| widget == playground.upcast_ref::<gtk::Widget>()),
+            "the selected pane renders Storybook's playground interface"
+        );
     }
 
     pub(super) fn an_existing_pane_chooser_discovers_a_later_provider() {
