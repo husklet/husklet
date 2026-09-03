@@ -1513,6 +1513,8 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
 fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     let fixture = Fixture::new(&[("sample", true)]);
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
@@ -1538,7 +1540,20 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
         .commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2)
         .expect("competing update commits");
 
-    page.consent();
+    let actionable = fixture.view.semantic_snapshot();
+    let actionable_consent = actionable.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("consent remains current until the attempted commit");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: actionable.revision, node: actionable_consent.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("stale update consent can first receive keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: actionable.revision, node: actionable_consent.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused stale update reaches its truthful refusal");
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert!(
         page.notice().contains("unchanged"),
         "failure is visible: {}",
@@ -1557,6 +1572,10 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     );
     assert!(page.notice().contains("Read the manifest again"));
     assert_eq!(inspect_action(&page).label().as_deref(), Some("Read manifest again"));
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+        .and_then(|button| button.label()), Some("Read manifest again".into()),
+        "stale consent refusal hands focus to the required reinspection action");
     let refreshed = fixture.view.semantic_snapshot();
     assert!(refreshed.root.children.iter().all(|node| node.label.as_deref() != Some("Accept update")));
     assert!(refreshed.root.children.iter().any(|node| {
@@ -1584,6 +1603,8 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
             .image_digest,
         "sha256:dddd"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn a_declined_image_records_nothing() {

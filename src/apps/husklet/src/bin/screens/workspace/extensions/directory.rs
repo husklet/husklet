@@ -425,6 +425,9 @@ impl Catalogue {
                     self.say(&format!(
                         "update failed; the installed extension is unchanged: {refusal}. Read the manifest again before consenting"
                     ));
+                    if restore_focus {
+                        self.inspect.grab_focus();
+                    }
                     return;
                 }
                 self.shelf.refresh(&candidate.manifest.name);
