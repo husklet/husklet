@@ -62,8 +62,9 @@ fn declare(
     let reports = reports.clone();
     let node_id = node.id;
     let key = column.key.clone();
-    factory.connect_setup(move |_, item| setup(item, align, editable, &view, node_id, &key, &reports));
-    factory.connect_bind(move |_, item| bind(item, index));
+    factory.connect_setup(move |_, item| setup(item, align, editable, index, &view, node_id, &key, &reports));
+    let title = column.title.clone();
+    factory.connect_bind(move |_, item| bind(item, index, &title));
     let declared = gtk::ColumnViewColumn::new(Some(&column.title), Some(factory));
     declared.set_resizable(true);
     declared.set_expand(matches!(column.width, Length::Fill));
@@ -79,6 +80,7 @@ fn setup(
     item: &gtk::glib::Object,
     align: Align,
     editable: bool,
+    index: usize,
     view: &gtk::glib::WeakRef<gtk::ColumnView>,
     node: hl_gui::NodeId,
     column: &str,
@@ -117,8 +119,16 @@ fn setup(
             let Some(row) = selection.rows.into_iter().next() else {
                 return;
             };
+            let Some(authoritative) = item
+                .item()
+                .and_then(|item| item.downcast::<gtk::StringObject>().ok())
+                .and_then(|item| item.string().split(UNIT).nth(index).map(str::to_owned))
+            else {
+                return;
+            };
             let value = entry.text().to_string();
             if value.len() > Cell::MAX_TEXT_BYTES || value.contains('\0') {
+                entry.set_text(&authoritative);
                 return;
             }
             reports.push(Event::Edit {
@@ -132,6 +142,10 @@ fn setup(
                     value,
                 },
             });
+            // Edits are proposals, not optimistic authority. Keep the cell
+            // controlled by its bound row until the producer publishes an
+            // accepted newer source window.
+            entry.set_text(&authoritative);
         });
         return;
     }
@@ -147,7 +161,7 @@ fn setup(
     item.set_child(Some(&label));
 }
 
-fn bind(item: &gtk::glib::Object, index: usize) {
+fn bind(item: &gtk::glib::Object, index: usize, title: &str) {
     let Ok(item) = item.clone().downcast::<gtk::ListItem>() else {
         return;
     };
@@ -164,6 +178,9 @@ fn bind(item: &gtk::glib::Object, index: usize) {
     }
     if let Ok(entry) = child.downcast::<gtk::Entry>() {
         entry.set_text(value);
+        let label = format!("{title}, row {}", item.position());
+        entry.update_property(&[gtk::accessible::Property::Label(&label)]);
+        entry.set_tooltip_text(Some(&label));
     }
 }
 

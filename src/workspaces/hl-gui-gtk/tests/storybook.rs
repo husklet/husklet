@@ -239,6 +239,45 @@ mod unix {
         );
         tree.apply(&rerender, &mut surface)
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        if story == "DataTable" {
+            surface
+                .resize(hl_gui::SourceId::new(100), hl_gui::Version::new(2), 100_000)
+                .expect("accepted edit advances the GTK source version");
+            settle_toolkit();
+            let requests = surface.requests(128);
+            assert!(!requests.is_empty(), "new source version requests fresh windows");
+            let mut accepted = false;
+            for (offset, request) in requests.into_iter().enumerate() {
+                let channel = ChannelId::new(5 + offset as u32);
+                wire.send(&Frame::new(
+                    channel,
+                    Kind::Event,
+                    serde_json::to_vec(&request).expect("accepted-edit row request encodes"),
+                ))
+                .expect("accepted-edit row request reaches Storybook");
+                let answer = loop {
+                    let carried = wire.receive().expect("Storybook answers the accepted-edit window");
+                    if carried.kind != Kind::Credit && carried.channel == channel {
+                        break carried;
+                    }
+                };
+                let window: hl_gui::RowWindow =
+                    serde_json::from_slice(&answer.payload).expect("accepted-edit row window decodes");
+                accepted |= window.rows.iter().any(|row| {
+                    row.cells
+                        .iter()
+                        .any(|cell| matches!(cell, hl_gui::Cell::Text(value) if value == "needle"))
+                });
+                surface.rows(&window).expect("GTK accepts the newer row window");
+            }
+            assert!(accepted, "accepted producer windows omitted the committed edit");
+            settle_toolkit();
+            assert_eq!(
+                find::<gtk::Entry>(&root, |entry| entry.text() == "needle").text(),
+                "needle",
+                "only an accepted newer window replaces the controlled cell"
+            );
+        }
         root.measure(gtk::Orientation::Horizontal, -1);
         root.measure(gtk::Orientation::Vertical, 300);
         root.allocate(300, 1_600, -1, None);
@@ -300,8 +339,21 @@ mod unix {
         match story {
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
+                let authoritative = entry.text();
+                let row = authoritative.strip_prefix("record-").expect("visible row identity");
+                let accessible_name = format!("Workspace record, row {row}");
+                assert_eq!(
+                    entry.tooltip_text().as_deref(),
+                    Some(accessible_name.as_str()),
+                    "the exact name shared with the accessible Label must identify column and row"
+                );
                 entry.set_text("needle");
                 entry.emit_by_name::<()>("activate", &[]);
+                assert_eq!(
+                    entry.text(),
+                    authoritative,
+                    "an unacknowledged draft must not replace authoritative row text"
+                );
             }
             "Keyboard and semantic actions" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.placeholder_text().as_deref() == Some("storybook"));

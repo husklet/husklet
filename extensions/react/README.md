@@ -231,10 +231,20 @@ exported by name from the package root.
 - **Text children are the label.** `<Text>hello</Text>` and
   `<Text label="hello" />` are the same thing; bare text has no widget.
 - **A handler is `on` plus the trigger**: `onInvoke`, `onChange`, `onSubmit`,
-  `onSelect`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
+  `onSelect`, `onEdit`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
   `onContext`. The event identity is derived from the node and the trigger, so
   re-rendering with a fresh closure rebinds locally and sends no patch. The
   callback receives `{trigger, node, id, value}`.
+
+Editable virtual tables remain producer-controlled. Mark only intended columns
+with `{editable: true}` and handle `onEdit` as a proposal carrying
+`{source, version, row: {index, id}, column, value}`. Compare `source` and
+`version` with the current collection and use the immutable row `id`; reject a
+stale proposal without mutating data. The native cell restores its authoritative
+bound value immediately. After validation and persistence succeed, advance the
+source version and publish a new bounded row window to display the accepted
+value. Show rejection feedback separately rather than leaving an uncommitted
+draft in the table.
 
 `vocabulary` exports both lists, and `tags` exports every component name.
 
