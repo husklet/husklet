@@ -86,6 +86,51 @@ test('process snapshots remove stale PID and scope claims across framed refresh 
   }
 });
 
+test('real framing keeps healthy process rows when one container refuses sampling', { timeout: 5_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'husklet-process-partial-'));
+  const socketPath = join(directory, 'host.sock');
+  const healthy = 'a'.repeat(32);
+  const broken = 'b'.repeat(32);
+  const server = net.createServer((socket) => {
+    const reader = new Reader();
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
+      protocol: 1, extension: 'process-partial-test', granted: ['container-read'],
+    } }));
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.payload?.call !== 'container_processes') continue;
+        const id = frame.payload.with.id;
+        const failed = id === broken;
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: failed ? 3 : 1,
+          payload: failed ? { error: 'conflict', detail: 'container is stopped' } : { reply: 'processes', with: {
+            titles: ['PID', 'COMMAND'], processes: [['23', '/usr/bin/healthy']],
+            observed_at_ms: 1_700_000_000_000, scope: 'namespace', pid_identity: 'snapshot', truncated: false,
+          } } }));
+      }
+    });
+  });
+  await new Promise((resolve, reject) => server.listen(socketPath, (error) => error ? reject(error) : resolve()));
+
+  let session; let stage;
+  try {
+    session = await connect({ path: socketPath });
+    stage = host();
+    stage.render(h(Processes, { api: workspace(session), resource: {
+      data: [{ id: healthy, name: 'api' }, { id: broken, name: 'worker' }],
+      loading: false, error: null, reload: async () => {},
+    } }));
+    await until(() => labelled(stage, '/usr/bin/healthy'));
+    assert.ok(labelled(stage, '1 container process snapshot unavailable; available containers remain visible.'));
+    assert.ok(labelled(stage, 'worker: container is stopped'));
+  } finally {
+    stage?.render(null);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    session?.close();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function labelled(stage, label) {
   return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
     patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label).at(-1);

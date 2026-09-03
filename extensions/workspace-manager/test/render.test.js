@@ -71,6 +71,44 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
   assert.ok(!labelled(stage, 'Kill'), 'snapshot PID rows never acquire a control action');
 });
 
+test('one unavailable container does not hide healthy process snapshots', async () => {
+  const processApi = { containers: { processes: async (id) => {
+    if (id === 'broken') throw new Error('container is stopped');
+    return {
+      titles: ['PID', 'COMMAND'], processes: [['17', '/usr/bin/healthy']],
+      observed_at_ms: 1_700_000_000_000, scope: 'namespace', pid_identity: 'snapshot', truncated: false,
+    };
+  } } };
+  const stage = host();
+  stage.render(h(Processes, { api: processApi, resource: {
+    data: [{ id: 'healthy', name: 'api' }, { id: 'broken', name: 'worker' }],
+    loading: false, error: null, reload: async () => {},
+  } }));
+  await settled(); await settled();
+  assert.ok(labelled(stage, '/usr/bin/healthy'));
+  assert.ok(labelled(stage, '1 container process snapshot unavailable; available containers remain visible.'));
+  assert.ok(labelled(stage, 'worker: container is stopped'));
+  assert.equal(labelled(stage, 'Retry processes'), undefined, 'a partial snapshot remains usable rather than becoming a page-wide error');
+});
+
+test('large process inventories stay below the client pending-call window', async () => {
+  let active = 0; let peak = 0; let completed = 0;
+  const processApi = { containers: { processes: async () => {
+    active += 1; peak = Math.max(peak, active);
+    await settled();
+    active -= 1; completed += 1;
+    return { titles: ['PID'], processes: [], observed_at_ms: 1, scope: 'namespace', pid_identity: 'snapshot', truncated: false };
+  } } };
+  const stage = host();
+  stage.render(h(Processes, { api: processApi, resource: {
+    data: Array.from({ length: 25 }, (_, index) => ({ id: `container-${index}`, name: `container-${index}` })),
+    loading: false, error: null, reload: async () => {},
+  } }));
+  while (completed < 25) await settled();
+  assert.equal(peak, 8);
+  assert.ok(labelled(stage, 'No running processes'));
+});
+
 test('execution observation is scoped to its page and replaces inventory without polling', async () => {
   const calls = [];
   let publish;

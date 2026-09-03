@@ -9,6 +9,7 @@ import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource
 const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
 const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
+const PROCESS_SAMPLING_CONCURRENCY = 8;
 
 function StructuredDetail({ value }) {
   return h(ObjectInspector, { value, ...INSPECTOR_BOUNDS, height: { minimum: { step: 10 }, maximum: { step: 32 } } });
@@ -544,15 +545,30 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
 
 export function Processes({ api, resource }) {
   const [snapshots, setSnapshots] = useState([]);
+  const [failures, setFailures] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const groups = await Promise.all((resource.data ?? []).map(async (container) => ({ container, rows: await api.containers.processes(container.id) })));
-      setSnapshots(groups);
-      setError(null);
-    } catch (cause) { setError(cause); } finally { setLoading(false); }
+      const containers = resource.data ?? [];
+      const groups = new Array(containers.length);
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < containers.length) {
+          const index = cursor; cursor += 1;
+          const container = containers[index];
+          try { groups[index] = { container, rows: await api.containers.processes(container.id), error: null }; }
+          catch (cause) { groups[index] = { container, rows: null, error: cause }; }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(PROCESS_SAMPLING_CONCURRENCY, containers.length) }, worker));
+      const available = groups.filter(({ rows }) => rows !== null);
+      const unavailable = groups.filter(({ error: cause }) => cause !== null);
+      setSnapshots(available);
+      setFailures(unavailable);
+      setError(available.length === 0 && unavailable.length > 0 ? unavailable[0].error : null);
+    } finally { setLoading(false); }
   }, [api, resource.data]);
   useEffect(() => { void load(); }, [load]);
   const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
@@ -585,7 +601,15 @@ export function Processes({ api, resource }) {
     }),
     h(Omitted, { count: view.omitted }),
     snapshots.some(({ rows }) => rows.truncated)
-      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null));
+      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null),
+    snapshots.length > 0 && failures.length > 0 ? h(Column, { gap: 1 },
+      h(Text, { label: `${failures.length} container process snapshot${failures.length === 1 ? '' : 's'} unavailable; available containers remain visible.`, color: 'warning', wrap: true }),
+      ...failures.slice(0, 8).map(({ container, error: cause }) => h(Text, {
+        key: container.id,
+        label: `${container.name || shortId(container.id)}: ${String(cause?.message ?? cause).slice(0, 256)}`,
+        color: 'text-dim', wrap: true,
+      })),
+      failures.length > 8 ? h(Text, { label: `${failures.length - 8} more failures omitted.`, color: 'text-dim' }) : null) : null);
 }
 
 export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
