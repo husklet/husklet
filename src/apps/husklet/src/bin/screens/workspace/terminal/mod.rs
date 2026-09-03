@@ -636,6 +636,8 @@ impl Window {
         Screenshot::schedule(&window, "terminal");
         Screenshot::schedule_resize(&window);
         LiveActions::schedule(&tw);
+        #[cfg(feature = "gui-checkpoint-e2e")]
+        journey::CheckpointJourney::schedule(app, &window, &tw);
     }
 }
 
@@ -662,6 +664,8 @@ use crate::*;
 mod actions;
 mod close;
 mod grid;
+#[cfg(feature = "gui-checkpoint-e2e")]
+mod journey;
 mod launch;
 mod link;
 mod pane;

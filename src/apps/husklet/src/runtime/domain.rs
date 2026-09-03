@@ -12,6 +12,8 @@ mod lifecycle;
 mod publication;
 mod restore;
 mod runtime;
+#[cfg(any(test, feature = "gui-checkpoint-e2e"))]
+pub mod test_workspace;
 
 use crate::runtime::process::{CommandSession as _, Peer};
 use close::ResultFile;

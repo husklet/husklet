@@ -17,6 +17,11 @@ name = "husklet"
 path = "src/bin/husklet.rs"
 required-features = ["gui"]
 
+[[test]]
+name = "gui_checkpoint_journey"
+path = "tests/gui_checkpoint_journey.rs"
+required-features = ["gui", "gui-checkpoint-e2e"]
+
 [dependencies]
 hl-design = { path = "../../packages/hl-design" }
 hl-fs = { path = "../../packages/hl-fs", default-features = false }
@@ -94,6 +99,8 @@ gui = [
 # Explicit cross-language integration proof. CI installs the locked MCP package
 # graph before enabling it; ordinary Rust gates never acquire npm dependencies.
 mcp-e2e = []
+# Production-executable GTK checkpoint journey. No shipped/default build accepts its control hook.
+gui-checkpoint-e2e = []
 
 [lints]
 workspace = true

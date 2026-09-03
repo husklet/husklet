@@ -1,7 +1,7 @@
 //! Product-path checkpoint acceptance for the workspace domain.
 
 use super::*;
-use hl_container::{Config, ContainerSpec, Guest, Isolation, Process, Sandbox};
+use hl_container::Guest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io;
@@ -138,70 +138,10 @@ impl Fixture {
                 Guest::Aarch64 => hl_ws::Arch::Arm64,
                 Guest::X86_64 => hl_ws::Arch::Amd64,
             };
-            let mut workspace = WorkspaceConfig::new(
-                format!("continue-product-{}", std::process::id()),
-                "fixture:local",
-                arch,
-            );
-            workspace.storage = Some(storage.clone());
-            workspace.docker_sock = false;
-            let store_path = home.join(".hl/workspaces.conf");
-            let mut store = context(
-                format!("open workspace store {}", store_path.display()),
-                crate::config::WorkspaceStore::load(&store_path),
-            )?;
-            context(
-                format!("publish workspace configuration {}", store_path.display()),
-                store.upsert(workspace.clone()),
-            )?;
-
-            let checkpoints = std::sync::Arc::new(context(
-                format!("open workspace checkpoint storage {}", storage.display()),
-                crate::runtime::checkpoint::WorkspaceCheckpoints::open(&storage),
-            )?);
-            let container_storage = storage.join("containers");
-            let containers = context(
-                format!("open container repository {}", container_storage.display()),
-                hl_container::Containers::builder(Config::new(container_storage.clone()))
-                    .checkpoints(checkpoints)
-                    .build()
-                    .await,
-            )?;
-            let configuration = Configuration::new(&workspace);
-            let signature = context("derive workspace signature", configuration.signature())?;
-            let configuration_signature = context(
-                "derive workspace configuration signature",
-                configuration.identity_signature(),
-            )?;
-            let runtime_signature = configuration.runtime_signature();
-            let session = context(
-                format!("select workspace session from {}", rootfs.display()),
-                crate::runtime::session::Session::from_root("", &rootfs),
-            )?;
-            let spec = ContainerSpec::from_directory(&rootfs, Process::new("/bin/sh").args(["-c", SCRIPT]))
-                .name(CONTAINER)
-                .guest(guest)
-                .isolation(Isolation {
-                    sandbox: Sandbox::Disabled,
-                    read_only_root: false,
-                    network_isolated: true,
-                    seccomp_baseline: hl_container::SeccompBaseline::Container,
-                });
-            let spec =
-                session.label(configuration.container(spec, signature, configuration_signature, runtime_signature));
-            let seeded = context("seed workspace primary container", containers.create(spec).await)?;
-            context(
-                "validate seeded workspace session authority",
-                crate::runtime::session::Session::from_labels(&seeded.spec.labels),
-            )?;
-            context(
-                "provision seeded workspace session",
-                session.provision(&containers).await,
-            )?;
-            let state_directory = container_storage.join("state/containers");
-            let container_state = state_directory.join(format!("{}.json", seeded.id));
-            let container_journal = state_directory.join(format!("{}.journal", seeded.id));
-            drop(containers);
+            let seeded = super::test_workspace::seed(&home, &storage, &rootfs, arch, SCRIPT).await?;
+            let workspace = seeded.workspace;
+            let container_state = seeded.container_state;
+            let container_journal = seeded.container_journal;
 
             let domain = Domain::new(&workspace);
             let helper_log = temporary.path().join("domain-worker.log");

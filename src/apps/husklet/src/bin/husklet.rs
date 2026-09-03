@@ -103,6 +103,8 @@ struct AppConfig {
     resize: Option<String>,
     /// Debug: receipt for the fixed live tab/paste/close/type exercise (`HL_TERM_LIVE_ACTIONS`).
     live_actions: Option<String>,
+    #[cfg(feature = "gui-checkpoint-e2e")]
+    checkpoint_journey: Option<String>,
     environment: host::environment::Environment,
     home: std::path::PathBuf,
 }
@@ -125,6 +127,8 @@ impl AppConfig {
             script: std::env::var("HL_TERM_SCRIPT").ok(),
             resize: std::env::var("HL_TERM_RESIZE").ok(),
             live_actions: std::env::var("HL_TERM_LIVE_ACTIONS").ok(),
+            #[cfg(feature = "gui-checkpoint-e2e")]
+            checkpoint_journey: std::env::var("HL_GUI_CHECKPOINT_JOURNEY").ok(),
             screenshot_ms: std::env::var("HL_TERM_SHOT_MS")
                 .ok()
                 .and_then(|value| value.parse().ok())
