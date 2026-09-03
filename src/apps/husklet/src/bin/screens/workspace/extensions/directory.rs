@@ -434,8 +434,17 @@ impl Catalogue {
 
     /// Walks away from the candidate, recording nothing.
     pub fn decline(self: &Rc<Self>) {
+        self.decline_with_focus(false);
+    }
+
+    /// Walks away from a keyboard-focused candidate without dropping focus
+    /// along with the controls that represented it.
+    fn decline_with_focus(self: &Rc<Self>, restore_focus: bool) {
         self.forget();
         self.say("nothing changed");
+        if restore_focus {
+            self.inspect.grab_focus();
+        }
     }
 
     /// Puts the candidate on the shelf, or says why it could not go there.
@@ -708,9 +717,10 @@ impl Catalogue {
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class(DECLINE);
         let page = Rc::downgrade(self);
+        let native_cancel = cancel.clone();
         cancel.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
-                page.decline();
+                page.decline_with_focus(native_cancel.has_focus());
             }
         });
         let page = Rc::downgrade(self);
@@ -744,7 +754,7 @@ impl Catalogue {
             Rc::new(move |action, _| match action {
                 ActionKind::Invoke => {
                     if let Some(page) = page.upgrade() {
-                        page.decline();
+                        page.decline_with_focus(semantic_cancel.has_focus());
                     }
                 }
                 ActionKind::Focus => {

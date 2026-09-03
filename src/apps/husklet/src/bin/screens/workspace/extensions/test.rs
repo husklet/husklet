@@ -1545,22 +1545,45 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
 fn a_declined_image_records_nothing() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
     typed(&page, "sample:1");
     page.inspect();
     assert!(page.poll(), "the inspection came back");
 
-    page.decline();
+    let proposal = fixture.view.semantic_snapshot();
+    let cancel = proposal.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Cancel"))
+        .expect("the reviewed image exposes its cancel action");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: cancel.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("keyboard and semantic clients can focus Cancel");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(gtk::prelude::RootExt::focus(&window).and_then(|widget| widget.downcast::<gtk::Button>().ok()).and_then(|button| button.label()), Some("Cancel".into()));
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: cancel.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused Cancel remains invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
 
     assert!(fixture.roster.borrow().entries().is_empty(), "nothing was recorded");
     assert!(
         fixture.shelf.content().child_by_name("sample").is_none(),
         "and no surface was mounted"
     );
+    assert_eq!(gtk::prelude::RootExt::focus(&window).and_then(|widget| widget.downcast::<gtk::Button>().ok()).and_then(|button| button.label()), Some("Read another image".into()), "removing the focused consent controls returns focus to the stable acquisition action");
     page.consent();
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a declined candidate cannot be installed afterwards"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn remote_image_progress_precedes_the_consent_prompt() {
