@@ -35,7 +35,8 @@ pub use builder::Surface;
 pub use component::{
     CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode, DependencyRelation,
     DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
-    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus, TimelineEvent,
+    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind, QueryNodeState,
+    QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 pub use data::{
     Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
@@ -90,3 +91,6 @@ pub const DEPENDENCY_GRAPH_NODE_LIMIT: usize = 32;
 pub const DEPENDENCY_GRAPH_EDGE_LIMIT: usize = 128;
 pub const DEPENDENCY_GRAPH_CYCLE_LIMIT: usize = 8;
 pub const DEPENDENCY_GRAPH_CYCLE_MEMBER_LIMIT: usize = 6;
+pub const QUERY_PLAN_NODE_LIMIT: usize = 36;
+pub const QUERY_PLAN_METRIC_LIMIT: usize = 5;
+pub const QUERY_PLAN_DEPTH_LIMIT: usize = 12;

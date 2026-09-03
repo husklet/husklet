@@ -479,6 +479,164 @@ pub enum DependencySource<'a> {
         total_cycles: usize,
     },
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryOperator {
+    TableScan,
+    IndexScan,
+    IndexOnlyScan,
+    BitmapScan,
+    Filter,
+    NestedLoop,
+    HashJoin,
+    MergeJoin,
+    Hash,
+    Sort,
+    Aggregate,
+    Group,
+    Limit,
+    Materialize,
+    CteScan,
+    SubqueryScan,
+    Append,
+    Result,
+    Insert,
+    Update,
+    Delete,
+}
+impl QueryOperator {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TableScan => "table_scan",
+            Self::IndexScan => "index_scan",
+            Self::IndexOnlyScan => "index_only_scan",
+            Self::BitmapScan => "bitmap_scan",
+            Self::Filter => "filter",
+            Self::NestedLoop => "nested_loop",
+            Self::HashJoin => "hash_join",
+            Self::MergeJoin => "merge_join",
+            Self::Hash => "hash",
+            Self::Sort => "sort",
+            Self::Aggregate => "aggregate",
+            Self::Group => "group",
+            Self::Limit => "limit",
+            Self::Materialize => "materialize",
+            Self::CteScan => "cte_scan",
+            Self::SubqueryScan => "subquery_scan",
+            Self::Append => "append",
+            Self::Result => "result",
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryNodeState {
+    Normal,
+    Hot,
+    EstimateMismatch,
+    Spill,
+}
+impl QueryNodeState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Hot => "hot",
+            Self::EstimateMismatch => "estimate_mismatch",
+            Self::Spill => "spill",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum QueryMetricKind {
+    EstimatedRows,
+    ActualRows,
+    Cost,
+    DurationUs,
+    Loops,
+}
+impl QueryMetricKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EstimatedRows => "estimated_rows",
+            Self::ActualRows => "actual_rows",
+            Self::Cost => "cost",
+            Self::DurationUs => "duration_us",
+            Self::Loops => "loops",
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryMetric {
+    kind: QueryMetricKind,
+    value: f64,
+}
+impl QueryMetric {
+    #[must_use]
+    pub fn new(kind: QueryMetricKind, value: f64) -> Option<Self> {
+        (value.is_finite()
+            && value >= 0.0
+            && (!matches!(kind, QueryMetricKind::DurationUs) || value <= 86_400_000_000.0)
+            && (!matches!(kind, QueryMetricKind::Loops) || value <= 1_000_000_000.0))
+            .then_some(Self { kind, value })
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryPlanNode {
+    id: String,
+    operator: QueryOperator,
+    label: String,
+    relation: String,
+    state: QueryNodeState,
+    detail: String,
+    metrics: Vec<QueryMetric>,
+    children: Vec<Self>,
+}
+impl QueryPlanNode {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        operator: QueryOperator,
+        label: impl Into<String>,
+        relation: impl Into<String>,
+        state: QueryNodeState,
+        detail: impl Into<String>,
+        metrics: impl IntoIterator<Item = QueryMetric>,
+        children: impl IntoIterator<Item = Self>,
+    ) -> Option<Self> {
+        fn clean(v: String, n: usize) -> String {
+            v.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(n)
+                .collect()
+        }
+        let id = clean(id.into(), 40);
+        let label = clean(label.into(), 120);
+        let relation = clean(relation.into(), 120);
+        let detail = clean(detail.into(), 160);
+        let metrics: Vec<_> = metrics.into_iter().collect();
+        let unique: std::collections::BTreeSet<_> = metrics.iter().map(|m| m.kind).collect();
+        (!id.trim().is_empty() && !label.trim().is_empty() && metrics.len() <= 5 && unique.len() == metrics.len())
+            .then_some(Self {
+                id,
+                operator,
+                label,
+                relation,
+                state,
+                detail,
+                metrics,
+                children: children.into_iter().collect(),
+            })
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum QueryPlanSource<'a> {
+    Exact(&'a [QueryPlanNode]),
+    Bounded {
+        prefix: &'a [QueryPlanNode],
+        total_nodes: usize,
+    },
+}
 impl CoverageView {
     #[must_use]
     pub fn new(source: CoverageSource<'_>) -> Self {
@@ -973,6 +1131,68 @@ impl Element {
                 .children(children),
         )
     }
+    #[must_use]
+    pub fn query_plan(source: QueryPlanSource<'_>) -> Option<Self> {
+        fn count(nodes: &[QueryPlanNode], depth: usize, ids: &mut std::collections::BTreeSet<String>) -> Option<usize> {
+            if depth > crate::QUERY_PLAN_DEPTH_LIMIT {
+                return None;
+            }
+            let mut n = 0;
+            for node in nodes {
+                if !ids.insert(node.id.clone()) {
+                    return None;
+                }
+                n += 1 + count(&node.children, depth + 1, ids)?
+            }
+            Some(n)
+        }
+        fn element(node: &QueryPlanNode) -> Element {
+            Element::new(Tag::QueryPlanNode)
+                .key(&node.id)
+                .label(format!("{} · {}", node.operator.as_str(), node.label))
+                .value(format!(
+                    "id={} operator={} state={} relation={} detail={}",
+                    node.id,
+                    node.operator.as_str(),
+                    node.state.as_str(),
+                    node.relation,
+                    node.detail
+                ))
+                .children(node.metrics.iter().map(|m| {
+                    Element::new(Tag::QueryPlanMetric)
+                        .label(m.kind.as_str())
+                        .value(m.value.to_string())
+                }))
+                .children(node.children.iter().map(element))
+        }
+        let (roots, total, bounded) = match source {
+            QueryPlanSource::Exact(v) => (v, 0, false),
+            QueryPlanSource::Bounded { prefix, total_nodes } => (prefix, total_nodes, true),
+        };
+        let shown = count(roots, 1, &mut std::collections::BTreeSet::new())?;
+        let total = if bounded {
+            if total < shown {
+                return None;
+            }
+            total
+        } else {
+            shown
+        };
+        if shown > crate::QUERY_PLAN_NODE_LIMIT {
+            return None;
+        }
+        let detail = if bounded {
+            format!("bounded source: showing {shown} of {total} operators")
+        } else {
+            "complete query plan".into()
+        };
+        Some(
+            Self::new(Tag::QueryPlan)
+                .label(format!("{shown} plan operators"))
+                .detail(detail)
+                .children(roots.iter().map(element)),
+        )
+    }
 
     /// A playable file.
     #[must_use]
@@ -986,8 +1206,8 @@ mod tests {
     use super::{
         CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode,
         DependencyRelation, DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction,
-        MemoryRegion, NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus,
-        TimelineEvent,
+        MemoryRegion, NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind,
+        QueryNodeState, QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
     };
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
@@ -1369,5 +1589,29 @@ mod tests {
             32
         );
         assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..} if value.as_text()==Some("bounded source: nodes 32/90, edges 32/500, cycles 0/0"))));
+    }
+    #[test]
+    fn query_plan_bounds_depth_metrics_and_provenance() {
+        let metrics = [QueryMetric::new(QueryMetricKind::DurationUs, 42.0).unwrap()];
+        let leaf = QueryPlanNode::new(
+            "scan",
+            QueryOperator::TableScan,
+            "users\n",
+            "users",
+            QueryNodeState::Hot,
+            "slow",
+            metrics,
+            [],
+        )
+        .unwrap();
+        let plan = Element::query_plan(QueryPlanSource::Bounded {
+            prefix: &[leaf],
+            total_nodes: 90,
+        })
+        .unwrap();
+        let mut r = crate::Reconciliation::new();
+        let f = r.reconcile(&plan);
+        assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..}if value.as_text()==Some("bounded source: showing 1 of 90 operators"))));
+        assert!(QueryMetric::new(QueryMetricKind::Loops, f64::NAN).is_none());
     }
 }

@@ -421,6 +421,9 @@ fn family(tag: Tag) -> &'static str {
         | Tag::DependencyEdge
         | Tag::DependencyCycle
         | Tag::DependencyCycleMember
+        | Tag::QueryPlan
+        | Tag::QueryPlanNode
+        | Tag::QueryPlanMetric
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",

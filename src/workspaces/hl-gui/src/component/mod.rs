@@ -12,7 +12,8 @@ mod content;
 pub use content::{
     CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode, DependencyRelation,
     DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
-    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, TestCase, TestStatus, TimelineEvent,
+    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind, QueryNodeState,
+    QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 mod control;
 mod structure;

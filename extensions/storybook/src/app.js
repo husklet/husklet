@@ -51,6 +51,7 @@ import { TEST_REPORT_STORY, TestReportStory } from './test-report.js';
 import { COVERAGE_STORY, CoverageInspectionStory } from './coverage-inspection.js';
 import { NETWORK_WATERFALL_STORY, NetworkWaterfallStory } from './network-waterfall.js';
 import { DEPENDENCY_GRAPH_STORY, DependencyGraphStory } from './dependency-graph.js';
+import { QUERY_PLAN_STORY, QueryPlanStory } from './query-plan.js';
 
 const { createElement: h, useMemo, useRef, useState } = React;
 
@@ -68,7 +69,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
     || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
     || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
     || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY
-    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY;
+    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY;
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -105,6 +106,7 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
+      h(ListItemButton, { key: QUERY_PLAN_STORY, label: QUERY_PLAN_STORY, selected: selected === QUERY_PLAN_STORY, onInvoke: () => onSelect(QUERY_PLAN_STORY) }),
       h(ListItemButton, { key: DEPENDENCY_GRAPH_STORY, label: DEPENDENCY_GRAPH_STORY, selected: selected === DEPENDENCY_GRAPH_STORY, onInvoke: () => onSelect(DEPENDENCY_GRAPH_STORY) }),
       h(ListItemButton, { key: NETWORK_WATERFALL_STORY, label: NETWORK_WATERFALL_STORY, selected: selected === NETWORK_WATERFALL_STORY, onInvoke: () => onSelect(NETWORK_WATERFALL_STORY) }),
       h(ListItemButton, { key: COVERAGE_STORY, label: COVERAGE_STORY, selected: selected === COVERAGE_STORY, onInvoke: () => onSelect(COVERAGE_STORY) }),
@@ -227,7 +229,9 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     h(
       Section,
       { key: 'stage', pad: 4, grow: true },
-      name === DEPENDENCY_GRAPH_STORY
+      name === QUERY_PLAN_STORY
+        ? h(QueryPlanStory)
+        : name === DEPENDENCY_GRAPH_STORY
         ? h(DependencyGraphStory)
         : name === NETWORK_WATERFALL_STORY
         ? h(NetworkWaterfallStory)

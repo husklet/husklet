@@ -128,6 +128,9 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     ) {
         return content::dependency_value(widget, content);
     }
+    if matches!(tag, Tag::QueryPlanNode | Tag::QueryPlanMetric) {
+        return content::query_value(widget, content);
+    }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);
     }

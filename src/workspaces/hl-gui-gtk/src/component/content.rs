@@ -27,6 +27,9 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::NetworkPhase => network_phase().upcast(),
         Tag::DependencyGraph | Tag::DependencyNode | Tag::DependencyCycle => dependency_container(tag).upcast(),
         Tag::DependencyEdge | Tag::DependencyCycleMember => dependency_leaf().upcast(),
+        Tag::QueryPlan => dependency_container(Tag::DependencyGraph).upcast(),
+        Tag::QueryPlanNode => dependency_container(Tag::DependencyNode).upcast(),
+        Tag::QueryPlanMetric => dependency_leaf().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
@@ -80,10 +83,23 @@ pub(crate) fn dependency_value(widget: &gtk::Widget, value: &str) -> bool {
     }
     true
 }
+pub(crate) fn query_value(widget: &gtk::Widget, value: &str) -> bool {
+    let ok = dependency_value(widget, value);
+    if let Some(state) = value.split_whitespace().find_map(|p| p.strip_prefix("state=")) {
+        widget.add_css_class(&format!("query-plan-{state}"))
+    }
+    ok
+}
 pub(crate) fn dependency_attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
-    if ![Tag::DependencyGraph, Tag::DependencyNode, Tag::DependencyCycle]
-        .into_iter()
-        .any(|t| super::belongs(parent, t))
+    if ![
+        Tag::DependencyGraph,
+        Tag::DependencyNode,
+        Tag::DependencyCycle,
+        Tag::QueryPlan,
+        Tag::QueryPlanNode,
+    ]
+    .into_iter()
+    .any(|t| super::belongs(parent, t))
     {
         return false;
     }
@@ -93,9 +109,15 @@ pub(crate) fn dependency_attach(parent: &gtk::Widget, child: &gtk::Widget) -> bo
     })
 }
 pub(crate) fn dependency_detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
-    if ![Tag::DependencyGraph, Tag::DependencyNode, Tag::DependencyCycle]
-        .into_iter()
-        .any(|t| super::belongs(parent, t))
+    if ![
+        Tag::DependencyGraph,
+        Tag::DependencyNode,
+        Tag::DependencyCycle,
+        Tag::QueryPlan,
+        Tag::QueryPlanNode,
+    ]
+    .into_iter()
+    .any(|t| super::belongs(parent, t))
     {
         return false;
     }
