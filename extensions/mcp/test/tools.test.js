@@ -30,6 +30,32 @@ const configuration = () => ({
 });
 const generation = '0123456789abcdef0123456789abcdef';
 
+const slotMutations = [
+  'husklet_terminal_write', 'husklet_terminal_write_bytes', 'husklet_terminal_split',
+  'husklet_terminal_spawn', 'husklet_terminal_focus', 'husklet_terminal_retitle',
+  'husklet_terminal_resize', 'husklet_terminal_ratio',
+  'husklet_terminal_switch_occupant', 'husklet_terminal_close',
+];
+
+test('every MCP slot-targeted terminal mutation requires the complete pane cursor', () => {
+  const listed = tools(fake().api);
+  const terminal = listed.filter(({ name }) => name.startsWith('husklet_terminal_'));
+  const intentionallyCursorless = new Set([
+    'husklet_terminal_tabs', 'husklet_terminal_topology', 'husklet_terminal_read',
+    'husklet_terminal_open',
+  ]);
+  assert.deepEqual(
+    terminal.map(({ name }) => name).filter((name) => !intentionallyCursorless.has(name)).sort(),
+    [...slotMutations].sort(),
+    'a new terminal tool must be classified as observation/open or cursor-bound mutation',
+  );
+  for (const name of slotMutations) {
+    const schema = listed.find((tool) => tool.name === name).inputSchema;
+    assert.ok(schema.shape.generation, `${name} lacks generation`);
+    assert.ok(schema.shape.revision, `${name} lacks revision`);
+  }
+});
+
 test('workspace create and confirmed update preserve the complete typed configuration', async () => {
   const { api, calls } = fake();
   const listed = tools(api);

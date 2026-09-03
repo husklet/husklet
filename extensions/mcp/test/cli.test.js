@@ -127,6 +127,16 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   const client = new Client({ name: 'spawned-cli-test', version: '1' });
   await client.connect(transport);
   const listed = await client.listTools();
+  const cursorBound = new Set([
+    'husklet_terminal_write', 'husklet_terminal_write_bytes', 'husklet_terminal_split',
+    'husklet_terminal_spawn', 'husklet_terminal_focus', 'husklet_terminal_retitle',
+    'husklet_terminal_resize', 'husklet_terminal_ratio',
+    'husklet_terminal_switch_occupant', 'husklet_terminal_close',
+  ]);
+  for (const tool of listed.tools.filter(({ name }) => cursorBound.has(name))) {
+    assert.ok(tool.inputSchema.required.includes('generation'), `${tool.name} packaged without generation`);
+    assert.ok(tool.inputSchema.required.includes('revision'), `${tool.name} packaged without revision`);
+  }
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_attach_terminal'));
   assert(listed.tools.some(({ name }) => name === 'husklet_extension_install'));
