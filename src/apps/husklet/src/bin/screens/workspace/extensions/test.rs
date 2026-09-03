@@ -695,6 +695,20 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         reference.width(),
         fixture._catalogue.viewport().width()
     );
+    let installed_heading = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .find_map(|widget| {
+            widget
+                .downcast::<gtk::Label>()
+                .ok()
+                .filter(|label| label.has_css_class("dhead") && label.text() == "alpha")
+        })
+        .expect("installed extension card heading");
+    assert_eq!(
+        installed_heading.accessible_role(),
+        gtk::AccessibleRole::Heading,
+        "installed cards must be navigable by heading at compact width"
+    );
     let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
         .into_iter()
         .filter(|widget| {

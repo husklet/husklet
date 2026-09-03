@@ -141,6 +141,7 @@ impl Settings {
 /// The extension's own name, which is also what its pages are labelled with.
 fn heading(name: &ExtensionName) -> gtk::Label {
     let label = gtk::Label::new(Some(&name.to_string()));
+    label.set_accessible_role(gtk::AccessibleRole::Heading);
     label.add_css_class("dhead");
     label.set_xalign(0.0);
     label
