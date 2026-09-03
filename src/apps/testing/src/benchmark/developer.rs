@@ -456,8 +456,12 @@ fn read_ledger(path: &Path, samples: u32) -> Result<Vec<Row>, Error> {
         return Ok(Vec::new());
     }
     let mut rows = Vec::new();
-    for line in BufReader::new(File::open(path)?).lines() {
-        let row: Row = serde_json::from_str(&line?)?;
+    let contents = fs::read(path)?;
+    for framed in contents.split_inclusive(|byte| *byte == b'\n') {
+        if !framed.ends_with(b"\n") {
+            break;
+        }
+        let row: Row = serde_json::from_slice(&framed[..framed.len() - 1])?;
         if row.sample >= samples
             || row.position >= ORDER.len()
             || row.mode != ORDER[row.position]
@@ -620,5 +624,15 @@ mod tests {
         assert_eq!(parsed.page_faults, 5);
         assert!(parse_perf(&text.replace("31\t\tinstructions", "0\t\tinstructions")).is_err());
         assert!(parse_perf(&text.replace("41\t\tcycles\n", "")).is_err());
+    }
+
+    #[test]
+    fn resume_drops_only_a_torn_final_ledger_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = directory.path().join("ledger.jsonl");
+        fs::write(&ledger, b"{\"sample\":0").unwrap();
+        assert!(read_ledger(&ledger, 3).unwrap().is_empty());
+        fs::write(&ledger, b"{not-json}\n").unwrap();
+        assert!(read_ledger(&ledger, 3).is_err());
     }
 }
