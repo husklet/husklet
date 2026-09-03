@@ -530,6 +530,7 @@ export function Images({ api, resource, imageDetails }) {
     await resource.reload();
   });
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
     h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull', enabled: !busy && reference.trim().length > 0 && (!pull || ['complete', 'failed', 'cancelled'].includes(pull.state)), onInvoke: startPull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
     pull ? h(Card, { variant: pull.state === 'failed' ? 'outline' : 'filled' },
@@ -538,11 +539,18 @@ export function Images({ api, resource, imageDetails }) {
         pull.layer ? h(Text, { label: `Layer ${pull.layer}`, color: 'text-dim' }) : null,
         pull.error ? h(Text, { label: pull.error, color: 'danger', wrap: true }) : null),
       h(CardActions, {}, !['complete', 'failed', 'cancelled'].includes(pull.state) ? h(Button, { label: 'Cancel pull', onInvoke: cancelPull }) : null)) : null,
-    h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
+    h(ErrorText, { error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading images…',
+      emptyLabel: 'No images',
+      emptyDetail: 'Enter an image reference above to pull one into this workspace.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry images',
+      onRetry: resource.reload,
+    }, h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
       ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', enabled: !busy, tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
-    h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
-    h(InventoryEmpty, { resource: { loading: resource.loading, error: error ?? resource.error }, records: view.records, label: 'No images', detail: 'Enter an image reference above to pull one into this workspace.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
         inspection.id === item.id ? h(ResourceState, {
@@ -557,7 +565,7 @@ export function Images({ api, resource, imageDetails }) {
       h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
         ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted })));
 }
 
 export function Volumes({ api, resource, volumeDetails }) {
