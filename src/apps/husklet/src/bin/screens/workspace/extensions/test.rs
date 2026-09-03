@@ -603,6 +603,10 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
     while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!((window.width(), window.height()), (300, 420));
     assert!(
+        fixture.view.sidebar.width() < 190,
+        "fixed navigation yields space to Settings and Extensions on a compact window"
+    );
+    assert!(
         fixture._catalogue.viewport().vexpands(),
         "the catalogue consumes the bounded page height"
     );
