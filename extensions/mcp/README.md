@@ -90,7 +90,13 @@ Names, prefixes, and snapshot PIDs are refused before the socket call. Execution
 signaling does not signal the owning container or parse a shell.
 Execution output replay reports stdout and stderr truncation independently and
 sets `eof` only when the process was already complete before replay; an empty
-running response is therefore not presented as end-of-stream.
+running response is therefore not presented as end-of-stream. Both log tools
+return captured stdout/stderr as byte arrays. If the MCP response bound clips
+either array, its per-stream flag and aggregate `truncated` flag are promoted,
+so a syntactically complete response never silently overclaims completeness.
+Container logs require the complete immutable container ID and belong to that
+container's captured output; execution logs belong to the exact immutable
+execution ID.
 Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
 complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
 re-resolved to a different image between inspection and removal.
@@ -254,7 +260,10 @@ before terminal input and another before the semantic action so fast changes are
 the host's credit-controlled subscription either reports a coalesced change or
 times out. Only a reported change causes one fresh snapshot. There is no polling
 loop. Terminal text is the bounded interpreted screen/history snapshot (with
-cursor and grid), not raw or unbounded process stdout/stderr. A stale-revision error is authoritative: read a fresh tree and reconsider
+cursor and grid), not raw or unbounded process stdout/stderr. Terminal writes are
+input bytes delivered to that observed pane; the terminal read result is not a
+stdin/stdout/stderr transcript. Use container or execution logs when captured
+stdout/stderr is required. A stale-revision error is authoritative: read a fresh tree and reconsider
 the action instead of replaying an old node ID.
 
 ## Day-one control workflow

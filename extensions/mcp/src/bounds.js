@@ -2,6 +2,7 @@ const SECRET = /(authorization|cookie|password|secret|token|credential|private.?
 const STRING_LIMIT = 8192;
 const ARRAY_LIMIT = 200;
 export const OUTPUT_LIMIT = 64 * 1024;
+const LOG_STREAM_LIMIT = 7_500;
 
 function safe(value, key = '', depth = 0) {
   if (SECRET.test(key)) return '[redacted]';
@@ -23,4 +24,20 @@ export function result(value) {
     text = `${new TextDecoder().decode(encoded.slice(0, OUTPUT_LIMIT - 40))}\n… [output truncated]`;
   }
   return { content: [{ type: 'text', text }] };
+}
+
+/** Preserve log completeness metadata when MCP applies its own output bound. */
+export function logResult(value) {
+  const stdout = Array.isArray(value?.stdout) ? value.stdout.slice(0, LOG_STREAM_LIMIT) : [];
+  const stderr = Array.isArray(value?.stderr) ? value.stderr.slice(0, LOG_STREAM_LIMIT) : [];
+  const stdoutTruncated = value?.stdout_truncated === true || stdout.length < (value?.stdout?.length ?? 0);
+  const stderrTruncated = value?.stderr_truncated === true || stderr.length < (value?.stderr?.length ?? 0);
+  return { content: [{ type: 'text', text: JSON.stringify({
+    stdout,
+    stderr,
+    truncated: value?.truncated === true || stdoutTruncated || stderrTruncated,
+    stdout_truncated: stdoutTruncated,
+    stderr_truncated: stderrTruncated,
+    eof: value?.eof === true,
+  }) }] };
 }

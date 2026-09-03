@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
-import { result } from './bounds.js';
+import { logResult, result } from './bounds.js';
 import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
@@ -165,7 +165,7 @@ const workspaceUpdate = z.object({ name: id, generation: workspaceGeneration, co
   });
 const empty = z.object({}).strict();
 const slot = z.object({ slot: id }).strict();
-const define = (name, description, inputSchema, run) => ({ name, description, inputSchema, run: async (input) => result(await run(input)) });
+const define = (name, description, inputSchema, run, pack = result) => ({ name, description, inputSchema, run: async (input) => pack(await run(input)) });
 const PANE_INPUT_BYTES = 64 * 1024;
 const BASE64_INPUT_CHARS = Math.ceil(PANE_INPUT_BYTES / 3) * 4;
 const canonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -246,11 +246,11 @@ export function tools(api) {
     define('husklet_container_processes', 'Read a bounded timestamped process snapshot bound to the complete immutable container ID actually sampled; scope says initial or full namespace, and PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
     define('husklet_container_execution', 'Inspect one bounded execution by its complete immutable ID.', z.object({ id: executionIdentity }).strict(), ({ id: value }) => api.containers.execution(value)),
     define('husklet_execution_list', 'List the bounded durable execution catalogue for this workspace.', empty, () => api.containers.executions()),
-    define('husklet_execution_logs', 'Replay bounded captured output for one immutable execution ID.', z.object({ id: executionIdentity, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr })),
+    define('husklet_execution_logs', 'Replay bounded captured stdout/stderr bytes for one immutable execution ID; eof means the execution was complete before replay, while per-stream flags report host or MCP truncation.', z.object({ id: executionIdentity, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr }), logResult),
     define('husklet_execution_wait', 'Wait up to 30 seconds for one immutable execution ID to stop and return its final state.', z.object({ id: executionIdentity, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
     define('husklet_execution_signal', 'Signal one immutable execution ID after explicit confirmation without signaling its owning container; snapshot PIDs are never accepted.', z.object({ id: executionIdentity, signal: signalName, confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.signalExecution(value, signal); return { done: true }; }),
     define('husklet_execution_remove', 'Remove one stopped execution record selected by its complete immutable ID, and its captured output, after explicit confirmation.', z.object({ id: executionIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.removeExecution(value); return { done: true }; }),
-    define('husklet_container_logs', 'Read bounded container logs.', z.object({ id, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict(), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr })),
+    define('husklet_container_logs', 'Read bounded captured stdout/stderr bytes from one complete immutable container ID; this is log replay, not the interpreted terminal screen/history.', z.object({ id: containerIdentity, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.logs(value, { stdout, stderr }), logResult),
     define('husklet_container_create', 'Create a bounded configured container from a local image; mounts are named volumes and published ports bind loopback only.', containerCreate, async (spec) => ({ id: await api.containers.create(spec) })),
     define('husklet_container_exec', 'Execute a bounded argv vector in one complete immutable running container ID without shell parsing.', z.object({ id: containerIdentity, command, user: containerUser.optional(), working_directory: containerAbsolutePath.optional() }).strict(), async ({ id: value, command: argv, user, working_directory: workingDirectory }) => ({ id: await api.containers.exec(value, { command: argv, user, workingDirectory }) })),
     define('husklet_container_attach_terminal', 'Open an ephemeral GUI terminal running an exact bounded argv in a complete immutable container ID; the process is killed when the pane disconnects.', z.object({ id: containerIdentity, command }).strict(), ({ id: value, command: argv }) => api.containers.attachTerminal(value, argv)),
@@ -288,7 +288,7 @@ export function tools(api) {
     define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),
     define('husklet_terminal_tabs', 'List terminal tabs.', empty, () => api.terminal.tabs()),
     define('husklet_terminal_topology', 'Read terminal split topology.', empty, () => api.terminal.topology()),
-    define('husklet_terminal_read', 'Read at most 500 lines from one pane.', z.object({ slot: id, lines: z.number().int().min(1).max(500) }).strict(), ({ slot: value, lines }) => api.terminal.read(value, lines)),
+    define('husklet_terminal_read', 'Read at most 500 lines of interpreted terminal screen/history with cursor and grid state; this is not raw stdout/stderr.', z.object({ slot: id, lines: z.number().int().min(1).max(500) }).strict(), ({ slot: value, lines }) => api.terminal.read(value, lines)),
     define('husklet_terminal_write', 'Write UTF-8 input to one exact observed terminal pane; this does not spawn a shell command.', z.object({ slot: id, generation: acquisitionRevision, revision: acquisitionRevision, input: terminalText }).strict(), async ({ slot: value, generation, revision, input }) => { await api.terminal.writeInput(value, generation, revision, input); return { done: true }; }),
     define('husklet_terminal_write_bytes', 'Write arbitrary bytes to one exact observed terminal pane from canonical padded base64, including control and non-UTF8 bytes.', terminalBytes.extend({ generation: acquisitionRevision, revision: acquisitionRevision }).strict(), async ({ slot: value, generation, revision, input_base64: encoded }) => { await api.terminal.writeInput(value, generation, revision, decodeTerminalBytes(encoded)); return { done: true }; }),
     define('husklet_terminal_open', 'Open a terminal tab, titled Terminal when omitted.', z.object({ title: z.string().max(256).optional() }).strict(), ({ title }) => api.terminal.openTab(title ?? 'Terminal')),

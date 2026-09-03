@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { CONTROL, KIND, Reader, encode } from '../../react/src/wire.js';
+
+test('packaged CLI distinguishes terminal state from truthful bounded log replay over Unix framing', async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-mcp-output-'));
+  const socketPath = path.join(directory, 'host.sock'); const containerId = 'c'.repeat(64); const execution = 'e'.repeat(32);
+  const oversized = Array.from({ length: 7_501 }, (_, index) => index % 256);
+  const host = net.createServer((socket) => { const reader = new Reader();
+    socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: { protocol: 1, extension: 'output-agent', granted: ['workspace-read', 'container-read', 'terminal-read'] } }));
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.kind !== KIND.request || frame.channel === CONTROL) continue;
+      const call = frame.payload.call; let payload;
+      if (call === 'workspace_info') payload = { reply: 'workspace', with: { name: 'dev' } };
+      else if (call === 'terminal_read_pane') payload = { reply: 'text', with: { slot: 'pane-1', generation: 4, revision: 9, lines: ['$ printf ready', 'ready'], columns: 80, rows: 24, cursor_column: 5, cursor_row: 2, truncated: false } };
+      else if (call === 'container_logs') payload = { reply: 'logs', with: { stdout: oversized, stderr: [69], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: false } };
+      else if (call === 'execution_logs') payload = { reply: 'logs', with: { stdout: [79, 75], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } };
+      else throw new Error(`unexpected host call ${call}`);
+      socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+    } });
+  });
+  await new Promise((resolve, reject) => host.listen(socketPath, resolve).once('error', reject));
+  const transport = new StdioClientTransport({ command: process.execPath, args: [path.resolve(import.meta.dirname, '../src/cli.js'), '--socket', socketPath, '--workspace', 'dev'], cwd: path.resolve(import.meta.dirname, '..'), stderr: 'pipe' });
+  const client = new Client({ name: 'output-contract-test', version: '1' });
+  context.after(async () => { await client.close(); await new Promise((resolve) => host.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
+  await client.connect(transport);
+  const definitions = Object.fromEntries((await client.listTools()).tools.map((tool) => [tool.name, tool]));
+  assert.match(definitions.husklet_terminal_read.description, /interpreted terminal screen\/history.*not raw stdout\/stderr/);
+  assert.match(definitions.husklet_container_logs.description, /complete immutable container ID.*not the interpreted terminal/);
+  assert.match(definitions.husklet_execution_logs.description, /immutable execution ID.*eof means.*complete before replay/);
+  const call = async (name, args) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  const terminal = await call('husklet_terminal_read', { slot: 'pane-1', lines: 20 });
+  assert.deepEqual({ lines: terminal.lines, cursor: [terminal.cursor_column, terminal.cursor_row], identity: [terminal.generation, terminal.revision] }, { lines: ['$ printf ready', 'ready'], cursor: [5, 2], identity: [4, 9] });
+  const rejected = await client.callTool({ name: 'husklet_container_logs', arguments: { id: 'mutable-name', stdout: true, stderr: true } });
+  assert.equal(rejected.isError, true);
+  const container = await call('husklet_container_logs', { id: containerId, stdout: true, stderr: true });
+  assert.equal(container.stdout.length, 7_500); assert.deepEqual([container.truncated, container.stdout_truncated, container.stderr_truncated, container.eof], [true, true, false, false]);
+  const durable = await call('husklet_execution_logs', { id: execution, stdout: true, stderr: false });
+  assert.deepEqual(durable, { stdout: [79, 75], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true });
+});
