@@ -24,11 +24,12 @@ try {
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { tools, createServer, semanticXml } from '@husklet/mcp';
     import { runPaneAgentTurn } from '@husklet/mcp/examples/agent-pane-flow.mjs';
-    import { runAgentDayOne } from '@husklet/mcp/examples/agent-day-one.mjs';
+    import { runAgentDayOne, waitForInstalledExtensionChange } from '@husklet/mcp/examples/agent-day-one.mjs';
     import { runAgentAdmin } from '@husklet/mcp/examples/agent-admin.mjs';
     if (typeof tools !== 'function' || typeof createServer !== 'function') process.exit(1);
     if (typeof runPaneAgentTurn !== 'function') process.exit(1);
     if (typeof runAgentDayOne !== 'function') process.exit(1);
+    if (typeof waitForInstalledExtensionChange !== 'function') process.exit(1);
     if (typeof runAgentAdmin !== 'function') process.exit(1);
     const names = new Set(tools({}).map(({ name }) => name));
     for (const name of ['husklet_workspace_create', 'husklet_workspace_update', 'husklet_container_execution', 'husklet_execution_list', 'husklet_execution_logs', 'husklet_execution_wait', 'husklet_execution_signal', 'husklet_execution_remove', 'husklet_image_list', 'husklet_image_inspect', 'husklet_image_pull', 'husklet_image_pull_start', 'husklet_image_pull_status', 'husklet_image_pull_cancel', 'husklet_image_remove', 'husklet_image_prune']) {

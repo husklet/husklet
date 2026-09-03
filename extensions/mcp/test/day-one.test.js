@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CONTROL, KIND, Reader, encode } from '../../react/src/wire.js';
-import { runAgentDayOne } from '../examples/agent-day-one.mjs';
+import { runAgentDayOne, waitForInstalledExtensionChange } from '../examples/agent-day-one.mjs';
 
 const configuration = (image) => ({
   name: 'target', image, architecture: 'amd64', storage: null, shell: null, cpus: 2, memory_mb: 1024,
@@ -50,6 +50,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         calls.push(frame.payload);
         const { call, with: argument } = frame.payload;
         if (call === 'workspace_info') answer(frame, 'workspace', { name: 'observer' });
+        else if (call === 'extension_list') answer(frame, 'extensions', [{ name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' }]);
         else if (call === 'image_pull_start') answer(frame, 'image_pull_job', { job: '7' });
         else if (call === 'image_pull_status') answer(frame, 'image_pull', {
           job: argument.job, revision: calls.filter(({ call: name }) => name === 'image_pull_status').length,
@@ -80,6 +81,11 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
             const summary = { id: 'execution-day-one', container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
             socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [summary], truncated: false } } }));
             setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...summary, running: false, exit_code: 0, pid: 0 }], truncated: false } } })));
+          });
+          if (call === 'event_subscribe' && argument.topic === 'extensions') setImmediate(() => {
+            const extension = { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'standby' };
+            socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'extensions', of: [extension] } }));
+            setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'extensions', of: [{ ...extension, status: 'duty' }] } })));
           });
           if (call === 'event_subscribe' && argument.topic === 'pane-changes') setImmediate(() => {
             changed('terminal-1', 'terminal', 1, 0);
@@ -124,6 +130,8 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   let diagnostics = ''; transport.stderr.on('data', (chunk) => { diagnostics += chunk; });
   const client = new Client({ name: 'day-one-test', version: '1' });
   await client.connect(transport);
+  const extensionChanged = await waitForInstalledExtensionChange(client, 'manager', 1_000);
+  assert.equal(extensionChanged.extension.status, 'duty');
   const containerChanged = await client.callTool({ name: 'husklet_container_change_wait', arguments: {
     id: containerId, after: { state: 'running', created: 41 }, timeout_ms: 1_000,
   } });
@@ -148,7 +156,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'event_subscribe', 'event_unsubscribe',
+    'workspace_info', 'extension_list', 'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
     'workspace_update', 'container_create', 'container_start',

@@ -13,6 +13,12 @@ const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/, 'complete immutabl
 const networkIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable network ID is required');
 const volumeGeneration = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable volume generation is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const extensionStatus = z.string().min(1).max(64).regex(/^(?:vacancy|standby|duty|fault:[0-9]+)$/);
+const extensionInventoryCursor = z.object({
+  name: extensionName,
+  image_digest: imageDigest,
+  status: extensionStatus,
+}).strict();
 const extensionJob = z.string().min(1).max(128);
 const extensionCapability = z.enum(['workspace-read', 'workspace-control', 'workspace-events', 'container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'terminal-read', 'terminal-control', 'terminal-output', 'pane-observe', 'pane-semantic-read', 'pane-semantic-control', 'extension-read', 'extension-control', 'extension-install', 'filesystem-read', 'filesystem-write', 'interface']);
 const extensionGrant = z.array(extensionCapability).max(24);
@@ -405,12 +411,13 @@ export function tools(api) {
   if (typeof api.watchExtensions === 'function' && typeof api.watchExtensionAcquisitions === 'function') definitions.push(define(
     'husklet_extension_wait',
     'Wait for a bounded installed-extension snapshot or acquisition revision invalidation without polling.',
-    z.object({ kind: z.enum(['inventory', 'acquisition']), job: extensionJob.optional(), after_revision: acquisitionRevision.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
-      .superRefine(({ kind, job, after_revision }, context) => {
+    z.object({ kind: z.enum(['inventory', 'acquisition']), after: extensionInventoryCursor.optional(), job: extensionJob.optional(), after_revision: acquisitionRevision.optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict()
+      .superRefine(({ kind, after, job, after_revision }, context) => {
         if ((job != null || after_revision != null) && kind !== 'acquisition') context.addIssue({ code: z.ZodIssueCode.custom, message: 'job and revision filtering apply only to acquisition changes' });
         if ((job == null) !== (after_revision == null)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'job-specific acquisition waits require both job and after_revision' });
+        if ((after != null) !== (kind === 'inventory')) context.addIssue({ code: z.ZodIssueCode.custom, message: 'installed-extension waits require an exact inventory cursor' });
       }),
-    ({ kind, job, after_revision, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    ({ kind, after, job, after_revision, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -419,7 +426,11 @@ export function tools(api) {
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       const watch = kind === 'inventory' ? api.watchExtensions : api.watchExtensionAcquisitions;
       watch((change) => {
-        if (kind === 'inventory' || job == null || (change.job === job && change.revision > after_revision)) finish({ changed: true, change });
+        if (kind === 'inventory') {
+          const current = change.find(({ name }) => name === after.name);
+          if (current?.image_digest === after.image_digest && current.status === after.status) return;
+          finish({ changed: true, change, extension: current ?? null, removed: current == null, replaced: current != null && current.image_digest !== after.image_digest });
+        } else if (job == null || (change.job === job && change.revision > after_revision)) finish({ changed: true, change });
       })
         .then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),

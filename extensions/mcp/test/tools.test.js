@@ -186,6 +186,8 @@ test('extension wait filters acquisition jobs and disposes its credit-controlled
   api.watchExtensionAcquisitions = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
   assert.equal(wait.inputSchema.safeParse({ kind: 'inventory', job: 'j', timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'inventory', timeout_ms: 10 }).success, false);
+  assert.equal(wait.inputSchema.safeParse({ kind: 'inventory', after: { name: 'manager', image_digest: `sha256:${'a'.repeat(64)}`, status: 'made-up' }, timeout_ms: 10 }).success, false);
   assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', job: 'wanted', timeout_ms: 10 }).success, false);
   assert.equal(wait.inputSchema.safeParse({ kind: 'acquisition', after_revision: 1, timeout_ms: 10 }).success, false);
   const pending = wait.run({ kind: 'acquisition', job: 'wanted', after_revision: 2, timeout_ms: 1000 });
@@ -198,6 +200,36 @@ test('extension wait filters acquisition jobs and disposes its credit-controlled
   const answer = await pending;
   assert.deepEqual(JSON.parse(answer.content[0].text), { changed: true, change: { job: 'wanted', revision: 3, state: 'committing', coalesced: 0 } });
   assert.equal(disposed, 1);
+});
+
+test('installed extension wait ignores its initial tuple and distinguishes status, removal, and replacement', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchExtensions = async (next) => {
+    listeners.add(next);
+    return async () => { if (listeners.delete(next)) disposed += 1; };
+  };
+  const wait = tools(api).find(({ name }) => name === 'husklet_extension_wait');
+  const digest = `sha256:${'a'.repeat(64)}`; const replacement = `sha256:${'b'.repeat(64)}`;
+  const after = { name: 'manager', image_digest: digest, status: 'standby' };
+  const status = wait.run({ kind: 'inventory', after, timeout_ms: 1000 });
+  const removed = wait.run({ kind: 'inventory', after: { ...after, name: 'removed' }, timeout_ms: 1000 });
+  const replaced = wait.run({ kind: 'inventory', after: { ...after, name: 'replacement' }, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener([after, { ...after, name: 'removed' }, { ...after, name: 'replacement' }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the unchanged initial inventory must not settle any wait');
+  for (const listener of [...listeners]) listener([
+    { ...after, status: 'duty' },
+    { ...after, name: 'replacement', image_digest: replacement },
+  ]);
+  const statusAnswer = JSON.parse((await status).content[0].text);
+  const removedAnswer = JSON.parse((await removed).content[0].text);
+  const replacedAnswer = JSON.parse((await replaced).content[0].text);
+  assert.deepEqual(statusAnswer.extension, { ...after, status: 'duty' });
+  assert.equal(statusAnswer.removed, false); assert.equal(statusAnswer.replaced, false);
+  assert.equal(removedAnswer.extension, null); assert.equal(removedAnswer.removed, true);
+  assert.equal(replacedAnswer.extension.image_digest, replacement); assert.equal(replacedAnswer.replaced, true);
+  assert.equal(disposed, 3); assert.equal(listeners.size, 0);
 });
 
 test('concurrent extension waits advance independently from their exact observed revisions', async () => {

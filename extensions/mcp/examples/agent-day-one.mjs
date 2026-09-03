@@ -5,6 +5,16 @@ const text = (answer, tool) => {
 };
 const call = async (client, name, args = {}) => text(await client.callTool({ name, arguments: args }), name);
 const json = async (client, name, args) => JSON.parse(await call(client, name, args));
+
+/** Wait for one exact installed extension record to change or disappear. */
+export async function waitForInstalledExtensionChange(client, name, waitMs = 30_000) {
+  const inventory = await json(client, 'husklet_extension_list');
+  const after = inventory.find((extension) => extension.name === name);
+  if (!after) throw new Error(`installed extension ${name} was not found`);
+  return json(client, 'husklet_extension_wait', {
+    kind: 'inventory', after, timeout_ms: waitMs,
+  });
+}
 const xmlNumber = (xml, name) => {
   const match = xml.match(new RegExp(`(?:<husklet-pane|<pane|<node)[^>]*\\b${name}="(\\d+)"`));
   if (!match) throw new Error(`semantic snapshot has no numeric ${name}`);

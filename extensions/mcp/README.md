@@ -100,7 +100,11 @@ ready after the client last inspected the job; no MCP call performs an
 unobservable blocking pull.
 `husklet_extension_wait` follows the host's credit-controlled extension topics,
 returning either the newest bounded inventory snapshot or acquisition job/revision
-metadata. A job-specific wait requires the revision already observed and returns
+metadata. An inventory wait requires the exact `{name, image_digest, status}`
+record returned by `husklet_extension_list`; it ignores the subscription's unchanged
+initial snapshot and reports status changes, removal, and same-name digest replacement.
+The packaged `waitForInstalledExtensionChange` example performs that read-and-arm flow.
+A job-specific acquisition wait requires the revision already observed and returns
 only a strictly newer revision, so clients can arm before acting without accepting
 queued old state. Acquisition notifications never carry manifest contents; clients fetch
 status only after an invalidation, and coalescing is reported explicitly.
