@@ -15,9 +15,17 @@ expect_literal() {
 }
 
 expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/react/Dockerfile 'ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32'
+expect_literal extensions/react/Dockerfile 'ARG NODE_VERSION=22.23.2'
+expect_literal extensions/react/Dockerfile 'ARG NPM_VERSION=10.9.8'
 expect_literal extensions/react/Dockerfile '    && npm pkg set type=module \'
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
 expect_literal extensions/react/Dockerfile 'LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"'
+expect_literal extensions/react/Dockerfile 'LABEL husklet.extension.node.version="${NODE_VERSION}"'
+expect_literal extensions/react/Dockerfile 'LABEL husklet.extension.npm.version="${NPM_VERSION}"'
+expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
+expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
+expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
 
 workflow="$root/.github/workflows/release.yml"
 [[ "$(grep -Fc 'platforms: linux/amd64,linux/arm64' "$workflow")" == 2 ]] \

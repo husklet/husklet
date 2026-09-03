@@ -245,12 +245,16 @@ try {
 
   const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine$/m);
+  assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
+  assert.match(dockerfile, /^ARG NODE_VERSION=22\.23\.2$/m);
+  assert.match(dockerfile, /^ARG NPM_VERSION=10\.9\.8$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
   assert.match(dockerfile, /npm init -y \\\n+    && npm pkg set type=module \\/, 'base /app must classify copied extension .js entrypoints as ESM');
   assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
+  assert.match(dockerfile, /test "\$\(node --version\)" = "v\$\{NODE_VERSION\}"/);
+  assert.match(dockerfile, /test "\$\(npm --version\)" = "\$\{NPM_VERSION\}"/);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
