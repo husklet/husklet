@@ -199,6 +199,47 @@ async function runPackedOversizedGreeting(starter, installedClient) {
   }
 }
 
+async function runPackedIllegalHeader(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host-illegal-header.sock');
+  let spoke = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    stream.on('data', () => { spoke = true; });
+    const greeting = wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+    });
+    greeting.writeUInt16LE(1, 10);
+    stream.end(greeting);
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not reject an illegal greeting header')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(spoke, false, 'illegal greeting header must be rejected before the starter sends a request');
+    assert.equal(stdout, '');
+    assert.equal(stderr, 'client-starter: startup failed: frame reserved bytes must be zero\n');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -271,6 +312,7 @@ try {
   await runPackedProtocolRefusal(starter, starterClient);
   await runPackedTruncatedGreeting(starter, starterClient);
   await runPackedOversizedGreeting(starter, starterClient);
+  await runPackedIllegalHeader(starter, starterClient);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
