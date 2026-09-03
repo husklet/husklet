@@ -712,6 +712,17 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn profiler_private_adoption_failure_closes_descriptor_and_pathname() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 230 injects both profiler adoption failures in a child-owned temporary directory.
+        assert_eq!(unsafe { hook(230) }, 0, "profiler private-failure scenario 230");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn jcc_shared_guard_preserves_cache_lifecycle_and_signal_contracts() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()

@@ -766,6 +766,17 @@ typedef struct translit_profile_generation {
     uint64_t size;
 } translit_profile_generation;
 static translit_profile_generation translit_profile_active;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int translit_profile_private_adopt_failure;
+static int translit_profile_private_adopt_last_fd = -1;
+static int translit_profile_private_adopt(int descriptor) {
+    translit_profile_private_adopt_last_fd = descriptor;
+    if (atomic_load_explicit(&translit_profile_private_adopt_failure, memory_order_acquire)) return -EMFILE;
+    return hl_host_process_fd_private_adopt(descriptor);
+}
+#else
+#define translit_profile_private_adopt(descriptor) hl_host_process_fd_private_adopt(descriptor)
+#endif
 static void translit_sampling_receipt(const char *stage) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (hl_option_get("HL_TRANSLIT_SYMBOL_RECEIPT") != NULL)
@@ -957,9 +968,12 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
         return;
     }
     int opened = descriptor;
-    descriptor = hl_host_process_fd_private_adopt(opened);
+    descriptor = translit_profile_private_adopt(opened);
     if (descriptor < 0) {
+        int saved = -descriptor;
         close(opened);
+        (void)unlink(path);
+        errno = saved;
         translit_profile_output_failed("jitdump private descriptor");
         return;
     }
@@ -1036,9 +1050,12 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
             return;
         }
         int opened = descriptor;
-        descriptor = hl_host_process_fd_private_adopt(opened);
+        descriptor = translit_profile_private_adopt(opened);
         if (descriptor < 0) {
+            int saved = -descriptor;
             close(opened);
+            (void)unlink(path);
+            errno = saved;
             translit_profile_output_failed("perf-map private descriptor");
             return;
         }
@@ -1191,16 +1208,18 @@ static int translit_jitdump_lifecycle_test(void) {
         g_emit.cursor = code + 12;
         g_emit.rx_delta = 0;
         char path[PATH_MAX];
+        uint64_t boundaries[3] = {0};
         snprintf(path, sizeof path, "%s/jit-%lld.dump", directory, (long long)getpid());
         for (uint64_t generation = 0; generation != 3; ++generation) {
             g_cache_gen = generation;
             translit_perf_map_generation_bind(generation, g_cache, J_RX(g_cache), CACHE_SZ);
+            struct timespec tick = {0, 1000000};
+            (void)nanosleep(&tick, NULL);
+            boundaries[generation] = translit_jitdump_now();
             translit_perf_map_publish_named("hl_jitdump_lifecycle", code, 4);
             if (generation == 0 && access(path, F_OK) == 0) _exit(3);
-            /* Checkpoint quiescence flushes producer-owned buffers but does not
-               close host-private profiler streams.  Exercise two consecutive
-               capture boundaries before the third generation and require the
-               same process-lifetime jitdump to continue afterwards. */
+            /* Repeated flush/quiescence boundaries retain both private streams;
+               the third generation must continue the same process lifetime. */
             translit_perf_map_flush();
             if (translit_perf_map_file == NULL || translit_jitdump_file == NULL ||
                 !hl_host_process_fd_private_current(fileno(translit_perf_map_file)) ||
@@ -1219,7 +1238,7 @@ static int translit_jitdump_lifecycle_test(void) {
             ok = fread(&load, sizeof load, 1, input) == 1 && load.id == 0 && load.pid == (uint32_t)getpid() &&
                  load.code_index == index &&
                  load.code_addr == (uint64_t)(uintptr_t)J_RX(code) && load.timestamp != 0 &&
-                 load.timestamp >= previous_timestamp &&
+                 load.timestamp >= boundaries[index - 1] && load.timestamp >= previous_timestamp &&
                  load.total_size >= sizeof load;
             if (!ok) dprintf(STDERR_FILENO, "jitdump lifecycle record %llu failed: id=%u pid=%u index=%llu address=%llx size=%u\n",
                              (unsigned long long)index, load.id, load.pid,
@@ -1261,6 +1280,48 @@ static int translit_jitdump_lifecycle_test(void) {
     (void)kill(child, SIGKILL);
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     return 217;
+}
+
+static int translit_profile_private_failure_test(void) {
+    pid_t child = fork();
+    if (child < 0) return 230;
+    if (child == 0) {
+        alarm(3);
+        char directory[] = "/tmp/hl-profile-private-failure-XXXXXX";
+        if (mkdtemp(directory) == NULL) _exit(1);
+        memset(&translit_profile_options, 0, sizeof translit_profile_options);
+        snprintf(translit_profile_options.directory, sizeof translit_profile_options.directory, "%s", directory);
+        translit_profile_options.enabled = 1;
+        translit_profile_options.symbolize = 1;
+        uint8_t *arena = mmap(NULL, CACHE_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (arena == MAP_FAILED) _exit(2);
+        g_cache = arena;
+        g_rw2rx = 0;
+        g_cache_gen = 17;
+        char jit_path[PATH_MAX], map_path[PATH_MAX];
+        snprintf(jit_path, sizeof jit_path, "%s/jit-%lld.dump", directory, (long long)getpid());
+        snprintf(map_path, sizeof map_path, "%s/perf-%lld-g17-rx%llx.map", directory, (long long)getpid(),
+                 (unsigned long long)(uintptr_t)J_RX(g_cache));
+        atomic_store_explicit(&translit_profile_private_adopt_failure, 1, memory_order_release);
+        translit_profile_private_adopt_last_fd = -1;
+        translit_jitdump_open(directory, getpid());
+        int jit_fd = translit_profile_private_adopt_last_fd;
+        int ok = translit_jitdump_file == NULL && jit_fd >= 0 && fcntl(jit_fd, F_GETFD) < 0 && errno == EBADF &&
+                 access(jit_path, F_OK) < 0 && errno == ENOENT;
+        translit_profile_private_adopt_last_fd = -1;
+        translit_perf_map_generation_bind(g_cache_gen, g_cache, J_RX(g_cache), CACHE_SZ);
+        translit_perf_map_publish_named("hl_private_failure", g_cache + 64, 4);
+        int map_fd = translit_profile_private_adopt_last_fd;
+        ok = ok && translit_perf_map_file == NULL && map_fd >= 0 && fcntl(map_fd, F_GETFD) < 0 && errno == EBADF &&
+             access(map_path, F_OK) < 0 && errno == ENOENT;
+        atomic_store_explicit(&translit_profile_private_adopt_failure, 0, memory_order_release);
+        if (munmap(arena, CACHE_SZ) != 0 || rmdir(directory) != 0) ok = 0;
+        _exit(ok ? 0 : 3);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 230;
 }
 #endif
 static uint64_t translit_displaced_lea_lowered;
@@ -3576,6 +3637,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 219) return translit_movsd_memory_fixture_test();
     if (scenario == 218) return translit_jcc_live_forward_shape_test() ? 0 : 218;
     if (scenario == 217) return translit_jitdump_lifecycle_test();
+    if (scenario == 230) return translit_profile_private_failure_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
         struct insn jump = {.len = 2, .op = 0xff, .has_modrm = 1, .reg = 4, .is_mem = 1,
