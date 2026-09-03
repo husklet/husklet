@@ -706,6 +706,47 @@ test('real Unix restart wait requires the same container at a newer running gene
   }
 });
 
+test('real Unix splitAndWait arms before CAS, verifies the returned slot, and disposes on timeout', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-split-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const pane = { slot: 'pane-new', generation: 1, revision: 1, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_split_observed') {
+        assert.deepEqual(frame.payload.with, { slot: 'pane-source', generation: 4, revision: 9, division: frame.payload.with.division });
+        if (frame.payload.with.division === 'beside') socket.write(encode({ channel: 61, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'pane-source', kind: 'terminal', generation: 4, revision: 10, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: frame.payload.with.division === 'beside' ? 'pane-new' : 'pane-timeout' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'split-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.splitAndWait('pane-source', 4, 9, 'beside', { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or mutate');
+    assert.deepEqual(await terminal.splitAndWait('pane-source', 4, 9, 'beside'), { changed: true, pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_split_observed', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.splitAndWait('pane-source', 4, 9, 'below', { timeoutMs: 5 }), {
+      changed: false, slot: 'pane-timeout', after: { generation: 4, revision: 9 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_split_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

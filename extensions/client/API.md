@@ -93,6 +93,7 @@ wrong caller.
 - `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `pane-observe` and the corresponding read grant.
 - `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `pane-observe`, `pane-semantic-control`, and the corresponding read grant.
 - `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `pane-observe` and `terminal-control`.
+- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `pane-observe` and `terminal-control`.
 
 ## Files
 

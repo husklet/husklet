@@ -89,6 +89,16 @@ const switched = await host.terminal.switchOccupantAndWait(
 if (switched.changed) console.log(switched.pane.provider);
 ```
 
+Layout creation has the same arm-before-authority form. The source cursor comes
+from pane inventory, and the successful result is the newly created pane:
+
+```js
+const split = await host.terminal.splitAndWait(
+  pane.slot, pane.generation, pane.revision, 'beside', { timeoutMs: 10_000 },
+);
+if (split.changed) console.log(split.pane.slot);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

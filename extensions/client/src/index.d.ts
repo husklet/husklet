@@ -322,6 +322,12 @@ export interface WorkspaceApi {
     openTab(title: string): Promise<string>;
     split(slot: string, division: Division): Promise<string>;
     splitObserved(slot: string, generation: number, revision: number, division: Division): Promise<string>;
+    /** Arm pane changes before a CAS split, then verify the returned child slot in bounded inventory. */
+    splitAndWait(slot: string, generation: number, revision: number, division: Division,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     spawn(slot: string, command: string[]): Promise<void>;
     spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
     read(slot: string, lines?: number): Promise<PaneText>;

@@ -663,6 +663,41 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.splitAndWait = async (slot, generation, revision, division, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal split requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal split requires nonnegative safe integer generation and revision');
+    }
+    if (division !== 'beside' && division !== 'below') throw new TypeError('terminal split division must be beside or below');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal split wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    let createdSlot;
+    const stop = await api.watchPaneChanges((change) => {
+      if ((change.slot === slot && (change.generation !== generation || change.revision !== revision))
+        || (createdSlot !== undefined && change.slot === createdSlot)) changed(change);
+    });
+    let timer;
+    try {
+      createdSlot = await api.terminal.splitObserved(slot, generation, revision, division);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, slot: createdSlot, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === createdSlot);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'created split cannot be verified from a truncated inventory'
+        : 'created split is absent from pane inventory');
+      return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
     if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
