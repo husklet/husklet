@@ -147,96 +147,7 @@ pub fn is_failure(frame: &Frame) -> bool {
 /// drift into subtly different node, handler, or addressed-slot spellings.
 #[must_use]
 pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
-    use hl_gui::Event;
-    let (name, trigger, node, id, detail) = match event {
-        Event::Invoke { node, id } => ("invoke", "Invoke", node, id, serde_json::Value::Null),
-        Event::Activate { node, id } => ("invoke", "Activate", node, id, serde_json::Value::Null),
-        Event::Submit { node, id } => ("submit", "Submit", node, id, serde_json::Value::Null),
-        Event::Change { node, id, value } => ("change", "Change", node, id, serde_json::json!({ "value": value })),
-        Event::Toggle { node, id, value } => ("change", "Toggle", node, id, serde_json::json!({ "value": value })),
-        Event::Expand { node, id, value } => ("change", "Expand", node, id, serde_json::json!({ "value": value })),
-        Event::Select {
-            node,
-            id,
-            rows,
-            collection,
-        } => (
-            "select", "Select",
-            node,
-            id,
-            serde_json::json!({ "rows": rows, "collection": collection.as_ref().map(|selected| serde_json::json!({
-                "source": selected.source.raw(),
-                "version": selected.version.raw(),
-                "rows": selected.rows.iter().map(|row| serde_json::json!({ "index": row.index, "id": row.id.to_string() })).collect::<Vec<_>>(),
-            })) }),
-        ),
-        Event::Scroll { node, id, dx, dy } => ("scroll", "Scroll", node, id, serde_json::json!({ "dx": dx, "dy": dy })),
-        Event::Close { node, id } => ("close", "Close", node, id, serde_json::Value::Null),
-        Event::Context { node, id, x, y } => ("context", "Context", node, id, serde_json::json!({ "x": x, "y": y })),
-        Event::Key {
-            node,
-            id,
-            key,
-            keycode,
-            modifiers,
-            pressed,
-        } => (
-            "key", "Key",
-            node,
-            id,
-            serde_json::json!({
-                "key": key,
-                "keycode": keycode,
-                "modifiers": modifiers,
-                "pressed": pressed,
-            }),
-        ),
-        Event::Focus { node, id, focused } => ("focus", "Focus", node, id, serde_json::json!({ "focused": focused })),
-        Event::Pointer {
-            node,
-            id,
-            phase,
-            x,
-            y,
-            button,
-            modifiers,
-        } => (
-            "pointer", "Pointer",
-            node,
-            id,
-            serde_json::json!({
-                "phase": match phase {
-                    hl_gui::PointerPhase::Enter => "enter",
-                    hl_gui::PointerPhase::Motion => "motion",
-                    hl_gui::PointerPhase::Leave => "leave",
-                    hl_gui::PointerPhase::Press => "press",
-                    hl_gui::PointerPhase::Release => "release",
-                },
-                "x": x,
-                "y": y,
-                "button": button,
-                "modifiers": modifiers,
-            }),
-        ),
-        Event::Drag { node, id } => ("drag", "Drag", node, id, serde_json::Value::Null),
-        Event::Drop { node, id, source, x, y } => (
-            "drop", "Drop",
-            node,
-            id,
-            serde_json::json!({ "source": source, "x": x, "y": y }),
-        ),
-        _ => return None,
-    };
-    let mut value = serde_json::json!({
-        "interaction": name, "trigger": trigger, "node": node, "id": id,
-    });
-    if let (Some(target), Some(fields)) = (value.as_object_mut(), detail.as_object()) {
-        target.extend(fields.clone());
-    }
-    if let (Some(slot), Some(target)) = (slot, value.as_object_mut()) {
-        target.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
-    }
-    payload(&value).ok()
+    payload(&crate::UiEvent::of(event, slot)?).ok()
 }
 
 /// Encodes a cross-language JSON payload while refusing integers JavaScript
@@ -361,17 +272,28 @@ mod tests {
         let node = NodeId::new(7);
         for (event, interaction_name, trigger) in [
             (
-                Event::Activate { node, id: EventId::new("opaque/not-a-trigger") },
+                Event::Activate {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                },
                 "invoke",
                 "Activate",
             ),
             (
-                Event::Toggle { node, id: EventId::new("opaque/not-a-trigger"), value: hl_gui::PropValue::Flag(true) },
+                Event::Toggle {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                    value: hl_gui::PropValue::Flag(true),
+                },
                 "change",
                 "Toggle",
             ),
             (
-                Event::Expand { node, id: EventId::new("opaque/not-a-trigger"), value: hl_gui::PropValue::Flag(true) },
+                Event::Expand {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                    value: hl_gui::PropValue::Flag(true),
+                },
                 "change",
                 "Expand",
             ),

@@ -136,6 +136,169 @@ pub struct UiSelectedRow {
     pub id: String,
 }
 
+impl UiEvent {
+    /// Converts one interactive toolkit report into its authoritative wire DTO.
+    /// Row-window requests are host-internal and therefore have no UI event.
+    #[must_use]
+    pub fn of(event: &hl_gui::Event, slot: Option<&str>) -> Option<Self> {
+        use hl_gui::Event;
+        let slot = slot.map(str::to_owned);
+        Some(match event {
+            Event::Invoke { node, id } => Self::Invoke {
+                trigger: "Invoke".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+            },
+            Event::Activate { node, id } => Self::Invoke {
+                trigger: "Activate".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+            },
+            Event::Submit { node, id } => Self::Submit {
+                trigger: "Submit".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+            },
+            Event::Change { node, id, value } => Self::Change {
+                trigger: "Change".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                value: value.clone(),
+            },
+            Event::Toggle { node, id, value } => Self::Change {
+                trigger: "Toggle".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                value: value.clone(),
+            },
+            Event::Expand { node, id, value } => Self::Change {
+                trigger: "Expand".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                value: value.clone(),
+            },
+            Event::Select {
+                node,
+                id,
+                rows,
+                collection,
+            } => Self::Select {
+                trigger: "Select".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                rows: rows.clone(),
+                collection: collection.as_ref().map(|selected| UiCollectionSelection {
+                    source: selected.source.raw(),
+                    version: selected.version.raw(),
+                    rows: selected
+                        .rows
+                        .iter()
+                        .map(|row| UiSelectedRow {
+                            index: row.index,
+                            id: row.id.to_string(),
+                        })
+                        .collect(),
+                }),
+            },
+            Event::Scroll { node, id, dx, dy } => Self::Scroll {
+                trigger: "Scroll".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                dx: *dx,
+                dy: *dy,
+            },
+            Event::Close { node, id } => Self::Close {
+                trigger: "Close".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+            },
+            Event::Context { node, id, x, y } => Self::Context {
+                trigger: "Context".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                x: *x,
+                y: *y,
+            },
+            Event::Key {
+                node,
+                id,
+                key,
+                keycode,
+                modifiers,
+                pressed,
+            } => Self::Key {
+                trigger: "Key".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                key: key.clone(),
+                keycode: *keycode,
+                modifiers: *modifiers,
+                pressed: *pressed,
+            },
+            Event::Focus { node, id, focused } => Self::Focus {
+                trigger: "Focus".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                focused: *focused,
+            },
+            Event::Pointer {
+                node,
+                id,
+                phase,
+                x,
+                y,
+                button,
+                modifiers,
+            } => Self::Pointer {
+                trigger: "Pointer".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                phase: match phase {
+                    hl_gui::PointerPhase::Enter => UiPointerPhase::Enter,
+                    hl_gui::PointerPhase::Motion => UiPointerPhase::Motion,
+                    hl_gui::PointerPhase::Leave => UiPointerPhase::Leave,
+                    hl_gui::PointerPhase::Press => UiPointerPhase::Press,
+                    hl_gui::PointerPhase::Release => UiPointerPhase::Release,
+                },
+                x: *x,
+                y: *y,
+                button: *button,
+                modifiers: *modifiers,
+            },
+            Event::Drag { node, id } => Self::Drag {
+                trigger: "Drag".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+            },
+            Event::Drop { node, id, source, x, y } => Self::Drop {
+                trigger: "Drop".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                source: source.raw(),
+                x: *x,
+                y: *y,
+            },
+            Event::Rows(_) => return None,
+            _ => return None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::UiEvent;
