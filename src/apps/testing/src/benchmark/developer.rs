@@ -1,8 +1,12 @@
-//! A real edit/build/test session, measured under all same-ISA execution backends.
+//! A real edit/build/test session, measured under native and translated execution backends.
+//!
+//! The checkpoint acceptance plan additionally requires two real capture/restore cycles. They do not
+//! belong in this runner until it owns a production checkpoint controller: phase markers alone would be
+//! a fake boundary that proves no process state was captured.
 
 use super::{evidence::Measurement, identity};
 use crate::suite::Error;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -15,7 +19,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v1";
+const SCHEMA: &str = "husklet-developer-benchmark-v2";
 const PHASES: [&str; 11] = [
     "prompt",
     "git",
@@ -40,12 +44,24 @@ const ORDER: [Mode; 6] = [
 
 #[derive(Args)]
 pub(crate) struct Options {
-    /// Immutable, prepared Linux rootfs containing sh, gcc, make, git, rg, tar, and apk metadata.
+    /// Immutable baseline Linux rootfs containing sh, gcc, make, git, rg, tar, and apk metadata.
     #[arg(long)]
     rootfs: PathBuf,
-    /// Production hl-x86_64 runner.
+    /// Production worker for the native-supervised baseline arm.
     #[arg(long)]
     engine: PathBuf,
+    /// Guest ISA served by the baseline worker and rootfs. Defaults preserve the original x86 campaign.
+    #[arg(long, value_enum, default_value = "x86_64")]
+    guest_isa: GuestIsa,
+    /// Rootfs for the translated arm. Defaults to --rootfs for a same-ISA campaign.
+    #[arg(long)]
+    translated_rootfs: Option<PathBuf>,
+    /// Production worker for the translated arm. Defaults to --engine for a same-ISA campaign.
+    #[arg(long)]
+    translated_engine: Option<PathBuf>,
+    /// Guest ISA served by the translated worker/rootfs. Defaults to --guest-isa.
+    #[arg(long, value_enum)]
+    translated_guest_isa: Option<GuestIsa>,
     /// Native engine loaded by the runner.
     #[arg(long)]
     native_library: PathBuf,
@@ -79,13 +95,54 @@ enum Mode {
     Translated,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum GuestIsa {
+    #[value(name = "aarch64", alias = "arm64")]
+    Aarch64,
+    #[value(name = "x86_64", alias = "amd64")]
+    X86_64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ExecutionBackend {
+    HostNative,
+    NativeSupervised,
+    /// The x86 guest translator emits x86 on x86 and AArch64 on ARM hosts.
+    X86Transliterator,
+    /// AArch64 guests are interpreter-only today, including on an x86 host.
+    Aarch64Interpreter,
+}
+
+impl GuestIsa {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Aarch64 => "aarch64",
+            Self::X86_64 => "x86_64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ArmArtifacts<'a> {
+    rootfs: &'a Path,
+    engine: &'a Path,
+    guest_isa: GuestIsa,
+}
+
 #[derive(Deserialize, Serialize)]
 struct Identity {
     schema: String,
     rootfs: String,
     engine: String,
     native_library: String,
-    fixture: String,
+    baseline_guest_isa: GuestIsa,
+    translated_rootfs: String,
+    translated_engine: String,
+    translated_guest_isa: GuestIsa,
+    translated_backend: ExecutionBackend,
+    workload_recipe: String,
     samples: u32,
 }
 
@@ -94,12 +151,15 @@ struct Row {
     sample: u32,
     position: usize,
     mode: Mode,
+    guest_isa: GuestIsa,
+    backend: ExecutionBackend,
     wall_ns: u128,
     counters: Counters,
     null_counters: Counters,
     phase_ns: Vec<(String, u128)>,
     stdout_sha256: String,
     semantic_sha256: String,
+    portable_semantic_sha256: String,
     backend_receipt: String,
 }
 
@@ -115,12 +175,18 @@ struct Counters {
 pub(crate) fn run(options: Options) -> Result<(), Error> {
     validate_options(&options)?;
     let fixture = fixture_source();
+    let translated = arm_artifacts(&options, Mode::Translated);
     let expected = Identity {
         schema: SCHEMA.into(),
         rootfs: identity::artifact_identity(&options.rootfs)?,
         engine: identity::artifact_identity(&options.engine)?,
         native_library: identity::artifact_identity(&options.native_library)?,
-        fixture: hex(Sha256::digest(fixture.as_bytes())),
+        baseline_guest_isa: options.guest_isa,
+        translated_rootfs: identity::artifact_identity(translated.rootfs)?,
+        translated_engine: identity::artifact_identity(translated.engine)?,
+        translated_guest_isa: translated.guest_isa,
+        translated_backend: execution_backend(Mode::Translated, translated.guest_isa),
+        workload_recipe: workload_recipe_identity(),
         samples: options.samples,
     };
     let ledger_path = options.results.join("ledger.jsonl");
@@ -149,7 +215,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
             if root.exists() {
                 fs::remove_dir_all(&root)?;
             }
-            clone_root(&options.rootfs, &root)?;
+            clone_root(arm_artifacts(&options, mode).rootfs, &root)?;
             stage_fixture(&root, fixture)?;
             let result = execute(&options, &root, mode, sample, position);
             fs::remove_dir_all(&root)?;
@@ -168,10 +234,43 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
-    if !options.rootfs.is_dir() || !options.engine.is_file() || !options.native_library.is_file() {
-        return Err("rootfs, engine, or native library has the wrong type".into());
+    let translated = arm_artifacts(options, Mode::Translated);
+    if !options.rootfs.is_dir()
+        || !options.engine.is_file()
+        || !translated.rootfs.is_dir()
+        || !translated.engine.is_file()
+        || !options.native_library.is_file()
+    {
+        return Err("baseline/translated rootfs, worker, or native library has the wrong type".into());
     }
     Ok(())
+}
+
+fn arm_artifacts(options: &Options, mode: Mode) -> ArmArtifacts<'_> {
+    if mode == Mode::Translated {
+        ArmArtifacts {
+            rootfs: options.translated_rootfs.as_deref().unwrap_or(&options.rootfs),
+            engine: options.translated_engine.as_deref().unwrap_or(&options.engine),
+            guest_isa: options.translated_guest_isa.unwrap_or(options.guest_isa),
+        }
+    } else {
+        ArmArtifacts {
+            rootfs: &options.rootfs,
+            engine: &options.engine,
+            guest_isa: options.guest_isa,
+        }
+    }
+}
+
+const fn execution_backend(mode: Mode, guest_isa: GuestIsa) -> ExecutionBackend {
+    match mode {
+        Mode::Native => ExecutionBackend::HostNative,
+        Mode::Supervised => ExecutionBackend::NativeSupervised,
+        Mode::Translated => match guest_isa {
+            GuestIsa::X86_64 => ExecutionBackend::X86Transliterator,
+            GuestIsa::Aarch64 => ExecutionBackend::Aarch64Interpreter,
+        },
+    }
 }
 
 fn require_identity(recorded: &Identity, expected: &Identity) -> Result<(), Error> {
@@ -241,7 +340,18 @@ printf 'HL_DONE\n' >&2
 "#
 }
 
+fn workload_recipe_identity() -> String {
+    let mut digest = Sha256::new();
+    for bytes in [makefile().as_bytes(), fixture_source().as_bytes()] {
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    hex(digest.finalize())
+}
+
 fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: usize) -> Result<Row, Error> {
+    let guest_isa = arm_artifacts(options, mode).guest_isa;
+    let backend = execution_backend(mode, guest_isa);
     let null_counters = measure_null(options, root, mode, sample, position)?;
     let measured = measured_argv(options, root, mode, "bin/sh", &["/work/session.sh"]);
     let perf_path = options
@@ -290,19 +400,22 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         .map_err(|_| "stderr reader remained shared")?
         .into_inner()?;
     let phase_ns = validate_phases(&marks, elapsed)?;
-    let receipt = backend_receipt(mode, &String::from_utf8(stderr)?)?;
+    let receipt = backend_receipt(backend, guest_isa, &String::from_utf8(stderr)?)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
     atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
     Ok(Row {
         sample,
         position,
         mode,
+        guest_isa,
+        backend,
         wall_ns: elapsed,
         counters,
         null_counters,
         phase_ns,
         stdout_sha256,
         semantic_sha256: semantic_sha256(&output),
+        portable_semantic_sha256: portable_semantic_sha256(&output),
         backend_receipt: receipt,
     })
 }
@@ -317,13 +430,16 @@ fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, argu
             measured.extend(arguments.iter().map(OsString::from));
         }
         Mode::Supervised | Mode::Translated => {
-            measured.push(options.engine.as_os_str().to_owned());
+            let artifacts = arm_artifacts(options, mode);
+            measured.push(artifacts.engine.as_os_str().to_owned());
             measured.extend(
                 ["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"]
                     .into_iter()
                     .map(OsString::from),
             );
             measured.push(options.native_library.as_os_str().to_owned());
+            measured.push("--guest-isa".into());
+            measured.push(artifacts.guest_isa.as_str().into());
             measured.push("--rootfs".into());
             measured.push(root.as_os_str().to_owned());
             match mode {
@@ -361,7 +477,12 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
     if !output.status.success() || !output.stdout.is_empty() {
         return Err(format!("developer null arm failed in {mode:?}: {}", output.status).into());
     }
-    backend_receipt(mode, &String::from_utf8(output.stderr)?)?;
+    let guest_isa = arm_artifacts(options, mode).guest_isa;
+    backend_receipt(
+        execution_backend(mode, guest_isa),
+        guest_isa,
+        &String::from_utf8(output.stderr)?,
+    )?;
     let counters = parse_perf(&fs::read_to_string(&path)?)?;
     fs::remove_file(path)?;
     Ok(counters)
@@ -419,15 +540,15 @@ fn validate_phases(marks: &[(String, u128)], end: u128) -> Result<Vec<(String, u
     Ok(result)
 }
 
-fn backend_receipt(mode: Mode, stderr: &str) -> Result<String, Error> {
-    match mode {
-        Mode::Native => Ok("host-native".into()),
-        Mode::Supervised => stderr
+fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str) -> Result<String, Error> {
+    let evidence: String = match backend {
+        ExecutionBackend::HostNative => "host-native".into(),
+        ExecutionBackend::NativeSupervised => stderr
             .lines()
             .find(|line| line.starts_with("[hl-native-supervised]") && line.contains("selected=1"))
             .map(str::to_owned)
-            .ok_or_else(|| "native-supervised arm did not prove selected=1".into()),
-        Mode::Translated => stderr
+            .ok_or_else(|| -> Error { "native-supervised arm did not prove selected=1".into() })?,
+        ExecutionBackend::X86Transliterator => stderr
             .lines()
             .find(|line| {
                 line.starts_with("[prof] translit:")
@@ -435,8 +556,21 @@ fn backend_receipt(mode: Mode, stderr: &str) -> Result<String, Error> {
                     && positive_field(line, "entries")
             })
             .map(str::to_owned)
-            .ok_or_else(|| "translated arm did not prove nonzero blocks and entries".into()),
-    }
+            .ok_or_else(|| -> Error { "x86 transliterator did not prove nonzero blocks and entries".into() })?,
+        ExecutionBackend::Aarch64Interpreter => stderr
+            .lines()
+            .find(|line| {
+                line.starts_with("[diag] backend-tree ")
+                    && positive_field(line, "crossings")
+                    && positive_field(line, "interpreted_entries")
+            })
+            .map(str::to_owned)
+            .ok_or_else(|| -> Error { "AArch64 interpreter did not prove nonzero entries".into() })?,
+    };
+    Ok(format!(
+        "guest_isa={} backend={backend:?} {evidence}",
+        guest_isa.as_str()
+    ))
 }
 
 fn positive_field(line: &str, name: &str) -> bool {
@@ -489,10 +623,11 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
     let Some(first) = rows.first() else {
         return Err("developer benchmark produced no rows".into());
     };
-    if let Some(divergent) = rows
-        .iter()
-        .find(|row| row.stdout_sha256 != first.stdout_sha256 || row.semantic_sha256 != first.semantic_sha256)
-    {
+    if let Some(divergent) = rows.iter().find(|row| {
+        (row.guest_isa == first.guest_isa
+            && (row.stdout_sha256 != first.stdout_sha256 || row.semantic_sha256 != first.semantic_sha256))
+            || row.portable_semantic_sha256 != first.portable_semantic_sha256
+    }) {
         return Err(format!(
             "developer benchmark backends produced different output: baseline={:?}/{}/{} stdout={} semantic={}; divergent={:?}/{}/{} stdout={} semantic={}",
             first.mode,
@@ -513,15 +648,17 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
 
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
     let mut text = String::from(
-        "sample\tposition\tmode\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
+        "sample\tposition\tmode\tguest_isa\tbackend\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
     );
     for row in rows {
         for (phase, elapsed) in &row.phase_ns {
             text.push_str(&format!(
-                "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{:?}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.sample,
                 row.position,
                 row.mode,
+                row.guest_isa.as_str(),
+                row.backend,
                 row.wall_ns,
                 row.counters.duration_ns,
                 row.counters.task_clock_ms,
@@ -576,12 +713,32 @@ fn semantic_sha256(output: &[u8]) -> String {
     hex(Sha256::digest(semantic))
 }
 
+fn portable_semantic_sha256(output: &[u8]) -> String {
+    let mut portable = Vec::with_capacity(output.len());
+    for line in output.split_inclusive(|byte| *byte == b'\n') {
+        if line.len() >= 67 && line[..64].iter().all(u8::is_ascii_hexdigit) && line[64..].starts_with(b"  -") {
+            portable.extend_from_slice(b"<architecture-bound-sha256>  -");
+            portable.extend_from_slice(&line[67..]);
+        } else {
+            portable.extend_from_slice(line);
+        }
+    }
+    hex(Sha256::digest(portable))
+}
+
 fn verify_output(directory: &Path, row: &Row) -> Result<(), Error> {
     let path = output_path(directory, row.sample, row.position, row.mode);
     let output = fs::read(&path)
         .map_err(|error| format!("cannot reopen completed output artifact {}: {error}", path.display()))?;
-    if hex(Sha256::digest(&output)) != row.stdout_sha256 || semantic_sha256(&output) != row.semantic_sha256 {
-        return Err(format!("completed output artifact {} does not match its ledger row", path.display()).into());
+    if hex(Sha256::digest(&output)) != row.stdout_sha256
+        || semantic_sha256(&output) != row.semantic_sha256
+        || portable_semantic_sha256(&output) != row.portable_semantic_sha256
+    {
+        return Err(format!(
+            "completed output artifact {} does not match its ledger row",
+            path.display()
+        )
+        .into());
     }
     Ok(())
 }
@@ -593,6 +750,24 @@ fn hex(bytes: impl AsRef<[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cross_isa_options() -> Options {
+        Options {
+            rootfs: "/roots/x86".into(),
+            engine: "/workers/hl-x86_64".into(),
+            guest_isa: GuestIsa::X86_64,
+            translated_rootfs: Some("/roots/arm".into()),
+            translated_engine: Some("/workers/hl-aarch64".into()),
+            translated_guest_isa: Some(GuestIsa::Aarch64),
+            native_library: "/lib/libhl-native.so".into(),
+            results: "/results".into(),
+            resume: false,
+            samples: 3,
+            quiet_seconds: 30,
+            lock_timeout: 900,
+            max_load: 1.0,
+        }
+    }
 
     #[test]
     fn phase_protocol_is_exact_and_individually_timed() {
@@ -613,10 +788,55 @@ mod tests {
 
     #[test]
     fn backend_receipts_cannot_be_vacuous() {
-        assert!(backend_receipt(Mode::Supervised, "[hl-native-supervised] selected=1 reason=eligible").is_ok());
-        assert!(backend_receipt(Mode::Supervised, "[hl-native-supervised] selected=0").is_err());
-        assert!(backend_receipt(Mode::Translated, "[prof] translit: blocks=9 entries=4").is_ok());
-        assert!(backend_receipt(Mode::Translated, "[prof] translit: blocks=9 entries=0").is_err());
+        assert_eq!(
+            backend_receipt(
+                ExecutionBackend::NativeSupervised,
+                GuestIsa::X86_64,
+                "[hl-native-supervised] selected=1 reason=eligible"
+            )
+            .unwrap(),
+            "guest_isa=x86_64 backend=NativeSupervised [hl-native-supervised] selected=1 reason=eligible"
+        );
+        assert!(
+            backend_receipt(
+                ExecutionBackend::NativeSupervised,
+                GuestIsa::X86_64,
+                "[hl-native-supervised] selected=0"
+            )
+            .is_err()
+        );
+        assert!(
+            backend_receipt(
+                ExecutionBackend::X86Transliterator,
+                GuestIsa::X86_64,
+                "[prof] translit: blocks=9 entries=4"
+            )
+            .is_ok()
+        );
+        assert!(
+            backend_receipt(
+                ExecutionBackend::X86Transliterator,
+                GuestIsa::X86_64,
+                "[prof] translit: blocks=9 entries=0"
+            )
+            .is_err()
+        );
+        assert!(
+            backend_receipt(
+                ExecutionBackend::Aarch64Interpreter,
+                GuestIsa::Aarch64,
+                "[diag] backend-tree crossings=19 translated_entries=0 interpreted_entries=19"
+            )
+            .is_ok()
+        );
+        assert!(
+            backend_receipt(
+                ExecutionBackend::Aarch64Interpreter,
+                GuestIsa::Aarch64,
+                "[prof] translit: blocks=9 entries=4"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -652,11 +872,61 @@ mod tests {
     }
 
     #[test]
+    fn translated_arm_selects_its_own_worker_root_and_typed_guest() {
+        let options = cross_isa_options();
+        let translated = arm_artifacts(&options, Mode::Translated);
+        assert_eq!(translated.rootfs, Path::new("/roots/arm"));
+        assert_eq!(translated.engine, Path::new("/workers/hl-aarch64"));
+        assert_eq!(translated.guest_isa, GuestIsa::Aarch64);
+        let argv = measured_argv(
+            &options,
+            Path::new("/cloned-arm-root"),
+            Mode::Translated,
+            "bin/true",
+            &[],
+        );
+        let argv = argv.iter().map(|value| value.to_str().unwrap()).collect::<Vec<_>>();
+        assert_eq!(argv[0], "/workers/hl-aarch64");
+        assert!(argv.windows(2).any(|pair| pair == ["--guest-isa", "aarch64"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--rootfs", "/cloned-arm-root"]));
+
+        let supervised = arm_artifacts(&options, Mode::Supervised);
+        assert_eq!(supervised.rootfs, Path::new("/roots/x86"));
+        assert_eq!(supervised.engine, Path::new("/workers/hl-x86_64"));
+        assert_eq!(supervised.guest_isa, GuestIsa::X86_64);
+    }
+
+    #[test]
+    fn same_isa_defaults_preserve_the_original_worker_and_root() {
+        let mut options = cross_isa_options();
+        options.translated_rootfs = None;
+        options.translated_engine = None;
+        options.translated_guest_isa = None;
+        let translated = arm_artifacts(&options, Mode::Translated);
+        assert_eq!(translated.rootfs, options.rootfs);
+        assert_eq!(translated.engine, options.engine);
+        assert_eq!(translated.guest_isa, GuestIsa::X86_64);
+    }
+
+    #[test]
+    fn workload_recipe_binds_both_the_makefile_and_session() {
+        let original = workload_recipe_identity();
+        let mut makefile_changed = Sha256::new();
+        for bytes in [b"changed".as_slice(), fixture_source().as_bytes()] {
+            makefile_changed.update((bytes.len() as u64).to_le_bytes());
+            makefile_changed.update(bytes);
+        }
+        assert_ne!(original, hex(makefile_changed.finalize()));
+    }
+
+    #[test]
     fn every_backend_must_produce_the_same_semantics() {
-        let row = |mode, output: &str| Row {
+        let row = |mode, guest_isa, output: &str, portable: &str| Row {
             sample: 0,
             position: 0,
             mode,
+            guest_isa,
+            backend: execution_backend(mode, guest_isa),
             wall_ns: 1,
             counters: Counters {
                 duration_ns: 1,
@@ -675,14 +945,45 @@ mod tests {
             phase_ns: Vec::new(),
             stdout_sha256: output.into(),
             semantic_sha256: output.into(),
+            portable_semantic_sha256: portable.into(),
             backend_receipt: String::new(),
         };
-        assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Translated, "same")]).is_ok());
-        let error = validate_outputs(&[row(Mode::Native, "same"), row(Mode::Supervised, "different")])
-            .unwrap_err()
-            .to_string();
+        assert!(
+            validate_outputs(&[
+                row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
+                row(
+                    Mode::Translated,
+                    GuestIsa::Aarch64,
+                    "different-architecture",
+                    "portable"
+                ),
+            ])
+            .is_ok()
+        );
+        let error = validate_outputs(&[
+            row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
+            row(Mode::Supervised, GuestIsa::X86_64, "different", "portable"),
+        ])
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("baseline=Native/0/0 stdout=same semantic=same"));
         assert!(error.contains("divergent=Supervised/0/0 stdout=different semantic=different"));
+        assert!(
+            validate_outputs(&[
+                row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
+                row(Mode::Translated, GuestIsa::Aarch64, "different", "wrong-portable"),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn portable_semantics_ignore_only_architecture_bound_digest_values() {
+        let x86 = b"prefix\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  -\n";
+        let arm = b"prefix\nfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210  -\n";
+        assert_ne!(semantic_sha256(x86), semantic_sha256(arm));
+        assert_eq!(portable_semantic_sha256(x86), portable_semantic_sha256(arm));
+        assert_ne!(portable_semantic_sha256(x86), portable_semantic_sha256(b"changed\n"));
     }
 
     #[test]
@@ -693,6 +994,8 @@ mod tests {
             sample: 0,
             position: 0,
             mode: Mode::Native,
+            guest_isa: GuestIsa::X86_64,
+            backend: ExecutionBackend::HostNative,
             wall_ns: 1,
             counters: Counters {
                 duration_ns: 1,
@@ -711,16 +1014,29 @@ mod tests {
             phase_ns: Vec::new(),
             stdout_sha256: hex(Sha256::digest(output)),
             semantic_sha256: semantic_sha256(output),
+            portable_semantic_sha256: portable_semantic_sha256(output),
             backend_receipt: "host-native".into(),
         };
         let ledger = directory.path().join("ledger.jsonl");
         append(&ledger, &row).unwrap();
-        assert!(read_ledger(&ledger, 3).err().unwrap().to_string().contains("cannot reopen"));
+        assert!(
+            read_ledger(&ledger, 3)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("cannot reopen")
+        );
 
         atomic_bytes(&output_path(directory.path(), 0, 0, Mode::Native), output).unwrap();
         assert_eq!(read_ledger(&ledger, 3).unwrap().len(), 1);
         fs::write(output_path(directory.path(), 0, 0, Mode::Native), b"tampered\n").unwrap();
-        assert!(read_ledger(&ledger, 3).err().unwrap().to_string().contains("does not match"));
+        assert!(
+            read_ledger(&ledger, 3)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("does not match")
+        );
     }
 
     #[test]
