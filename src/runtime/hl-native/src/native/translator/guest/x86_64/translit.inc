@@ -7816,8 +7816,11 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         result = refused && body != NULL && after == JIT_BODY_OWNER_N - TL_MAX_OWNER_RANGES + 6 ? 0 : 124;
     } else if (scenario == 81) {
         uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
-        int exact = body != NULL && block->host_len <= translit_test_body_bytes + TL_EXIT_HEADROOM &&
-                    block->profile_insns > 0 && published == block->profile_insns + 1;
+        int exact = body != NULL && block->host_len > 0 &&
+                    block->host_len <= translit_test_body_bytes + TL_EXIT_HEADROOM &&
+                    block->profile_insns > 0 && block->profile_insns < TL_MAX_INSNS &&
+                    block->guest_end < translit_fall_fixture_guest + translit_fall_fixture_length &&
+                    published == block->profile_insns + 1;
         for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
             uint64_t owner_guest = 0, instruction_guest = 0;
             exact = jit_body_owner_lookup((uint64_t)(uintptr_t)body + offset, &owner_guest) &&
