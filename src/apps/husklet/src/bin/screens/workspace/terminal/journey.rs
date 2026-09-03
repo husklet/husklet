@@ -62,13 +62,14 @@ impl CheckpointJourney {
                 &path,
                 "initial_topology_typed tabs=2 panes=3 selected=split focused=1 geometry=913x617",
             );
+            let ready = format!("{path}.initial-ready");
 
             let path_for_close = path.clone();
             let app = app.clone();
             let parent = parent.clone();
             let terminal_window = window.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
-                if !Self::initial_state_visible(&terminal_window) {
+                if !std::path::Path::new(&ready).exists() || !Self::initial_state_visible(&terminal_window) {
                     return glib::ControlFlow::Continue;
                 }
                 Self::record(&path_for_close, "initial_state_ready");

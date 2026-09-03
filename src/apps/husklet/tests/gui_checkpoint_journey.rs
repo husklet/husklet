@@ -45,8 +45,9 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         .unwrap_or_else(|| temporary.path().to_owned());
     std::fs::create_dir_all(&evidence).unwrap();
     let receipt = evidence.join("journey.receipt");
+    let initial_ready = std::path::PathBuf::from(format!("{}.initial-ready", receipt.display()));
     let cycle_ready = std::path::PathBuf::from(format!("{}.cycle1-ready", receipt.display()));
-    for stale in [&receipt, &cycle_ready, &evidence.join("result.receipt")] {
+    for stale in [&receipt, &initial_ready, &cycle_ready, &evidence.join("result.receipt")] {
         remove_if_exists(stale);
     }
     let output = std::fs::File::create(evidence.join("husklet.out")).unwrap();
@@ -72,10 +73,20 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     wait_receipt(
         &mut journey.application,
         &receipt,
-        "reopen_command_typed",
+        "initial_topology_typed tabs=2 panes=3 selected=split focused=1 geometry=913x617",
         Duration::from_secs(60),
     );
     let before = slot_state(&rootfs, "before");
+    let initial_progress = progress_sizes(&rootfs);
+    wait_for_all_growth(&rootfs, initial_progress, Duration::from_secs(5));
+    std::fs::write(&initial_ready, b"ready\n").unwrap();
+
+    wait_receipt(
+        &mut journey.application,
+        &receipt,
+        "reopen_command_typed",
+        Duration::from_secs(60),
+    );
     let after = slot_state(&rootfs, "after-1");
     assert_eq!(before, after, "reopen lost per-pane shell state or cwd");
     let first_progress = progress_sizes(&rootfs);

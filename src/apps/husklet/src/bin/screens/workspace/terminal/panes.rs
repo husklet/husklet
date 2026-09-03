@@ -105,6 +105,27 @@ impl Panes {
         pane.content.grab_focus()
     }
 
+    /// Restores focus once a newly-built pane reaches a mapped window.
+    ///
+    /// Session restore builds the widget tree before the application presents
+    /// its toplevel. `grab_focus` at that point is accepted by neither GTK nor
+    /// the pane's focus controller, leaving the saved pane selected in the model
+    /// but the reopened window with no keyboard target.
+    pub(crate) fn focus_when_mapped(window: &Rc<TermWin>, slot: &str) -> bool {
+        let Some(pane) = Self::at(window, slot) else {
+            return false;
+        };
+        let content = pane.content;
+        content.add_tick_callback(move |content, _| {
+            if !content.is_mapped() {
+                return glib::ControlFlow::Continue;
+            }
+            content.grab_focus();
+            glib::ControlFlow::Break
+        });
+        true
+    }
+
     /// Sets how much of its split one pane takes.
     pub(crate) fn ratio(window: &Rc<TermWin>, slot: &str, ratio: f64) -> Adjustment {
         let Some(pane) = Self::at(window, slot) else {

@@ -538,7 +538,7 @@ impl WindowSession<'_> {
             let focused = session
                 .focused_pane
                 .as_deref()
-                .is_some_and(|slot| Panes::focus(tw, slot));
+                .is_some_and(|slot| Panes::focus_when_mapped(tw, slot));
             if !focused {
                 if let Some(terminal) = fallback {
                     terminal.grab_focus();
