@@ -277,12 +277,12 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
     BufReader::new(stdout).read_to_end(&mut output)?;
     let status = child.wait()?;
     reader.join().map_err(|_| "stderr reader panicked")??;
+    let elapsed = start.elapsed().as_nanos();
     if !status.success() {
         return Err(format!("developer session failed in {mode:?}: {status}").into());
     }
     let counters = parse_perf(&fs::read_to_string(&perf_path)?)?;
     fs::remove_file(perf_path)?;
-    let elapsed = start.elapsed().as_nanos();
     let marks = Arc::try_unwrap(marks)
         .map_err(|_| "phase reader remained shared")?
         .into_inner()?;
@@ -292,16 +292,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
     let phase_ns = validate_phases(&marks, elapsed)?;
     let receipt = backend_receipt(mode, &String::from_utf8(stderr)?)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
-    fs::write(
-        options.results.join(format!("stdout-{sample}-{position}-{mode:?}.txt")),
-        &output,
-    )?;
-    let semantic = output
-        .split(|byte| *byte == b'\n')
-        .filter(|line| line.len() == 67 && line[64..] == *b"  -")
-        .flatten()
-        .copied()
-        .collect::<Vec<_>>();
+    atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
     Ok(Row {
         sample,
         position,
@@ -311,7 +302,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         null_counters,
         phase_ns,
         stdout_sha256,
-        semantic_sha256: hex(Sha256::digest(semantic)),
+        semantic_sha256: semantic_sha256(&output),
         backend_receipt: receipt,
     })
 }
@@ -480,6 +471,7 @@ fn read_ledger(path: &Path, samples: u32) -> Result<Vec<Row>, Error> {
         {
             return Err("developer ledger contains an invalid or duplicate key".into());
         }
+        verify_output(path.parent().ok_or("developer ledger has no result directory")?, &row)?;
         rows.push(row);
     }
     Ok(rows)
@@ -560,6 +552,40 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), Error> {
     Ok(())
 }
 
+fn output_path(directory: &Path, sample: u32, position: usize, mode: Mode) -> PathBuf {
+    directory.join(format!("stdout-{sample}-{position}-{mode:?}.txt"))
+}
+
+fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    let mut file = File::create(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    File::open(path.parent().ok_or("output artifact has no result directory")?)?.sync_all()?;
+    Ok(())
+}
+
+fn semantic_sha256(output: &[u8]) -> String {
+    let semantic = output
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.len() == 67 && line[64..] == *b"  -")
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    hex(Sha256::digest(semantic))
+}
+
+fn verify_output(directory: &Path, row: &Row) -> Result<(), Error> {
+    let path = output_path(directory, row.sample, row.position, row.mode);
+    let output = fs::read(&path)
+        .map_err(|error| format!("cannot reopen completed output artifact {}: {error}", path.display()))?;
+    if hex(Sha256::digest(&output)) != row.stdout_sha256 || semantic_sha256(&output) != row.semantic_sha256 {
+        return Err(format!("completed output artifact {} does not match its ledger row", path.display()).into());
+    }
+    Ok(())
+}
+
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -610,11 +636,18 @@ mod tests {
 
     #[test]
     fn developer_fixture_closes_over_the_same_guest_path_for_every_backend() {
+        let fixture = fixture_source();
         assert!(
-            fixture_source().starts_with(
+            fixture.starts_with(
                 "#!/bin/sh\nset -eu\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
             ),
             "the host environment must not decide which guest tools the workload executes"
+        );
+        assert!(
+            fixture.contains(
+                "apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | sha256sum"
+            ),
+            "a missing package producer must not be hidden by a successful pipeline tail"
         );
     }
 
@@ -650,6 +683,44 @@ mod tests {
             .to_string();
         assert!(error.contains("baseline=Native/0/0 stdout=same semantic=same"));
         assert!(error.contains("divergent=Supervised/0/0 stdout=different semantic=different"));
+    }
+
+    #[test]
+    fn completed_rows_require_their_exact_durable_output_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = b"abc\n";
+        let row = Row {
+            sample: 0,
+            position: 0,
+            mode: Mode::Native,
+            wall_ns: 1,
+            counters: Counters {
+                duration_ns: 1,
+                task_clock_ms: 1.0,
+                instructions: 1,
+                cycles: 1,
+                page_faults: 1,
+            },
+            null_counters: Counters {
+                duration_ns: 1,
+                task_clock_ms: 1.0,
+                instructions: 1,
+                cycles: 1,
+                page_faults: 1,
+            },
+            phase_ns: Vec::new(),
+            stdout_sha256: hex(Sha256::digest(output)),
+            semantic_sha256: semantic_sha256(output),
+            backend_receipt: "host-native".into(),
+        };
+        let ledger = directory.path().join("ledger.jsonl");
+        append(&ledger, &row).unwrap();
+        assert!(read_ledger(&ledger, 3).err().unwrap().to_string().contains("cannot reopen"));
+
+        atomic_bytes(&output_path(directory.path(), 0, 0, Mode::Native), output).unwrap();
+        assert_eq!(read_ledger(&ledger, 3).unwrap().len(), 1);
+        fs::write(output_path(directory.path(), 0, 0, Mode::Native), b"tampered\n").unwrap();
+        assert!(read_ledger(&ledger, 3).err().unwrap().to_string().contains("does not match"));
     }
 
     #[test]
