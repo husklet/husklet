@@ -121,6 +121,28 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   stage.close();
 });
 
+test('a slotless compatibility event never guesses between multiple surfaces', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let firstInvoked = 0;
+  let secondInvoked = 0;
+  const first = render(h(Button, { label: 'First', onInvoke: () => (firstInvoked += 1) }), session, { title: 'First' });
+  const second = render(h(Button, { label: 'Second', onInvoke: () => (secondInvoked += 1) }), session, {
+    split: { slot: 'surface-1', division: 'beside' },
+  });
+  await Promise.all([first.ready, second.ready]);
+  await until(() => stage.calls.filter((call) => call.call === 'interface_render_at').length === 2);
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual([firstInvoked, secondInvoked], [0, 0]);
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke', slot: 'surface-2' });
+  await until(() => secondInvoked === 1);
+  assert.equal(firstInvoked, 0);
+  await Promise.all([first.close(), second.close()]);
+  session.close();
+  stage.close();
+});
+
 test('the client refuses a thirty-third live root before opening it', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });

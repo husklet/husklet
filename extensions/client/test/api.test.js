@@ -219,7 +219,11 @@ test('separately typed GUI interaction events remain deliverable and return cred
 test('generated UI event validation owns current payloads while protocol-1 legacy remains accepted', () => {
   const current = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', slot: 'pane-1', source: 4, x: 2.5, y: 8 };
   assert.equal(validateUiEvent(current), current);
-  assert.throws(() => validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop' }), /ui event/);
+  const omitted = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 };
+  const nullable = { ...omitted, slot: null };
+  assert.equal(validateUiEvent(omitted), omitted);
+  assert.equal(validateUiEvent(nullable), nullable);
+  assert.throws(() => validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', x: 2.5, y: 8 }), /ui event/);
   const legacy = { slot: 'pane-1', event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } } };
   assert.equal(validateUiEvent(legacy), legacy);
 });

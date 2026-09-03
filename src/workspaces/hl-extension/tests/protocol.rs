@@ -6,6 +6,20 @@ use hl_extension::{
     Malformed, Manifest, PaneSelection, RelativePath, Resources, Welcome, PROTOCOL,
 };
 
+#[test]
+fn omitted_and_null_ui_slots_both_preserve_legacy_unaddressed_events() {
+    for slot in [None, Some(serde_json::Value::Null)] {
+        let mut value = serde_json::json!({
+            "interaction": "invoke", "trigger": "Invoke", "node": 7, "id": "event"
+        });
+        if let Some(slot) = slot {
+            value.as_object_mut().unwrap().insert("slot".into(), slot);
+        }
+        assert!(matches!(serde_json::from_value::<hl_extension::UiEvent>(value).unwrap(),
+            hl_extension::UiEvent::Invoke { slot: None, .. }));
+    }
+}
+
 /// The document an extension image carries, with extra lines appended.
 fn manifest_document(extra: &str) -> String {
     format!(
