@@ -5446,6 +5446,19 @@ export interface ConfirmActionProps {
 export const ConfirmAction: ComponentType<ConfirmActionProps>;
 export const CONFIRM_ACTION_TEXT_BYTE_LIMIT: 1024;
 
+export interface ResourceStateProps extends NodeProps {
+  state: 'loading' | 'empty' | 'error' | 'ready';
+  loadingLabel?: string;
+  emptyLabel?: string;
+  emptyDetail?: string;
+  error?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+  children?: ReactNode;
+}
+export const ResourceState: ComponentType<ResourceStateProps>;
+export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
+
 /** Every tag name, in catalogue order. */
 export const tags: string[];
 
@@ -5690,7 +5703,6 @@ export interface WorkspaceApi {
     focus(slot: string): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
-    switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
   };
   files: {
     list(path: string): Promise<FileEntry[]>;

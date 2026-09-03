@@ -234,6 +234,19 @@ export interface ConfirmActionProps {
 export const ConfirmAction: ComponentType<ConfirmActionProps>;
 export const CONFIRM_ACTION_TEXT_BYTE_LIMIT: 1024;
 
+export interface ResourceStateProps extends NodeProps {
+  state: 'loading' | 'empty' | 'error' | 'ready';
+  loadingLabel?: string;
+  emptyLabel?: string;
+  emptyDetail?: string;
+  error?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+  children?: ReactNode;
+}
+export const ResourceState: ComponentType<ResourceStateProps>;
+export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
+
 /** Every tag name, in catalogue order. */
 export const tags: string[];
 

@@ -34,6 +34,7 @@ import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../
 import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
 import { WorkspaceFileEditStory, boundedFiles, FILE_LIMIT, PATH_LIMIT, CONTENT_LIMIT } from '../src/workspace-file-edit.js';
 import { ImagePullStory, boundedPull, LAYER_LIMIT, REFERENCE_LIMIT, STATUS_LIMIT } from '../src/image-pull.js';
+import { ResourceStateStory } from '../src/resource-state.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -70,6 +71,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['extension lifecycle', h(ExtensionLifecycleStory)],
     ['workspace file edit', h(WorkspaceFileEditStory)],
     ['image pull', h(ImagePullStory)],
+    ['container inventory states', h(ResourceStateStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -103,6 +105,31 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('container inventory story traverses failure, retry, empty, and ready states', () => {
+  const stage = host();
+  const initial = stage.render(h(ResourceStateStory));
+  const error = node(initial.patches, 'Button', 'error');
+  assert(error);
+  let before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: error, id: `${error}:Invoke` }));
+  let changed = stage.since(before);
+  assert(node(changed, 'Button', 'Retry inventory'));
+
+  const retry = node(changed, 'Button', 'Retry inventory');
+  before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: retry, id: `${retry}:Invoke` }));
+  changed = stage.since(before);
+  assert(changed.some((patch) => patch.Create?.tag === 'Progress'));
+
+  const all = stage.frames.flatMap((frame) => frame.patches);
+  const ready = node(all, 'Button', 'ready');
+  before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: ready, id: `${ready}:Invoke` }));
+  changed = stage.since(before);
+  assert(node(changed, 'ListItemText', 'api · running'));
+  assert(changed.length <= 64);
 });
 
 test('container operations bounds and sanitizes every host-sized projection', () => {
