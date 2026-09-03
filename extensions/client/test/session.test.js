@@ -928,6 +928,53 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
   }
 });
 
+test('real Unix signalExecutionAndWait ignores initial state and awaits exact immutable transition', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-signal-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const id = 'e'.repeat(32); let signals = 0;
+  const summary = (running, exitCode, pid = 42) => ({ id, container_id: 'c'.repeat(64), running, exit_code: exitCode, pid, command: ['sleep', '30'], user: 'root' });
+  const initial = summary(true, 0); const exited = summary(false, 143);
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        socket.write(encode({ channel: 110, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [initial], truncated: false } } }));
+      } else if (frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'execution_inspect') {
+        assert.deepEqual(frame.payload.with, { id });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: initial } }));
+      } else if (frame.payload.call === 'execution_kill') {
+        signals += 1; assert.deepEqual(frame.payload.with, { id, signal: 'SIGTERM' });
+        if (signals === 1) socket.write(encode({ channel: 111, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [exited], truncated: false } } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'signal-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const containers = workspace(session).containers;
+    const cursor = { running: true, exit_code: 0, pid: 42 };
+    await assert.rejects(containers.signalExecutionAndWait(id, 'SIG TERM', cursor), /signal/);
+    await assert.rejects(containers.signalExecutionAndWait(id, 'SIGTERM', cursor, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid signal or timeout must not subscribe or signal');
+    assert.deepEqual(await containers.signalExecutionAndWait(id, 'SIGTERM', cursor), { changed: true, execution: exited });
+    assert.deepEqual(calls, ['event_subscribe', 'execution_inspect', 'execution_kill', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await containers.signalExecutionAndWait(id, 'SIGTERM', cursor, { timeoutMs: 5 }), {
+      changed: false, id, state: 'exited', after: cursor,
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'execution_inspect', 'execution_kill', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

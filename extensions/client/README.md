@@ -78,6 +78,17 @@ All options are validated before creation. A wait or log failure throws
 `ExecutionOperationError` with the retained `executionId` and failing `phase`;
 the client never removes that execution automatically.
 
+Signals can be coupled to an exact observed execution transition. The default
+waits for exit; use `state: 'changed'` when a non-terminating signal has a
+catalogue-visible transition:
+
+```js
+const execution = await host.containers.execution(executionId);
+const stopped = await host.containers.signalExecutionAndWait(
+  execution.id, 'TERM', execution, { state: 'exited', timeoutMs: 10_000 },
+);
+```
+
 Pane occupant changes can likewise be armed and verified without racing a raw
 subscription against the mutation:
 

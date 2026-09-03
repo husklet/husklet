@@ -268,6 +268,13 @@ export interface WorkspaceApi {
       stdout?: boolean; stderr?: boolean;
     }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
+    /** Arm and verify the exact execution cursor before signaling, then await its requested transition. */
+    signalExecutionAndWait(id: string, signal: string,
+      after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
+      options?: { state?: 'changed' | 'exited'; timeoutMs?: number }): Promise<
+        | { changed: true; execution: ExecutionSummary }
+        | { changed: false; id: string; state: 'changed' | 'exited'; after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'> }
+      >;
     removeExecution(id: string): Promise<void>;
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */

@@ -938,6 +938,49 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchExecutions = (listener) => watch('executions', 'executions', listener, 'execution');
+  api.containers.signalExecutionAndWait = async (id, signal, after, { state = 'exited', timeoutMs = 30_000 } = {}) => {
+    const executionId = immutableIdentity(id, [32], 'execution');
+    if (typeof signal !== 'string' || signal.length < 1 || signal.length > 32 || !/^[A-Za-z0-9+-]+$/.test(signal)) {
+      throw new TypeError('execution signal must be a 1..32 byte ASCII signal name or number');
+    }
+    if (after == null || typeof after.running !== 'boolean'
+      || !Number.isSafeInteger(after.exit_code) || !Number.isSafeInteger(after.pid)) {
+      throw new TypeError('execution signal wait requires the exact running, exit_code, and pid cursor');
+    }
+    if (state !== 'changed' && state !== 'exited') throw new TypeError('execution signal wait state must be changed or exited');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('execution signal wait timeout must be between 1 and 30000ms');
+    }
+    const differs = (execution) => execution.running !== after.running
+      || execution.exit_code !== after.exit_code || execution.pid !== after.pid;
+    let observed;
+    const transition = new Promise((resolve, reject) => {
+      observed = (catalogue) => {
+        const execution = catalogue.executions.find((candidate) => candidate.id === executionId);
+        if (!execution) {
+          if (!catalogue.truncated) reject(new Error('execution disappeared while waiting for its signal transition'));
+          return;
+        }
+        if (!differs(execution) || (state === 'exited' && execution.running)) return;
+        resolve(execution);
+      };
+    });
+    const stop = await api.watchExecutions(observed);
+    let timer;
+    try {
+      const current = await api.containers.execution(executionId);
+      if (differs(current)) throw new Error('execution cursor changed before signal authority');
+      await api.containers.signalExecution(executionId, signal);
+      const execution = await Promise.race([
+        transition,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return execution === null ? { changed: false, id: executionId, state, after } : { changed: true, execution };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
   api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
   api.extensions.enableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {

@@ -64,6 +64,7 @@ wrong caller.
 - `host.containers.signalExecution(...)` — `execution_kill`, requires `container-control`.
 - `host.containers.removeExecution(...)` — `execution_remove`, requires `container-control`.
 - `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID in `ExecutionOperationError` and never auto-remove the record.
+- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `container-read` and `container-control`.
 
 ## Terminal and panes
 
