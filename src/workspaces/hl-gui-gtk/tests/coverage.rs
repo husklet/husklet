@@ -108,7 +108,33 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     every_container_keeps_the_child_it_is_given();
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
+    every_composite_field_caption_names_its_editable_widget();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn every_composite_field_caption_names_its_editable_widget() {
+    let mut covered = Vec::new();
+    for tag in Tag::ALL.iter().filter(|tag| tag.accepts(Prop::Label)) {
+        let mut session = Session::new();
+        let node = session.producer.create(*tag);
+        session.producer.append(NodeId::ROOT, node);
+        session.producer.set(node, Prop::Label, PropValue::text("Accessible name"));
+        session.flush().unwrap();
+        let widgets = session.widgets();
+        let caption = widgets
+            .iter()
+            .find(|candidate| candidate.has_css_class("hl-caption"))
+            .and_then(|candidate| candidate.clone().downcast::<gtk::Label>().ok());
+        let focusable = widgets.iter().find(|candidate| candidate.has_css_class("hl-field")).cloned();
+        let (Some(caption), Some(focusable)) = (caption, focusable) else { continue };
+        if !focusable.is_focusable() {
+            continue;
+        }
+        let labelled = caption.mnemonic_widget().as_ref() == Some(&focusable);
+        assert!(labelled, "{} draws a caption that does not name its editable GTK widget", tag.as_str());
+        covered.push(*tag);
+    }
+    assert!(!covered.is_empty(), "catalogue contains composite labelled controls");
 }
 fn query_plan_is_nested_selectable_and_hot() {
     let mut s = Session::new();

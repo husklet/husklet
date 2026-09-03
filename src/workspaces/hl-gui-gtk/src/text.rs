@@ -76,6 +76,14 @@ fn framed(widget: &gtk::Widget, tag: Tag, content: &str) -> bool {
     }
     if let Some(caption) = slot::caption(widget) {
         caption.set_text(content);
+        if let Some(editable) = slot::editable(widget) {
+            // The visible caption must name the control assistive technology
+            // and mnemonic navigation actually operate, not only its wrapper.
+            if editable.is_focusable() {
+                caption.set_mnemonic_widget(Some(&editable));
+            }
+            editable.update_relation(&[gtk::accessible::Relation::LabelledBy(&[caption.upcast_ref()])]);
+        }
         return true;
     }
     plotted(widget, tag, content)
