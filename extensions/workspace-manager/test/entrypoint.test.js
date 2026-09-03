@@ -156,13 +156,16 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 43, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON (optional)', '["sh","-lc","printf ready"]') }));
     peer.write(encode({ channel: 44, kind: KIND.event, payload: changeInvocation(requests, 'Environment pairs JSON (optional)', '[["MODE","test"],["EMPTY",""]]') }));
     peer.write(encode({ channel: 45, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/workspace/app') }));
+    peer.write(encode({ channel: 46, kind: KIND.event, payload: changeInvocation(requests, 'Memory limit MiB (optional)', '512') }));
+    peer.write(encode({ channel: 47, kind: KIND.event, payload: changeInvocation(requests, 'CPU limit (optional)', '2') }));
+    peer.write(encode({ channel: 48, kind: KIND.event, payload: changeInvocation(requests, 'PID limit (optional)', '128') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'worker')));
     peer.write(encode({ channel: 28, kind: KIND.event, payload: invocation(requests, 'Create and start') }));
     await until(() => calls.includes('container_create') && calls.includes('container_start'));
     assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
       image: 'alpine:3.20', name: 'worker', entrypoint: null, command: ['sh', '-lc', 'printf ready'], environment: [['MODE', 'test'], ['EMPTY', '']], working_directory: '/workspace/app',
-      hostname: null, user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
+      hostname: null, user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: 512, cpus: 2, pids_limit: 128,
     });
     assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: createdContainerId });
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));

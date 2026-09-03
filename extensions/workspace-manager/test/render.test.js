@@ -420,6 +420,54 @@ test('container creation retains exact identity and retries only start after a p
   ], 'retry never creates a duplicate container');
 });
 
+test('container creation validates exact resource bounds and retains them until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('create temporarily unavailable');
+      return 'limited-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'limited');
+  for (const [placeholder, maximum, label] of [
+    ['Memory limit MiB (optional)', 1_048_576, 'Memory limit'],
+    ['CPU limit (optional)', 256, 'CPU limit'],
+    ['PID limit (optional)', 1_000_000, 'PID limit'],
+  ]) {
+    change(stage, placeholder, '0');
+    assert.ok(labelled(stage, `${label} must be a whole decimal number from 1 to ${maximum}.`));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+    change(stage, placeholder, String(maximum + 1));
+    assert.ok(labelled(stage, `${label} must be a whole decimal number from 1 to ${maximum}.`));
+    change(stage, placeholder, '1.5');
+    assert.ok(labelled(stage, `${label} must be a whole decimal number from 1 to ${maximum}.`));
+    change(stage, placeholder, String(maximum));
+    assert.equal(isEnabled(stage, 'Create and start'), true, `${label} upper boundary is accepted`);
+  }
+
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'create temporarily unavailable'));
+  assert.equal(fieldValue(stage, 'Memory limit MiB (optional)'), '1048576');
+  assert.equal(fieldValue(stage, 'CPU limit (optional)'), '256');
+  assert.equal(fieldValue(stage, 'PID limit (optional)'), '1000000');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.deepEqual(calls, [
+    ['create', { image: 'alpine:3.20', name: 'limited', memory_mb: 1_048_576, cpus: 256, pids_limit: 1_000_000 }],
+    ['create', { image: 'alpine:3.20', name: 'limited', memory_mb: 1_048_576, cpus: 256, pids_limit: 1_000_000 }],
+    ['start', 'limited-container'], ['reload'],
+  ]);
+  assert.equal(fieldValue(stage, 'Memory limit MiB (optional)'), '');
+  assert.equal(fieldValue(stage, 'CPU limit (optional)'), '');
+  assert.equal(fieldValue(stage, 'PID limit (optional)'), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
@@ -890,6 +938,13 @@ function isEnabled(stage, label) {
   const node = labelled(stage, label)?.SetProp.id;
   return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
     'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Enabled').at(-1)?.SetProp.value?.Flag;
+}
+
+function fieldValue(stage, placeholder) {
+  const node = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder).at(-1)?.SetProp.id;
+  return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value').at(-1)?.SetProp.value?.Text;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

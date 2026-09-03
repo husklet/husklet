@@ -155,11 +155,28 @@ function containerCreateOptions(draft) {
     || workingDirectory.includes('\0') || workingDirectory.split('/').some((part) => part === '.' || part === '..'))) {
     throw new Error('Working directory must be an absolute, NUL-free path without dot segments and at most 4096 bytes.');
   }
+  const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
+  const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
+  const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
   return {
     ...(command ? { command } : {}),
     ...(environment ? { environment } : {}),
     ...(workingDirectory ? { working_directory: workingDirectory } : {}),
+    ...(memoryMb === null ? {} : { memory_mb: memoryMb }),
+    ...(cpus === null ? {} : { cpus }),
+    ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
   };
+}
+
+function optionalDecimalLimit(value, label, maximum) {
+  const text = value.trim();
+  if (!text) return null;
+  if (!/^[0-9]+$/.test(text)) throw new Error(`${label} must be a whole decimal number from 1 to ${maximum}.`);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new Error(`${label} must be a whole decimal number from 1 to ${maximum}.`);
+  }
+  return parsed;
 }
 
 export function Containers({ api, resource, containerDetails, onOpenExecution }) {
@@ -170,7 +187,9 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
-  const [draft, setDraft] = useState({ image: '', name: '', command: '', environment: '', workingDirectory: '' });
+  const [draft, setDraft] = useState({
+    image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '',
+  });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
   const [creationNotice, setCreationNotice] = useState('');
@@ -221,7 +240,9 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       }
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
-      setCreated(null); setDraft({ image: '', name: '', command: '', environment: '', workingDirectory: '' });
+      setCreated(null); setDraft({
+        image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '',
+      });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
   };
@@ -251,7 +272,10 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }),
         h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
         h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),
-        h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }))),
+        h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.memoryMb, placeholder: 'Memory limit MiB (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, memoryMb: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.cpus, placeholder: 'CPU limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, cpus: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.pidsLimit, placeholder: 'PID limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') })) }))),
       h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
         label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
         enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError)),
