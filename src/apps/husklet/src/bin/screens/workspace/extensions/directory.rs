@@ -70,6 +70,13 @@ pub struct Catalogue {
 }
 
 impl Catalogue {
+    #[cfg(feature = "native-test-hooks")]
+    pub(crate) fn proposed_candidate(&self) -> Option<Candidate> {
+        self.candidate.borrow().as_ref().map(|proposal| match proposal {
+            Proposal::Install { candidate, .. } | Proposal::Update { candidate, .. } => candidate.clone(),
+        })
+    }
+
     /// Builds the page and puts its polling on the main loop.
     #[must_use]
     pub fn new(shelf: &Rc<Shelf>, inspection: Inspection) -> Rc<Self> {

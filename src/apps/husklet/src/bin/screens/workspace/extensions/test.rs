@@ -53,6 +53,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
         closing_the_catalogue_cancels_its_exact_acquisition_before_reentry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
+        #[cfg(feature = "native-test-hooks")]
+        registry_install_enables_a_real_image_selected_provider();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         stale_provider_generations_cannot_authorize_replacements();
@@ -939,6 +941,29 @@ fn candidate() -> Candidate {
     }
 }
 
+#[cfg(feature = "native-test-hooks")]
+fn extension_archive() -> Vec<u8> {
+    use hl_images::Digest;
+    fn append(builder: &mut tar::Builder<&mut Vec<u8>>, path: &str, bytes: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
+    }
+    let document = "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1.0.0\"\nprotocol = 1\ncapabilities = [\"interface\"]\ninterface = { tab_title = \"Sample\" }\n[[pane_providers]]\nid = \"dashboard\"\ntitle = \"Dashboard\"\n";
+    let mut layer = Vec::new();
+    { let mut tar = tar::Builder::new(&mut layer); append(&mut tar, "etc/husklet/extension.toml", document.as_bytes()); tar.finish().unwrap(); }
+    let config = serde_json::to_vec(&serde_json::json!({
+        "architecture":"amd64", "os":"linux", "config": {"Entrypoint":["/opt/husklet/extension"], "User":"65532:65532", "Labels":{"husklet.extension.manifest":"/etc/husklet/extension.toml"}},
+        "rootfs":{"type":"layers", "diff_ids":[Digest::sha256(&layer).to_string()]}
+    })).unwrap();
+    let manifest = serde_json::to_vec(&serde_json::json!([{"Config":"config.json", "RepoTags":["scenario/sample:1"], "Layers":["layer.tar"]}])).unwrap();
+    let mut archive = Vec::new();
+    { let mut tar = tar::Builder::new(&mut archive); append(&mut tar, "config.json", &config); append(&mut tar, "layer.tar", &layer); append(&mut tar, "manifest.json", &manifest); tar.finish().unwrap(); }
+    archive
+}
+
 fn capability_choice(page: &Catalogue, capability: Capability) -> gtk::CheckButton {
     descendants(page.widget().upcast_ref())
         .into_iter()
@@ -1470,8 +1495,136 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     );
 }
 
+#[cfg(feature = "native-test-hooks")]
+fn registry_install_enables_a_real_image_selected_provider() {
+    use hl_container::{Config, Containers, Persistence};
+    use hl_images::format::docker::{Archive, Limits};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let containers = runtime.block_on(async {
+        Containers::builder(Config::new(root.path()).persistence(Persistence::Memory)).build().await.unwrap()
+    });
+    Archive::load(&extension_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
+    runtime.spawn(hl_daemon::Daemon::new(containers).platform(hl_images::Platform::linux_amd64()).server(&socket).serve_with_shutdown(async move { let _ = stopped.await; }));
+    assert!(until(|| socket.exists()));
+
+    let fixture = Fixture::new(&[]);
+    let acquisition_socket = socket.clone();
+    let inspection: Inspection = Rc::new(move |reference| {
+        let (sent, received) = std::sync::mpsc::channel();
+        hl::extension::Candidate::acquire_from_socket(&acquisition_socket, hl_ws::Arch::Amd64, reference, &sent);
+        PendingInspection::detached(received)
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "scenario/sample:1");
+    page.inspect();
+    assert!(until_gui(|| { page.poll(); page.notice().contains("asks for") }), "acquisition stopped at {}", page.notice());
+    let acquired = page.proposed_candidate().expect("digest-bound candidate remains pending consent");
+    let digest = descendants(page.widget().upcast_ref()).iter().filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string()).find(|line| line.starts_with("Digest: ")).unwrap();
+    page.consent();
+    let entry = fixture.roster.borrow().entries().into_iter().next().unwrap();
+    assert_eq!(entry.stage, Stage::Standby);
+    assert_eq!(format!("Digest: {}", entry.image_digest), digest);
+    assert!(fixture.view.entries().contains(&"sample".to_owned()), "disabled installation is visible on the sidebar");
+
+    // The acquired identity is now the sole authority used to select the
+    // sidecar plan. Before explicit enable there is no host or provider.
+    let gallery = Gallery::new();
+    assert!(gallery.providers().is_empty());
+    fixture.roster.borrow_mut().enable_if_digest(&entry.name, &entry.image_digest).unwrap();
+    let manifest = acquired.manifest;
+    assert_eq!(manifest.pane_providers.len(), 1, "acquired manifest carries its provider");
+    let socket = root.path().join("reference.sock");
+    let plan = hl::extension::Plan {
+        record: Record { enabled: true, ..entry_record(&entry, &manifest) },
+        manifest: manifest.clone(),
+        spec: hl::extension::SidecarSpec::new(&manifest, &entry.granted, &hl::extension::Image {
+            reference: entry.image_digest.clone(), digest: entry.image_digest.clone(),
+            entrypoint: vec!["/opt/husklet/extension".to_owned()], user: "65532:65532".to_owned(),
+        }, &socket),
+        workspace: "dev".to_owned(),
+    };
+    assert_eq!(plan.spec.request().image, entry.image_digest, "the acquired digest selects the launch image");
+    let (post, deliveries) = super::super::extension::channel();
+    let shown = gallery.clone();
+    let generation = Rc::new(Cell::new(None));
+    let publishing = Rc::clone(&generation);
+    let ready = Rc::new(Cell::new(false));
+    let became_ready = Rc::clone(&ready);
+    let (widget, interface) = super::super::extension::Interface::with_lifecycle(
+        deliveries, Rc::new(|_| {}), Rc::new(|_| {}), Rc::new(move || {
+            became_ready.set(true);
+            if let Some(generation) = publishing.get() { shown.ready("sample", generation); }
+        }),
+    );
+    let holder = gtk::Box::new(gtk::Orientation::Vertical, 0); holder.append(&widget);
+    generation.set(Some(gallery.enrol("sample", &widget, &holder, &manifest.pane_providers, Rc::new(|_| {}))));
+    let interface = interface.install();
+    let weak = Rc::downgrade(&interface);
+    gallery.enrol_semantics(
+        "sample",
+        Rc::new(move |slot| weak.upgrade().ok_or_else(|| hl_extension::HostError::Absent("closed".into()))?.borrow().semantics(slot)),
+        Rc::new(|_, _| Ok(())),
+    );
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    let host = hl::extension::Host::open(ProcessSupply::new(plan), Box::new(move |report| {
+        reported.lock().unwrap().push(format!("{report:?}"));
+        if let hl::extension::Report::Frame(frame) = report { let _ = post.send(super::super::extension::Delivery::Frame(frame.frame)); }
+    }));
+    assert!(until_gui(|| { interface.borrow_mut().tick(); !gallery.providers().is_empty() }), "ready={} standing={:?} reports={:?}", ready.get(), host.standing(), reports.lock().unwrap());
+    assert_eq!(gallery.providers()[0].title, "Dashboard");
+    host.close().unwrap();
+    let _ = stop.send(());
+}
+
+#[cfg(feature = "native-test-hooks")]
+fn entry_record(entry: &hl::extension::Entry, manifest: &Manifest) -> Record {
+    Record { name: entry.name.clone(), image_digest: entry.image_digest.clone(), version: manifest.version.clone(),
+        granted: entry.granted.clone(), enabled: false, installed_at: 1, pane_providers: manifest.pane_providers.clone() }
+}
+
 /// What the fake extension heard, in order.
 type Heard = Arc<Mutex<Vec<String>>>;
+
+#[cfg(feature = "native-test-hooks")]
+struct ProcessSupply {
+    plan: hl::extension::Plan,
+    child: Mutex<Option<std::process::Child>>,
+}
+
+#[cfg(feature = "native-test-hooks")]
+impl ProcessSupply {
+    fn new(plan: hl::extension::Plan) -> Self { Self { plan, child: Mutex::new(None) } }
+}
+
+#[cfg(feature = "native-test-hooks")]
+impl hl::extension::Supply for ProcessSupply {
+    fn plan(&self) -> Result<Option<hl::extension::Plan>, String> { Ok(Some(self.plan.clone())) }
+    fn ensure(&self, plan: &hl::extension::Plan) -> Result<(), String> {
+        let child = std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+            .args(["--exact", "screens::workspace::extensions::test::image_selected_sidecar_process", "--ignored", "--nocapture"])
+            .env("HUSKLET_TEST_IMAGE_SOCKET", plan.spec.socket()).spawn().map_err(|error| error.to_string())?;
+        *self.child.lock().unwrap() = Some(child); Ok(())
+    }
+    fn attend(&self, _: &hl::extension::Plan, conversation: &mut hl::extension::Conversation) -> Result<(), String> {
+        conversation.serve(&ports::services()).map_err(|error| error.to_string())
+    }
+    fn halt(&self, _: &hl::extension::Plan) {
+        if let Some(mut child) = self.child.lock().unwrap().take() { let _ = child.kill(); let _ = child.wait(); }
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[test]
+#[ignore = "subprocess entrypoint for the image-selected sidecar composition test"]
+fn image_selected_sidecar_process() {
+    let socket = std::path::PathBuf::from(std::env::var("HUSKLET_TEST_IMAGE_SOCKET").unwrap());
+    listen(&socket, &Arc::default(), &AtomicBool::new(false), &AtomicBool::new(false));
+}
 
 /// A supply with no container daemon: `ensure` starts a thread that connects to
 /// the host's own socket, speaks the handshake, and then listens.

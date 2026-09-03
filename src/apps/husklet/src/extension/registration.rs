@@ -179,8 +179,9 @@ impl Candidate {
         })
     }
 
-    #[cfg(test)]
-    fn acquire_from_socket(
+    #[cfg(any(test, feature = "native-test-hooks"))]
+    #[doc(hidden)]
+    pub fn acquire_from_socket(
         socket: &std::path::Path,
         architecture: hl_ws::Arch,
         reference: &str,
