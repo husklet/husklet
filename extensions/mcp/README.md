@@ -113,6 +113,12 @@ Workspace configuration environment entries whose names indicate credentials
 are retained by name with their values replaced by `[redacted]`; ordinary values
 remain exact. This is presentation redaction, not an immutable configuration
 revision, so mutations still require the separately observed generation.
+Host failure text is untrusted. MCP replaces credential assignments and bearer
+values, folds controls and newlines into one line, and limits the public message
+to 1,024 UTF-8 bytes with an explicit truncation marker. Confirmation-gated
+removal receipts include the exact immutable ID, digest, generation, or confined
+path sent to the host; `done: true` therefore does not stand alone as ambiguous
+success evidence. Rejected schema parameters are not copied into these receipts.
 Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
 complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
 re-resolved to a different image between inspection and removal.

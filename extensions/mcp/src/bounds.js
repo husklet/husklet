@@ -3,6 +3,7 @@ const STRING_LIMIT = 8192;
 const ARRAY_LIMIT = 200;
 export const OUTPUT_LIMIT = 64 * 1024;
 export const INVENTORY_ITEMS_LIMIT = 200;
+export const ERROR_BYTES_LIMIT = 1024;
 const LOG_STREAM_LIMIT = 7_500;
 export const FILE_BYTES_LIMIT = 12_000;
 
@@ -106,4 +107,32 @@ export function detailResult(value) {
     throw new RangeError(`detail exceeds the ${OUTPUT_LIMIT}-byte MCP output limit`);
   }
   return { content: [{ type: 'text', text }] };
+}
+
+const SECRET_ASSIGNMENT = /\b(authorization|cookie|password|secret|token|credential|private.?key)(\s*[:=]\s*)([^\s,;]+)/giu;
+const BEARER = /\bBearer\s+[^\s,;]+/giu;
+
+function clipUtf8(value, limit) {
+  let bytes = 0; let output = '';
+  for (const character of value) {
+    const width = new TextEncoder().encode(character).byteLength;
+    if (bytes + width > limit) break;
+    output += character; bytes += width;
+  }
+  return output;
+}
+
+/** One-line, bounded public rendering of an untrusted host or validation failure. */
+export function publicError(error) {
+  const marker = '… [error truncated]';
+  const raw = error instanceof Error ? error.message : String(error);
+  const redacted = raw.replace(BEARER, 'Bearer [redacted]').replace(SECRET_ASSIGNMENT, '$1$2[redacted]');
+  const flattened = redacted.replace(/[\u0000-\u001f\u007f-\u009f]+/gu, ' ').replace(/\s+/gu, ' ').trim() || 'extension call failed';
+  const message = new TextEncoder().encode(flattened).byteLength <= ERROR_BYTES_LIMIT
+    ? flattened : `${clipUtf8(flattened, ERROR_BYTES_LIMIT - new TextEncoder().encode(marker).byteLength)}${marker}`;
+  const failure = new Error(message);
+  failure.name = error?.name ?? 'Error';
+  if (error?.kind != null) failure.kind = error.kind;
+  if (error?.capability != null) failure.capability = error.capability;
+  return failure;
 }
