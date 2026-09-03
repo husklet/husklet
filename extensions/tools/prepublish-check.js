@@ -10,6 +10,7 @@ const repository = path.resolve(root, '..');
 const readJson = (name) => JSON.parse(fs.readFileSync(path.join(root, name, 'package.json')));
 const react = readJson('react');
 const mcp = readJson('mcp');
+const applications = [readJson('storybook'), readJson('workspace-manager')];
 const expected = process.env.RELEASE_VERSION ?? react.version;
 
 for (const manifest of [react, mcp]) {
@@ -20,6 +21,10 @@ for (const manifest of [react, mcp]) {
   assert.equal(manifest.repository?.directory, manifest.name === '@husklet/react' ? 'extensions/react' : 'extensions/mcp');
 }
 assert.equal(mcp.dependencies['@husklet/react'], expected, 'MCP must depend on the exact paired React release');
+for (const manifest of applications) {
+  assert.equal(manifest.private, true, `${manifest.name} is an image application, not a public npm package`);
+  assert.equal(manifest.dependencies['@husklet/react'], 'file:../react');
+}
 
 // Trusted publishing is partly a workflow property, so keep its security-critical
 // contract in the same locally runnable check as the package metadata.
