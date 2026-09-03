@@ -790,9 +790,28 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .and_then(|button| button.label()),
         Some("Enable".into())
     );
+    let replacement = manifest("alpha");
+    let prepared = fixture.roster.borrow().prepare_update(&replacement, "sha256:lifecycle-replacement")
+        .expect("replacement update");
+    fixture.roster.borrow_mut().commit_update(
+        prepared, &Grant::new([Capability::Interface]), 2,
+    ).expect("replacement wins before stale lifecycle action");
     gtk::prelude::RootExt::focus(&window)
         .and_downcast::<gtk::Button>()
         .expect("focused Enable button")
+        .emit_clicked();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window).and_downcast::<gtk::Button>().and_then(|button| button.label()),
+        Some("Enable".into()),
+        "a stale lifecycle action refreshes and focuses its truthful replacement"
+    );
+    assert!(fixture.extension_tagged("alpha", settings::REFUSAL)
+        .and_downcast::<gtk::Label>().is_some_and(|label| label.text().contains("changed")),
+        "the refreshed card retains the refusal message");
+    gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>()
+        .expect("refreshed Enable button")
         .emit_clicked();
     while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!(
