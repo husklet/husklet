@@ -228,6 +228,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PEER_REFUSE_AFTER_JOIN",
+        "test-only capture peer that refuses after proving membership and before self-dump",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
         "test-only capture peer that works far longer than the rendezvous stall window before committing",
         Flag

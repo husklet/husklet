@@ -5572,6 +5572,79 @@ fn unwaited_child_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn refusal_resume_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-refusal-resume-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-refusal-resume-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/refusal_resume.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+/// A participant that refuses before its self-dump has consumed no state. The failed generation must
+/// therefore release the complete original tree, including the coordinating init, and preserve a nested
+/// child's pending wait status. Merely observing `CaptureRefused` is insufficient: the production failure
+/// was a truthful refusal followed by the coordinator exiting, which still destroyed the live workspace.
+#[test]
+fn a_pre_self_dump_refusal_resumes_the_original_tree_with_pending_status_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, refusal_resume_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let port = Arc::new(TestTerminal::default());
+        let capture = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(
+                    &executable,
+                    &release,
+                    &final_release,
+                    &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_REFUSE_AFTER_JOIN"],
+                ),
+                StandardStreams::default().with_terminal(Terminal::new(port.clone(), 24, 80).unwrap()),
+                store.clone(),
+                store,
+            )
+            .unwrap(),
+        );
+        capture.start().unwrap();
+        port.wait_output(b"REFUSAL-MEMBER-ZOMBIE");
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("the forced pre-self-dump member refusal was reported as a successful checkpoint");
+        port.input(b"\n");
+        let resumed = wait_result_bounded(&capture, "pre-self-dump refusal recovery")
+            .unwrap_or_else(|error| panic!("{isa:?} original tree did not resume: {error:?}: {}", port.output()));
+        assert_eq!(resumed.guest_status, 0, "{isa:?}: {}", port.output());
+        assert!(
+            port.output().contains("REFUSAL-MEMBER-REAPED"),
+            "{isa:?}: {}",
+            port.output()
+        );
+        assert!(
+            port.output().contains("REFUSAL-COORDINATOR-RESUMED"),
+            "{isa:?}: coordinator did not survive the recoverable refusal: {}",
+            port.output()
+        );
+    }
+}
+
 /// A child exit status the capture's own reap destroys survives into the restored tree.
 ///
 /// The coordinator reaps with `waitpid(-1, WNOHANG)` from inside the container init, which IS a guest
@@ -5710,7 +5783,22 @@ fn a_capture_that_cannot_preserve_a_status_it_destroyed_refuses_on_both_isas() {
         let refusal = capture
             .capture_checkpoint_until(checkpoint_deadline())
             .expect_err("a capture that destroyed a child exit status it could not carry was reported as successful");
-        let _ = capture.wait();
+        // This refusal occurs after waitpid consumed the kernel corpse. Recovery is no longer honest:
+        // even if the host writes the fixture's release byte, the original parent must not be resumed
+        // with an invented or missing status. The terminal outcome is the API boundary presented to the
+        // workspace close path; it must never be mistaken for a successful rollback.
+        port.input(b"\n");
+        let terminal = capture.wait();
+        assert!(
+            !matches!(&terminal, Ok(exit) if exit.guest_status == 0),
+            "{isa:?} claimed successful rollback after destructively consuming a child status: {}",
+            port.output()
+        );
+        assert!(
+            !port.output().contains("UNWAITED-CHILD-REAPED"),
+            "{isa:?} resumed a parent after destroying the status it needed: {}",
+            port.output()
+        );
         let stored = store.0.lock().unwrap();
         assert!(
             !stored.contains_key("MANIFEST"),

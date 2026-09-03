@@ -1735,12 +1735,19 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     // and the rendezvous exemption must not cover it -- the capture has to refuse. Placed after the
     // registration round trip and gated on `park` so only a peer, never the coordinator, can take it.
     if (park && hl_option_get("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN") != NULL) _exit(0);
+    /* Test-only boundary probe. Unlike PEER_EXIT_AFTER_JOIN this participant remains alive and has
+       consumed no guest state. A failed generation must release it back into the original tree. */
+    int forced_refusal = park && hl_option_get("HL_CKPT_TEST_PEER_REFUSE_AFTER_JOIN") != NULL;
+    if (forced_refusal) {
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        ckpt_member_refuse(procdir, "pass the pre-self-dump refusal boundary (test hook)");
+    }
     /* CPU images contain engine pointers to immutable seccomp filter nodes.
        Restoring those addresses would either remove the sandbox or dereference
        stale host memory. Until the filter bytecode is part of the checkpoint
        format, refuse the capture while every task is stopped and publish
        nothing. */
-    for (int i = 0; i < count; i++)
+    for (int i = 0; !forced_refusal && i < count; i++)
         if (live[i]->seccomp_mode != 0 || live[i]->seccomp_filters != NULL) {
             fprintf(stderr, "[ckpt] refuse: CPU %d has unserialized seccomp state (mode=%d filters=%p)\n", i,
                     live[i]->seccomp_mode, (void *)live[i]->seccomp_filters);
@@ -1749,14 +1756,14 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
             atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
             return -1;
         }
-    struct cpu *images = malloc((size_t)count * sizeof *images);
-    if (!images) {
+    struct cpu *images = forced_refusal ? NULL : malloc((size_t)count * sizeof *images);
+    if (!forced_refusal && !images) {
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
     }
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; !forced_refusal && i < count; i++) {
         images[i] = *live[i];
         /* Written only while translated code is active and consumed before returning to the dispatcher.
            A stopped checkpoint must not serialize an incomplete diagnostic transaction. */
@@ -1766,8 +1773,8 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     }
     g_ckpt_cpu_images = images;
     g_ckpt_cpu_count = count;
-    int result = ckpt_dump_self_locked(c, procdir);
-    if (result != 0) {
+    int result = forced_refusal ? -1 : ckpt_dump_self_locked(c, procdir);
+    if (result != 0 && !forced_refusal) {
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         if (park) ckpt_member_refuse(procdir, g_ckpt_member_refusal ? g_ckpt_member_refusal : "complete its dump");
     }
