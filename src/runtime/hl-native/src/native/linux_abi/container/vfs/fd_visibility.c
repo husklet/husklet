@@ -103,6 +103,7 @@ static int fdvis_stalled_parent_test(void);
 static int fdvis_corpse_holder_test(void);
 static int fdvis_recursive_identity_test(void);
 static int fdvis_sparse_cleanup_test(void);
+static int fdvis_sparse_fork_cleanup_test(void);
 #endif
 
 static struct fdpath_slot *fdpath_find(uint64_t key, uint64_t owner_start_ns, int claim) {
@@ -384,6 +385,7 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
     if (scenario == 12) return fdvis_recursive_identity_test();
     if (scenario == 14) return fdvis_index_contract_test();
     if (scenario == 15) return fdvis_sparse_cleanup_test();
+    if (scenario == 16) return fdvis_sparse_fork_cleanup_test();
     if (scenario >= 8 && scenario <= 11) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
@@ -1968,4 +1970,104 @@ static int fdvis_sparse_cleanup_test(void) {
     free(control);
     return clean;
 }
+
+#if !defined(_WIN32)
+/* The unit-only cleanup scenario proves both publication seams, but the optimization also relies on an
+ * OS fork copying this process-private bitmap while the parent publishes a distinct set of shared child
+ * rows. Exercise that boundary with descriptors in distant bitmap words, then add one descriptor in the
+ * child. The child cleanup must remove all three child rows without touching either the parent's rows or
+ * an unrelated peer. */
+static int fdvis_sparse_fork_cleanup_test(void) {
+    struct fdvis_slot *slots =
+        mmap(NULL, sizeof *slots * FDVIS_N, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct fdvis_index_slot *index = mmap(NULL, sizeof *index * FDVIS_INDEX_N, PROT_READ | PROT_WRITE,
+                                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct fdpath_slot *paths =
+        mmap(NULL, sizeof *paths * FDPATH_N, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct fdvis_control *control =
+        mmap(NULL, sizeof *control, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (slots == MAP_FAILED || index == MAP_FAILED || paths == MAP_FAILED || control == MAP_FAILED) {
+        if (slots != MAP_FAILED) (void)munmap(slots, sizeof *slots * FDVIS_N);
+        if (index != MAP_FAILED) (void)munmap(index, sizeof *index * FDVIS_INDEX_N);
+        if (paths != MAP_FAILED) (void)munmap(paths, sizeof *paths * FDPATH_N);
+        if (control != MAP_FAILED) (void)munmap(control, sizeof *control);
+        return 0;
+    }
+    memset(slots, 0, sizeof *slots * FDVIS_N);
+    memset(index, 0, sizeof *index * FDVIS_INDEX_N);
+    memset(paths, 0, sizeof *paths * FDPATH_N);
+    memset(control, 0, sizeof *control);
+    struct fdvis_slot *saved_slots = g_fdvis;
+    struct fdvis_index_slot *saved_index = g_fdvis_index;
+    struct fdpath_slot *saved_paths = g_fdpaths;
+    struct fdvis_control *saved_control = g_fdvis_control;
+    uint64_t saved_owned[FDVIS_OWNED_WORDS];
+    memcpy(saved_owned, g_fdvis_owned, sizeof saved_owned);
+    memset(g_fdvis_owned, 0, sizeof g_fdvis_owned);
+    g_fdvis = slots;
+    g_fdvis_index = index;
+    g_fdpaths = paths;
+    g_fdvis_control = control;
+
+    const int low_fd = 3;
+    const int high_fd = HL_NFD - 11;
+    const int child_fd = 130;
+    int parent = 0;
+    uint64_t parent_start = 0;
+    (void)fdvis_self(&parent, &parent_start);
+    int low_status = proc_fdvis_publish(low_fd, HL_HOST_FD_FILE, 201, 202);
+    int high_status = proc_fdvis_publish(high_fd, HL_HOST_FD_PIPE, 203, 204);
+    int indexed = fdvis_index_rebuild_locked();
+    struct fdvis_fork_plan plan;
+    int prepared = low_status <= 0 && high_status <= 0 && indexed ? proc_fdvis_fork_prepare(&plan) : -1;
+    /* Install the unrelated row after prepare's deliberate stale-owner sweep: cleanup, not recovery, is
+     * the operation this fixture is isolating. */
+    const int peer = parent == INT_MAX ? parent - 1 : parent + 1;
+    unsigned peer_slot = FDVIS_N;
+    for (unsigned slot = FDVIS_N; slot > 0; --slot)
+        if (slots[slot - 1].key == 0) {
+            peer_slot = slot - 1;
+            break;
+        }
+    if (peer_slot < FDVIS_N) slots[peer_slot] = (struct fdvis_slot){
+        .key = fdvis_key(peer, 7), .generation = 1, .owner_start_ns = parent_start, .kind = HL_HOST_FD_FILE};
+    indexed = indexed && peer_slot < FDVIS_N && fdvis_index_rebuild_locked();
+    pid_t child = prepared == 0 ? fork() : -1;
+    if (child == 0) {
+        int status = proc_fdvis_after_fork(&plan, (int)getpid(), 1);
+        int published = status == 0 && proc_fdvis_publish(child_fd, HL_HOST_FD_OTHER, 205, 206) <= 0;
+        proc_fdvis_cleanup();
+        _exit(published ? 0 : 1);
+    }
+    int parent_publish = child > 0 ? proc_fdvis_after_fork(&plan, (int)child, 0) : -1;
+    int child_status = 1;
+    if (child > 0)
+        while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {}
+    int child_row_remains = 0;
+    for (unsigned slot = 0; child > 0 && slot < FDVIS_N; ++slot)
+        if ((int)(uint32_t)(slots[slot].key >> 32) == (int)child) child_row_remains = 1;
+    int clean = indexed && child > 0 && parent_publish == 0 && WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0 &&
+                !child_row_remains &&
+                fdvis_find(fdvis_key(parent, low_fd), parent_start, 0) != NULL &&
+                fdvis_find(fdvis_key(parent, high_fd), parent_start, 0) != NULL &&
+                fdvis_find(fdvis_key(peer, 7), parent_start, 0) == &slots[peer_slot];
+
+    if (prepared == 0) free(plan.entries);
+    g_fdvis = saved_slots;
+    g_fdvis_index = saved_index;
+    g_fdpaths = saved_paths;
+    g_fdvis_control = saved_control;
+    memcpy(g_fdvis_owned, saved_owned, sizeof saved_owned);
+    (void)munmap(slots, sizeof *slots * FDVIS_N);
+    (void)munmap(index, sizeof *index * FDVIS_INDEX_N);
+    (void)munmap(paths, sizeof *paths * FDPATH_N);
+    (void)munmap(control, sizeof *control);
+    return clean;
+}
+#else
+static int fdvis_sparse_fork_cleanup_test(void) {
+    /* This scenario proves copy-on-fork inheritance, which the Windows host does not provide. */
+    return 1;
+}
+#endif
 #endif
