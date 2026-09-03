@@ -2313,6 +2313,19 @@ static struct {
     _Atomic int in_translated;
     _Atomic int departing;
 } g_stw_threads[STW_MAXTHREAD];
+/* Exclusive upper bound on every slot which may have reached `used = 1`.
+   Slots are allocated under g_stw_reg_lock, but fork snapshots the registry
+   outside the allocator's control; publish the bound before `used`.  Removal
+   deliberately leaves the bound monotonic so a sparse hole cannot hide a
+   later live slot from the child reset. */
+static _Atomic unsigned g_stw_highwater;
+
+static void stw_highwater_publish(unsigned exclusive) {
+    unsigned current = atomic_load_explicit(&g_stw_highwater, memory_order_relaxed);
+    while (current < exclusive &&
+           !atomic_compare_exchange_weak_explicit(&g_stw_highwater, &current, exclusive,
+                                                  memory_order_release, memory_order_relaxed)) {}
+}
 
 static pthread_mutex_t g_stw_reg_lock = PTHREAD_MUTEX_INITIALIZER;
 /* A checkpoint releases g_jit_lock while its dispatcher gate remains active.
@@ -2416,6 +2429,17 @@ _Static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "signal recovery requires lock-fre
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2 && sizeof(uint32_t) == sizeof(unsigned int),
                "signal recovery requires a lock-free 32-bit owner count");
 static jit_body_owner_set g_body_owners[STW_RETIRED_MAX + 1];
+/* Body-owner slots can contain holes after generation reclamation.  Keep a
+   monotonic bound rather than a count: clear must visit every possibly
+   published slot, while avoiding the untouched capacity tail. */
+static _Atomic unsigned g_body_owner_highwater;
+
+static void jit_body_owner_highwater_publish(unsigned exclusive) {
+    unsigned current = atomic_load_explicit(&g_body_owner_highwater, memory_order_relaxed);
+    while (current < exclusive &&
+           !atomic_compare_exchange_weak_explicit(&g_body_owner_highwater, &current, exclusive,
+                                                  memory_order_release, memory_order_relaxed)) {}
+}
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic int g_body_owner_publish_pause;
 static _Atomic int g_body_owner_publish_slot;
@@ -2464,6 +2488,7 @@ static jit_body_owner_set *jit_body_owner_set_for(uint64_t generation, int creat
         while (atomic_load_explicit(&g_body_owner_publish_pause, memory_order_acquire) == 2) sched_yield();
     }
 #endif
+    jit_body_owner_highwater_publish((unsigned)(empty - g_body_owners) + 1u);
     atomic_store_explicit(&empty->entry, entries, memory_order_release);
     return empty;
 }
@@ -2687,7 +2712,10 @@ static void jit_cache_rewind_in_place(void) {
 }
 
 static void jit_body_owner_clear(void) {
-    for (size_t i = 0; i < sizeof(g_body_owners) / sizeof(g_body_owners[0]); i++) {
+    unsigned highwater = atomic_load_explicit(&g_body_owner_highwater, memory_order_acquire);
+    if (highwater > sizeof(g_body_owners) / sizeof(g_body_owners[0]))
+        highwater = sizeof(g_body_owners) / sizeof(g_body_owners[0]);
+    for (unsigned i = 0; i < highwater; i++) {
         /* Called only in the single surviving fork child or under dispatcher
            teardown/STW, when no signal lookup can still hold this pointer. */
         jit_body_owner_entry *entries =
@@ -2698,6 +2726,7 @@ static void jit_body_owner_clear(void) {
         g_body_owners[i].rw2rx = 0;
         atomic_store_explicit(&g_body_owners[i].count, 0, memory_order_relaxed);
     }
+    atomic_store_explicit(&g_body_owner_highwater, 0, memory_order_release);
 }
 
 static void jit_body_owner_after_fork(int preserve) {
@@ -2874,6 +2903,7 @@ static void stw_register(struct cpu *cpu) {
 #ifdef G_STW_CPU_SLOT
             cpu->stw_slot = i;
 #endif
+            stw_highwater_publish((unsigned)i + 1u);
             atomic_store_explicit(&g_stw_threads[i].used, 1, memory_order_release);
             break;
         }
@@ -3420,7 +3450,9 @@ static void stw_after_fork(void) {
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_relaxed);
     pthread_mutex_init(&g_stw_reg_lock, NULL);
     pthread_mutex_init(&g_quiesce_lock, NULL);
-    for (int i = 0; i < STW_MAXTHREAD; i++)
+    unsigned highwater = atomic_load_explicit(&g_stw_highwater, memory_order_acquire);
+    if (highwater > STW_MAXTHREAD) highwater = STW_MAXTHREAD;
+    for (unsigned i = 0; i < highwater; i++)
         atomic_store_explicit(&g_stw_threads[i].used, 0, memory_order_relaxed);
     g_stw_threads[0].th = pthread_self();
     g_stw_threads[0].cpu = survivor;
@@ -3428,6 +3460,7 @@ static void stw_after_fork(void) {
     atomic_store_explicit(&g_stw_threads[0].in_translated, 0, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].departing, 0, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].used, 1, memory_order_relaxed);
+    atomic_store_explicit(&g_stw_highwater, 1, memory_order_release);
     g_my_exec_gen = &g_stw_threads[0].exec_gen;
     g_my_stw_slot = 0;
 #ifdef G_STW_CPU_SLOT
@@ -3445,9 +3478,18 @@ static int stw_translated_lifecycle_test(void) {
     struct cpu cpu = { 0 };
 #endif
     int saved_threaded = g_threaded;
+    /* Force the production allocator past a sparse occupied prefix.  The
+       child reset must clear that real high slot, not merely the survivor's
+       replacement at slot zero. */
+    enum { sparse_slot = 7 };
+    for (int i = 0; i < sparse_slot; i++)
+        atomic_store_explicit(&g_stw_threads[i].used, 1, memory_order_relaxed);
+    stw_highwater_publish(sparse_slot);
     stw_register(&cpu);
     int slot = STW_SLOT(&cpu);
-    if (slot < 0 || g_my_stw_slot != slot || g_stw_threads[slot].cpu != &cpu) return 30;
+    if (slot != sparse_slot || g_my_stw_slot != slot || g_stw_threads[slot].cpu != &cpu ||
+        atomic_load_explicit(&g_stw_highwater, memory_order_acquire) != sparse_slot + 1)
+        return 30;
 
     /* A single-thread dispatcher has no peer to quiesce and must not publish
        translated ownership merely to run a block. */
@@ -3489,7 +3531,10 @@ static int stw_translated_lifecycle_test(void) {
     if (g_my_stw_slot != slot) return 33;
 #endif
     stw_after_fork();
-    if (g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu) return 34;
+    if (g_my_stw_slot != 0 || g_stw_threads[0].cpu != &cpu ||
+        atomic_load_explicit(&g_stw_threads[sparse_slot].used, memory_order_relaxed) ||
+        atomic_load_explicit(&g_stw_highwater, memory_order_acquire) != 1)
+        return 34;
 #ifdef G_STW_CPU_SLOT
     if (cpu.stw_slot != 0) return 34;
 #endif
@@ -3500,6 +3545,13 @@ static int stw_translated_lifecycle_test(void) {
 #ifdef G_STW_CPU_SLOT
     if (cpu.stw_slot != -1) return 35;
 #endif
+    uint64_t owner_generation = UINT64_MAX - 17u;
+    jit_body_owner_set *owner = jit_body_owner_set_for(owner_generation, 1);
+    if (owner == NULL || atomic_load_explicit(&g_body_owner_highwater, memory_order_acquire) == 0) return 39;
+    jit_body_owner_clear();
+    if (atomic_load_explicit(&owner->entry, memory_order_acquire) != NULL ||
+        atomic_load_explicit(&g_body_owner_highwater, memory_order_acquire) != 0)
+        return 40;
     return 0;
 }
 #endif
