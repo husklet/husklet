@@ -156,6 +156,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 51, kind: KIND.event, payload: changeInvocation(requests, 'Hostname (optional)', 'worker-1.internal') }));
     peer.write(encode({ channel: 52, kind: KIND.event, payload: changeInvocation(requests, 'Run as user (optional)', '1000:1000') }));
     peer.write(encode({ channel: 53, kind: KIND.event, payload: changeInvocation(requests, 'Labels JSON (optional)', '[["role","worker"],["tier","backend"]]') }));
+    peer.write(encode({ channel: 54, kind: KIND.event, payload: changeInvocation(requests, 'Entrypoint argv JSON (optional)', '["/bin/sh","-lc"]') }));
     peer.write(encode({ channel: 43, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON (optional)', '["sh","-lc","printf ready"]') }));
     peer.write(encode({ channel: 44, kind: KIND.event, payload: changeInvocation(requests, 'Environment pairs JSON (optional)', '[["MODE","test"],["EMPTY",""]]') }));
     peer.write(encode({ channel: 45, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/workspace/app') }));
@@ -169,7 +170,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 28, kind: KIND.event, payload: invocation(requests, 'Create and start') }));
     await until(() => calls.includes('container_create') && calls.includes('container_start'));
     assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
-      image: 'alpine:3.20', name: 'worker', entrypoint: null, command: ['sh', '-lc', 'printf ready'], environment: [['MODE', 'test'], ['EMPTY', '']], working_directory: '/workspace/app',
+      image: 'alpine:3.20', name: 'worker', entrypoint: ['/bin/sh', '-lc'], command: ['sh', '-lc', 'printf ready'], environment: [['MODE', 'test'], ['EMPTY', '']], working_directory: '/workspace/app',
       hostname: 'worker-1.internal', user: '1000:1000', labels: [['role', 'worker'], ['tier', 'backend']], mounts: [
         { volume: 'cache', target: '/cache', read_only: true },
         { volume: 'data', target: '/srv/data', read_only: false },

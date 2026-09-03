@@ -148,6 +148,16 @@ function containerCreateOptions(draft) {
       throw new Error('Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.');
     }
   }
+  const entrypointText = draft.entrypoint.trim();
+  let entrypoint;
+  if (entrypointText) {
+    try { entrypoint = JSON.parse(entrypointText); } catch { throw new Error('Entrypoint must be valid JSON, such as ["/bin/sh","-lc"].'); }
+    if (!Array.isArray(entrypoint) || entrypoint.length === 0 || entrypoint.length > 64 || entrypoint[0] === ''
+      || entrypoint.some((argument) => typeof argument !== 'string' || argument.includes('\0') || bytes(argument) > 4_096)
+      || entrypoint.reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+      throw new Error('Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.');
+    }
+  }
   const commandText = draft.command.trim();
   let command;
   if (commandText) {
@@ -157,6 +167,9 @@ function containerCreateOptions(draft) {
       || command.reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
       throw new Error('Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.');
     }
+  }
+  if ([...(entrypoint ?? []), ...(command ?? [])].reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+    throw new Error('Entrypoint and command together must contain at most 32768 bytes.');
   }
   const environmentText = draft.environment.trim();
   let environment;
@@ -214,6 +227,7 @@ function containerCreateOptions(draft) {
   }
   return {
     ...(hostname ? { hostname } : {}),
+    ...(entrypoint ? { entrypoint } : {}),
     ...(command ? { command } : {}),
     ...(environment ? { environment } : {}),
     ...(workingDirectory ? { working_directory: workingDirectory } : {}),
@@ -247,7 +261,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({
-    image: '', name: '', hostname: '', user: '', labels: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+    image: '', name: '', hostname: '', user: '', labels: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
   });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -300,7 +314,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
       setCreated(null); setDraft({
-        image: '', name: '', hostname: '', user: '', labels: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+        image: '', name: '', hostname: '', user: '', labels: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
       });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
@@ -332,6 +346,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.hostname, placeholder: 'Hostname (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, hostname: String(event.value ?? '') })) }),
         h(Entry, { value: draft.user, placeholder: 'Run as user (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, user: String(event.value ?? '') })) }),
         h(Entry, { value: draft.labels, placeholder: 'Labels JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, labels: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.entrypoint, placeholder: 'Entrypoint argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, entrypoint: String(event.value ?? '') })) }),
         h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
         h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),
         h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }),

@@ -647,6 +647,52 @@ test('container creation validates bounded labels and retains them until success
   assert.equal(fieldValue(stage, placeholder), '');
 });
 
+test('container creation validates entrypoint argv and retains it until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('entrypoint temporarily unavailable');
+      return 'entrypoint-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'entrypoint');
+  const placeholder = 'Entrypoint argv JSON (optional)';
+  const error = 'Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.';
+  for (const invalid of [
+    '[]', '[""]', '[1]', JSON.stringify(['x'.repeat(4097)]),
+    JSON.stringify(Array.from({ length: 65 }, () => 'x')),
+  ]) {
+    change(stage, placeholder, invalid);
+    assert.ok(labelled(stage, error));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, placeholder, JSON.stringify(Array.from({ length: 64 }, () => 'x')));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 64-argument boundary is accepted');
+  change(stage, placeholder, JSON.stringify(['x'.repeat(4096)]));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact per-argument byte boundary is accepted');
+  change(stage, placeholder, JSON.stringify(Array.from({ length: 4 }, () => 'e'.repeat(4096))));
+  change(stage, 'Command argv JSON (optional)', JSON.stringify(Array.from({ length: 5 }, () => 'c'.repeat(4096))));
+  assert.ok(labelled(stage, 'Entrypoint and command together must contain at most 32768 bytes.'));
+  change(stage, 'Command argv JSON (optional)', JSON.stringify(Array.from({ length: 4 }, () => 'c'.repeat(4096))));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact combined 32768-byte boundary is accepted');
+  change(stage, placeholder, '["/bin/sh","-lc"]');
+  change(stage, 'Command argv JSON (optional)', '["printf ready"]');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'entrypoint temporarily unavailable'));
+  assert.equal(fieldValue(stage, placeholder), '["/bin/sh","-lc"]');
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'entrypoint', entrypoint: ['/bin/sh', '-lc'], command: ['printf ready'] };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'entrypoint-container'], ['reload']]);
+  assert.equal(fieldValue(stage, placeholder), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
