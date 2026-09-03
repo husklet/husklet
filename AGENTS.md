@@ -503,10 +503,13 @@ disappeared.  Keep the holder outside that boundary instead:
 
     flock -s /var/tmp/husklet-box.lock -c 'nix develop -c cargo test ...'
 
-Verified with `lslocks`: the descriptor form showed no holder during the Nix
-build; the outer `flock` process remained a `FLOCK READ` holder for the whole
-inner command.  After launching a new wrapper shape, inspect the live holder
-once rather than assuming descriptor inheritance crosses every tool.
+Verified behaviorally: `nix develop` can close inherited nonstandard
+descriptors, while an outer `flock` process remains the holder for the whole
+inner command. Do not use absence from `lslocks` as evidence that a BSD
+`flock` is absent: on this host `exec 9>file; flock -x 9; sleep` is omitted
+from `lslocks` even though an independent `flock -n -s file -c true` is
+refused until the shell exits. After launching a new wrapper shape, probe it
+with a competing nonblocking lock; exclusion is the property that matters.
 
 **The descriptor is inherited, so killing the script does not release the
 lock.** Every child gets fd 9, and the lock lives until the last inheritor

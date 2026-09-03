@@ -704,6 +704,36 @@ mod tests {
         assert_eq!(probes.get(), 2);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn measurement_excludes_a_competing_shared_lock_process_for_its_lifetime() {
+        let directory = tempfile::tempdir().unwrap();
+        let intent = directory.path().join("wanted");
+        let box_path = directory.path().join("box");
+        let measurement = Measurement::acquire_with(
+            &intent,
+            &box_path,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            |_| Ok(true),
+        )
+        .unwrap();
+        let compete = || {
+            std::process::Command::new("flock")
+                .arg("-n")
+                .arg("-s")
+                .arg(&box_path)
+                .args(["-c", "true"])
+                .status()
+                .unwrap()
+                .success()
+        };
+
+        assert!(!compete(), "a shared builder entered during measurement");
+        drop(measurement);
+        assert!(compete(), "measurement drop did not release the box lock");
+    }
+
     #[test]
     fn acquisition_timeout_is_one_deadline_across_quiet_and_box_lock() {
         let directory = tempfile::tempdir().unwrap();
