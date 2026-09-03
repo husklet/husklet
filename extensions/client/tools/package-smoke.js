@@ -332,7 +332,7 @@ try {
   for (const required of [
     'package.json', 'README.md', 'API.md', 'LICENSE', 'src/index.js', 'src/index.d.ts',
     'src/generated-protocol.js', 'src/generated-protocol.d.ts', 'src/semantic.js',
-    'src/session.js', 'src/wire.js', 'examples/starter/Dockerfile',
+    'src/session.js', 'src/wire.js', 'examples/starter/.dockerignore', 'examples/starter/Dockerfile',
     'examples/starter/extension.toml', 'examples/starter/main.js', 'examples/starter/package.json',
   ]) assert(names.has(required), `npm package omits ${required}`);
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')),
@@ -368,7 +368,11 @@ try {
   const starter = path.join(scratch, 'starter');
   fs.cpSync(path.join(installedClient, 'examples/starter'), starter, { recursive: true });
   const starterManifest = JSON.parse(fs.readFileSync(path.join(starter, 'package.json')));
+  const starterDockerignore = fs.readFileSync(path.join(starter, '.dockerignore'), 'utf8');
   assert.equal(starterManifest.engines.node, manifest.engines.node, 'starter Node requirement drifted from the installed client');
+  assert.equal(starterDockerignore,
+    'node_modules/*\n!node_modules/@husklet/\nnode_modules/@husklet/*\n!node_modules/@husklet/client/\nnpm-debug.log*\n.git\n.gitignore\n',
+    'starter image context must include only the installed client SDK from node_modules');
   assert.equal(starterManifest.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterManifest.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/client/protocol\')])"');
   execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--offline', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
