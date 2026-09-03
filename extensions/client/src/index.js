@@ -698,6 +698,46 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.closeAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal close requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal close wait timeout must be between 1 and 30000ms');
+    }
+    let pending = false; let wake;
+    const next = () => pending ? Promise.resolve() : new Promise((resolve) => { wake = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot !== slot
+        || (change.generation === generation && change.revision === revision)) return;
+      pending = true; wake?.(); wake = undefined;
+    });
+    const deadline = Date.now() + timeoutMs;
+    try {
+      await api.terminal.closeObserved(slot, generation, revision);
+      while (true) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { changed: false, slot, after: { generation, revision } };
+        let timer;
+        const event = await Promise.race([
+          next().then(() => true),
+          new Promise((resolve) => { timer = setTimeout(() => resolve(false), remaining); }),
+        ]);
+        clearTimeout(timer);
+        if (!event) return { changed: false, slot, after: { generation, revision } };
+        pending = false;
+        const inventory = await api.terminal.panes();
+        const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+        if (!pane && !inventory.truncated) return { changed: true, slot };
+        if (pane && pane.generation !== generation) {
+          throw new Error('closed pane slot was replaced before complete absence was observed');
+        }
+      }
+    } finally {
+      await stop();
+    }
+  };
   api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
     if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {

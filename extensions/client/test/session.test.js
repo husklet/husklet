@@ -747,6 +747,57 @@ test('real Unix splitAndWait arms before CAS, verifies the returned slot, and di
   }
 });
 
+test('real Unix closeAndWait requires complete absence and disposes success and timeout', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-close-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-close'; let inventoryReads = 0; let closeRequests = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_close_pane_observed') {
+        closeRequests += 1;
+        assert.deepEqual(frame.payload.with, { slot, generation: 6, revision: 10 });
+        if (closeRequests === 1) {
+          socket.write(encode({ channel: 70, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot, kind: 'terminal', generation: 6, revision: 11, coalesced: 0,
+          } } }));
+        }
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        inventoryReads += 1;
+        const incomplete = inventoryReads === 1;
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+          panes: [], truncated: incomplete,
+        } } }));
+        if (incomplete) setTimeout(() => socket.write(encode({ channel: 71, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 6, revision: 12, coalesced: 0 },
+        } })), 1);
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'close-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.closeAndWait(slot, 6, 10, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or close');
+    assert.deepEqual(await terminal.closeAndWait(slot, 6, 10), { changed: true, slot });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_close_pane_observed', 'pane_list', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.closeAndWait(slot, 6, 10, { timeoutMs: 5 }), {
+      changed: false, slot, after: { generation: 6, revision: 10 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_close_pane_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

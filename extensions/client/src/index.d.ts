@@ -350,6 +350,12 @@ export interface WorkspaceApi {
     resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
+    /** Arm pane changes before CAS close and prove absence only from a complete inventory. */
+    closeAndWait(slot: string, generation: number, revision: number,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; slot: string }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     focus(slot: string): Promise<void>;
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;

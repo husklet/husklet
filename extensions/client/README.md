@@ -99,6 +99,17 @@ const split = await host.terminal.splitAndWait(
 if (split.changed) console.log(split.pane.slot);
 ```
 
+Destructive close uses complete pane inventory as its absence authority. A
+truncated inventory never settles the operation, and replacement of the slot is
+reported instead of being mistaken for successful absence:
+
+```js
+const closed = await host.terminal.closeAndWait(
+  pane.slot, pane.generation, pane.revision, { timeoutMs: 10_000 },
+);
+if (!closed.changed) console.log('close was accepted but absence was not observed');
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 
