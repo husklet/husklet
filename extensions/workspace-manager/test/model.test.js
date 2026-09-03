@@ -6,8 +6,15 @@ import {
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
   NETWORK_DETAIL_SOURCE, NETWORK_DETAIL_WINDOW_LIMIT, NetworkDetailsSource,
   VOLUME_DETAIL_SOURCE, VOLUME_DETAIL_WINDOW_LIMIT, VolumeDetailsSource,
-  bounded, bytes, logText, processRows, resourceReference, shortId,
+  bounded, bytes, containerNameError, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
+
+test('container rename validation matches the native byte grammar exactly', () => {
+  for (const valid of ['a', 'Worker_2.prod', `a${'-'.repeat(127)}`]) assert.equal(containerNameError(valid), '');
+  for (const invalid of ['', '.worker', '-worker', '_worker', 'bad name', 'naïve', `a${'-'.repeat(128)}`]) {
+    assert.match(containerNameError(invalid), /1–128 ASCII/);
+  }
+});
 
 test('records are bounded and omissions stay visible', () => {
   const view = bounded(Array.from({ length: 205 }, (_, index) => index));

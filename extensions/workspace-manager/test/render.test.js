@@ -309,6 +309,48 @@ test('container stop and kill cannot call the API before final confirmation', as
   assert.deepEqual(calls.at(-1), ['kill', immutable, 'SIGKILL']);
 });
 
+test('container rename validates locally, retries failure, and preserves immutable authority until refresh', async () => {
+  const immutable = 'a'.repeat(64);
+  const calls = [];
+  let attempts = 0;
+  const controlled = { containers: {
+    rename: async (...args) => {
+      calls.push(['rename', ...args]);
+      attempts += 1;
+      if (attempts === 1) throw new Error('name catalogue temporarily unavailable');
+    },
+  } };
+  const resource = {
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
+    loading: false, error: null, reload: async () => calls.push(['reload']),
+  };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  await settled();
+  assert.ok(labelled(stage, `Current name: api. Immutable ID: ${immutable}`));
+
+  change(stage, `New name for ${immutable.slice(0, 12)}`, '.invalid');
+  assert.ok(labelled(stage, 'Container name must contain 1–128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit.'));
+  assert.equal(isEnabled(stage, 'Rename'), false);
+  assert.deepEqual(calls, [], 'invalid input never reaches the typed API');
+
+  change(stage, `New name for ${immutable.slice(0, 12)}`, 'worker_2.prod');
+  invoke(stage, 'Rename');
+  assert.ok(labelled(stage, 'Renaming…'), 'the in-flight operation is explicit');
+  assert.equal(isEnabled(stage, 'Renaming…'), false);
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'name catalogue temporarily unavailable'));
+  assert.ok(labelled(stage, 'api'), 'failed rename does not optimistically replace inventory identity');
+  invoke(stage, 'Retry rename'); await settled(); await settled();
+  assert.deepEqual(calls, [
+    ['rename', immutable, 'worker_2.prod'],
+    ['rename', immutable, 'worker_2.prod'],
+    ['reload'],
+  ]);
+  assert.ok(labelled(stage, 'Renamed to worker_2.prod. Inventory identity will update after the authoritative refresh.'));
+  assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
+});
+
 test('container creation retains exact identity and retries only start after a partial failure', async () => {
   const calls = [];
   let starts = 0;
@@ -620,6 +662,12 @@ function isDestructive(stage, label) {
   const node = labelled(stage, label)?.SetProp.id;
   return stage.frames.flatMap((frame) => frame.patches).some((patch) =>
     'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Destructive' && patch.SetProp.value?.Flag === true);
+}
+
+function isEnabled(stage, label) {
+  const node = labelled(stage, label)?.SetProp.id;
+  return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Enabled').at(-1)?.SetProp.value?.Flag;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

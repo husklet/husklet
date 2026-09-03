@@ -2,6 +2,15 @@
 export const RECORD_LIMIT = 200;
 export const LOG_LIMIT = 400;
 
+const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+/** The native container-name grammar, expressed as a user-facing validation result. */
+export function containerNameError(name) {
+  return typeof name === 'string' && CONTAINER_NAME.test(name)
+    ? ''
+    : 'Container name must contain 1–128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit.';
+}
+
 /** A bounded view plus the number honestly omitted. */
 export function bounded(records, limit = RECORD_LIMIT) {
   const all = Array.isArray(records) ? records : [];

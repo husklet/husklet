@@ -110,6 +110,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const imageRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 11, kind: KIND.event, payload: invocation(requests, 'Containers') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > imageRenders);
+    peer.write(encode({ channel: 34, kind: KIND.event, payload: changeInvocation(requests, `New name for ${containerId.slice(0, 12)}`, 'api-renamed') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text === 'api-renamed')));
+    peer.write(encode({ channel: 35, kind: KIND.event, payload: invocation(requests, 'Rename') }));
+    await until(() => calls.includes('container_rename'));
+    assert.deepEqual(requests.find((request) => request.call === 'container_rename').with, { id: containerId, name: 'api-renamed' });
     peer.write(encode({ channel: 26, kind: KIND.event, payload: changeInvocation(requests, 'Image reference', 'alpine:3.20') }));
     peer.write(encode({ channel: 27, kind: KIND.event, payload: changeInvocation(requests, 'Container name', 'worker') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
