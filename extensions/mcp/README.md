@@ -99,6 +99,13 @@ so a syntactically complete response never silently overclaims completeness.
 Container logs require the complete immutable container ID and belong to that
 container's captured output; execution logs belong to the exact immutable
 execution ID.
+Inventory tools never inherit the generic result formatter's silent clipping.
+Execution and pane catalogues carry host `truncated` fields, which MCP promotes
+when its 200-item bound omits rows. Workspace, container, image, volume, network,
+extension, terminal-tab, and topology results have no compatible completeness
+field, so MCP fails closed if its item, nesting, string, or 65,536-byte response
+bound would omit data. A successful response from those tools is therefore the
+complete host-provided inventory; host-side bounds still apply where documented.
 Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
 complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
 re-resolved to a different image between inspection and removal.

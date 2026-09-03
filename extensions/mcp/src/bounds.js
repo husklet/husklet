@@ -2,6 +2,7 @@ const SECRET = /(authorization|cookie|password|secret|token|credential|private.?
 const STRING_LIMIT = 8192;
 const ARRAY_LIMIT = 200;
 export const OUTPUT_LIMIT = 64 * 1024;
+export const INVENTORY_ITEMS_LIMIT = 200;
 const LOG_STREAM_LIMIT = 7_500;
 export const FILE_BYTES_LIMIT = 12_000;
 
@@ -55,4 +56,41 @@ export function fileResult(value) {
 /** A single explicitly incomplete file observation. */
 export function fileRangeResult(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+function strictInventory(value, key = '', depth = 0) {
+  if (SECRET.test(key)) return '[redacted]';
+  if (depth >= 8) throw new RangeError('inventory exceeds the MCP depth limit');
+  if (typeof value === 'string') {
+    if (value.length > STRING_LIMIT) throw new RangeError('inventory string exceeds the MCP string limit');
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > INVENTORY_ITEMS_LIMIT) throw new RangeError('inventory nested array exceeds the MCP item limit');
+    return value.map((item) => strictInventory(item, '', depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length > INVENTORY_ITEMS_LIMIT) throw new RangeError('inventory object exceeds the MCP field limit');
+    return Object.fromEntries(entries.map(([name, item]) => [name, strictInventory(item, name, depth + 1)]));
+  }
+  return value;
+}
+
+/** Serialize inventories as valid JSON without unmarked local omission. */
+export function inventoryResult(value, field) {
+  let bounded = value;
+  if (field != null) {
+    const items = value?.[field];
+    if (!Array.isArray(items)) throw new TypeError(`inventory ${field} must be an array`);
+    const omitted = items.length > INVENTORY_ITEMS_LIMIT;
+    bounded = { ...value, [field]: items.slice(0, INVENTORY_ITEMS_LIMIT), truncated: value?.truncated === true || omitted };
+  } else if (Array.isArray(value) && value.length > INVENTORY_ITEMS_LIMIT) {
+    throw new RangeError(`inventory exceeds the ${INVENTORY_ITEMS_LIMIT}-item MCP limit and has no truncation metadata`);
+  }
+  const text = JSON.stringify(strictInventory(bounded));
+  if (new TextEncoder().encode(text).byteLength > OUTPUT_LIMIT) {
+    throw new RangeError(`inventory exceeds the ${OUTPUT_LIMIT}-byte MCP output limit`);
+  }
+  return { content: [{ type: 'text', text }] };
 }

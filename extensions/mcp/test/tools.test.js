@@ -490,6 +490,7 @@ test('execution catalogue and output are finite strict reads', async () => {
   const { api, calls } = fake();
   const output = { stdout: [111], stderr: [], truncated: true, stdout_truncated: true,
     stderr_truncated: false, eof: false };
+  api.containers.executions = async (...args) => { calls.push(['containers.executions', ...args]); return { executions: [], truncated: false }; };
   api.containers.executionLogs = async (...args) => { calls.push(['containers.executionLogs', ...args]); return output; };
   const listed = tools(api);
   const list = listed.find(({ name }) => name === 'husklet_execution_list');
