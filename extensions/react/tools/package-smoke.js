@@ -46,6 +46,7 @@ async function runPackedStarter(consumer, starter) {
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
+  let exit;
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => (stderr += chunk));
   try {
@@ -61,11 +62,14 @@ async function runPackedStarter(consumer, starter) {
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
     assert.equal(stderr, '');
   } finally {
-    peer?.destroy();
     if (child.exitCode === null) child.kill('SIGTERM');
-    if (child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve));
+    exit = child.exitCode === null
+      ? await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
+      : { code: child.exitCode, signal: child.signalCode };
+    peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
   }
+  assert.deepEqual(exit, { code: 0, signal: null }, `packed React starter did not stop cleanly; stderr=${stderr}`);
 }
 
 function packageStageFiles(dockerfile, destination) {
