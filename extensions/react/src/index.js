@@ -329,6 +329,12 @@ export function workspace(session) {
       focus: (slot) => done('terminal_focus_pane', { slot }),
       retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
+      ratioObserved: (slot, generation, revision, ratio) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+          throw new TypeError('terminal ratio requires nonnegative safe integer generation and revision');
+        }
+        return done('terminal_ratio_observed', { slot, generation, revision, ratio });
+      },
       switchOccupant: (slot, generation, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
         const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
@@ -574,7 +580,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant', 'switchOccupantObserved'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

@@ -64,6 +64,8 @@ Occupant switching likewise requires both cursor fields, so an old provider
 selection cannot replace a pane whose observed revision has since changed.
 `husklet_terminal_spawn` also requires both fields and will not run its bounded
 argv when the pane changed after observation.
+`husklet_terminal_ratio` requires the cursor too, preventing a stale slot from
+resizing a replacement pane's split.
 
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one

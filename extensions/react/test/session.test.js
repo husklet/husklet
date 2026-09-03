@@ -579,6 +579,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const spawning = terminal.spawnObserved('s1', 4, 7, ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
+  const ratio = terminal.ratioObserved('s1', 4, 7, 0.6);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
@@ -595,6 +596,9 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     call: 'terminal_resize_grid', with: { slot: 's1', columns: 120, rows: 40 },
   });
   assert.deepEqual((await next()).payload, {
+    call: 'terminal_ratio_observed', with: { slot: 's1', generation: 4, revision: 7, ratio: 0.6 },
+  });
+  assert.deepEqual((await next()).payload, {
     call: 'terminal_retitle_pane', with: { slot: 's1', title: ' Build 🧪 ' },
   });
   assert.deepEqual((await next()).payload, {
@@ -608,9 +612,10 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
   assert.equal(await splitting, 's2');
-  await Promise.all([spawning, writing, resizing, retitling, closing]);
+  await Promise.all([spawning, writing, resizing, ratio, retitling, closing]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
@@ -619,6 +624,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.throws(() => terminal.writeInput('s1', -1, 7, 'x'), /generation and revision/);
   assert.throws(() => terminal.closeObserved('s1', 4, -1), /generation and revision/);
   assert.throws(() => terminal.splitObserved('s1', 4, -1, 'below'), /generation and revision/);
+  assert.throws(() => terminal.ratioObserved('s1', 4, -1, 0.6), /generation and revision/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
     assert.throws(() => terminal.retitle('s1', title), /pane title must/);

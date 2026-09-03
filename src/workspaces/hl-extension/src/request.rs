@@ -281,6 +281,13 @@ pub enum Request {
         slot: String,
         ratio: f64,
     },
+    /// Resizes only the exact pane snapshot the caller observed.
+    TerminalRatioObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        ratio: f64,
+    },
     TerminalSwitchOccupant {
         slot: String,
         generation: u64,
@@ -420,6 +427,7 @@ impl Request {
             | Self::TerminalFocusPane { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRatio { .. }
+            | Self::TerminalRatioObserved { .. }
             | Self::TerminalSwitchOccupant { .. }
             | Self::TerminalSwitchOccupantObserved { .. } => Capability::TerminalControl,
             // Reading what a shell printed is what `TerminalOutput` was separated
@@ -731,6 +739,12 @@ mod tests {
             },
             Request::TerminalRatio {
                 slot: "1".into(),
+                ratio: 0.5,
+            },
+            Request::TerminalRatioObserved {
+                slot: "1".into(),
+                generation: 2,
+                revision: 3,
                 ratio: 0.5,
             },
         ] {

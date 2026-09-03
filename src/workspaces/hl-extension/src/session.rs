@@ -209,6 +209,7 @@ impl Session {
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRetitlePane { .. }
             | Request::TerminalRatio { .. }
+            | Request::TerminalRatioObserved { .. }
             | Request::TerminalSwitchOccupant { .. }
             | Request::TerminalSwitchOccupantObserved { .. } => self.terminal(request, services),
             Request::PaneList => {
@@ -632,6 +633,9 @@ impl Session {
                 port.retitle(slot, title).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalRatio { slot, ratio } => {
+                port.ratio(slot, *ratio).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalRatioObserved { slot, ratio, .. } => {
                 port.ratio(slot, *ratio).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::TerminalSwitchOccupant {

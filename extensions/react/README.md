@@ -175,6 +175,8 @@ authoritative screen snapshot; `terminal.splitObserved(slot, generation, revisio
 splits only that exact snapshot (the legacy `split` remains for compatibility);
 `terminal.spawnObserved(slot, generation, revision, argv)` similarly prevents a
 stale slot from running argv in a replacement terminal (legacy `spawn` remains);
+`terminal.ratioObserved` binds layout resizing to the same cursor while legacy
+`ratio` remains available;
 `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
 through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
