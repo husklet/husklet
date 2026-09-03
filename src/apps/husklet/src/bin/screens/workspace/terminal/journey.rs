@@ -124,7 +124,7 @@ impl CheckpointJourney {
                 return glib::ControlFlow::Continue;
             };
             terminal.feed_child(
-                format!("printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-after-{cycle}\\n")
+                format!("printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-after-{cycle}\n")
                     .as_bytes(),
             );
             Self::record(&path, &Self::event("reopen_command_typed", cycle));
