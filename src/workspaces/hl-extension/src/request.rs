@@ -600,6 +600,7 @@ mod tests {
                 spec: crate::port::ContainerCreateSpec {
                     image: "alpine:3.20".into(),
                     name: "worker".into(),
+                    hostname: None,
                     entrypoint: None,
                     command: Vec::new(),
                     environment: Vec::new(),

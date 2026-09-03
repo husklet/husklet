@@ -217,15 +217,7 @@ impl EndpointSpec {
         if let Some(name) = &self.name {
             values.push(name.clone());
         }
-        if values.iter().any(|value| {
-            value.is_empty()
-                || value.len() > 253
-                || !value.bytes().enumerate().all(|(index, byte)| match byte {
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
-                    b'_' | b'.' | b'-' => index != 0,
-                    _ => false,
-                })
-        }) {
+        if values.iter().any(|value| !valid_endpoint_name(value)) {
             return Err(crate::Error::InvalidNetwork(
                 "endpoint names and aliases must be non-empty DNS-compatible names".into(),
             ));
@@ -236,6 +228,16 @@ impl EndpointSpec {
         }
         Ok(())
     }
+}
+
+pub(crate) fn valid_endpoint_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
+            b'_' | b'.' | b'-' => index != 0,
+            _ => false,
+        })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

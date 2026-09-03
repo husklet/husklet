@@ -105,6 +105,8 @@ pub struct ContainerOutput {
 pub struct ContainerCreateSpec {
     pub image: String,
     pub name: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
     pub entrypoint: Option<Vec<String>>,
     pub command: Vec<String>,
     pub environment: Vec<(String, String)>,

@@ -311,7 +311,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.notEqual(resourceReferences.isError, true);
   assert.deepEqual(calls.slice(resourceReferenceStart), [{
     call: 'container_create', with: { spec: {
-      image: 'alpine:3.20', name: 'resource-reference-boundary', entrypoint: null, command: [],
+      image: 'alpine:3.20', name: 'resource-reference-boundary', hostname: null, entrypoint: null, command: [],
       environment: [], working_directory: null, user: null, labels: [],
       mounts: [{ volume: exactVolume, target: '/data', read_only: false }], network: exactNetwork,
       ports: [], memory_mb: null, cpus: null, pids_limit: null,
@@ -325,6 +325,23 @@ test('admin workflow confines files to socket workspace and cleans success and f
   });
   assert.equal(resourceReferenceOversized.isError, true);
   assert.equal(calls.length, resourceReferenceOversizedStart);
+
+  const exactHostname = 'h'.repeat(253);
+  const hostnameStart = calls.length;
+  const hostnameExact = await client.callTool({
+    name: 'husklet_container_create', arguments: { image: 'alpine:3.20', name: 'hostname-boundary', hostname: exactHostname },
+  });
+  assert.notEqual(hostnameExact.isError, true);
+  assert.equal(calls.length, hostnameStart + 1);
+  assert.equal(calls[hostnameStart].with.spec.hostname, exactHostname);
+  for (const invalidHostname of ['h'.repeat(254), 'bad\nname', '-leading']) {
+    const invalidStart = calls.length;
+    const invalid = await client.callTool({
+      name: 'husklet_container_create', arguments: { image: 'alpine:3.20', name: 'hostname-invalid', hostname: invalidHostname },
+    });
+    assert.equal(invalid.isError, true);
+    assert.equal(calls.length, invalidStart);
+  }
 
   const exactCommand = ['printf', '%s', '$(touch /tmp/not-run)', 'two words', "single'quote", ''];
   const spawnStart = calls.length;

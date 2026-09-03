@@ -157,11 +157,11 @@ export function workspace(session) {
       removeExecution: (id) => done('execution_remove', { id }),
       create: async (configuration, legacyName) => {
         const spec = typeof configuration === 'string' ? {
-          image: configuration, name: legacyName, entrypoint: null, command: [], environment: [],
+          image: configuration, name: legacyName, hostname: null, entrypoint: null, command: [], environment: [],
           working_directory: null, user: null, labels: [], mounts: [], network: null, ports: [],
           memory_mb: null, cpus: null, pids_limit: null,
         } : {
-          entrypoint: null, command: [], environment: [], working_directory: null, user: null,
+          hostname: null, entrypoint: null, command: [], environment: [], working_directory: null, user: null,
           labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
           pids_limit: null, ...configuration,
         };

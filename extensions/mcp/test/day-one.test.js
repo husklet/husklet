@@ -170,7 +170,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     id: containerId, command: ['/usr/bin/worker', '--once'], user: null, working_directory: null,
   });
   assert.deepEqual(calls.find(({ call }) => call === 'container_create').with.spec, {
-    image: 'alpine:3.21', name: 'day-one', entrypoint: null,
+    image: 'alpine:3.21', name: 'day-one', hostname: null, entrypoint: null,
     command: ['/usr/bin/worker', '--once'], environment: [], working_directory: null, user: null,
     labels: [['husklet.agent-workflow', 'day-one']], mounts: [], network: null, ports: [],
     memory_mb: 512, cpus: 1, pids_limit: 128,

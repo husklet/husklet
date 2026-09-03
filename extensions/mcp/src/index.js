@@ -36,6 +36,7 @@ const fileContents = z.string().max(64 * 1024).refine(
   'file contents exceed 65536 UTF-8 bytes',
 );
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const hostname = z.string().min(1).max(253).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const resourceName = z.string().min(1).max(255).regex(
   /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
   'resource name must start with an ASCII alphanumeric and contain only ASCII alphanumerics, underscores, periods, or hyphens',
@@ -93,6 +94,7 @@ const optionalCommand = z.array(z.string().max(4096)).max(64);
 const containerCreate = z.object({
   image: imageReference,
   name: containerName,
+  hostname: hostname.nullable().default(null),
   entrypoint: command.nullable().default(null),
   command: optionalCommand.default([]),
   environment: z.array(z.tuple([environmentName, environmentValue])).max(256).default([]),

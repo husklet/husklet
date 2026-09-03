@@ -5144,6 +5144,14 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ContainerCreateConfiguration {
+  image: string; name: string; hostname?: string | null;
+  entrypoint?: string[] | null; command?: string[]; environment?: [string, string][];
+  working_directory?: string | null; user?: string | null; labels?: [string, string][];
+  mounts?: { volume: string; target: string; read_only?: boolean }[]; network?: string | null;
+  ports?: { container: number; host?: number | null; protocol: 'tcp' | 'udp' }[];
+  memory_mb?: number | null; cpus?: number | null; pids_limit?: number | null;
+}
 export interface ProcessList {
   titles: string[]; processes: string[][]; observed_at_ms: number;
   scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
@@ -5287,6 +5295,7 @@ export interface WorkspaceApi {
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
     signalExecution(id: string, signal: string): Promise<void>;
+    create(configuration: ContainerCreateConfiguration): Promise<string>;
     create(image: string, name: string): Promise<string>;
     start(id: string): Promise<void>;
     stop(id: string): Promise<void>;

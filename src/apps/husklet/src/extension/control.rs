@@ -38,7 +38,7 @@ impl ContainerLifecycle {
             endpoints_config: EndpointsConfig([(network.clone(), EndpointConfig::default())].into_iter().collect()),
         });
         CreateContainer {
-            image: spec.image.clone(), labels: spec.labels.iter().cloned().collect(),
+            image: spec.image.clone(), hostname: spec.hostname.clone(), labels: spec.labels.iter().cloned().collect(),
             entrypoint: spec.entrypoint.clone(), cmd: (!spec.command.is_empty()).then(|| spec.command.clone()),
             env: (!spec.environment.is_empty()).then(|| spec.environment.iter()
                 .map(|(name, value)| format!("{name}={value}")).collect()),
@@ -70,7 +70,7 @@ impl ContainerControl for ContainerLifecycle {
     /// for a name already taken, and a failure otherwise.
     fn create(&self, image: &str, name: &str) -> Result<String, HostError> {
         self.create_spec(&ContainerCreateSpec {
-            image: image.to_owned(), name: name.to_owned(), entrypoint: None, command: Vec::new(),
+            image: image.to_owned(), name: name.to_owned(), hostname: None, entrypoint: None, command: Vec::new(),
             environment: Vec::new(), working_directory: None, user: None, labels: Vec::new(),
             mounts: Vec::new(), network: None, ports: Vec::new(), memory_mb: None, cpus: None,
             pids_limit: None,
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn configured_creation_maps_only_supported_native_authority() {
         let request = ContainerLifecycle::creation(&ContainerCreateSpec {
-            image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
+            image: "alpine:3.20".into(), name: "worker".into(), hostname: Some("worker.internal".into()), entrypoint: Some(vec!["/init".into()]),
             command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
             working_directory: Some("/work".into()), user: Some("1000".into()),
             labels: vec![("owner".into(), "agent".into())],
@@ -207,6 +207,7 @@ mod tests {
             memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
         });
         assert_eq!(request.image, "alpine:3.20");
+        assert_eq!(request.hostname.as_deref(), Some("worker.internal"));
         assert_eq!(request.entrypoint.as_deref(), Some(["/init".into()].as_slice()));
         assert_eq!(request.cmd.as_deref(), Some(["serve".into()].as_slice()));
         assert_eq!(request.env.as_deref(), Some(["MODE=agent".into()].as_slice()));

@@ -118,7 +118,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => calls.includes('container_create') && calls.includes('container_start'));
     assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
       image: 'alpine:3.20', name: 'worker', entrypoint: null, command: [], environment: [], working_directory: null,
-      user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
+      hostname: null, user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
     });
     assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: 'created-over-socket' });
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));

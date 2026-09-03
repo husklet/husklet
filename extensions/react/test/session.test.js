@@ -471,7 +471,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
 test('configured container creation preserves its bounded typed specification', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const spec = {
-    image: 'alpine:3.20', name: 'worker', entrypoint: ['/init'], command: ['serve'],
+    image: 'alpine:3.20', name: 'worker', hostname: 'h'.repeat(253), entrypoint: ['/init'], command: ['serve'],
     environment: [['MODE', 'agent']], working_directory: '/work', user: '1000',
     labels: [['owner', 'agent']], mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
     network: 'private', ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],

@@ -909,6 +909,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 spec: hl_extension::port::ContainerCreateSpec {
                     image: "alpine".into(),
                     name: "x".into(),
+                    hostname: None,
                     entrypoint: None,
                     command: Vec::new(),
                     environment: Vec::new(),
@@ -1270,6 +1271,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     let spec = ContainerCreateSpec {
         image: "alpine:3.20".into(),
         name: "worker".into(),
+        hostname: Some("h".repeat(253)),
         entrypoint: Some(vec!["/init".into()]),
         command: vec!["serve".into()],
         environment: vec![("MODE".into(), "agent".into())],
@@ -1295,6 +1297,14 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
         Ok(Reply::Identity("id-worker".into()))
     );
+    assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
+
+    let mut oversized_hostname = spec.clone();
+    oversized_hostname.hostname = Some("h".repeat(254));
+    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: oversized_hostname }, &services(&host)), Err(Failure::Conflict { .. })));
+    let mut injected_hostname = spec.clone();
+    injected_hostname.hostname = Some("bad\nname".into());
+    assert!(matches!(authorized.dispatch(&Request::ContainerCreate { spec: injected_hostname }, &services(&host)), Err(Failure::Conflict { .. })));
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
     let mut boundary = spec.clone();

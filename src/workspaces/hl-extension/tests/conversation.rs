@@ -804,7 +804,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
     let request = Request::ContainerCreate { spec: ContainerCreateSpec {
-        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None, command: Vec::new(),
+        image: "alpine:3.20".into(), name: "worker".into(), hostname: Some("h".repeat(253)), entrypoint: None, command: Vec::new(),
         environment: vec![("é".repeat(128), "value".into())], working_directory: None, user: None,
         labels: Vec::new(), mounts: vec![ContainerVolumeMount {
             volume: "v".repeat(255), target: "/data".into(), read_only: false,

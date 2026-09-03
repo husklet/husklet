@@ -847,6 +847,13 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
                 .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
     };
     let valid = identifier(&spec.name, 128)
+        && spec.hostname.as_ref().is_none_or(|value| {
+            !value.is_empty()
+                && value.len() <= 253
+                && value.bytes().enumerate().all(|(index, byte)| {
+                    byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))
+                })
+        })
         && !spec.image.is_empty()
         && spec.image.len() <= 512
         && spec.image.trim() == spec.image

@@ -327,8 +327,8 @@ impl ContainerSpec {
                 ));
             }
         }
-        if self.hostname.as_deref().is_some_and(str::is_empty) {
-            return Err(Error::InvalidSpec("hostname must not be empty".into()));
+        if self.hostname.as_deref().is_some_and(|value| !crate::model::network::valid_endpoint_name(value)) {
+            return Err(Error::InvalidSpec("hostname must be a non-empty DNS-compatible name of at most 253 bytes".into()));
         }
         if self
             .hosts
@@ -469,6 +469,16 @@ mod tests {
             Process::new("/bin/true").env_bytes(b"NAME", b"bad\0value"),
         ] {
             assert!(ContainerSpec::from_directory(root.path(), invalid).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn hostname_uses_the_endpoint_name_contract() {
+        let valid = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).hostname("h".repeat(253));
+        assert!(valid.validate().is_ok());
+        for hostname in ["h".repeat(254), "bad\nname".into(), "bad name".into(), "bad\0name".into(), "-leading".into()] {
+            let invalid = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).hostname(hostname);
+            assert!(invalid.validate().is_err());
         }
     }
 
