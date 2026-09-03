@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-client-pack-'));
 
-async function runPackedStarter(starter, installedClient, architecture) {
+async function runPackedStarter(starter, installedClient, architecture, signal) {
   const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
-  const socket = path.join(starter, `host-${architecture}.sock`);
+  const socket = path.join(starter, `host-${architecture}-${signal}.sock`);
   let peer;
   let observed = false;
   const server = net.createServer((stream) => {
@@ -51,7 +51,7 @@ async function runPackedStarter(starter, installedClient, architecture) {
     }
     assert(observed, `packed client starter did not call the real socket; stderr=${stderr}`);
     assert(stdout.endsWith('\n'), `packed client starter did not report workspace information; stderr=${stderr}`);
-    child.kill('SIGTERM');
+    child.kill(signal);
     const exit = await Promise.race([
       new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
       new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not stop')), 2_000)),
@@ -121,8 +121,10 @@ try {
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
   const starterClient = path.join(starter, 'node_modules/@husklet/client');
-  await runPackedStarter(starter, starterClient, 'x86_64');
-  await runPackedStarter(starter, starterClient, 'aarch64');
+  for (const architecture of ['x86_64', 'aarch64']) {
+    await runPackedStarter(starter, starterClient, architecture, 'SIGTERM');
+    await runPackedStarter(starter, starterClient, architecture, 'SIGINT');
+  }
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
