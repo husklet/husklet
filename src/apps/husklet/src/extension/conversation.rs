@@ -1163,6 +1163,9 @@ mod tests {
                 name: "workspace-manager".into(),
                 image_digest: "sha256:manager".into(),
                 status: "duty".into(),
+                version: "1.0.0".into(),
+                enabled: true,
+                pane_providers: Vec::new(),
             }])
         }
     }
@@ -1223,6 +1226,9 @@ mod tests {
             name: "workspace-manager".into(),
             image_digest: "sha256:observed".into(),
             status: "duty".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
         }]);
         conversation.with_extension_events(events);
 

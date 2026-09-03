@@ -5481,7 +5481,10 @@ export const LOG_VIEW_CHARACTER_LIMIT: 4096;
 export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
-export interface ExtensionSummary { name: string; image_digest: string; status: string }
+export interface ExtensionPaneProvider { id: string; title: string; icon: string | null }
+export interface ExtensionSummary { name: string; image_digest: string; status: string; version?: string; enabled?: boolean; pane_providers?: ExtensionPaneProvider[] }
+export interface ExtensionProviderDeclaration { extension: string; image_digest: string; version: string; status: string; id: string; title: string; icon: string | null }
+export interface ExtensionProviderCatalogue { providers: ExtensionProviderDeclaration[]; truncated: boolean }
 export type ExtensionCapability =
   | 'workspace-read' | 'workspace-control' | 'workspace-events'
   | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
@@ -5674,6 +5677,10 @@ export interface WorkspaceApi {
     cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Enabled manifest declarations, independent of whether a provider currently occupies a pane. */
+    providers(): Promise<ExtensionProviderCatalogue>;
+    /** Wait for the extension lifecycle cursor to change, then return its enabled provider catalogue. */
+    waitForProviders(after: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'>, options?: { timeoutMs?: number }): Promise<{ changed: boolean; extension?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'> | null; catalogue?: ExtensionProviderCatalogue; after?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'> }>;
     /** Wait for an actually mounted provider occupant, or its removal, using an exact prior pane cursor. */
     waitForProviderMount(extension: string, provider: string, options?: {
       state?: 'mounted' | 'unmounted';

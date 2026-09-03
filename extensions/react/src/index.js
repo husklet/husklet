@@ -385,6 +385,42 @@ export function workspace(session) {
     subscribe,
     unsubscribe,
   };
+  const providerCatalogue = (extensions) => {
+    if (!Array.isArray(extensions) || extensions.some((extension) => typeof extension.enabled !== 'boolean' || !Array.isArray(extension.pane_providers))) {
+      throw new Error('host does not expose installed provider declarations');
+    }
+    const all = extensions.filter(({ enabled }) => enabled).flatMap((extension) => extension.pane_providers.map((provider) => ({
+      extension: extension.name,
+      image_digest: extension.image_digest,
+      version: extension.version ?? '',
+      status: extension.status,
+      id: provider.id,
+      title: provider.title,
+      icon: provider.icon ?? null,
+    })));
+    return { providers: all.slice(0, 200), truncated: all.length > 200 };
+  };
+  api.extensions.providers = async () => providerCatalogue(await api.extensions.list());
+  api.extensions.waitForProviders = async (after, { timeoutMs = 30_000 } = {}) => {
+    if (after == null || typeof after.name !== 'string' || typeof after.image_digest !== 'string' || typeof after.status !== 'string') {
+      throw new TypeError('provider catalogue wait requires an exact extension name, image digest, and status cursor');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('provider catalogue wait timeout must be between 1 and 30000ms');
+    let dispose; let timer; let settled = false;
+    return new Promise((resolve, reject) => {
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      api.watchExtensions((extensions) => {
+        const current = extensions.find(({ name }) => name === after.name);
+        if (current?.image_digest === after.image_digest && current.status === after.status) return;
+        try { finish({ changed: true, extension: current == null ? null : { name: current.name, image_digest: current.image_digest, status: current.status }, catalogue: providerCatalogue(extensions) }); }
+        catch (error) { finish(undefined, error); }
+      }).then((stop) => { dispose = stop; if (settled) void stop(); }, (error) => finish(undefined, error));
+      timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
+    });
+  };
   api.watchContainers = async (listener) => {
     if (typeof listener !== 'function') throw new TypeError('container listener must be a function');
     const off = session.onEvent((event) => { if (event?.snapshot === 'containers') listener(event.of); });

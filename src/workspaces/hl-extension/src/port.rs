@@ -569,6 +569,12 @@ pub struct ExtensionSummary {
     pub name: String,
     pub image_digest: String,
     pub status: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub pane_providers: Vec<crate::PaneProvider>,
 }
 
 pub const EXTENSION_REFERENCE_BYTES: usize = 512;

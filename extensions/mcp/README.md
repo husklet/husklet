@@ -197,7 +197,23 @@ the exact extension/provider pair, and accepts an optional prior
 post-mutation wait. `state: unmounted` waits for removal. A truncated inventory
 cannot prove absence and therefore fails explicitly. The public React
 `extensions.waitForProviderMount` method exposes the same contract. This observes
-only providers occupying panes; protocol 1 has no global enabled-provider registry.
+only providers occupying panes; use the declaration catalogue below for unmounted providers.
+Current hosts also publish the persisted manifest declarations on extension
+inventory. `husklet_extension_provider_list` projects at most 200 declarations
+whose records are enabled, each bound to extension name, immutable image digest,
+manifest version, lifecycle status, provider ID, title, and icon. This catalogue
+is independent of pane occupancy and deliberately does not claim the sidecar is
+healthy or its interface is drawable. `fault:N` remains enabled policy with a
+failed runtime; `standby` declarations are excluded. Older protocol-1 hosts omit
+the added summary fields, and the typed React API fails explicitly rather than
+inventing an empty catalogue.
+`husklet_extension_provider_catalogue_wait` uses the exact existing
+`{name,image_digest,status}` lifecycle cursor and the credit-controlled extension
+snapshot. A digest replacement or status transition returns the newest bounded
+catalogue; an unchanged initial snapshot cannot satisfy it. React exposes these
+as `extensions.providers()` and `extensions.waitForProviders(...)`. The protocol
+still has no independent runtime-registration or readiness revision; use the
+mounted-provider wait when an actual pane occupant is required.
 
 `husklet_pane_wait` applies the same rule to a specific pane: pass the last
 observed generation and revision, and the wait ignores the host's unchanged

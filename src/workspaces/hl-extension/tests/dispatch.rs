@@ -706,6 +706,9 @@ impl ExtensionStore for Host {
             name: "sample".into(),
             image_digest: "sha256:abc".into(),
             status: "duty".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
         }])
     }
     fn inspect(&self, name: &str) -> Result<ExtensionSummary, HostError> {
@@ -714,6 +717,9 @@ impl ExtensionStore for Host {
             name: name.into(),
             image_digest: "sha256:abc".into(),
             status: "duty".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
         })
     }
     fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
