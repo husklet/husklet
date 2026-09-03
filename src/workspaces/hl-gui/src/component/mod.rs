@@ -10,8 +10,10 @@
 mod content;
 
 pub use content::{
-    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
-    TestStatus, TimelineEvent,
+    CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode, DependencyRelation,
+    DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
+    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind, QueryNodeState,
+    QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 mod control;
 mod structure;

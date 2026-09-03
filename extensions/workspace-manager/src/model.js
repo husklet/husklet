@@ -2,10 +2,40 @@
 export const RECORD_LIMIT = 200;
 export const LOG_LIMIT = 400;
 
+const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+/** The native container-name grammar, expressed as a user-facing validation result. */
+export function containerNameError(name) {
+  return typeof name === 'string' && CONTAINER_NAME.test(name)
+    ? ''
+    : 'Container name must contain 1–128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit.';
+}
+
 /** A bounded view plus the number honestly omitted. */
 export function bounded(records, limit = RECORD_LIMIT) {
   const all = Array.isArray(records) ? records : [];
   return { records: all.slice(0, limit), omitted: Math.max(0, all.length - limit) };
+}
+
+export function endpointAliases(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
+  const aliases = value.split(',').map((alias) => alias.trim());
+  const valid = aliases.length <= 64
+    && new Set(aliases).size === aliases.length
+    && aliases.every((alias) => alias.length >= 1 && alias.length <= 253
+      && [...alias].every((character, index) => /[A-Za-z0-9]/.test(character)
+        || (index > 0 && '_.-'.includes(character))));
+  if (!valid) throw new TypeError('Network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names.');
+  return aliases;
+}
+
+export function immutableContainerId(value) {
+  return /^(?:[0-9a-f]{32}|[0-9a-f]{64})$/.test(value);
+}
+
+export function boundedMessage(value, limit = 512) {
+  const message = value?.message ?? String(value ?? '');
+  return message.length <= limit ? message : `${message.slice(0, limit)}…`;
 }
 
 export function shortId(value) {
@@ -115,11 +145,11 @@ export class ExecutionDetailsSource {
     const values = [
       ['Execution ID', details?.id],
       ['Container ID', details?.container_id],
-      ['State', details ? details.running ? 'running' : 'exited' : null],
-      ['Exit code', details && !details.running ? String(details.exit_code) : null],
+      ['State', details && 'running' in details ? details.running ? 'running' : 'exited' : null],
+      ['Exit code', details && 'exit_code' in details && !details.running ? String(details.exit_code) : null],
       ['Process ID', details?.pid > 0 ? String(details.pid) : null],
       ['Command', details?.command?.join(' ')],
-      ['User', details?.user || 'default user'],
+      ['User', details && 'user' in details ? details.user || 'default user' : null],
     ];
     this.rows = values.filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
       .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));

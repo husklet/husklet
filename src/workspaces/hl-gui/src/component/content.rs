@@ -208,6 +208,435 @@ pub enum CoverageSource<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoverageView(String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HttpMethod {
+    Delete,
+    Get,
+    Head,
+    Options,
+    Patch,
+    Post,
+    Put,
+}
+impl HttpMethod {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "DELETE",
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Options => "OPTIONS",
+            Self::Patch => "PATCH",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkPhaseKind {
+    Dns,
+    Connect,
+    Tls,
+    Request,
+    Wait,
+    Download,
+}
+impl NetworkPhaseKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dns => "dns",
+            Self::Connect => "connect",
+            Self::Tls => "tls",
+            Self::Request => "request",
+            Self::Wait => "wait",
+            Self::Download => "download",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkPhase {
+    kind: NetworkPhaseKind,
+    offset_us: u64,
+    duration_us: u64,
+}
+impl NetworkPhase {
+    #[must_use]
+    pub fn new(kind: NetworkPhaseKind, offset_us: u64, duration_us: u64) -> Option<Self> {
+        (duration_us > 0
+            && duration_us <= crate::NETWORK_WATERFALL_PHASE_TIME_LIMIT_US
+            && offset_us
+                .checked_add(duration_us)
+                .is_some_and(|end| end <= crate::NETWORK_WATERFALL_TIME_LIMIT_US))
+        .then_some(Self {
+            kind,
+            offset_us,
+            duration_us,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRequest {
+    method: HttpMethod,
+    url: String,
+    start_us: u64,
+    duration_us: u64,
+    status: Option<u16>,
+    bytes: u64,
+    detail: String,
+    phases: Vec<NetworkPhase>,
+}
+impl NetworkRequest {
+    #[must_use]
+    pub fn new(
+        method: HttpMethod,
+        url: impl Into<String>,
+        start_us: u64,
+        duration_us: u64,
+        status: Option<u16>,
+        bytes: u64,
+        detail: impl Into<String>,
+        phases: impl IntoIterator<Item = NetworkPhase>,
+    ) -> Option<Self> {
+        fn clean(value: String) -> String {
+            value
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(crate::NETWORK_WATERFALL_TEXT_LIMIT)
+                .collect()
+        }
+        let url = clean(url.into());
+        let detail = clean(detail.into());
+        let phases: Vec<_> = phases
+            .into_iter()
+            .take(crate::NETWORK_WATERFALL_PHASE_LIMIT + 1)
+            .collect();
+        let timing = duration_us > 0
+            && start_us
+                .checked_add(duration_us)
+                .is_some_and(|end| end <= crate::NETWORK_WATERFALL_TIME_LIMIT_US);
+        let phase_shape = phases.len() <= crate::NETWORK_WATERFALL_PHASE_LIMIT
+            && phases.iter().all(|p| p.offset_us + p.duration_us <= duration_us)
+            && phases
+                .windows(2)
+                .all(|p| p[0].offset_us + p[0].duration_us <= p[1].offset_us);
+        (!url.trim().is_empty()
+            && timing
+            && status.is_none_or(|s| (100..=599).contains(&s))
+            && bytes <= crate::NETWORK_WATERFALL_BYTE_LIMIT
+            && phase_shape)
+            .then_some(Self {
+                method,
+                url,
+                start_us,
+                duration_us,
+                status,
+                bytes,
+                detail,
+                phases,
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum NetworkSource<'a> {
+    Exact(&'a [NetworkRequest]),
+    Bounded {
+        prefix: &'a [NetworkRequest],
+        total_requests: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyState {
+    Resolved,
+    Missing,
+    Conflict,
+}
+impl DependencyState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Resolved => "resolved",
+            Self::Missing => "missing",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRelation {
+    Runtime,
+    Development,
+    Optional,
+    Peer,
+    Build,
+}
+impl DependencyRelation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Development => "development",
+            Self::Optional => "optional",
+            Self::Peer => "peer",
+            Self::Build => "build",
+        }
+    }
+}
+fn dep_clean(value: impl Into<String>, limit: usize) -> String {
+    value
+        .into()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(limit)
+        .collect()
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyNode {
+    id: String,
+    label: String,
+    version: String,
+    state: DependencyState,
+    detail: String,
+}
+impl DependencyNode {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        version: impl Into<String>,
+        state: DependencyState,
+        detail: impl Into<String>,
+    ) -> Option<Self> {
+        let id = dep_clean(id, 40);
+        let label = dep_clean(label, 120);
+        let version = dep_clean(version, 64);
+        let detail = dep_clean(detail, 160);
+        (!id.trim().is_empty() && !label.trim().is_empty()).then_some(Self {
+            id,
+            label,
+            version,
+            state,
+            detail,
+        })
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyEdge {
+    source: String,
+    target: String,
+    relation: DependencyRelation,
+    requirement: String,
+}
+impl DependencyEdge {
+    #[must_use]
+    pub fn new(
+        source: impl Into<String>,
+        target: impl Into<String>,
+        relation: DependencyRelation,
+        requirement: impl Into<String>,
+    ) -> Option<Self> {
+        let source = dep_clean(source, 40);
+        let target = dep_clean(target, 40);
+        let requirement = dep_clean(requirement, 96);
+        (!source.trim().is_empty() && !target.trim().is_empty()).then_some(Self {
+            source,
+            target,
+            relation,
+            requirement,
+        })
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyCycle {
+    members: Vec<String>,
+}
+impl DependencyCycle {
+    #[must_use]
+    pub fn new(members: impl IntoIterator<Item = impl Into<String>>) -> Option<Self> {
+        let members: Vec<_> = members.into_iter().map(|v| dep_clean(v, 40)).collect();
+        let unique: std::collections::BTreeSet<_> = members.iter().collect();
+        (!members.is_empty()
+            && members.len() <= crate::DEPENDENCY_GRAPH_CYCLE_MEMBER_LIMIT
+            && unique.len() == members.len()
+            && members.iter().all(|v| !v.trim().is_empty()))
+        .then_some(Self { members })
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum DependencySource<'a> {
+    Exact {
+        nodes: &'a [DependencyNode],
+        edges: &'a [DependencyEdge],
+        cycles: &'a [DependencyCycle],
+    },
+    Bounded {
+        nodes: &'a [DependencyNode],
+        total_nodes: usize,
+        edges: &'a [DependencyEdge],
+        total_edges: usize,
+        cycles: &'a [DependencyCycle],
+        total_cycles: usize,
+    },
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryOperator {
+    TableScan,
+    IndexScan,
+    IndexOnlyScan,
+    BitmapScan,
+    Filter,
+    NestedLoop,
+    HashJoin,
+    MergeJoin,
+    Hash,
+    Sort,
+    Aggregate,
+    Group,
+    Limit,
+    Materialize,
+    CteScan,
+    SubqueryScan,
+    Append,
+    Result,
+    Insert,
+    Update,
+    Delete,
+}
+impl QueryOperator {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TableScan => "table_scan",
+            Self::IndexScan => "index_scan",
+            Self::IndexOnlyScan => "index_only_scan",
+            Self::BitmapScan => "bitmap_scan",
+            Self::Filter => "filter",
+            Self::NestedLoop => "nested_loop",
+            Self::HashJoin => "hash_join",
+            Self::MergeJoin => "merge_join",
+            Self::Hash => "hash",
+            Self::Sort => "sort",
+            Self::Aggregate => "aggregate",
+            Self::Group => "group",
+            Self::Limit => "limit",
+            Self::Materialize => "materialize",
+            Self::CteScan => "cte_scan",
+            Self::SubqueryScan => "subquery_scan",
+            Self::Append => "append",
+            Self::Result => "result",
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryNodeState {
+    Normal,
+    Hot,
+    EstimateMismatch,
+    Spill,
+}
+impl QueryNodeState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Hot => "hot",
+            Self::EstimateMismatch => "estimate_mismatch",
+            Self::Spill => "spill",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum QueryMetricKind {
+    EstimatedRows,
+    ActualRows,
+    Cost,
+    DurationUs,
+    Loops,
+}
+impl QueryMetricKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EstimatedRows => "estimated_rows",
+            Self::ActualRows => "actual_rows",
+            Self::Cost => "cost",
+            Self::DurationUs => "duration_us",
+            Self::Loops => "loops",
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryMetric {
+    kind: QueryMetricKind,
+    value: f64,
+}
+impl QueryMetric {
+    #[must_use]
+    pub fn new(kind: QueryMetricKind, value: f64) -> Option<Self> {
+        (value.is_finite()
+            && value >= 0.0
+            && (!matches!(kind, QueryMetricKind::DurationUs) || value <= 86_400_000_000.0)
+            && (!matches!(kind, QueryMetricKind::Loops) || value <= 1_000_000_000.0))
+            .then_some(Self { kind, value })
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryPlanNode {
+    id: String,
+    operator: QueryOperator,
+    label: String,
+    relation: String,
+    state: QueryNodeState,
+    detail: String,
+    metrics: Vec<QueryMetric>,
+    children: Vec<Self>,
+}
+impl QueryPlanNode {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        operator: QueryOperator,
+        label: impl Into<String>,
+        relation: impl Into<String>,
+        state: QueryNodeState,
+        detail: impl Into<String>,
+        metrics: impl IntoIterator<Item = QueryMetric>,
+        children: impl IntoIterator<Item = Self>,
+    ) -> Option<Self> {
+        fn clean(v: String, n: usize) -> String {
+            v.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .take(n)
+                .collect()
+        }
+        let id = clean(id.into(), 40);
+        let label = clean(label.into(), 120);
+        let relation = clean(relation.into(), 120);
+        let detail = clean(detail.into(), 160);
+        let metrics: Vec<_> = metrics.into_iter().collect();
+        let unique: std::collections::BTreeSet<_> = metrics.iter().map(|m| m.kind).collect();
+        (!id.trim().is_empty() && !label.trim().is_empty() && metrics.len() <= 5 && unique.len() == metrics.len())
+            .then_some(Self {
+                id,
+                operator,
+                label,
+                relation,
+                state,
+                detail,
+                metrics,
+                children: children.into_iter().collect(),
+            })
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum QueryPlanSource<'a> {
+    Exact(&'a [QueryPlanNode]),
+    Bounded {
+        prefix: &'a [QueryPlanNode],
+        total_nodes: usize,
+    },
+}
 impl CoverageView {
     #[must_use]
     pub fn new(source: CoverageSource<'_>) -> Self {
@@ -577,6 +1006,194 @@ impl Element {
         Self::new(Tag::CoverageView).value(CoverageView::new(source).0)
     }
 
+    #[must_use]
+    pub fn network_waterfall(source: NetworkSource<'_>) -> Self {
+        let (requests, total) = match source {
+            NetworkSource::Exact(v) => (v, v.len()),
+            NetworkSource::Bounded { prefix, total_requests } => (prefix, total_requests.max(prefix.len())),
+        };
+        let shown = requests.len().min(crate::NETWORK_WATERFALL_REQUEST_LIMIT);
+        let detail = if total > shown {
+            format!("truncated: showing {shown} of {total} requests")
+        } else {
+            format!("showing all {shown} requests")
+        };
+        Self::new(Tag::NetworkWaterfall)
+            .label(format!("{shown} requests"))
+            .detail(detail)
+            .children(requests[..shown].iter().enumerate().map(|(index, request)| {
+                let status = request.status.map_or_else(|| "pending".to_owned(), |v| v.to_string());
+                Self::new(Tag::NetworkRequest)
+                    .key(index.to_string())
+                    .label(format!("{} {}", request.method.as_str(), request.url))
+                    .value(format!(
+                        "start_us={} duration_us={} status={} bytes={} detail={}",
+                        request.start_us, request.duration_us, status, request.bytes, request.detail
+                    ))
+                    .children(request.phases.iter().map(|phase| {
+                        Self::new(Tag::NetworkPhase).label(phase.kind.as_str()).value(format!(
+                            "offset_us={} duration_us={} total_us={}",
+                            phase.offset_us, phase.duration_us, request.duration_us
+                        ))
+                    }))
+            }))
+    }
+    #[must_use]
+    pub fn dependency_graph(source: DependencySource<'_>) -> Option<Self> {
+        let (nodes, tn, edges, te, cycles, tc, bounded) = match source {
+            DependencySource::Exact { nodes, edges, cycles } => {
+                (nodes, nodes.len(), edges, edges.len(), cycles, cycles.len(), false)
+            }
+            DependencySource::Bounded {
+                nodes,
+                total_nodes,
+                edges,
+                total_edges,
+                cycles,
+                total_cycles,
+            } => (nodes, total_nodes, edges, total_edges, cycles, total_cycles, true),
+        };
+        if nodes.len() > crate::DEPENDENCY_GRAPH_NODE_LIMIT
+            || edges.len() > crate::DEPENDENCY_GRAPH_EDGE_LIMIT
+            || cycles.len() > crate::DEPENDENCY_GRAPH_CYCLE_LIMIT
+            || tn < nodes.len()
+            || te < edges.len()
+            || tc < cycles.len()
+        {
+            return None;
+        }
+        let ids: std::collections::BTreeSet<_> = nodes.iter().map(|n| n.id.as_str()).collect();
+        if ids.len() != nodes.len()
+            || edges
+                .iter()
+                .any(|e| !ids.contains(e.source.as_str()) || !ids.contains(e.target.as_str()))
+        {
+            return None;
+        }
+        let edge_ids: std::collections::BTreeSet<_> = edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.target.as_str(), e.relation.as_str()))
+            .collect();
+        if edge_ids.len() != edges.len() {
+            return None;
+        }
+        for c in cycles {
+            if c.members.iter().any(|m| !ids.contains(m.as_str())) {
+                return None;
+            }
+            for i in 0..c.members.len() {
+                let a = &c.members[i];
+                let b = &c.members[(i + 1) % c.members.len()];
+                if !edges.iter().any(|e| e.source == *a && e.target == *b) {
+                    return None;
+                }
+            }
+        }
+        let detail = if bounded {
+            format!(
+                "bounded source: nodes {}/{tn}, edges {}/{te}, cycles {}/{tc}",
+                nodes.len(),
+                edges.len(),
+                cycles.len()
+            )
+        } else {
+            "complete dependency graph".into()
+        };
+        let mut children = nodes
+            .iter()
+            .map(|n| {
+                Self::new(Tag::DependencyNode)
+                    .key(&n.id)
+                    .label(format!("{}@{}", n.label, n.version))
+                    .value(format!("id={} state={} detail={}", n.id, n.state.as_str(), n.detail))
+                    .children(edges.iter().filter(|e| e.source == n.id).map(|e| {
+                        Self::new(Tag::DependencyEdge)
+                            .label(format!("{} → {}", e.relation.as_str(), e.target))
+                            .value(format!("requirement={}", e.requirement))
+                    }))
+            })
+            .collect::<Vec<_>>();
+        children.extend(cycles.iter().enumerate().map(|(i, c)| {
+            Self::new(Tag::DependencyCycle)
+                .label(format!("cycle {}", i + 1))
+                .detail(format!("{} members", c.members.len()))
+                .children(c.members.iter().enumerate().map(|(j, m)| {
+                    Self::new(Tag::DependencyCycleMember)
+                        .key(j.to_string())
+                        .label(m)
+                        .value(format!("position={j}"))
+                }))
+        }));
+        Some(
+            Self::new(Tag::DependencyGraph)
+                .label(format!("{} dependencies", nodes.len()))
+                .detail(detail)
+                .children(children),
+        )
+    }
+    #[must_use]
+    pub fn query_plan(source: QueryPlanSource<'_>) -> Option<Self> {
+        fn count(nodes: &[QueryPlanNode], depth: usize, ids: &mut std::collections::BTreeSet<String>) -> Option<usize> {
+            let mut n = 0;
+            for node in nodes {
+                if depth > crate::QUERY_PLAN_DEPTH_LIMIT {
+                    return None;
+                }
+                if !ids.insert(node.id.clone()) {
+                    return None;
+                }
+                n += 1 + count(&node.children, depth + 1, ids)?
+            }
+            Some(n)
+        }
+        fn element(node: &QueryPlanNode) -> Element {
+            Element::new(Tag::QueryPlanNode)
+                .key(&node.id)
+                .label(format!("{} · {}", node.operator.as_str(), node.label))
+                .value(format!(
+                    "id={} operator={} state={} relation={} detail={}",
+                    node.id,
+                    node.operator.as_str(),
+                    node.state.as_str(),
+                    node.relation,
+                    node.detail
+                ))
+                .children(node.metrics.iter().map(|m| {
+                    Element::new(Tag::QueryPlanMetric)
+                        .label(m.kind.as_str())
+                        .value(m.value.to_string())
+                }))
+                .children(node.children.iter().map(element))
+        }
+        let (roots, total, bounded) = match source {
+            QueryPlanSource::Exact(v) => (v, 0, false),
+            QueryPlanSource::Bounded { prefix, total_nodes } => (prefix, total_nodes, true),
+        };
+        let shown = count(roots, 1, &mut std::collections::BTreeSet::new())?;
+        let total = if bounded {
+            if total < shown {
+                return None;
+            }
+            total
+        } else {
+            shown
+        };
+        if shown > crate::QUERY_PLAN_NODE_LIMIT {
+            return None;
+        }
+        let detail = if bounded {
+            format!("bounded source: showing {shown} of {total} operators")
+        } else {
+            "complete query plan".into()
+        };
+        Some(
+            Self::new(Tag::QueryPlan)
+                .label(format!("{shown} plan operators"))
+                .detail(detail)
+                .children(roots.iter().map(element)),
+        )
+    }
+
     /// A playable file.
     #[must_use]
     pub fn video(uri: impl Into<String>) -> Self {
@@ -587,8 +1204,10 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion,
-        TestCase, TestStatus, TimelineEvent,
+        CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode,
+        DependencyRelation, DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction,
+        MemoryRegion, NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind,
+        QueryNodeState, QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
     };
     use crate::{Element, HEX_VIEW_BYTE_LIMIT};
 
@@ -824,5 +1443,208 @@ mod tests {
                 .count(),
             512
         );
+    }
+
+    #[test]
+    fn network_waterfall_rejects_invalid_timing_and_bounds_exact_semantics() {
+        assert!(NetworkPhase::new(NetworkPhaseKind::Dns, 0, 0).is_none());
+        let overlapping = [
+            NetworkPhase::new(NetworkPhaseKind::Dns, 0, 5).unwrap(),
+            NetworkPhase::new(NetworkPhaseKind::Connect, 4, 2).unwrap(),
+        ];
+        assert!(NetworkRequest::new(HttpMethod::Get, "https://bad", 0, 10, Some(200), 1, "", overlapping).is_none());
+        let phase = NetworkPhase::new(NetworkPhaseKind::Wait, 2, 3).unwrap();
+        let requests = (0..40)
+            .filter_map(|index| {
+                NetworkRequest::new(
+                    HttpMethod::Get,
+                    format!("https://example.test/{index}\n{}", "x".repeat(200)),
+                    0,
+                    10,
+                    Some(200),
+                    42,
+                    "detail\tclean",
+                    [phase.clone()],
+                )
+            })
+            .collect::<Vec<_>>();
+        let element = Element::network_waterfall(NetworkSource::Bounded {
+            prefix: &requests,
+            total_requests: 99,
+        });
+        let mut reconciliation = crate::Reconciliation::new();
+        let frame = reconciliation.reconcile(&element);
+        assert_eq!(
+            frame
+                .patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::NetworkRequest,
+                        ..
+                    }
+                ))
+                .count(),
+            crate::NETWORK_WATERFALL_REQUEST_LIMIT
+        );
+        assert_eq!(
+            frame
+                .patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::NetworkPhase,
+                        ..
+                    }
+                ))
+                .count(),
+            crate::NETWORK_WATERFALL_REQUEST_LIMIT
+        );
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. } if value.as_text() == Some("truncated: showing 32 of 99 requests"))));
+        assert!(
+            !frame
+                .patches
+                .iter()
+                .filter_map(|p| if let crate::Patch::SetProp { value, .. } = p {
+                    value.as_text()
+                } else {
+                    None
+                })
+                .any(|v| v.contains('\n') || v.contains('\t'))
+        );
+    }
+
+    #[test]
+    fn dependency_graph_is_referential_bounded_and_cycle_exact() {
+        let nodes = (0..32)
+            .map(|i| {
+                DependencyNode::new(
+                    format!("n{i}"),
+                    format!("node{i}"),
+                    "1.0",
+                    if i == 1 {
+                        DependencyState::Conflict
+                    } else {
+                        DependencyState::Resolved
+                    },
+                    "detail\n",
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut edges = (0..31)
+            .map(|i| {
+                DependencyEdge::new(
+                    format!("n{i}"),
+                    format!("n{}", i + 1),
+                    DependencyRelation::Runtime,
+                    "^1",
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        edges.push(DependencyEdge::new("n31", "n0", DependencyRelation::Runtime, "^1").unwrap());
+        let cycle = DependencyCycle::new(["n0", "n1", "n2"]).unwrap();
+        assert!(
+            Element::dependency_graph(DependencySource::Exact {
+                nodes: &nodes,
+                edges: &edges,
+                cycles: &[cycle]
+            })
+            .is_none(),
+            "cycle closure must be an actual edge"
+        );
+        assert!(
+            Element::dependency_graph(DependencySource::Exact {
+                nodes: &nodes,
+                edges: &[DependencyEdge::new("n0", "absent", DependencyRelation::Build, "*").unwrap()],
+                cycles: &[]
+            })
+            .is_none()
+        );
+        let graph = Element::dependency_graph(DependencySource::Bounded {
+            nodes: &nodes,
+            total_nodes: 90,
+            edges: &edges,
+            total_edges: 500,
+            cycles: &[],
+            total_cycles: 0,
+        })
+        .unwrap();
+        let mut r = crate::Reconciliation::new();
+        let f = r.reconcile(&graph);
+        assert_eq!(
+            f.patches
+                .iter()
+                .filter(|p| matches!(
+                    p,
+                    crate::Patch::Create {
+                        tag: crate::Tag::DependencyNode,
+                        ..
+                    }
+                ))
+                .count(),
+            32
+        );
+        assert!(f.patches.iter().any(|p|matches!(p,crate::Patch::SetProp{prop:crate::Prop::Detail,value,..} if value.as_text()==Some("bounded source: nodes 32/90, edges 32/500, cycles 0/0"))));
+    }
+    fn query_metrics() -> Vec<QueryMetric> {
+        [QueryMetricKind::EstimatedRows, QueryMetricKind::ActualRows, QueryMetricKind::Cost,
+         QueryMetricKind::DurationUs, QueryMetricKind::Loops]
+            .into_iter().enumerate()
+            .map(|(index, kind)| QueryMetric::new(kind, index as f64 + 1.0).unwrap()).collect()
+    }
+    fn query_node(id: impl Into<String>, children: impl IntoIterator<Item = QueryPlanNode>) -> QueryPlanNode {
+        QueryPlanNode::new(id, QueryOperator::TableScan, "users", "users", QueryNodeState::Hot,
+            "slow", query_metrics(), children).unwrap()
+    }
+    #[test]
+    fn query_plan_maximum_is_exactly_217_semantic_nodes_without_truncation() {
+        let nodes = (0..crate::QUERY_PLAN_NODE_LIMIT).map(|i| query_node(format!("n{i}"), [])).collect::<Vec<_>>();
+        let plan = Element::query_plan(QueryPlanSource::Exact(&nodes)).unwrap();
+        let frame = crate::Reconciliation::new().reconcile(&plan);
+        assert_eq!(frame.patches.iter().filter(|p| matches!(p, crate::Patch::Create { .. })).count(),
+            1 + crate::QUERY_PLAN_NODE_LIMIT * (1 + crate::QUERY_PLAN_METRIC_LIMIT));
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. }
+            if value.as_text() == Some("complete query plan"))));
+    }
+    #[test]
+    fn query_plan_rejects_the_37th_operator() {
+        let nodes = (0..=crate::QUERY_PLAN_NODE_LIMIT).map(|i| query_node(format!("n{i}"), [])).collect::<Vec<_>>();
+        assert!(Element::query_plan(QueryPlanSource::Exact(&nodes)).is_none());
+    }
+    #[test]
+    fn query_plan_accepts_twelve_levels_and_rejects_thirteen() {
+        fn chain(depth: usize) -> QueryPlanNode {
+            let mut node = query_node(format!("n{}", depth - 1), []);
+            for level in (0..depth - 1).rev() { node = query_node(format!("n{level}"), [node]); }
+            node
+        }
+        assert!(Element::query_plan(QueryPlanSource::Exact(&[chain(crate::QUERY_PLAN_DEPTH_LIMIT)])).is_some());
+        assert!(Element::query_plan(QueryPlanSource::Exact(&[chain(crate::QUERY_PLAN_DEPTH_LIMIT + 1)])).is_none());
+    }
+    #[test]
+    fn query_plan_rejects_duplicate_metric_kinds() {
+        let duration = QueryMetric::new(QueryMetricKind::DurationUs, 42.0).unwrap();
+        assert!(QueryPlanNode::new("scan", QueryOperator::TableScan, "users", "users", QueryNodeState::Normal,
+            "", [duration.clone(), duration], []).is_none());
+    }
+    #[test]
+    fn query_plan_detail_is_control_safe_and_bounded() {
+        let node = QueryPlanNode::new("scan", QueryOperator::TableScan, "users", "users", QueryNodeState::Normal,
+            format!("{}\nignored", "x".repeat(200)), [], []).unwrap();
+        assert_eq!(node.detail.chars().count(), 160);
+        assert!(!node.detail.chars().any(char::is_control));
+    }
+    #[test]
+    fn query_plan_bounded_source_reports_authoritative_provenance() {
+        let leaf = query_node("scan", []);
+        let plan = Element::query_plan(QueryPlanSource::Bounded { prefix: &[leaf], total_nodes: 90 }).unwrap();
+        let frame = crate::Reconciliation::new().reconcile(&plan);
+        assert!(frame.patches.iter().any(|p| matches!(p, crate::Patch::SetProp { prop: crate::Prop::Detail, value, .. }
+            if value.as_text() == Some("bounded source: showing 1 of 90 operators"))));
+        assert!(QueryMetric::new(QueryMetricKind::Loops, f64::NAN).is_none());
     }
 }

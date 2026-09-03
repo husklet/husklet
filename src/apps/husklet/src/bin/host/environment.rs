@@ -34,11 +34,6 @@ impl Environment {
         Self(values)
     }
 
-    pub fn apply(&self, command: &mut std::process::Command) {
-        command.env_clear().envs(TERMINAL_CAPABILITIES);
-        command.envs(self.0.iter().map(|(key, value)| (key, value)));
-    }
-
     pub fn terminal(&self) -> Vec<String> {
         let mut values = TERMINAL_CAPABILITIES
             .map(|(key, value)| format!("{key}={value}"))

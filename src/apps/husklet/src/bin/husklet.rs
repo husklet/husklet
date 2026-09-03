@@ -46,7 +46,7 @@ use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::{ProcessGroup, Processes};
 use host::pty::PtyProcess;
 use host::{
-    command::{application_path, Hl},
+    command::application_path,
     home::Home,
 };
 use screens::workspace::overview::Overview;

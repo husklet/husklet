@@ -8,7 +8,7 @@ export const OPERATION_HISTORY_LIMIT = 6;
 export const SOURCE = 100;
 export const SCHEMA = Object.freeze([
   { key: 'id', title: 'ID', width: { chars: 12 }, sortable: true },
-  { key: 'name', title: 'Workspace record', width: 'fill', sortable: true },
+  { key: 'name', title: 'Workspace record', width: 'fill', sortable: true, editable: true },
   { key: 'state', title: 'State', width: { chars: 12 } },
 ]);
 
@@ -21,6 +21,7 @@ export class LargeRecordSource {
     this.descending = false;
     this.state = 'ready';
     this.generated = 0;
+    this.edits = new Map();
   }
 
   length() {
@@ -41,6 +42,17 @@ export class LargeRecordSource {
     await this.publish();
   }
 
+  async sort(event) {
+    if (event.source !== SOURCE || event.version !== this.version) return { accepted: false, reason: 'stale version' };
+    if (!SCHEMA.some((column) => column.key === event.column && column.sortable)) {
+      return { accepted: false, reason: 'unsortable column' };
+    }
+    this.descending = Boolean(event.descending);
+    this.version += 1;
+    await this.publish();
+    return { accepted: true };
+  }
+
   answer(request) {
     if (request.source !== SOURCE || request.version !== this.version || this.state === 'loading') return null;
     const count = Math.min(request.range.count, WINDOW_LIMIT, Math.max(0, this.length() - request.range.start));
@@ -51,10 +63,23 @@ export class LargeRecordSource {
 
   row(index) {
     if (this.state === 'error') {
-      return { id: 0, cells: [{ Text: 'unavailable' }, { Text: 'The source refused this window' }, { Badge: { label: 'error', tone: 'danger' } }] };
+      return { key: 0, cells: [{ Text: 'unavailable' }, { Text: 'The source refused this window' }, { Badge: { label: 'error', tone: 'Danger' } }] };
     }
     const logical = this.descending ? this.length() - index - 1 : index;
-    return { id: logical, cells: [{ Number: logical }, { Text: `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'positive' : 'warning' } }] };
+    return { key: logical, cells: [{ Number: logical }, { Text: this.edits.get(String(logical)) ?? `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'Positive' : 'Warning' } }] };
+  }
+
+  async edit(event) {
+    const current = event.source === SOURCE && event.version === this.version;
+    const value = String(event.value ?? '').trim();
+    if (!current) return { accepted: false, reason: 'stale version' };
+    if (event.column !== 'name' || !event.row?.id || value.length === 0 || new TextEncoder().encode(value).length > 256) {
+      return { accepted: false, reason: 'invalid value' };
+    }
+    this.edits.set(String(event.row.id), value);
+    this.version += 1;
+    await this.publish();
+    return { accepted: true };
   }
 }
 
@@ -108,17 +133,33 @@ export function LargeDataTableStory({ source }) {
     ),
     ...(state === 'loading' ? [h(Progress, { key: 'loading', label: 'Waiting for a row window' })]
       : state === 'empty' ? [h(EmptyState, { key: 'empty', label: 'No matching records', detail: 'Change the filter or state control.' })]
-      : state === 'error' ? [h(Banner, { key: 'error', label: 'The source rejected this window', tone: 'danger' })] : []),
+      : state === 'error' ? [
+        h(Banner, { key: 'error', label: 'The source rejected this window', tone: 'danger' }),
+        h(Button, { key: 'retry', label: 'Retry row source', onInvoke: () => {
+          update({ state: 'loading' });
+          record('retrying row source');
+        } }),
+      ] : []),
     h(DataTable, {
       source: SOURCE,
       schema: SCHEMA,
       grow: true,
       onFocus: () => record('focused records'),
       onSelect: (event) => {
-        const rows = Array.isArray(event.rows) ? event.rows.slice(0, 1) : [];
-        const label = rows.length === 0 ? 'No record selected' : `Selected logical row ${String(rows[0])}`;
+        const rows = Array.isArray(event.collection?.rows) ? event.collection.rows.slice(0, 1) : [];
+        const current = event.collection?.source === SOURCE && event.collection?.version === source.version;
+        const label = !current || rows.length === 0 ? 'No current record selected' : `Selected immutable record ${String(rows[0].id)}`;
         setSelected(label);
         record(label.toLowerCase());
+      },
+      onEdit: async (event) => {
+        const result = await source.edit(event);
+        record(result.accepted ? `renamed immutable record ${event.row.id}` : `edit refused: ${result.reason}`);
+      },
+      onSort: async (event) => {
+        const result = await source.sort(event);
+        if (result.accepted) setDescending(Boolean(event.descending));
+        record(result.accepted ? `sorted ${event.column} ${event.descending ? 'descending' : 'ascending'}` : `sort refused: ${result.reason}`);
       },
     }),
     h(Text, { label: selected, color: 'text-dim' }),

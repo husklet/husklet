@@ -6,6 +6,20 @@ use hl_extension::{
     Malformed, Manifest, PaneSelection, RelativePath, Resources, Welcome, PROTOCOL,
 };
 
+#[test]
+fn omitted_and_null_ui_slots_both_preserve_legacy_unaddressed_events() {
+    for slot in [None, Some(serde_json::Value::Null)] {
+        let mut value = serde_json::json!({
+            "interaction": "invoke", "trigger": "Invoke", "node": 7, "id": "event"
+        });
+        if let Some(slot) = slot {
+            value.as_object_mut().unwrap().insert("slot".into(), slot);
+        }
+        assert!(matches!(serde_json::from_value::<hl_extension::UiEvent>(value).unwrap(),
+            hl_extension::UiEvent::Invoke { slot: None, .. }));
+    }
+}
+
 /// The document an extension image carries, with extra lines appended.
 fn manifest_document(extra: &str) -> String {
     format!(
@@ -356,6 +370,11 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
             "{} asks for nothing, so it could not do anything",
             path.display()
         );
+        if path.ends_with("extensions/storybook/extension.toml") {
+            assert_eq!(manifest.pane_providers.len(), 1, "the playground is discoverable from a terminal pane");
+            assert_eq!(manifest.pane_providers[0].id.as_str(), "playground");
+            assert_eq!(manifest.pane_providers[0].title, "Component playground");
+        }
         assert_eq!(
             Manifest::parse(&manifest.document().expect("written"), PROTOCOL).expect("re-read"),
             manifest,

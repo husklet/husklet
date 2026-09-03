@@ -238,8 +238,19 @@ impl<S: Storage> Roster<S> {
     /// `Refusal::Record` when the record cannot be written.
     pub fn disable(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
         let previous = self.installation.clone();
+        let previous_record = previous.record(name).cloned();
         let record = self.installation.disable(name)?.clone();
         if let Err(fault) = self.records.save(&record) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
+        if let Err(fault) = self.records.clear_fault(name) {
+            // The record and crash marker form one lifecycle decision. Restore
+            // the former enabled record when clearing the latter is refused,
+            // so neither memory nor a reopen observes a half-disable.
+            if let Some(previous_record) = previous_record.as_ref() {
+                let _ = self.records.save(previous_record);
+            }
             self.installation = previous;
             return Err(fault.into());
         }
@@ -330,13 +341,13 @@ impl<S> std::fmt::Debug for Roster<S> {
 
 /// The manifest a record stands for.
 ///
-/// A record is what a person wrote down; a manifest is what an image declares.
-/// Until the two are stored together the manifest is rebuilt from the record
-/// alone, which is the conservative direction: it declares exactly what was
-/// consented to and nothing an image might have started asking for since.
+/// New records retain the accepted declaration so launch and presentation
+/// policy survives a host restart. Legacy records are rebuilt conservatively.
+/// In both cases the record's separate identity and grant overwrite the nested
+/// declaration, so persistence can never turn a request into authority.
 #[must_use]
 pub fn described(record: &Record) -> Manifest {
-    Manifest {
+    let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: record.version.clone(),
@@ -348,7 +359,15 @@ pub fn described(record: &Record) -> Manifest {
         pane_providers: record.pane_providers.clone(),
         resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::new(),
-    }
+    });
+    // These duplicated fields are the durable consent boundary. A nested
+    // declaration can describe launch and presentation, never widen authority.
+    manifest.name.clone_from(&record.name);
+    manifest.version.clone_from(&record.version);
+    manifest.protocol = hl_extension::PROTOCOL;
+    manifest.capabilities.clone_from(&record.granted);
+    manifest.pane_providers.clone_from(&record.pane_providers);
+    manifest
 }
 
 /// Puts one stored record under the policy, in the state it was stored in.
@@ -367,9 +386,51 @@ fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objecti
 
 #[cfg(test)]
 mod tests {
-    use super::{Refusal, Roster};
+    use super::{described, Refusal, Roster};
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Stage};
-    use hl_ws::storage::Directory;
+    use hl_ws::storage::{Directory, Key, Storage};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    #[derive(Clone)]
+    struct RefuseFaultClear {
+        inner: Directory,
+        refuse: Arc<AtomicBool>,
+    }
+
+    impl Storage for RefuseFaultClear {
+        type Error = hl_ws::storage::Error;
+
+        fn put(&self, key: &Key, bytes: &[u8]) -> Result<(), Self::Error> {
+            self.inner.put(key, bytes)
+        }
+
+        fn get(&self, key: &Key) -> Result<Vec<u8>, Self::Error> {
+            self.inner.get(key)
+        }
+
+        fn list(&self, prefix: Option<&Key>) -> Result<Vec<Key>, Self::Error> {
+            self.inner.list(prefix)
+        }
+
+        fn list_until(&self, prefix: Option<&Key>, deadline: Instant) -> Result<Vec<Key>, Self::Error> {
+            self.inner.list_until(prefix, deadline)
+        }
+
+        fn remove(&self, key: &Key) -> Result<(), Self::Error> {
+            if key.as_str().starts_with(super::super::state::FAULT_PREFIX)
+                && self.refuse.swap(false, Ordering::AcqRel)
+            {
+                return Err(std::io::Error::other("injected fault-marker refusal").into());
+            }
+            self.inner.remove(key)
+        }
+
+        fn remove_until(&self, key: &Key, deadline: Instant) -> Result<(), Self::Error> {
+            self.inner.remove_until(key, deadline)
+        }
+    }
 
     fn manifest(name: &str, capabilities: &[Capability]) -> Manifest {
         Manifest {
@@ -414,6 +475,34 @@ mod tests {
     }
 
     #[test]
+    fn launch_declaration_survives_reopen_without_widening_consent() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let mut asked = manifest("sample", &[Capability::ContainerRead, Capability::Interface]);
+        asked.entrypoint = Some(vec!["/opt/sample/bin/serve".to_owned(), "--socket".to_owned()]);
+        asked.resources = hl_extension::Resources {
+            memory_mb: 384,
+            cpus: 2,
+            process_count: 41,
+        };
+        let mut roster = opened(temporary.path());
+        roster
+            .register(&asked, "sha256:aaaa", &Grant::new([Capability::Interface]), 7)
+            .expect("registered");
+
+        let reopened = opened(temporary.path());
+        let record = reopened.installation.record(&asked.name).expect("reopened record");
+        let restored = described(record);
+
+        assert_eq!(restored.entrypoint, asked.entrypoint);
+        assert_eq!(restored.resources, asked.resources);
+        assert!(restored.capabilities.holds(Capability::Interface));
+        assert!(
+            !restored.capabilities.holds(Capability::ContainerRead),
+            "persisted requested capabilities cannot widen the recorded grant"
+        );
+    }
+
+    #[test]
     fn enabling_and_disabling_survive_a_reopen() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);
@@ -451,6 +540,51 @@ mod tests {
         let entry = &reopened.entries()[0];
         assert_eq!(entry.image_digest, "sha256:aaaa", "retry keeps the installed image");
         assert!(entry.granted.holds(Capability::Interface), "retry keeps consent");
+    }
+
+    #[test]
+    fn disabling_a_host_fault_survives_reopen_as_standby() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut roster = opened(temporary.path());
+        roster
+            .register(&asked, "sha256:aaaa", &asked.capabilities, 7)
+            .expect("registered");
+        roster.enable(&asked.name).expect("enabled");
+        roster.fault(&asked.name, 6).expect("fault persisted");
+
+        roster.disable(&asked.name).expect("disabled");
+
+        assert_eq!(roster.stage(&asked.name), Stage::Standby);
+        assert_eq!(opened(temporary.path()).stage(&asked.name), Stage::Standby);
+    }
+
+    #[test]
+    fn failed_fault_clear_rolls_back_the_durable_disable() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let refuse = Arc::new(AtomicBool::new(false));
+        let storage = Directory::open(temporary.path()).expect("storage");
+        let mut roster = Roster::open(RefuseFaultClear {
+            inner: storage,
+            refuse: Arc::clone(&refuse),
+        })
+        .expect("roster");
+        let asked = manifest("sample", &[Capability::Interface]);
+        roster
+            .register(&asked, "sha256:aaaa", &asked.capabilities, 7)
+            .expect("registered");
+        roster.enable(&asked.name).expect("enabled");
+        roster.fault(&asked.name, 6).expect("fault persisted");
+        refuse.store(true, Ordering::Release);
+
+        assert!(roster.disable(&asked.name).is_err());
+
+        assert_eq!(roster.stage(&asked.name), Stage::Fault { restarts: 6 });
+        assert_eq!(
+            opened(temporary.path()).stage(&asked.name),
+            Stage::Fault { restarts: 6 },
+            "a reopen sees the former enabled fault, not a half-disable"
+        );
     }
 
     #[test]

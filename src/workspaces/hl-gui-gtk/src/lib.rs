@@ -131,7 +131,9 @@ impl Surface {
 
     fn discard(&mut self, id: NodeId) -> Result<(), Failure> {
         let widget = self.registry.remove(id).ok_or(Failure::Unmapped(id))?;
+        self.sources.retain(|_, node| *node != id);
         self.bindings.forget(id);
+        self.reports.withdraw(id, None);
         build::detach(&widget);
         Ok(())
     }
@@ -179,15 +181,16 @@ impl Renderer for Surface {
             }
             Patch::SetProp { id, prop, value } => {
                 if let (Prop::Source, PropValue::Source(source)) = (*prop, value) {
+                    self.sources.retain(|_, node| *node != *id);
                     self.sources.insert(*source, *id);
                 }
                 let (widget, node) = self.describe(*id, tree)?;
-                prop::apply(widget, node, *prop, value);
+                prop::apply(widget, node, *prop, value, &self.reports);
                 Ok(())
             }
             Patch::ClearProp { id, prop } => {
                 let (widget, node) = self.describe(*id, tree)?;
-                prop::clear(widget, node, *prop);
+                prop::clear(widget, node, *prop, &self.reports);
                 Ok(())
             }
             Patch::SetHandler { id, handler } => {
@@ -197,6 +200,7 @@ impl Renderer for Surface {
             }
             Patch::ClearHandler { id, trigger } => {
                 self.bindings.clear(*id, *trigger);
+                self.reports.withdraw(*id, Some(*trigger));
                 Ok(())
             }
             Patch::Remove { id } => self.discard(*id),

@@ -41,6 +41,11 @@ pub struct Record {
     /// Pane-provider catalogue consented to with this exact image digest.
     #[serde(default)]
     pub pane_providers: Vec<crate::manifest::PaneProvider>,
+    /// Complete declaration accepted for this digest. Records written before
+    /// this field existed reopen with the historical conservative defaults.
+    /// Identity and authority remain the separate fields above.
+    #[serde(default)]
+    pub declaration: Option<Manifest>,
 }
 
 /// Where an extension stands right now.
@@ -281,6 +286,7 @@ impl Installation {
                 enabled: false,
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
+                declaration: Some(manifest.clone()),
             },
             restarts: Restarts::default(),
         });
@@ -317,8 +323,10 @@ impl Installation {
 
     /// Commits an explicitly accepted update after its runtime replacement succeeds.
     ///
-    /// This is the only widening path in the crate, and it takes the consent as
-    /// an argument so that it cannot be reached except from a prompt's answer.
+    /// This is the only widening path in the crate, and it takes the selected
+    /// consent as an argument so that it cannot be reached except from a
+    /// prompt's answer. Optional additions left unselected are not granted;
+    /// interface authority remains mandatory for an authored interface.
     /// The result is still an intersection with what the manifest asks for.
     /// `replace` must be atomic from the host's perspective and leave the old
     /// runtime in service on error; the record changes only after success.
@@ -342,7 +350,11 @@ impl Installation {
         }
         let granted =
             Grant::new(entry.record.granted.iter().chain(consented.iter())).intersect(&update.manifest.capabilities);
-        let missing = granted.missing(&update.manifest.capabilities);
+        let required = Grant::new(
+            (update.manifest.interface.is_some() || !update.manifest.pane_providers.is_empty())
+                .then_some(Capability::Interface),
+        );
+        let missing = granted.missing(&required);
         if !missing.is_empty() {
             return Err(UpdateFailure::Refused(Objection::Consent(missing)));
         }
@@ -353,7 +365,8 @@ impl Installation {
             granted,
             enabled: entry.record.enabled,
             installed_at: at,
-            pane_providers: update.manifest.pane_providers,
+            pane_providers: update.manifest.pane_providers.clone(),
+            declaration: Some(update.manifest),
         };
         replace(&entry.record, &next).map_err(UpdateFailure::Replacement)?;
         entry.record = next;
@@ -390,6 +403,10 @@ impl Installation {
             .get_mut(name)
             .ok_or_else(|| Objection::Absence(name.clone()))?;
         entry.record.enabled = false;
+        // A deliberate disable is also an explicit answer to a crash loop.
+        // Retaining the terminal marker would present a stopped extension as
+        // faulted forever and make a later enable indistinguishable from retry.
+        entry.restarts = Restarts::default();
         Ok(&entry.record)
     }
 
@@ -441,8 +458,8 @@ impl Installation {
 
     /// Clears a fault at a person's request and puts the sidecar back on duty.
     ///
-    /// This is the only exit from [`Stage::Fault`], so a crash loop cannot
-    /// resolve itself into a state nobody was told about.
+    /// Alongside an explicit disable, this is an exit from [`Stage::Fault`],
+    /// so a crash loop cannot resolve itself into a state nobody was told about.
     ///
     /// # Errors
     /// Returns `Objection::Absence` when nothing is recorded under `name`.
@@ -593,6 +610,22 @@ mod tests {
 
         installation.retry(&manifest.name).expect("retried");
         assert_eq!(installation.stage(&manifest.name), Stage::Duty);
+    }
+
+    #[test]
+    fn disabling_a_fault_is_an_explicit_standby_decision() {
+        let mut installation = Installation::new();
+        let manifest = manifest(&[Capability::Interface]);
+        installation
+            .install(&manifest, "sha256:a", &manifest.capabilities, 10)
+            .expect("installed");
+        installation.enable(&manifest.name).expect("enabled");
+        installation.fault(&manifest.name, 7).expect("fault recorded");
+
+        installation.disable(&manifest.name).expect("disabled");
+
+        assert_eq!(installation.stage(&manifest.name), Stage::Standby);
+        assert!(!installation.record(&manifest.name).expect("record").enabled);
     }
 
     #[test]

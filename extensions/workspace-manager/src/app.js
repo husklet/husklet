@@ -1,13 +1,19 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, Progress, Row, Scroll, Separator, Spinner, Text,
+  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, ResourceState, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, logText, processRows, resourceReference, shortId } from './model.js';
+import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
+const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
+const PROCESS_SAMPLING_CONCURRENCY = 8;
+
+function StructuredDetail({ value }) {
+  return h(ObjectInspector, { value, ...INSPECTOR_BOUNDS, height: { minimum: { step: 10 }, maximum: { step: 32 } } });
+}
 
 export function WorkspaceManager({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
   const [section, setSection] = useState('overview');
@@ -91,17 +97,27 @@ function Navigation({ section, onSelect }) {
     }))));
 }
 
-function Overview({ containers, images, volumes, networks, onOpen }) {
-  const running = (containers.data ?? []).filter((item) => item.state === 'running').length;
+export function Overview({ containers, images, volumes, networks, onOpen }) {
+  const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
+  const imagesSummary = resourceSummary(images, () => 'Available locally');
+  const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
+  const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
   return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 3 },
     h(Heading, { label: 'Workspace overview', scale: 'title' }),
     h(Text, { label: 'Inspect and operate the resources in this workspace.', color: 'text-dim' }),
     h(Row, { gap: 2, wrap: true },
-      h(Summary, { title: 'Containers', value: containers.loading ? '…' : String((containers.data ?? []).length), detail: `${running} running`, onOpen: () => onOpen('containers') }),
-      h(Summary, { title: 'Images', value: images.loading ? '…' : String((images.data ?? []).length), detail: 'Available locally', onOpen: () => onOpen('images') }),
-      h(Summary, { title: 'Volumes', value: volumes.loading ? '…' : String((volumes.data ?? []).length), detail: 'Durable local storage', onOpen: () => onOpen('volumes') }),
-      h(Summary, { title: 'Networks', value: networks.loading ? '…' : String((networks.data ?? []).length), detail: 'Workspace-local connectivity', onOpen: () => onOpen('networks') })),
+      h(Summary, { title: 'Containers', ...containersSummary, onOpen: () => onOpen('containers') }),
+      h(Summary, { title: 'Images', ...imagesSummary, onOpen: () => onOpen('images') }),
+      h(Summary, { title: 'Volumes', ...volumesSummary, onOpen: () => onOpen('volumes') }),
+      h(Summary, { title: 'Networks', ...networksSummary, onOpen: () => onOpen('networks') })),
     h(ErrorText, { error: containers.error ?? images.error ?? volumes.error ?? networks.error })));
+}
+
+function resourceSummary(resource, readyDetail) {
+  if (resource.loading) return { value: '…', detail: 'Reading inventory…' };
+  if (resource.error) return { value: 'Unavailable', detail: 'Refresh failed' };
+  const records = resource.data ?? [];
+  return { value: String(records.length), detail: readyDetail(records) };
 }
 
 function Summary({ title: label, value, detail, onOpen }) {
@@ -110,31 +126,179 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
+function containerCreateOptions(draft) {
+  const bytes = (value) => new TextEncoder().encode(value).byteLength;
+  const hostname = draft.hostname;
+  if (hostname && (bytes(hostname) > 253 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(hostname))) {
+    throw new Error('Hostname must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 253 bytes.');
+  }
+  const user = draft.user;
+  if (user && (bytes(user) > 256 || user.includes('\0'))) {
+    throw new Error('Run as user must be a nonempty, NUL-free value of at most 256 bytes.');
+  }
+  const labelsText = draft.labels.trim();
+  let labels;
+  if (labelsText) {
+    try { labels = JSON.parse(labelsText); } catch { throw new Error('Labels must be valid JSON pairs, such as [["role","worker"]].'); }
+    if (!Array.isArray(labels) || labels.length > 128
+      || labels.some((pair) => !Array.isArray(pair) || pair.length !== 2
+        || pair.some((value) => typeof value !== 'string')
+        || pair[0].length === 0 || pair[0].includes('\0') || bytes(pair[0]) > 256
+        || pair[1].includes('\0') || bytes(pair[1]) > 4_096)
+      || new Set(labels.map(([name]) => name)).size !== labels.length) {
+      throw new Error('Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.');
+    }
+  }
+  const network = draft.network;
+  if (network && (bytes(network) > 255 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(network))) {
+    throw new Error('Initial network must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes.');
+  }
+  const entrypointText = draft.entrypoint.trim();
+  let entrypoint;
+  if (entrypointText) {
+    try { entrypoint = JSON.parse(entrypointText); } catch { throw new Error('Entrypoint must be valid JSON, such as ["/bin/sh","-lc"].'); }
+    if (!Array.isArray(entrypoint) || entrypoint.length === 0 || entrypoint.length > 64 || entrypoint[0] === ''
+      || entrypoint.some((argument) => typeof argument !== 'string' || argument.includes('\0') || bytes(argument) > 4_096)
+      || entrypoint.reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+      throw new Error('Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.');
+    }
+  }
+  const commandText = draft.command.trim();
+  let command;
+  if (commandText) {
+    try { command = JSON.parse(commandText); } catch { throw new Error('Command must be valid JSON, such as ["sh","-lc","printf ready"].'); }
+    if (!Array.isArray(command) || command.length > 64 || (command.length > 0 && command[0] === '')
+      || command.some((argument) => typeof argument !== 'string' || argument.includes('\0') || bytes(argument) > 4_096)
+      || command.reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+      throw new Error('Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.');
+    }
+  }
+  if ([...(entrypoint ?? []), ...(command ?? [])].reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+    throw new Error('Entrypoint and command together must contain at most 32768 bytes.');
+  }
+  const environmentText = draft.environment.trim();
+  let environment;
+  if (environmentText) {
+    try { environment = JSON.parse(environmentText); } catch { throw new Error('Environment must be valid JSON pairs, such as [["MODE","test"]].'); }
+    if (!Array.isArray(environment) || environment.length > 256
+      || environment.some((pair) => !Array.isArray(pair) || pair.length !== 2
+        || pair.some((value) => typeof value !== 'string')
+        || pair[0].length === 0 || pair[0].includes('=') || pair[0].includes('\0') || bytes(pair[0]) > 256
+        || pair[1].includes('\0') || bytes(pair[1]) > 8_192)
+      || new Set(environment.map(([name]) => name)).size !== environment.length) {
+      throw new Error('Environment must contain at most 256 unique [name, value] pairs with bounded NUL-free strings.');
+    }
+  }
+  const workingDirectory = draft.workingDirectory.trim();
+  if (workingDirectory && (!workingDirectory.startsWith('/') || bytes(workingDirectory) > 4_096
+    || workingDirectory.includes('\0') || workingDirectory.split('/').some((part) => part === '.' || part === '..'))) {
+    throw new Error('Working directory must be an absolute, NUL-free path without dot segments and at most 4096 bytes.');
+  }
+  const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
+  const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
+  const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
+  const mountsText = draft.mounts.trim();
+  let mounts;
+  if (mountsText) {
+    try { mounts = JSON.parse(mountsText); } catch { throw new Error('Mounts must be valid JSON, such as [{"volume":"cache","target":"/cache","read_only":true}].'); }
+    const allowed = new Set(['volume', 'target', 'read_only']);
+    if (!Array.isArray(mounts) || mounts.length > 64
+      || mounts.some((mount) => !mount || typeof mount !== 'object' || Array.isArray(mount)
+        || Object.keys(mount).some((key) => !allowed.has(key))
+        || typeof mount.volume !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(mount.volume)
+        || typeof mount.target !== 'string' || !mount.target.startsWith('/') || bytes(mount.target) > 4_096
+        || mount.target.includes('\0') || mount.target.split('/').some((part) => part === '.' || part === '..')
+        || (mount.read_only !== undefined && typeof mount.read_only !== 'boolean'))
+      || new Set(mounts.map((mount) => mount.target)).size !== mounts.length) {
+      throw new Error('Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.');
+    }
+    mounts = mounts.map(({ volume, target, read_only = false }) => ({ volume, target, read_only }));
+  }
+  const portsText = draft.ports.trim();
+  let ports;
+  if (portsText) {
+    try { ports = JSON.parse(portsText); } catch { throw new Error('Ports must be valid JSON, such as [{"container":8080,"host":18080,"protocol":"tcp"}].'); }
+    const allowed = new Set(['container', 'host', 'protocol']);
+    const validPort = (value) => Number.isInteger(value) && value >= 1 && value <= 65_535;
+    if (!Array.isArray(ports) || ports.length > 64
+      || ports.some((port) => !port || typeof port !== 'object' || Array.isArray(port)
+        || Object.keys(port).some((key) => !allowed.has(key))
+        || !validPort(port.container) || (port.host !== undefined && port.host !== null && !validPort(port.host))
+        || !['tcp', 'udp'].includes(port.protocol))
+      || new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length) {
+      throw new Error('Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.');
+    }
+    ports = ports.map(({ container, host = null, protocol }) => ({ container, host, protocol }));
+  }
+  return {
+    ...(hostname ? { hostname } : {}),
+    ...(entrypoint ? { entrypoint } : {}),
+    ...(command ? { command } : {}),
+    ...(environment ? { environment } : {}),
+    ...(workingDirectory ? { working_directory: workingDirectory } : {}),
+    ...(user ? { user } : {}),
+    ...(labels ? { labels } : {}),
+    ...(network ? { network } : {}),
+    ...(memoryMb === null ? {} : { memory_mb: memoryMb }),
+    ...(cpus === null ? {} : { cpus }),
+    ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
+    ...(mounts ? { mounts } : {}),
+    ...(ports ? { ports } : {}),
+  };
+}
+
+function optionalDecimalLimit(value, label, maximum) {
+  const text = value.trim();
+  if (!text) return null;
+  if (!/^[0-9]+$/.test(text)) throw new Error(`${label} must be a whole decimal number from 1 to ${maximum}.`);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new Error(`${label} must be a whole decimal number from 1 to ${maximum}.`);
+  }
+  return parsed;
+}
+
 export function Containers({ api, resource, containerDetails, onOpenExecution }) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
-  const [draft, setDraft] = useState({ image: '', name: '' });
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
+  const [draft, setDraft] = useState({
+    image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+  });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
   const [creationNotice, setCreationNotice] = useState('');
+  const currentContainers = useRef(new Map());
+  currentContainers.current = new Map((resource.data ?? []).map((container) => [container.id, container.state]));
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
   };
   const inspect = async (item) => {
+    const revision = ++inspectionRevision.current;
     setSelected(item.id);
-    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
+    setInspection({ id: item.id, state: 'loading', count: 0, detail: null, error: null });
     try {
       const detail = await api.containers.inspect(item.id);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(detail);
-      setInspection({ id: item.id, state: 'ready', count, error: null });
+      if (revision !== inspectionRevision.current) return;
+      setInspection({ id: item.id, state: 'ready', count, detail, error: null });
     } catch (cause) {
-      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+      if (revision === inspectionRevision.current) setInspection({ id: item.id, state: 'error', count: 0, detail: null, error: cause });
     }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setSelected(null);
+    setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+  }, [resource.data]);
   const toggleDetails = (item) => {
     if (selected === item.id && inspection.state !== 'error') {
       setSelected(null);
@@ -147,56 +311,163 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     let target = created;
     try {
       if (!target) {
-        const id = await api.containers.create({ image: draft.image.trim(), name: draft.name.trim() });
+        const id = await api.containers.create({
+          image: draft.image.trim(), name: draft.name.trim(), ...containerCreateOptions(draft),
+        });
         target = { id, name: draft.name.trim() };
         setCreated(target);
       }
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
-      setCreated(null); setDraft({ image: '', name: '' });
+      setCreated(null); setDraft({
+        image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+      });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
   };
+  let configurationError = '';
+  try { containerCreateOptions(draft); } catch (error) { configurationError = error.message; }
+  const remove = async (item) => {
+    if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
+      throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
+    }
+    setBusy(`remove:${item.id}`);
+    try {
+      await api.containers.remove(item.id);
+      inspectionRevision.current += 1;
+      setSelected(null);
+      setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+      await detailsSource.replace(null);
+      await resource.reload();
+    } finally { setBusy(''); }
+  };
   const view = bounded(resource.data);
+  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
     h(Card, { variant: 'outline' },
       h(CardHeader, { label: 'Create a container', detail: 'Uses a local image and starts it after durable creation.' }),
-      h(CardContent, {}, h(Row, { gap: 1, wrap: true },
+      h(CardContent, { gap: 1 },
+        h(Heading, { label: 'Identity and image', scale: 'body' }),
+        h(Row, { gap: 1, wrap: true },
         h(Entry, { value: draft.image, placeholder: 'Image reference', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, image: String(event.value ?? '') })) }),
-        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }))),
+        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.hostname, placeholder: 'Hostname (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, hostname: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.user, placeholder: 'Run as user (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, user: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.labels, placeholder: 'Labels JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, labels: String(event.value ?? '') })) })),
+        h(Text, { label: 'Labels use JSON [name, value] pairs, for example [["role","worker"]].', color: 'text-dim', wrap: true }),
+        h(Heading, { label: 'Process', scale: 'body' }),
+        h(Row, { gap: 1, wrap: true },
+        h(Entry, { value: draft.entrypoint, placeholder: 'Entrypoint argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, entrypoint: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) })),
+        h(Text, { label: 'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.', color: 'text-dim', wrap: true }),
+        h(Heading, { label: 'Resources and connectivity', scale: 'body' }),
+        h(Row, { gap: 1, wrap: true },
+        h(Entry, { value: draft.memoryMb, placeholder: 'Memory limit MiB (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, memoryMb: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.cpus, placeholder: 'CPU limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, cpus: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.pidsLimit, placeholder: 'PID limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.network, placeholder: 'Initial network (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, network: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.mounts, placeholder: 'Named volume mounts JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, mounts: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.ports, placeholder: 'Published ports JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, ports: String(event.value ?? '') })) })),
+        h(Text, { label: 'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.', color: 'text-dim', wrap: true })),
       h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
         label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
-        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0)),
+        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError)),
         onInvoke: createAndStart,
       })),
+      configurationError ? h(Text, { label: configurationError, color: 'danger', wrap: true }) : null,
       h(ErrorText, { error: creationError }), creationNotice ? h(Text, { label: creationNotice, color: 'positive', wrap: true }) : null),
-    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No containers', detail: 'Create a container through an agent or extension, then refresh this page.' }),
-    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading containers…',
+      emptyLabel: 'No containers',
+      emptyDetail: 'Create a container through an agent or extension, then refresh this page.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry containers',
+      onRetry: resource.reload,
+    }, ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.name || shortId(item.id), detail: item.image }),
-      h(CardContent, {}, h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' }))),
+      h(CardContent, { gap: 2 },
+        h(Row, { gap: 2, align: 'center' }, h(Badge, { label: item.state, tone: stateTone(item.state) }), h(Text, { label: shortId(item.id), color: 'text-dim' })),
+        h(ContainerRename, { api, container: item, reload: resource.reload, blocked: busy !== '' })),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
-        ...containerActions(item, busy, act)),
-      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onOpenExecution }) : null)),
-    h(Omitted, { count: view.omitted }));
+        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
+        ...containerActions(item, busy, act, remove)),
+      selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onRetry: () => inspect(item), onOpenExecution }) : null)),
+    h(Omitted, { count: view.omitted })));
 }
 
-function containerActions(item, busy, act) {
+function ContainerRename({ api, container, reload, blocked }) {
+  const current = container.name ?? '';
+  const [draft, setDraft] = useState(current);
+  const [result, setResult] = useState({ state: 'idle', error: null, name: '' });
+  useEffect(() => {
+    setDraft(current);
+    setResult({ state: 'idle', error: null, name: '' });
+  }, [container.id, current]);
+  const validation = containerNameError(draft);
+  const rename = async () => {
+    if (validation || draft === current || result.state === 'loading') return;
+    const requested = draft;
+    const immutableId = container.id;
+    setResult({ state: 'loading', error: null, name: requested });
+    try {
+      await api.containers.rename(immutableId, requested);
+      setResult({ state: 'success', error: null, name: requested });
+      await reload();
+    } catch (error) {
+      setResult({ state: 'error', error, name: requested });
+    }
+  };
+  const changed = draft !== current;
+  return h(Column, { gap: 1 },
+    h(Heading, { label: 'Rename container', scale: 'caption' }),
+    h(Text, { label: `Current name: ${current || '(unnamed)'}. Immutable ID: ${container.id}`, color: 'text-dim', wrap: true }),
+    h(Row, { gap: 1, wrap: true, align: 'center' },
+      h(Entry, {
+        value: draft, placeholder: `New name for ${shortId(container.id)}`, enabled: !blocked && result.state !== 'loading',
+        onChange: (event) => {
+          setDraft(String(event.value ?? '').slice(0, 129));
+          setResult({ state: 'idle', error: null, name: '' });
+        },
+      }),
+      result.state === 'loading' ? h(Spinner) : null,
+      h(Button, {
+        label: result.state === 'loading' ? 'Renaming…' : result.state === 'error' ? 'Retry rename' : 'Rename',
+        enabled: !blocked && result.state !== 'loading' && changed && !validation,
+        onInvoke: rename,
+      })),
+    changed && validation ? h(Text, { label: validation, color: 'danger', wrap: true }) : null,
+    result.state === 'error' ? h(Text, { label: result.error?.message ?? String(result.error), color: 'danger', wrap: true }) : null,
+    result.state === 'success' ? h(Text, {
+      label: `Renamed to ${result.name}. Inventory identity will update after the authoritative refresh.`, color: 'positive', wrap: true,
+    }) : null);
+}
+
+function containerActions(item, busy, act, remove) {
   const blocked = busy !== '';
   const running = item.state === 'running';
   return [
     h(Button, { key: 'start', label: running ? 'Restart' : 'Start', enabled: !blocked, onInvoke: () => act(running ? 'restart' : 'start', item.id) }),
     h(Button, { key: 'pause', label: item.state === 'paused' ? 'Resume' : 'Pause', enabled: !blocked && (running || item.state === 'paused'), onInvoke: () => act(item.state === 'paused' ? 'unpause' : 'pause', item.id) }),
     h(ConfirmAction, {
-      key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop',
+      key: 'stop', label: 'Stop', confirmLabel: 'Confirm stop', pendingLabel: 'Confirm stop',
+      authorityKey: `container:${item.id}:stop`,
       question: `Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && running,
       onConfirm: () => act('stop', item.id),
+    }),
+    h(ConfirmAction, {
+      key: 'remove', label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove',
+      authorityKey: `container:${item.id}:remove`,
+      question: `Remove stopped container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && item.state === 'stopped',
+      onConfirm: () => remove(item),
     }),
   ];
 }
 
-function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
+function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecution }) {
   const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
   const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
   const [attachment, setAttachment] = useState({ state: 'idle', slot: '', error: null });
@@ -238,18 +509,19 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
     } catch (error) { setAttachment({ state: 'error', slot: '', error }); }
   };
   return h(CardContent, { gap: 2 },
-    inspection.state === 'loading'
-      ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading container details…' }))
-      : inspection.state === 'error'
-        ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-        : inspection.state === 'ready' && inspection.count === 0
-          ? h(EmptyState, { label: 'No container details', detail: 'The host returned no inspectable fields.' })
-          : inspection.state === 'ready'
-            ? h(KeyValueTable, { source: CONTAINER_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })
-            : null,
+    h(ResourceState, {
+      state: inspection.state === 'idle' ? 'loading' : inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+      loadingLabel: 'Reading container details…',
+      emptyLabel: 'No container details',
+      emptyDetail: 'The host returned no inspectable fields.',
+      error: inspection.error?.message ?? String(inspection.error ?? ''),
+      retryLabel: 'Retry details',
+      onRetry,
+    }, h(StructuredDetail, { value: inspection.detail })),
     h(Separator), h(Heading, { label: 'Quick actions', scale: 'caption' }),
     h(Row, { gap: 1, wrap: true }, h(Button, { label: 'Load logs', onInvoke: readLogs }), h(ConfirmAction, {
-      label: 'Kill', confirmLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
+      authorityKey: `container:${container.id}:kill:SIGKILL`,
+      label: 'Kill', confirmLabel: 'Confirm kill', pendingLabel: 'Confirm kill', question: `Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`,
       onConfirm: () => act('kill', container.id, 'SIGKILL'),
     })),
     logs === null ? null : h(Text, { label: logs || 'No log output.', wrap: true }),
@@ -273,22 +545,57 @@ function ContainerDetail({ api, container, act, inspection, onOpenExecution }) {
 
 export function Processes({ api, resource }) {
   const [snapshots, setSnapshots] = useState([]);
+  const [failures, setFailures] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const loadRevision = useRef(0);
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
+    setLoading(true);
     try {
-      const groups = await Promise.all((resource.data ?? []).map(async (container) => ({ container, rows: await api.containers.processes(container.id) })));
-      setSnapshots(groups);
-      setError(null);
-    } catch (cause) { setError(cause); }
+      const containers = resource.data ?? [];
+      const groups = new Array(containers.length);
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < containers.length) {
+          const index = cursor; cursor += 1;
+          const container = containers[index];
+          try { groups[index] = { container, rows: await api.containers.processes(container.id), error: null }; }
+          catch (cause) { groups[index] = { container, rows: null, error: cause }; }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(PROCESS_SAMPLING_CONCURRENCY, containers.length) }, worker));
+      if (revision !== loadRevision.current) return;
+      const available = groups.filter(({ rows }) => rows !== null);
+      const unavailable = groups.filter(({ error: cause }) => cause !== null);
+      setSnapshots(available);
+      setFailures(unavailable);
+      setError(available.length === 0 && unavailable.length > 0 ? unavailable[0].error : null);
+    } finally { if (revision === loadRevision.current) setLoading(false); }
   }, [api, resource.data]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { loadRevision.current += 1; };
+  }, [load]);
   const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
   const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
+  const completeNamespace = snapshots.length > 0 && snapshots.every(({ rows }) => rows.scope === 'namespace');
   const view = bounded(processes);
+  const failure = error ?? resource.error;
+  const state = loading || resource.loading ? 'loading' : failure ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Processes', subtitle: 'A bounded snapshot across all visible containers.' },
-    h(Toolbar, { loading: resource.loading, onRefresh: load }), h(ErrorText, { error }),
-    h(InventoryEmpty, { resource: { loading: resource.loading, error }, records: view.records, label: 'No running processes', detail: 'Start a container to see its process snapshot here.' }),
-    h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
+    h(Toolbar, { loading: state === 'loading', onRefresh: load }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading processes…',
+      emptyLabel: 'No running processes',
+      emptyDetail: 'Start a container to see its process snapshot here.',
+      error: failure?.message ?? String(failure ?? ''),
+      retryLabel: 'Retry processes',
+      onRetry: resource.error ? resource.reload : load,
+    }, h(Text, { label: completeNamespace
+      ? 'Full container namespace snapshots; PIDs identify only this observation and may be reused.'
+      : 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
     observed > 0 ? h(Text, { label: `Observed ${new Date(observed).toISOString()}`, color: 'text-dim' }) : null,
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
@@ -300,7 +607,15 @@ export function Processes({ api, resource }) {
     }),
     h(Omitted, { count: view.omitted }),
     snapshots.some(({ rows }) => rows.truncated)
-      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
+      ? h(Text, { label: 'The host process snapshot was truncated at its safety limit.', color: 'warning', wrap: true }) : null),
+    snapshots.length > 0 && failures.length > 0 ? h(Column, { gap: 1 },
+      h(Text, { label: `${failures.length} container process snapshot${failures.length === 1 ? '' : 's'} unavailable; available containers remain visible.`, color: 'warning', wrap: true }),
+      ...failures.slice(0, 8).map(({ container, error: cause }) => h(Text, {
+        key: container.id,
+        label: `${container.name || shortId(container.id)}: ${String(cause?.message ?? cause).slice(0, 256)}`,
+        color: 'text-dim', wrap: true,
+      })),
+      failures.length > 8 ? h(Text, { label: `${failures.length - 8} more failures omitted.`, color: 'text-dim' }) : null) : null);
 }
 
 export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
@@ -310,32 +625,41 @@ export function Executions({ api, resource, executionDetails, truncated = false,
   const [inspection, setInspection] = useState({ state: 'idle', count: 0, error: null });
   const [output, setOutput] = useState(null);
   const [busy, setBusy] = useState('');
+  const [inventoryVersion, setInventoryVersion] = useState(0);
+  const lifecycleRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const inspect = async (id) => {
+    const revision = ++lifecycleRevision.current;
     setSelected(id); setInspection({ state: 'loading', count: 0, error: null }); setOutput(null);
     try {
       const detail = await api.containers.execution(id);
+      if (revision !== lifecycleRevision.current) return;
       const count = await detailsSource.replace(detail);
+      if (revision !== lifecycleRevision.current) return;
       setInspection({ state: 'ready', count, error: null });
-    } catch (error) { setInspection({ state: 'error', count: 0, error }); }
+    } catch (error) { if (revision === lifecycleRevision.current) setInspection({ state: 'error', count: 0, error }); }
   };
   useEffect(() => {
     if (requestedExecution && selected !== requestedExecution) void inspect(requestedExecution);
   }, [requestedExecution]);
   const logs = async (id) => {
+    const revision = lifecycleRevision.current;
     setBusy(`logs:${id}`);
     try {
       const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
+      if (revision !== lifecycleRevision.current) return;
       const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
       setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
         stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }),
         truncated: value.truncated, stdoutTruncated: value.stdout_truncated, stderrTruncated: value.stderr_truncated,
         eof: value.eof }));
-    } finally { setBusy(''); }
+    } finally { if (revision === lifecycleRevision.current) setBusy(''); }
   };
   const wait = async (id) => {
+    const revision = lifecycleRevision.current;
     setBusy(`wait:${id}`);
-    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); await detailsSource.replace(detail); await resource.reload(); }
-    finally { setBusy(''); }
+    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); if (revision !== lifecycleRevision.current) return; await detailsSource.replace(detail); if (revision === lifecycleRevision.current) await resource.reload(); }
+    finally { if (revision === lifecycleRevision.current) setBusy(''); }
   };
   const terminate = async (id) => {
     await api.containers.signalExecution(id, 'SIGTERM');
@@ -343,20 +667,37 @@ export function Executions({ api, resource, executionDetails, truncated = false,
     await inspect(id);
   };
   const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    lifecycleRevision.current += 1;
+    setSelected(''); setInspection({ state: 'idle', count: 0, error: null }); setOutput(null); setBusy('');
+    setInventoryVersion((version) => version + 1);
+  }, [resource.data]);
   const view = bounded(resource.data);
+  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Executions', subtitle: 'Bounded exec-session catalogue, status and captured output.' },
-    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }), h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No executions', detail: 'Commands executed in containers will appear here.' }),
-    ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
+    h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }),
+    h(ResourceState, {
+      state,
+      loadingLabel: 'Reading executions…',
+      emptyLabel: 'No executions',
+      emptyDetail: 'Commands executed in containers will appear here.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry executions',
+      onRetry: resource.reload,
+    }, ...view.records.map((item) => h(Card, { key: `${inventoryVersion}:${item.id}`, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
       h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
-        selected !== item.id ? null : inspection.state === 'loading'
-          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading execution details…' }))
-          : inspection.state === 'error'
-            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-            : inspection.count === 0
-              ? h(EmptyState, { label: 'No execution details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } }),
+        selected !== item.id ? null : h(ResourceState, {
+          state: inspection.state === 'idle' ? 'loading' : inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+          loadingLabel: 'Reading execution details…',
+          emptyLabel: 'No execution details',
+          emptyDetail: 'The host returned no inspectable fields.',
+          error: inspection.error?.message ?? String(inspection.error ?? ''),
+          retryLabel: 'Retry details',
+          onRetry: () => inspect(item.id),
+        }, h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })),
         selected === item.id && output ? h(Column, { gap: 1 },
           h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || (output.eof ? 'No stdout captured (EOF).' : 'No stdout captured yet; execution is still running.'), monospace: true }),
           output.stdoutTruncated ? h(Text, { label: 'Standard output was truncated to its configured bound.', color: 'warning' }) : null,
@@ -367,13 +708,13 @@ export function Executions({ api, resource, executionDetails, truncated = false,
           output.truncated && !output.stdoutTruncated && !output.stderrTruncated
             ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
+        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id ? setSelected('') : void inspect(item.id) }),
         h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
         h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
-        h(ConfirmAction, { label: 'Terminate', confirmLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
-        h(ConfirmAction, { label: 'Remove record', confirmLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
+        h(ConfirmAction, { authorityKey: `execution:${item.id}:SIGTERM`, label: 'Terminate', confirmLabel: 'Confirm SIGTERM', pendingLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
+        h(ConfirmAction, { authorityKey: `execution:${item.id}:remove`, label: 'Remove record', confirmLabel: 'Confirm removal', pendingLabel: 'Confirm removal', question: `Remove execution record ${shortId(item.id)}?`, enabled: !busy && !item.running, onConfirm: () => remove(item.id) })))),
     h(Omitted, { count: view.omitted }),
-    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null);
+    truncated ? h(Text, { label: 'The host execution catalogue was truncated at its safety limit.', color: 'warning', wrap: true }) : null));
 }
 
 const IMAGE_DETAIL_SCHEMA = Object.freeze([
@@ -390,6 +731,8 @@ export function Images({ api, resource, imageDetails }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const currentImages = useRef(new Set());
   currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
   const [pull, setPull] = useState(null);
@@ -409,7 +752,7 @@ export function Images({ api, resource, imageDetails }) {
     void api.watchImagePulls(async (change) => {
       if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
       const status = await api.images.pullStatus(pull.job);
-      if (disposed) return;
+      if (disposed || status.job !== pull.job || status.revision < change.revision) return;
       setPull(status);
       if (status.state === 'complete') { setNotice(`Pulled ${status.reference}.`); await resource.reload(); }
     }).then((dispose) => { if (disposed) void dispose(); else stop = dispose; }).catch((error) => {
@@ -417,20 +760,36 @@ export function Images({ api, resource, imageDetails }) {
     });
     return () => { disposed = true; if (stop) void stop(); };
   }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
-  const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
-  const inspect = (item) => run(`inspect:${item.id}`, async () => {
+  const cancelPull = () => run('pull-cancel', async () => {
+    await api.images.cancelPull(pull.job);
+    setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' }));
+  });
+  const inspect = async (item) => {
+    const revision = ++inspectionRevision.current;
+    setBusy(`inspect:${item.id}`);
     setDetail(null);
     setInspection({ id: item.id, state: 'loading', count: 0, error: null });
     try {
       const value = await api.images.inspect(item.reference || item.id);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(value);
+      if (revision !== inspectionRevision.current) return;
       setDetail(value);
       setInspection({ id: item.id, state: 'ready', count, error: null });
     } catch (cause) {
-      setInspection({ id: item.id, state: 'error', count: 0, error: cause });
-      throw cause;
+      if (revision === inspectionRevision.current) setInspection({ id: item.id, state: 'error', count: 0, error: cause });
+    } finally {
+      setBusy('');
     }
-  });
+  };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setDetail(null);
+    setInspection({ id: '', state: 'idle', count: 0, error: null });
+    setConfirm('');
+  }, [resource.data]);
   const remove = (item) => run(`remove:${item.id}`, async () => {
     if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
     await api.images.remove(item.id); setConfirm('');
@@ -443,6 +802,7 @@ export function Images({ api, resource, imageDetails }) {
     await resource.reload();
   });
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Images', subtitle: 'Images available to this workspace.' },
     h(Row, { gap: 1 }, h(Entry, { value: reference, placeholder: 'registry/image:tag', onChange: (event) => setReference(String(event.value ?? '')) }), h(Button, { label: pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull', enabled: !busy && reference.trim().length > 0 && (!pull || ['complete', 'failed', 'cancelled'].includes(pull.state)), onInvoke: startPull }), h(Button, { label: 'Refresh', enabled: !busy, onInvoke: resource.reload })),
     pull ? h(Card, { variant: pull.state === 'failed' ? 'outline' : 'filled' },
@@ -451,58 +811,103 @@ export function Images({ api, resource, imageDetails }) {
         pull.layer ? h(Text, { label: `Layer ${pull.layer}`, color: 'text-dim' }) : null,
         pull.error ? h(Text, { label: pull.error, color: 'danger', wrap: true }) : null),
       h(CardActions, {}, !['complete', 'failed', 'cancelled'].includes(pull.state) ? h(Button, { label: 'Cancel pull', onInvoke: cancelPull }) : null)) : null,
-    h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
+    h(ErrorText, { error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading images…',
+      emptyLabel: 'No images',
+      emptyDetail: 'Enter an image reference above to pull one into this workspace.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry images',
+      onRetry: resource.reload,
+    }, h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null, confirm === 'prune'
       ? h(React.Fragment, {}, h(Text, { label: 'Remove every unused image?', color: 'warning' }), h(Button, { label: 'Confirm prune', enabled: !busy, tone: 'danger', destructive: true, onInvoke: prune }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
       : h(Button, { label: 'Prune unused images', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm('prune') })),
-    h(ErrorText, { error: error ?? resource.error }), notice ? h(Text, { label: notice, color: 'positive' }) : null,
-    h(InventoryEmpty, { resource: { loading: resource.loading, error: error ?? resource.error }, records: view.records, label: 'No images', detail: 'Enter an image reference above to pull one into this workspace.' }),
     ...view.records.map((item) => h(Card, { key: item.id, variant: detail?.id === item.id ? 'filled' : 'outline' }, h(CardHeader, { label: item.reference || item.repo_tags?.[0] || '<untagged>', detail: shortId(item.id) }),
       h(CardContent, {}, h(Text, { label: bytes(item.size), color: 'text-dim' }),
-        inspection.id === item.id && inspection.state === 'loading'
-          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading image details…' }))
-          : inspection.id === item.id && inspection.state === 'error'
-            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-            : inspection.id === item.id && inspection.state === 'ready' && inspection.count === 0
-              ? h(EmptyState, { label: 'No image details', detail: 'The host returned no inspectable fields.' })
-              : detail?.id === item.id
-                ? h(KeyValueTable, { source: IMAGE_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 12 }, maximum: { step: 40 } } })
-                : null),
-      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === item.id && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
+        inspection.id === item.id ? h(ResourceState, {
+          state: inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+          loadingLabel: 'Reading image details…',
+          emptyLabel: 'No image details',
+          emptyDetail: 'The host returned no inspectable fields.',
+          error: inspection.error?.message ?? String(inspection.error ?? ''),
+          retryLabel: 'Retry inspect',
+          onRetry: () => inspect(item),
+        }, h(StructuredDetail, { value: detail })) : null),
+      h(CardActions, { gap: 1 }, h(Button, { label: 'Inspect', enabled: !busy, onInvoke: () => inspect(item) }), confirm === item.id
         ? h(React.Fragment, {}, h(Text, { label: `Remove immutable image ${item.id}?`, color: 'warning' }), h(Button, { label: 'Confirm remove', enabled: !busy, tone: 'danger', destructive: true, onInvoke: () => remove(item) }), h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => setConfirm('') }))
         : h(Button, { label: 'Remove', enabled: !busy, tone: 'danger', onInvoke: () => setConfirm(item.id) })))),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted })));
 }
 
 export function Volumes({ api, resource, volumeDetails }) {
   const localDetails = useMemo(() => new VolumeDetailsSource(), []);
   const detailsSource = volumeDetails ?? localDetails;
   const [name, setName] = useState('');
-  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, error: null });
-  const create = async () => { await api.volumes.create(name.trim()); setName(''); await resource.reload(); };
+  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, detail: null, error: null });
+  const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
+  const create = async () => {
+    const requested = name.trim();
+    if (!requested || creation.state === 'loading') return;
+    setCreation({ state: 'loading', name: requested, error: null });
+    try {
+      await api.volumes.create(requested);
+      await resource.reload();
+      setName('');
+      setCreation({ state: 'success', name: requested, error: null });
+    } catch (cause) {
+      setCreation({ state: 'error', name: requested, error: cause });
+    }
+  };
   const currentVolumes = useRef(new Map());
   currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
   const remove = async (volume) => {
-    if (currentVolumes.current.get(volume.name) !== volume.generation) return;
+    if (currentVolumes.current.get(volume.name) !== volume.generation) {
+      throw new Error(`Volume ${volume.name} changed generation; inspect and confirm again.`);
+    }
     await api.volumes.remove(volume.name, volume.generation);
-    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, error: null });
+    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
     await resource.reload();
   };
   const inspect = async (volume) => {
-    setInspection({ name: volume.name, state: 'loading', count: 0, error: null });
+    const revision = ++inspectionRevision.current;
+    setInspection({ name: volume.name, state: 'loading', count: 0, detail: null, error: null });
     try {
-      const count = await detailsSource.replace(await api.volumes.inspect(volume.name));
-      setInspection({ name: volume.name, state: 'ready', count, error: null });
-    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, error }); }
+      const detail = await api.volumes.inspect(volume.name);
+      if (revision !== inspectionRevision.current) return;
+      const count = await detailsSource.replace(detail);
+      if (revision !== inspectionRevision.current) return;
+      setInspection({ name: volume.name, state: 'ready', count, detail, error: null });
+    } catch (error) { if (revision === inspectionRevision.current) setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
+  }, [resource.data]);
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
-    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
-    h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
-    ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
+    creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating volume ${creation.name}…` })) : null,
+    creation.state === 'error' ? h(Text, { label: boundedMessage(creation.error), color: 'danger', wrap: true }) : null,
+    creation.state === 'success' ? h(Text, { label: `Created volume ${creation.name}.`, color: 'positive', wrap: true }) : null,
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading volumes…',
+      emptyLabel: 'No volumes',
+      emptyDetail: 'Create a named volume above when a workload needs durable storage.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry volumes',
+      onRetry: resource.reload,
+    }, ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
+        authorityKey: `volume:${volume.name}:${volume.generation}:remove`,
+        label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove', question: `Remove volume ${volume.name} generation ${volume.generation}?`,
         onConfirm: () => remove(volume),
       })),
       inspection.name === volume.name ? h(CardContent, {},
@@ -512,8 +917,8 @@ export function Volumes({ api, resource, volumeDetails }) {
             ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
             : inspection.count === 0
               ? h(EmptyState, { label: 'No volume details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: VOLUME_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 6 }, maximum: { step: 10 } } })) : null)),
-    h(Omitted, { count: view.omitted }));
+              : h(StructuredDetail, { value: inspection.detail })) : null)),
+    h(Omitted, { count: view.omitted })));
 }
 
 export function Networks({ api, resource, networkDetails }) {
@@ -521,38 +926,116 @@ export function Networks({ api, resource, networkDetails }) {
   const detailsSource = networkDetails ?? localDetails;
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
+  const [aliases, setAliases] = useState('');
+  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const [error, setError] = useState(null);
+  const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
+  const [operation, setOperation] = useState({ state: 'idle', request: null, error: null });
+  const [disconnectRequest, setDisconnectRequest] = useState(null);
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
+  const endpointInput = useRef({ container: '', aliases: '' });
+  endpointInput.current = { container: container.trim(), aliases };
   const currentNetworks = useRef(new Set());
   currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
   const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
-  const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
-  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, error: null }); await resource.reload(); };
+  const create = async () => {
+    const requested = name.trim();
+    if (!requested || creation.state === 'loading') return;
+    setCreation({ state: 'loading', name: requested, error: null });
+    try {
+      await api.networks.create(requested);
+      await resource.reload();
+      setName('');
+      setCreation({ state: 'success', name: requested, error: null });
+    } catch (cause) {
+      setCreation({ state: 'error', name: requested, error: cause });
+    }
+  };
+  const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null }); await resource.reload(); };
   const inspect = async (network) => {
     const id = resourceReference(network);
-    setInspection({ id, state: 'loading', count: 0, error: null });
+    const revision = ++inspectionRevision.current;
+    setInspection({ id, state: 'loading', count: 0, detail: null, error: null });
     try {
-      const count = await detailsSource.replace(await api.networks.inspect(id));
-      setInspection({ id, state: 'ready', count, error: null });
-    } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
+      const detail = await api.networks.inspect(id);
+      if (revision !== inspectionRevision.current) return;
+      const count = await detailsSource.replace(detail);
+      if (revision !== inspectionRevision.current) return;
+      setInspection({ id, state: 'ready', count, detail, error: null });
+    } catch (error) { if (revision === inspectionRevision.current) setInspection({ id, state: 'error', count: 0, detail: null, error }); }
   };
-  const attach = async (network, verb) => { const id = resourceReference(network); if (!current(id)) return; await api.networks[verb](id, container.trim()); await resource.reload(); };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+    setDisconnectRequest(null);
+  }, [resource.data]);
+  const request = (network, verb) => {
+    const containerId = container.trim();
+    if (!immutableContainerId(containerId)) throw new TypeError('Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.');
+    return { verb, network: resourceReference(network), container: containerId, aliases: verb === 'connect' ? endpointAliases(aliases) : [] };
+  };
+  const attach = async (next) => {
+    if (next.container !== endpointInput.current.container
+      || (next.verb === 'connect' && next.aliases.join(',') !== endpointAliases(endpointInput.current.aliases).join(','))) {
+      throw new Error('Endpoint input changed; review and confirm the operation again.');
+    }
+    if (!current(next.network)) throw new Error(`Network ${next.network} changed or disappeared; inspect and confirm again.`);
+    setOperation({ state: 'loading', request: next, error: null });
+    try {
+      if (next.verb === 'connect') await api.networks.connect(next.network, next.container, { aliases: next.aliases });
+      else await api.networks.disconnect(next.network, next.container);
+      await resource.reload();
+      setOperation({ state: 'success', request: next, error: null });
+      setDisconnectRequest(null);
+    } catch (cause) {
+      setOperation({ state: 'error', request: next, error: cause });
+      throw cause;
+    }
+  };
+  const begin = (network, verb) => {
+    setError(null);
+    try {
+      const next = request(network, verb);
+      if (verb === 'disconnect') setDisconnectRequest(next);
+      else void attach(next).catch(() => {});
+    } catch (cause) { setOperation({ state: 'error', request: null, error: cause }); }
+  };
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
-    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
-    h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
-    h(ErrorText, { error: error ?? resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
-    ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
+    creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating network ${creation.name}…` })) : null,
+    creation.state === 'error' ? h(Text, { label: boundedMessage(creation.error), color: 'danger', wrap: true }) : null,
+    creation.state === 'success' ? h(Text, { label: `Created network ${creation.name}.`, color: 'positive', wrap: true }) : null,
+    h(Entry, { value: container, placeholder: 'Complete container ID', enabled: operation.state !== 'loading', onChange: (event) => { setContainer(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); setDisconnectRequest(null); } }),
+    h(Entry, { value: aliases, placeholder: 'Endpoint aliases (comma-separated, optional)', enabled: operation.state !== 'loading', onChange: (event) => { setAliases(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); } }),
+    operation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `${title(operation.request.verb)}ing immutable endpoint…` })) : null,
+    operation.state === 'error' ? h(Row, { gap: 1, wrap: true }, h(Text, { label: boundedMessage(operation.error), color: 'danger', wrap: true }), operation.request ? h(Button, { label: `Retry ${operation.request.verb}`, onInvoke: () => { void attach(operation.request).catch(() => {}); } }) : null) : null,
+    operation.state === 'success' ? h(Text, { label: `${operation.request.verb === 'connect' ? 'Connected' : 'Disconnected'} container ${operation.request.container} ${operation.request.verb === 'connect' ? 'to' : 'from'} network ${operation.request.network}${operation.request.aliases.length ? ` with ${operation.request.aliases.length} endpoint alias${operation.request.aliases.length === 1 ? '' : 'es'}` : ''}.`, color: 'positive', wrap: true }) : null,
+    h(ErrorText, { error }),
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading networks…',
+      emptyLabel: 'No networks',
+      emptyDetail: 'Create a network above to connect workspace containers.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry networks',
+      onRetry: resource.reload,
+    }, ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
-      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
-        label: 'Disconnect', confirmLabel: 'Confirm disconnect',
-        question: `Disconnect immutable container ${container.trim() || 'container'} from network ${resourceReference(network)}?`,
-        enabled: container.trim().length > 0, onConfirm: () => attach(network, 'disconnect'),
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: operation.state !== 'loading' && container.trim().length > 0, onInvoke: () => begin(network, 'connect') }), h(Button, {
+        label: 'Disconnect', enabled: operation.state !== 'loading' && container.trim().length > 0, tone: 'danger', onInvoke: () => begin(network, 'disconnect'),
       }), h(ConfirmAction, {
-        label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
+        authorityKey: `network:${resourceReference(network)}:remove`,
+        label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
         onConfirm: () => remove(network),
       })),
+      disconnectRequest?.network === resourceReference(network) ? h(CardContent, {},
+        h(Text, { label: `Disconnect immutable container ${disconnectRequest.container} from network ${disconnectRequest.network}?`, color: 'warning', wrap: true }),
+        h(Row, { gap: 1 }, h(Button, { label: 'Confirm disconnect', enabled: operation.state !== 'loading', tone: 'danger', destructive: true, onInvoke: () => { void attach(disconnectRequest).catch(() => {}); } }), h(Button, { label: 'Cancel', enabled: operation.state !== 'loading', onInvoke: () => setDisconnectRequest(null) }))) : null,
       inspection.id === resourceReference(network) ? h(CardContent, {},
         inspection.state === 'loading'
           ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading network details…' }))
@@ -560,13 +1043,13 @@ export function Networks({ api, resource, networkDetails }) {
             ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
             : inspection.count === 0
               ? h(EmptyState, { label: 'No network details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: NETWORK_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 8 }, maximum: { step: 16 } } })) : null)),
-    h(Omitted, { count: view.omitted }));
+              : h(StructuredDetail, { value: inspection.detail })) : null)),
+    h(Omitted, { count: view.omitted })));
 }
 
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }
 function Toolbar({ loading, onRefresh }) { return h(Row, { gap: 1, align: 'center' }, loading ? h(Spinner) : null, h(Button, { label: 'Refresh', enabled: !loading, onInvoke: onRefresh })); }
-function ErrorText({ error }) { return error ? h(Text, { label: error.message ?? String(error), color: 'danger', wrap: true }) : null; }
+function ErrorText({ error }) { return error ? h(Text, { label: boundedMessage(error), color: 'danger', wrap: true }) : null; }
 function InventoryEmpty({ resource, records, label, detail }) {
   return !resource.loading && !resource.error && records.length === 0
     ? h(EmptyState, { label, detail })
@@ -574,27 +1057,6 @@ function InventoryEmpty({ resource, records, label, detail }) {
 }
 function Omitted({ count }) { return count > 0 ? h(Text, { label: `${count} more records omitted to keep this view bounded.`, color: 'text-dim' }) : null; }
 
-// A destructive operation is always two distinct interactions. The first
-// only reveals this prompt; only the final button carries destructive
-// metadata and can call the host API.
-function ConfirmAction({ label, confirmLabel, question, enabled = true, onConfirm }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const confirm = async () => {
-    setBusy(true); setError(null);
-    try { await onConfirm(); setConfirming(false); } catch (cause) { setError(cause); } finally { setBusy(false); }
-  };
-  if (!confirming) return h(Button, {
-    label, enabled: enabled && !busy, tone: 'danger', onInvoke: () => { setError(null); setConfirming(true); },
-  });
-  return h(Column, { gap: 1 },
-    h(Text, { label: question, color: 'warning', wrap: true }),
-    h(Row, { gap: 1, align: 'center' }, busy ? h(Spinner) : null,
-      h(Button, { label: confirmLabel, enabled: !busy, tone: 'danger', destructive: true, onInvoke: confirm }),
-      h(Button, { label: 'Cancel', enabled: !busy, onInvoke: () => { setError(null); setConfirming(false); } })),
-    h(ErrorText, { error }));
-}
 function title(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
 function stateTone(state) { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
 

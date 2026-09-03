@@ -14,3 +14,8 @@ capabilities = ["interface"]
 
 [interface]
 tab_title = "Components"
+
+[[pane_providers]]
+id = "playground"
+title = "Component playground"
+icon = "applications-development-symbolic"

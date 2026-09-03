@@ -8,7 +8,7 @@ use crate::component::field;
 use crate::text;
 
 /// Applies one property to an already constructed widget.
-pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropValue) {
+pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropValue, reports: &crate::event::Reports) {
     match prop {
         Prop::Label => text::caption(widget, node.tag, value),
         Prop::Value => text::body(widget, node.tag, value),
@@ -44,14 +44,14 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Choices => choices(widget, value),
         Prop::Columns => columns(widget, value),
         Prop::Schema | Prop::Source | Prop::RowHeight => {
-            crate::collection::configure(widget, prop, value);
+            crate::collection::configure(widget, node, prop, value, reports);
         }
     }
 }
 
 /// Restores a property to its constructed default.
-pub(crate) fn clear(widget: &gtk::Widget, node: &Node, prop: Prop) {
-    apply(widget, node, prop, &PropValue::Nothing);
+pub(crate) fn clear(widget: &gtk::Widget, node: &Node, prop: Prop, reports: &crate::event::Reports) {
+    apply(widget, node, prop, &PropValue::Nothing, reports);
 }
 
 fn tooltip(widget: &gtk::Widget, value: &PropValue) {
@@ -146,7 +146,7 @@ fn columns(widget: &gtk::Widget, value: &PropValue) {
         gallery.set_max_children_per_line(u32::from(value.as_count().unwrap_or(1)));
         return;
     }
-    crate::collection::configure(widget, Prop::Columns, value);
+    // Legacy non-virtual tables do not use the report channel.
 }
 
 fn ellipsize(widget: &gtk::Widget, value: &PropValue) {

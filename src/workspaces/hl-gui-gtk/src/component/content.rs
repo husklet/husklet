@@ -22,12 +22,212 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::TimelineView => memory_map().upcast(),
         Tag::TestReportView => memory_map().upcast(),
         Tag::CoverageView => memory_map().upcast(),
+        Tag::NetworkWaterfall => network_waterfall().upcast(),
+        Tag::NetworkRequest => network_request().upcast(),
+        Tag::NetworkPhase => network_phase().upcast(),
+        Tag::DependencyGraph | Tag::DependencyNode | Tag::DependencyCycle => dependency_container(tag).upcast(),
+        Tag::DependencyEdge | Tag::DependencyCycleMember => dependency_leaf().upcast(),
+        Tag::QueryPlan => dependency_container(Tag::DependencyGraph).upcast(),
+        Tag::QueryPlanNode => dependency_container(Tag::DependencyNode).upcast(),
+        Tag::QueryPlanMetric => dependency_leaf().upcast(),
         Tag::DiffViewer => diff().upcast(),
         Tag::DiffLine => diff_line().upcast(),
         Tag::StackTrace => stack_trace().upcast(),
         Tag::StackFrame => stack_frame().upcast(),
         _ => chart().upcast(),
     }
+}
+
+fn dependency_container(tag: Tag) -> gtk::Box {
+    let root = super::axis::column(2);
+    root.add_css_class("dependency-container");
+    let label = super::slot::caption_label();
+    label.set_selectable(true);
+    label.add_css_class("monospace");
+    root.append(&label);
+    if tag == Tag::DependencyGraph || tag == Tag::DependencyCycle {
+        let detail = super::slot::detail_label();
+        detail.set_selectable(true);
+        root.append(&detail)
+    } else {
+        let value = super::axis::label();
+        value.set_selectable(true);
+        value.add_css_class("monospace");
+        super::slot::field(&value);
+        root.append(&value)
+    }
+    root
+}
+fn dependency_leaf() -> gtk::Box {
+    let root = super::axis::column(0);
+    let label = super::slot::caption_label();
+    label.set_selectable(true);
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    super::slot::field(&value);
+    root.append(&label);
+    root.append(&value);
+    root
+}
+pub(crate) fn dependency_value(widget: &gtk::Widget, value: &str) -> bool {
+    let Some(field) = super::slot::editable(widget).and_then(|w| w.downcast::<gtk::Label>().ok()) else {
+        return false;
+    };
+    field.set_text(value);
+    for c in ["dependency-resolved", "dependency-missing", "dependency-conflict"] {
+        widget.remove_css_class(c)
+    }
+    if let Some(state) = value.split_whitespace().find_map(|p| p.strip_prefix("state=")) {
+        widget.add_css_class(&format!("dependency-{state}"))
+    }
+    true
+}
+pub(crate) fn query_value(widget: &gtk::Widget, value: &str) -> bool {
+    let ok = dependency_value(widget, value);
+    for class in ["query-plan-normal", "query-plan-hot", "query-plan-estimate_mismatch", "query-plan-spill"] {
+        widget.remove_css_class(class)
+    }
+    if let Some(state) = value.split_whitespace().find_map(|p| p.strip_prefix("state=")) {
+        widget.add_css_class(&format!("query-plan-{state}"))
+    }
+    ok
+}
+pub(crate) fn dependency_attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if ![
+        Tag::DependencyGraph,
+        Tag::DependencyNode,
+        Tag::DependencyCycle,
+        Tag::QueryPlan,
+        Tag::QueryPlanNode,
+    ]
+    .into_iter()
+    .any(|t| super::belongs(parent, t))
+    {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|p| {
+        p.append(child);
+        true
+    })
+}
+pub(crate) fn dependency_detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if ![
+        Tag::DependencyGraph,
+        Tag::DependencyNode,
+        Tag::DependencyCycle,
+        Tag::QueryPlan,
+        Tag::QueryPlanNode,
+    ]
+    .into_iter()
+    .any(|t| super::belongs(parent, t))
+    {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|p| {
+        p.remove(child);
+        true
+    })
+}
+
+fn network_waterfall() -> gtk::Box {
+    let root = super::axis::column(4);
+    root.add_css_class("network-waterfall");
+    root.set_hexpand(true);
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    let detail = super::slot::detail_label();
+    detail.set_selectable(true);
+    root.append(&title);
+    root.append(&detail);
+    root
+}
+fn network_request() -> gtk::Box {
+    let root = super::axis::column(2);
+    root.add_css_class("network-request");
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    title.add_css_class("monospace");
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    value.add_css_class("dim-label");
+    super::slot::field(&value);
+    root.append(&title);
+    root.append(&value);
+    root
+}
+fn network_phase() -> gtk::Box {
+    let root = super::axis::row(8);
+    root.add_css_class("network-phase");
+    let title = super::slot::caption_label();
+    title.set_selectable(true);
+    title.set_width_chars(10);
+    let value = super::axis::label();
+    value.set_selectable(true);
+    value.add_css_class("monospace");
+    value.set_hexpand(true);
+    super::slot::field(&value);
+    let bar = gtk::LevelBar::new();
+    bar.set_min_value(0.0);
+    bar.set_max_value(1.0);
+    bar.set_size_request(120, 8);
+    bar.add_css_class("network-phase-bar");
+    root.append(&title);
+    root.append(&value);
+    root.append(&bar);
+    root
+}
+
+pub(crate) fn network_value(widget: &gtk::Widget, tag: Tag, value: &str) -> bool {
+    let Some(field) = super::slot::editable(widget).and_then(|w| w.downcast::<gtk::Label>().ok()) else {
+        return false;
+    };
+    field.set_text(value);
+    if tag == Tag::NetworkRequest {
+        for class in ["network-success", "network-failure", "network-pending"] {
+            widget.remove_css_class(class);
+        }
+        let status = value.split_whitespace().find_map(|part| part.strip_prefix("status="));
+        let class = status
+            .and_then(|s| s.parse::<u16>().ok())
+            .map_or("network-pending", |s| {
+                if s < 400 { "network-success" } else { "network-failure" }
+            });
+        widget.add_css_class(class);
+    } else if let Some(bar) = super::slot::offspring(widget)
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
+    {
+        let number = |name: &str| {
+            value
+                .split_whitespace()
+                .find_map(|p| p.strip_prefix(name)?.parse::<f64>().ok())
+        };
+        if let (Some(duration), Some(total)) = (number("duration_us="), number("total_us=")) {
+            bar.set_value((duration / total).clamp(0.0, 1.0));
+        }
+    }
+    true
+}
+
+pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if !(super::belongs(parent, Tag::NetworkWaterfall) || super::belongs(parent, Tag::NetworkRequest)) {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|container| {
+        container.append(child);
+        true
+    })
+}
+pub(crate) fn detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if !(super::belongs(parent, Tag::NetworkWaterfall) || super::belongs(parent, Tag::NetworkRequest)) {
+        return false;
+    }
+    parent.downcast_ref::<gtk::Box>().is_some_and(|container| {
+        container.remove(child);
+        true
+    })
 }
 
 fn json_view() -> gtk::ScrolledWindow {
@@ -486,7 +686,9 @@ pub(crate) fn coverage(widget: &gtk::Widget, value: &str) -> bool {
         rows.remove(&child);
     }
     for (index, line) in value.lines().take(hl_gui::COVERAGE_VIEW_LINE_LIMIT + 1).enumerate() {
-        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") { break; }
+        if index == hl_gui::COVERAGE_VIEW_LINE_LIMIT && !line.starts_with("…\t\t… showing ") {
+            break;
+        }
         let columns = line.splitn(3, '\t').collect::<Vec<_>>();
         if columns.len() != 3 {
             continue;

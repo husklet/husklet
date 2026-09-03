@@ -86,6 +86,12 @@ impl Queue {
         }) {
             return Err(Fault::Malformed("a row window exceeded the text payload limit".into()));
         }
+        if mutations.iter().any(|mutation| {
+            matches!(&mutation.mutation, hl_gui::SourceMutation::Open { columns, .. }
+                if hl_gui::validate_columns(columns).is_err())
+        }) {
+            return Err(Fault::Malformed("an invalid table schema was refused".into()));
+        }
         let cost = |frames: &[SurfaceFrame], mutations: &[SurfaceMutation]| {
             frames
                 .iter()
@@ -188,6 +194,9 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// How often a serving conversation yields to observation and the maximum
+    /// time one socket write may monopolize its worker.
+    const IO_TURN: Duration = Duration::from_millis(250);
     /// How long a connected peer has to complete the handshake.
     ///
     /// A process that connects and says nothing would otherwise hold the one
@@ -301,16 +310,31 @@ impl Conversation {
     /// Returns why the conversation ended, except a clean hangup, which is the
     /// ordinary end of a session and is reported as success.
     pub fn serve(&mut self, services: &Services<'_>) -> Result<(), Fault> {
-        const OBSERVE: Duration = Duration::from_millis(250);
-        self.control.set_read_timeout(Some(OBSERVE))?;
+        self.arm_io_deadlines()?;
+        let mut partial_since = None;
         loop {
             match self.wire.receive() {
-                Ok(frame) => self.exchange(&frame, services)?,
-                Err(Transit::Pending) => self.observe(services)?,
+                Ok(frame) => {
+                    partial_since = None;
+                    self.exchange(&frame, services)?;
+                }
+                Err(Transit::Pending) => {
+                    if self.wire.buffered() == 0 {
+                        partial_since = None;
+                    } else if partial_since.get_or_insert_with(Instant::now).elapsed() >= self.settle {
+                        return Err(Fault::Malformed("an unfinished frame exceeded its deadline".into()));
+                    }
+                    self.observe(services)?;
+                }
                 Err(Transit::Closed) => return Ok(()),
                 Err(other) => return Err(fault(other)),
             }
         }
+    }
+
+    fn arm_io_deadlines(&self) -> io::Result<()> {
+        self.control.set_read_timeout(Some(Self::IO_TURN))?;
+        self.control.set_write_timeout(Some(Self::IO_TURN))
     }
 
     /// Publishes changed full listings for topics backed by real production ports.
@@ -321,45 +345,45 @@ impl Conversation {
     fn observe(&mut self, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
         let mut snapshots = Vec::new();
-        if self.session.may_emit(Topic::Containers) {
+        if self.may_observe(Topic::Containers) {
             if let Ok(containers) = services.containers.list() {
                 snapshots.push(Snapshot::Containers(containers));
             }
         }
-        if self.session.may_emit(Topic::Executions) {
+        if self.may_observe(Topic::Executions) {
             if let Ok(executions) = services.containers.executions() {
                 snapshots.push(Snapshot::Executions(executions));
             }
         }
-        if self.session.may_emit(Topic::Images) {
+        if self.may_observe(Topic::Images) {
             if let Ok(images) = services.images.list() {
                 snapshots.push(Snapshot::Images(images));
             }
         }
-        if self.session.may_emit(Topic::ImagePulls) {
+        if self.may_observe(Topic::ImagePulls) {
             snapshots.extend(services.images.pull_changes().into_iter().map(Snapshot::ImagePulls));
         }
-        if self.session.may_emit(Topic::Volumes) {
+        if self.may_observe(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
                 snapshots.push(Snapshot::Volumes(volumes));
             }
         }
-        if self.session.may_emit(Topic::Networks) {
+        if self.may_observe(Topic::Networks) {
             if let Ok(networks) = services.networks.list() {
                 snapshots.push(Snapshot::Networks(networks));
             }
         }
-        if self.session.may_emit(Topic::Terminal) {
+        if self.may_observe(Topic::Terminal) {
             if let Ok(tabs) = services.terminal.tabs() {
                 snapshots.push(Snapshot::Terminal(tabs));
             }
         }
-        if self.session.may_emit(Topic::Extensions) {
+        if self.may_observe(Topic::Extensions) {
             if let Ok(extensions) = services.extensions.list() {
                 snapshots.push(Snapshot::Extensions(extensions));
             }
         }
-        if self.session.may_emit(Topic::ExtensionAcquisitions) {
+        if self.may_observe(Topic::ExtensionAcquisitions) {
             if let Some(batch) = self.drain_extension_events() {
                 for (index, invalidation) in batch.acquisitions.into_iter().enumerate() {
                     snapshots.push(Snapshot::ExtensionAcquisitions(
@@ -376,12 +400,12 @@ impl Conversation {
                 }
             }
         }
-        if self.session.may_emit(Topic::WorkspaceEvents) {
+        if self.may_observe(Topic::WorkspaceEvents) {
             if let Some(batch) = self.events.as_ref().and_then(super::host::Events::drain) {
                 snapshots.push(Snapshot::WorkspaceEvents(batch));
             }
         }
-        if self.session.may_emit(Topic::WorkspaceLifecycle) {
+        if self.may_observe(Topic::WorkspaceLifecycle) {
             if let Some(revision) = self.workspace_lifecycle_revision {
                 if let Ok(changes) = services.workspace_control.lifecycle_since(revision) {
                     for change in changes {
@@ -406,6 +430,21 @@ impl Conversation {
         }
         self.observe_panes(services)?;
         Ok(())
+    }
+
+    /// Whether collecting a topic can produce an event the peer is currently
+    /// allowed to receive. The first collection has no route yet and is what
+    /// allocates one; after that, exhausted channel credit stops work at the
+    /// service boundary rather than repeatedly rebuilding snapshots which
+    /// cannot leave the host. Returned credit makes the next observation read
+    /// fresh state, so a stalled peer resumes from the latest full snapshot.
+    fn may_observe(&self, topic: Topic) -> bool {
+        if !self.session.may_emit(topic) {
+            return false;
+        }
+        self.subscriptions
+            .channel(topic)
+            .is_none_or(|channel| self.channels.credit(channel).is_some_and(|credit| credit > 0))
     }
 
     fn flush_interactions(&mut self) -> Result<(), Fault> {
@@ -616,6 +655,27 @@ impl Conversation {
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
+        if frame.kind == Kind::Ping {
+            self.wire
+                .send(&Frame::new(frame.channel, Kind::Pong, frame.payload.clone()))
+                .map_err(fault)?;
+            return Ok(());
+        }
+        if frame.kind == Kind::Close {
+            if let Some(topic) = self
+                .session
+                .topics()
+                .into_iter()
+                .find(|topic| self.subscriptions.channel(*topic) == Some(frame.channel))
+            {
+                self.session.unfollow(topic);
+                if topic == Topic::WorkspaceLifecycle {
+                    self.workspace_lifecycle_revision = None;
+                }
+                self.subscriptions.close(topic, &mut self.channels, &mut self.outbox);
+            }
+            return Ok(());
+        }
         if frame.kind == Kind::Credit {
             if let Some(topic) = self.replenish(frame) {
                 self.carry(topic)?;
@@ -646,9 +706,89 @@ impl Conversation {
     /// is refused rather than ending the conversation, because a peer waiting
     /// on a reply learns more from the refusal than from a closed socket.
     fn call(&mut self, frame: &Frame, services: &Services<'_>) -> Result<Reply, Failure> {
-        let request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
+        let mut request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
+        if let hl_extension::Request::TerminalSwitchOccupant { slot, generation, .. } = &mut request {
+            let topology = services.terminal.topology().ok().map(|topology| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+                hash.finish()
+            });
+            let inventory = services.terminal.pane_inventory()?;
+            let pane = inventory
+                .panes
+                .iter()
+                .find(|pane| pane.slot == *slot)
+                .ok_or_else(|| Failure::Absent {
+                    detail: format!("pane {slot} is absent"),
+                })?;
+            let (_, _, observed, _) = self.pane_state(services, pane, topology);
+            if *generation != observed {
+                return Err(Failure::Conflict {
+                    detail: format!("pane {slot} changed since generation {generation}"),
+                });
+            }
+            *generation = pane.generation;
+        } else if let hl_extension::Request::TerminalWritePane { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalRetitlePaneObserved { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalFocusPaneObserved { slot, generation, revision }
+        | hl_extension::Request::TerminalResizeGridObserved { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalRatioObserved { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalSpawnObserved { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalClosePaneObserved { slot, generation, revision }
+        | hl_extension::Request::TerminalSplitObserved { slot, generation, revision, .. }
+        | hl_extension::Request::TerminalSwitchOccupantObserved { slot, generation, revision, .. } = &mut request
+        {
+            let topology = services.terminal.topology().ok().map(|topology| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+                hash.finish()
+            });
+            let inventory = services.terminal.pane_inventory()?;
+            let pane = inventory
+                .panes
+                .iter()
+                .find(|pane| pane.slot == *slot)
+                .ok_or_else(|| Failure::Absent {
+                    detail: format!("pane {slot} is absent"),
+                })?;
+            let (_, observed_revision, observed_generation, _) = self.pane_state(services, pane, topology);
+            if *generation != observed_generation || *revision != observed_revision {
+                return Err(Failure::Conflict {
+                    detail: format!("pane {slot} changed since generation {generation} revision {revision}"),
+                });
+            }
+            *generation = pane.generation;
+            *revision = pane.revision;
+        } else if let hl_extension::Request::PaneSemanticAction { slot, action } = &mut request {
+            let topology = services.terminal.topology().ok().map(|topology| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+                hash.finish()
+            });
+            let inventory = services.terminal.pane_inventory()?;
+            let pane = inventory
+                .panes
+                .iter()
+                .find(|pane| pane.slot == *slot)
+                .ok_or_else(|| Failure::Absent {
+                    detail: format!("pane {slot} is absent"),
+                })?;
+            let (_, observed_revision, observed_generation, _) = self.pane_state(services, pane, topology);
+            if action.generation != observed_generation || action.revision != observed_revision {
+                return Err(Failure::Conflict {
+                    detail: format!(
+                        "pane {slot} changed since generation {} revision {}",
+                        action.generation, action.revision
+                    ),
+                });
+            }
+            // The peer observes the conversation's monotonic pane cursor;
+            // the toolkit adapter authorizes its own stable provider/native
+            // generation. Both checks happen in one dispatch.
+            action.generation = pane.generation;
+        }
         let mut answer = self.session.dispatch(&request, services);
         if let Ok(reply) = &mut answer {
             self.attach_pane_cursors(reply, services);
@@ -664,6 +804,15 @@ impl Conversation {
                     topic: Topic::WorkspaceLifecycle,
                 } => {
                     self.workspace_lifecycle_revision = None;
+                    self.subscriptions
+                        .close(Topic::WorkspaceLifecycle, &mut self.channels, &mut self.outbox);
+                }
+                hl_extension::Request::EventUnsubscribe { topic } => {
+                    // `Session::unfollow` stops publication authority; retire
+                    // the transport route as part of the same acknowledged
+                    // call so repeated topic use cannot leak channel budget or
+                    // retain a coalesced snapshot after disposal.
+                    self.subscriptions.close(*topic, &mut self.channels, &mut self.outbox);
                 }
                 _ => {}
             }
@@ -672,7 +821,7 @@ impl Conversation {
     }
 
     fn attach_pane_cursors(&mut self, reply: &mut Reply, services: &Services<'_>) {
-        if !matches!(reply, Reply::Text(_) | Reply::Panes(_)) {
+        if !matches!(reply, Reply::Text(_) | Reply::Panes(_) | Reply::Semantics(_)) {
             return;
         }
         let topology = services.terminal.topology().ok().map(|topology| {
@@ -689,6 +838,13 @@ impl Conversation {
                     let (_, revision, generation, _) = self.pane_state(services, pane, topology);
                     text.generation = generation;
                     text.revision = revision;
+                }
+            }
+            Reply::Semantics(tree) => {
+                if let Some(pane) = inventory.panes.iter().find(|pane| pane.slot == tree.slot) {
+                    let (_, revision, generation, _) = self.pane_state(services, pane, topology);
+                    tree.generation = generation;
+                    tree.revision = revision;
                 }
             }
             Reply::Panes(returned) => {
@@ -763,10 +919,13 @@ impl Conversation {
         };
         for message in self.outbox.drain(channel) {
             let payload = if topic == Topic::PaneChanges && message.superseded > 0 {
-                serde_json::from_slice::<Snapshot>(&message.payload)
-                    .map(|snapshot| snapshot.with_coalesced(message.superseded))
-                    .and_then(|snapshot| serde_json::to_vec(&snapshot))
-                    .unwrap_or(message.payload)
+                match serde_json::from_slice::<Snapshot>(&message.payload) {
+                    Ok(snapshot) => snapshot
+                        .with_coalesced(message.superseded)
+                        .payload()
+                        .unwrap_or(message.payload),
+                    Err(_) => message.payload,
+                }
             } else {
                 message.payload
             };
@@ -779,11 +938,12 @@ impl Conversation {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
@@ -818,12 +978,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn credited_event_cannot_block_the_conversation_writer_without_bound() {
+        let (ours, _peer) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("stalled-reader").expect("name"),
+            Grant::new([Capability::ContainerRead]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.arm_io_deadlines().expect("socket deadlines");
+        let topic = hl_extension::Topic::Containers;
+        conversation.session.follow(topic);
+        conversation.route(topic).expect("subscription route");
+        let channel = conversation.subscriptions.channel(topic).expect("routed channel");
+        assert_eq!(
+            conversation.subscriptions.emit(
+                topic,
+                vec![b'x'; Frame::PAYLOAD_LIMIT],
+                &conversation.session,
+                &mut conversation.channels,
+                &mut conversation.outbox,
+            ),
+            Emission::Queued,
+        );
+
+        let started = Instant::now();
+        let error = conversation
+            .carry(topic)
+            .expect_err("a peer that never reads must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "credited event held the conversation worker for {:?}",
+            started.elapsed()
+        );
+        assert!(matches!(error, Fault::Socket(_)), "unexpected write failure: {error:?}");
+        assert_eq!(
+            conversation.outbox.depth(channel),
+            0,
+            "failed write is not retained without bound"
+        );
+    }
+
     /// In-memory adapters: no container runtime and no window.
     struct Host {
         ledger: Arc<Ledger>,
     }
-    impl hl_extension::port::VolumeStore for Host {}
-    impl hl_extension::port::NetworkStore for Host {}
+    impl hl_extension::port::VolumeStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
+            self.ledger.note("volumes.list");
+            Ok(Vec::new())
+        }
+    }
+    impl hl_extension::port::NetworkStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
+            self.ledger.note("networks.list");
+            Ok(Vec::new())
+        }
+    }
 
     impl ContainerInventory for Host {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -896,6 +1108,11 @@ mod tests {
                 created: 0,
             })
         }
+
+        fn pull_changes(&self) -> Vec<hl_extension::port::ImagePullChange> {
+            self.ledger.note("images.pull_changes");
+            Vec::new()
+        }
     }
 
     impl TerminalSurface for Host {
@@ -919,6 +1136,27 @@ mod tests {
             }])
         }
 
+        fn pane_inventory(&self) -> Result<hl_extension::PaneInventory, HostError> {
+            let semantic = self.ledger.semantic_revision.load(Ordering::Acquire) != 0;
+            Ok(hl_extension::PaneInventory {
+                panes: vec![hl_extension::InspectablePane {
+                    slot: "s1".to_owned(),
+                    generation: 0,
+                    revision: 0,
+                    kind: if semantic {
+                        hl_extension::PaneKind::Native
+                    } else {
+                        hl_extension::PaneKind::Terminal
+                    },
+                    provider: None,
+                    tab: Some("t1".to_owned()),
+                    title: Some("shell".to_owned()),
+                    focused: true,
+                }],
+                truncated: false,
+            })
+        }
+
         fn open_tab(&self, title: &str) -> Result<String, HostError> {
             self.ledger.note("terminal.open_tab");
             Ok(format!("tab-{title}"))
@@ -940,6 +1178,8 @@ mod tests {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 120,
+                rows: 40,
                 lines: vec![format!("at most {lines}")],
                 cursor_column: 12,
                 cursor_row: 3,
@@ -955,6 +1195,7 @@ mod tests {
             }
             Ok(hl_extension::PaneSemanticTree {
                 slot: slot.to_owned(),
+                generation: 0,
                 revision,
                 root: hl_extension::SemanticNode {
                     id: 1,
@@ -1036,6 +1277,7 @@ mod tests {
                 path: path.clone(),
                 directory: true,
                 size: 0,
+                identity: None,
             }])
         }
 
@@ -1050,6 +1292,7 @@ mod tests {
                 path: path.clone(),
                 directory: false,
                 size: 8,
+                identity: None,
             })
         }
 
@@ -1066,6 +1309,9 @@ mod tests {
                 name: "workspace-manager".into(),
                 image_digest: "sha256:manager".into(),
                 status: "duty".into(),
+                version: "1.0.0".into(),
+                enabled: true,
+                pane_providers: Vec::new(),
             }])
         }
     }
@@ -1126,6 +1372,9 @@ mod tests {
             name: "workspace-manager".into(),
             image_digest: "sha256:observed".into(),
             status: "duty".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
         }]);
         conversation.with_extension_events(events);
 
@@ -1198,6 +1447,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn pane_addressed_pointer_metadata_crosses_the_credited_unix_frame() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut wire = Wire::new(theirs);
+        let event_authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceEvents]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, event_authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceEvents);
+        let events = super::super::host::Events::default();
+        events.observe(hl_extension::WorkspaceEvent::Pointer {
+            phase: hl_extension::PointerPhase::Scroll,
+            slot: "pane-7".into(),
+            generation: 9,
+            x: 12.5,
+            y: 4.0,
+            button: None,
+            modifiers: vec!["shift".into()],
+            delta_x: Some(-1.0),
+            delta_y: Some(2.0),
+        });
+        conversation.with_events(events);
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+
+        conversation.observe(&services(&host)).expect("pointer observed");
+
+        let frame = wire.receive().expect("credited pointer event");
+        let snapshot: Snapshot = serde_json::from_slice(&frame.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::WorkspaceEvents(batch)
+            if matches!(&batch.events[0], hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Scroll,
+                slot,
+                generation: 9,
+                modifiers,
+                delta_x: Some(dx),
+                delta_y: Some(dy),
+                ..
+            } if slot == "pane-7" && modifiers == &["shift"] && *dx == -1.0 && *dy == 2.0)));
+    }
+
     /// Reads the welcome and answers it with a version.
     fn shake(wire: &mut Wire<UnixStream>, protocol: u32) {
         let frame = wire.receive().expect("welcome");
@@ -1240,6 +1533,30 @@ mod tests {
     }
 
     #[test]
+    fn a_ping_is_answered_without_disturbing_the_next_call() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let channel = hl_extension::ChannelId::new(17);
+        let payload = b"client-heartbeat-41".to_vec();
+        wire.send(&Frame::new(channel, Kind::Ping, payload.clone()))
+            .expect("ping sent over the Unix socket");
+        let pong = wire.receive().expect("bounded pong");
+        assert_eq!(pong.kind, Kind::Pong);
+        assert_eq!(pong.channel, channel, "the heartbeat retains its correlation channel");
+        assert_eq!(pong.payload, payload, "the heartbeat retains its opaque correlation payload");
+        assert!(ledger.reached().is_empty(), "heartbeats never dispatch workspace authority");
+
+        let answer = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()), "a hangup after a pong stays clean");
+    }
+
+    #[test]
     fn a_production_subscription_receives_changed_full_snapshots_without_duplicates() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
@@ -1276,6 +1593,47 @@ mod tests {
                 >= 2,
             "the absence of a duplicate is from equality, not a stopped producer"
         );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn closing_an_event_channel_stops_observation_without_closing_calls() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(650)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Containers,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        let event = wire.receive().expect("initial event names its channel");
+        assert_eq!(event.kind, Kind::Event);
+        let reads_before_close = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+
+        wire.send(&Frame::new(event.channel, Kind::Close, Vec::new()))
+            .expect("channel close sent");
+        assert_eq!(wire.receive(), Err(Transit::Pending), "a closed channel emits no more events");
+        let reads_after_close = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+        assert_eq!(reads_after_close, reads_before_close, "a closed channel induces no service polling");
+
+        let answer = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
@@ -1392,6 +1750,137 @@ mod tests {
     }
 
     #[test]
+    fn framed_unsubscribe_retires_the_topic_channel_and_queued_snapshot() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("peer deadline");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+        let ports = services(&host);
+        let topic = hl_extension::Topic::Containers;
+        let snapshot = Snapshot::Containers(vec![ContainerSummary {
+            id: "c1".into(),
+            name: "api".into(),
+            image: "image".into(),
+            state: "running".into(),
+            created: 1,
+        }]);
+        let mut peer = Wire::new(theirs);
+
+        let subscribe = codec::request(&Request::EventSubscribe { topic }).expect("subscribe request");
+        conversation.exchange(&subscribe, &ports).expect("subscribe");
+        assert_eq!(
+            codec::read_reply(&peer.receive().expect("subscribe reply")).unwrap(),
+            Reply::Done
+        );
+        conversation.publish(&snapshot).expect("first snapshot");
+        let first = peer.receive().expect("first event");
+        assert_eq!(first.kind, Kind::Event);
+        let channel = first.channel;
+
+        // Exhaust this route and leave a newer snapshot coalesced behind it.
+        for created in 2..=hl_extension::Channels::CREDIT {
+            let mut next = snapshot.clone();
+            if let Snapshot::Containers(containers) = &mut next {
+                containers[0].created = i64::from(created);
+            }
+            conversation.publish(&next).expect("credited snapshot");
+            peer.receive().expect("credited event");
+        }
+        assert_eq!(conversation.publish(&snapshot), Ok(Emission::Superseded));
+        assert_eq!(conversation.outbox.depth(channel), 1);
+
+        let unsubscribe = codec::request(&Request::EventUnsubscribe { topic }).expect("unsubscribe request");
+        conversation.exchange(&unsubscribe, &ports).expect("unsubscribe");
+        assert_eq!(
+            codec::read_reply(&peer.receive().expect("unsubscribe reply")).unwrap(),
+            Reply::Done
+        );
+        assert_eq!(conversation.subscriptions.channel(topic), None);
+        assert_eq!(
+            conversation.channels.credit(channel),
+            None,
+            "channel budget is returned"
+        );
+        assert_eq!(
+            conversation.outbox.depth(channel),
+            0,
+            "stale coalesced state is discarded"
+        );
+
+        let stale_credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).unwrap());
+        conversation
+            .exchange(&stale_credit, &ports)
+            .expect("stale credit ignored");
+    }
+
+    #[test]
+    fn stalled_subscriptions_do_no_service_reads_and_resume_after_exact_credit() {
+        let ledger = Arc::new(Ledger::default());
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
+        let (ours, _theirs) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([
+                Capability::ContainerRead,
+                Capability::ImageRead,
+                Capability::ImageWrite,
+                Capability::VolumeRead,
+                Capability::NetworkRead,
+                Capability::TerminalRead,
+            ]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        let topics = [
+            hl_extension::Topic::Containers,
+            hl_extension::Topic::Executions,
+            hl_extension::Topic::Images,
+            hl_extension::Topic::ImagePulls,
+            hl_extension::Topic::Volumes,
+            hl_extension::Topic::Networks,
+            hl_extension::Topic::Terminal,
+        ];
+        for topic in topics {
+            conversation.session.follow(topic);
+            conversation.route(topic).expect("subscription route");
+            let channel = conversation.subscriptions.channel(topic).expect("routed channel");
+            for _ in 0..hl_extension::Channels::CREDIT {
+                assert_eq!(
+                    conversation.channels.reserve(channel),
+                    Ok(hl_extension::Permission::Send),
+                    "every initial credit is available for {topic:?}",
+                );
+            }
+            assert_eq!(conversation.channels.credit(channel), Some(0));
+        }
+
+        conversation.observe(&services(&host)).expect("stalled observation");
+        assert!(
+            ledger.reached().is_empty(),
+            "zero credit must stop work before every subscribed service boundary"
+        );
+
+        let resumed = hl_extension::Topic::Containers;
+        let channel = conversation.subscriptions.channel(resumed).expect("container channel");
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+        conversation
+            .exchange(&credit, &services(&host))
+            .expect("credit returned");
+        conversation.observe(&services(&host)).expect("resumed observation");
+        assert_eq!(
+            ledger.reached(),
+            vec!["containers.list"],
+            "only the exact replenished topic resumes, from a fresh service read"
+        );
+    }
+
+    #[test]
     fn pane_observation_does_no_terminal_or_semantic_work_without_a_subscriber() {
         let ledger = Arc::new(Ledger::default());
         let host = Host {
@@ -1452,7 +1941,7 @@ mod tests {
     }
 
     #[test]
-    fn a_native_store_mutation_reaches_the_same_subscriber_as_an_mcp_mutation() {
+    fn native_and_socket_mutations_reach_the_same_subscriber() {
         let host = Host {
             ledger: Arc::new(Ledger::default()),
         };
@@ -1629,6 +2118,13 @@ mod tests {
                     && change.revision == 1
                     && change.generation == 1
         ));
+        let mut semantics = Reply::Semantics(host.semantics("s1").expect("host-local semantic tree"));
+        conversation.attach_pane_cursors(&mut semantics, &services(&host));
+        let Reply::Semantics(tree) = semantics else {
+            panic!("semantic reply retained its kind");
+        };
+        assert_eq!(tree.slot, "s1");
+        assert_eq!((tree.generation, tree.revision), (1, 1));
         assert!(
             initial.payload.len() <= Frame::PAYLOAD_LIMIT,
             "metadata remains protocol bounded"
@@ -1713,6 +2209,26 @@ mod tests {
         );
         assert!(fault.to_string().contains("not yet declared"), "{fault}");
         drop(theirs);
+    }
+
+    #[test]
+    fn a_peer_cannot_hold_the_only_conversation_with_an_unfinished_frame() {
+        let deadline = Duration::from_millis(400);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let encoded = codec::request(&Request::ContainerList)
+            .expect("request")
+            .encode()
+            .expect("frame");
+        let mut stream = wire.into_stream();
+        let started = Instant::now();
+        stream.write_all(&encoded[..5]).expect("partial frame header");
+
+        let fault = served.join().expect("conversation thread").expect_err("partial peer released");
+        assert!(matches!(fault, Fault::Malformed(ref detail) if detail.contains("unfinished frame")));
+        assert!(started.elapsed() >= deadline, "an ordinary observation tick is not mistaken for a stalled frame");
+        assert!(started.elapsed() < Duration::from_secs(2), "the partial-frame deadline remains bounded");
     }
 
     #[test]
@@ -1840,6 +2356,22 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_source_schema_never_reaches_the_window_queue() {
+        let queue = Queue::new();
+        let duplicate = hl_gui::Column::new("same", "Name");
+        let mutation = hl_extension::SurfaceMutation {
+            slot: "table-pane".into(),
+            mutation: hl_gui::SourceMutation::Open {
+                source: hl_gui::SourceId::new(1),
+                columns: vec![duplicate.clone(), duplicate],
+            },
+        };
+        let refusal = queue.deposit(Vec::new(), vec![mutation]);
+        assert!(matches!(refusal, Err(Fault::Malformed(ref detail)) if detail.contains("invalid table schema")));
+        assert!(queue.is_empty(), "invalid schema allocates no GUI work");
+    }
+
+    #[test]
     fn an_oversized_cell_faults_before_the_row_window_is_queued() {
         let queue = Queue::new();
         let mutation = hl_extension::SurfaceMutation {
@@ -1895,6 +2427,27 @@ mod tests {
         assert!(codec::read_reply(&answered).is_ok(), "the conversation survives it");
         drop(wire);
         let _ = served.join().expect("joined");
+    }
+
+    #[test]
+    fn an_unfinished_request_frame_never_dispatches_or_steals_the_next_reply() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let mut unfinished = codec::request(&Request::ContainerList).expect("encoded request");
+        unfinished.flags = hl_extension::Flags::none();
+        wire.send(&unfinished).expect("unfinished frame sent over Unix socket");
+        let refused = wire.receive().expect("unfinished request is answered");
+        assert!(codec::is_failure(&refused));
+        assert!(ledger.reached().is_empty(), "an unfinished logical request never reaches authority");
+
+        let answered = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answered), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]

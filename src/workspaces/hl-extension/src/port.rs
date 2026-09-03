@@ -50,6 +50,9 @@ pub struct ContainerSummary {
 /// pretending all hosts can report one fixed process schema.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ProcessList {
+    /// Complete immutable identity of the container actually sampled.
+    #[serde(default)]
+    pub container_id: String,
     pub titles: Vec<String>,
     pub processes: Vec<Vec<String>>,
     /// Host wall-clock time at which this point-in-time view was produced.
@@ -72,6 +75,8 @@ pub struct ProcessList {
 pub enum ProcessScope {
     #[default]
     Initial,
+    /// Every process visible in the container's PID namespace at observation time.
+    Namespace,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -105,6 +110,8 @@ pub struct ContainerOutput {
 pub struct ContainerCreateSpec {
     pub image: String,
     pub name: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
     pub entrypoint: Option<Vec<String>>,
     pub command: Vec<String>,
     pub environment: Vec<(String, String)>,
@@ -267,6 +274,13 @@ pub enum Occupant {
     Surface,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PaneOccupantTarget {
+    Terminal,
+    Surface { extension: String, provider: String },
+}
+
 /// The text a pane is showing, as lines, oldest first.
 ///
 /// Lines rather than one blob: a caller asking for the tail of a pane is
@@ -279,6 +293,12 @@ pub struct PaneText {
     pub generation: u64,
     #[serde(default)]
     pub revision: u64,
+    /// Columns in the exact terminal grid this text and cursor were read from.
+    #[serde(default)]
+    pub columns: u16,
+    /// Rows in the exact terminal grid this text and cursor were read from.
+    #[serde(default)]
+    pub rows: u16,
     pub lines: Vec<String>,
     /// Zero-based cursor column in the terminal's visible grid.
     #[serde(default)]
@@ -298,6 +318,8 @@ pub const SEMANTIC_ACTION_VALUE_LIMIT: usize = 4096;
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneSemanticTree {
     pub slot: String,
+    /// Identity of the pane occupant whose semantic tree was observed.
+    pub generation: u64,
     pub revision: u64,
     pub root: SemanticNode,
     pub truncated: bool,
@@ -329,6 +351,8 @@ pub enum SemanticActionKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PaneSemanticAction {
+    /// Identity of the pane occupant whose semantic tree was observed.
+    pub generation: u64,
     pub revision: u64,
     pub node: u64,
     pub action: SemanticActionKind,
@@ -524,6 +548,19 @@ pub struct Entry {
     pub path: RelativePath,
     pub directory: bool,
     pub size: u64,
+    #[serde(default)]
+    pub identity: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileRange {
+    pub path: RelativePath,
+    pub identity: String,
+    pub offset: u64,
+    pub total: u64,
+    pub contents: Vec<u8>,
+    pub eof: bool,
+    pub truncated: bool,
 }
 
 /// One installed extension and its durable lifecycle policy.
@@ -532,6 +569,12 @@ pub struct ExtensionSummary {
     pub name: String,
     pub image_digest: String,
     pub status: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub pane_providers: Vec<crate::PaneProvider>,
 }
 
 pub const EXTENSION_REFERENCE_BYTES: usize = 512;
@@ -729,6 +772,13 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Atomically assigns a new unique name to one immutable container identity.
+    fn rename(&self, _id: &str, _name: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "container rename is unsupported by this host".into(),
+        ))
+    }
+
     /// Delivers a validated Linux signal to a running container.
     fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
@@ -744,15 +794,16 @@ pub trait ContainerControl {
         ))
     }
 
-    /// Removes one stopped execution record and its captured output.
+    /// Removes one stopped execution record selected by its complete immutable
+    /// execution identity, and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "execution removal is unsupported by this host".into(),
         ))
     }
 
-    /// Starts an additional process detached from the extension connection and
-    /// returns its durable exec identity.
+    /// Starts an additional process in one complete immutable container identity,
+    /// detached from the extension connection, and returns its durable exec identity.
     fn execute(
         &self,
         _id: &str,
@@ -835,6 +886,15 @@ pub trait NetworkStore {
     fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("network connection is unavailable".into()))
     }
+    fn connect_with_aliases(&self, reference: &str, container: &str, aliases: &[String]) -> Result<(), HostError> {
+        if aliases.is_empty() {
+            self.connect(reference, container)
+        } else {
+            Err(HostError::Unsupported(
+                "network endpoint aliases are unavailable".into(),
+            ))
+        }
+    }
     fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("network disconnection is unavailable".into()))
     }
@@ -863,6 +923,12 @@ pub trait TerminalSurface {
 
     fn pane_inventory(&self) -> Result<PaneInventory, HostError> {
         Err(HostError::Unsupported("pane discovery is unavailable".into()))
+    }
+
+    fn switch_occupant(&self, _slot: &str, _generation: u64, _target: &PaneOccupantTarget) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "terminal occupant switching is unavailable".into(),
+        ))
     }
 
     /// # Errors
@@ -899,7 +965,7 @@ pub trait TerminalSurface {
     }
 
     /// Writes raw bytes into a terminal pane, without appending a newline.
-    fn write(&self, _slot: &str, _contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, _slot: &str, _generation: u64, _revision: u64, _contents: &[u8]) -> Result<(), HostError> {
         Err(HostError::Unsupported("terminal input is unavailable".into()))
     }
 
@@ -920,6 +986,12 @@ pub trait TerminalSurface {
     /// # Errors
     /// Returns `HostError::Absent` when no pane is open under the slot.
     fn focus(&self, slot: &str) -> Result<(), HostError>;
+
+    /// Changes the title of the tab containing one live pane without replacing
+    /// that pane, its process, or its position in the layout.
+    fn retitle(&self, _slot: &str, _title: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal pane retitle is unavailable".into()))
+    }
 
     /// Sets how much of its split one pane takes, as a fraction in `0.05..=0.95`.
     ///
@@ -999,6 +1071,10 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
+    fn read_range(&self, _path: &RelativePath, _offset: u64, _limit: usize, _observed: Option<&str>) -> Result<FileRange, HostError> {
+        Err(HostError::Unsupported("observed filesystem reads are unavailable".into()))
+    }
+
     /// Reads metadata for exactly one confined workspace-relative path.
     fn stat(&self, _path: &RelativePath) -> Result<Entry, HostError> {
         Err(HostError::Unsupported("filesystem metadata is unavailable".into()))
@@ -1008,6 +1084,10 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
 
+    fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
+        Err(HostError::Unsupported("observed filesystem creation is unavailable".into()))
+    }
+
     fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("directory creation is unavailable".into()))
     }
@@ -1015,17 +1095,23 @@ pub trait WorkspaceFiles {
     fn rename(&self, _from: &RelativePath, _to: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("filesystem rename is unavailable".into()))
     }
+    fn rename_observed(&self, _from: &RelativePath, _to: &RelativePath, _observed: &str) -> Result<String, HostError> {
+        Err(HostError::Unsupported("observed filesystem rename is unavailable".into()))
+    }
 
     fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("filesystem removal is unavailable".into()))
+    }
+    fn remove_observed(&self, _path: &RelativePath, _observed: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("observed filesystem removal is unavailable".into()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Division, LayoutNode, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText, bounded_pane_text,
-        pane_lines,
+        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
     };
 
     #[test]
@@ -1042,6 +1128,8 @@ mod tests {
             slot: "pane".into(),
             generation: 0,
             revision: 0,
+            columns: 80,
+            rows: 24,
             lines: vec![
                 "old".repeat(PANE_TEXT_BYTES / 3),
                 "middle".repeat(PANE_TEXT_BYTES / 6),
@@ -1055,6 +1143,7 @@ mod tests {
         assert!(bounded.truncated);
         assert_eq!(bounded.lines.last().map(String::as_str), Some("new"));
         assert_eq!((bounded.cursor_column, bounded.cursor_row), (4, 2));
+        assert_eq!((bounded.columns, bounded.rows), (80, 24));
         assert!(bounded.lines.iter().map(|line| line.len() + 1).sum::<usize>() <= PANE_TEXT_BYTES);
     }
 
@@ -1082,6 +1171,13 @@ mod tests {
     }
 
     #[test]
+    fn namespace_process_scope_has_a_stable_wire_value() {
+        let value = serde_json::to_value(super::ProcessScope::Namespace).expect("scope");
+        assert_eq!(value, serde_json::json!("namespace"));
+        assert_eq!(serde_json::from_value::<super::ProcessScope>(value).expect("scope"), super::ProcessScope::Namespace);
+    }
+
+    #[test]
     fn nested_layout_has_a_stable_tagged_wire_shape() {
         let pane = || LayoutNode::Pane {
             pane: PaneSummary {
@@ -1104,5 +1200,21 @@ mod tests {
         assert_eq!(value["kind"], "split");
         assert_eq!(value["division"], "beside");
         assert_eq!(value["first"]["kind"], "pane");
+    }
+
+    #[test]
+    fn legacy_network_ports_never_silently_drop_aliases() {
+        struct Legacy;
+        impl super::NetworkStore for Legacy {
+            fn connect(&self, _reference: &str, _container: &str) -> Result<(), super::HostError> {
+                Ok(())
+            }
+        }
+        let aliases = vec!["database".to_owned()];
+        assert!(Legacy.connect_with_aliases("network", "container", &[]).is_ok());
+        assert!(matches!(
+            Legacy.connect_with_aliases("network", "container", &aliases),
+            Err(super::HostError::Unsupported(_))
+        ));
     }
 }

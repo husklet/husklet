@@ -4,7 +4,71 @@
 // and the handlers for the interactions it can report. A property no component
 // declares is a type error, which is the whole point of generating this.
 
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+
+export interface CommandPaletteItem {
+  id: string;
+  title: string;
+  group?: string;
+  detail?: string;
+  shortcut?: string;
+  keywords?: readonly string[];
+  disabled?: boolean;
+  destructive?: boolean;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  onInvoke?: (command: CommandPaletteItem) => void;
+}
+export interface CommandPaletteViewProps extends NodeProps {
+  commands?: readonly CommandPaletteItem[];
+  initialQuery?: string;
+  placeholder?: string;
+  emptyLabel?: string;
+  onQueryChange?: (query: string) => void;
+  onSelect?: (command: CommandPaletteItem) => void;
+}
+export const CommandPaletteView: ComponentType<CommandPaletteViewProps>;
+export function filterCommands(commands: readonly CommandPaletteItem[], query: string): CommandPaletteItem[];
+export const COMMAND_PALETTE_ITEM_LIMIT: 256;
+export const COMMAND_PALETTE_QUERY_BYTE_LIMIT: 128;
+export const COMMAND_PALETTE_TEXT_BYTE_LIMIT: 256;
+
+export interface TerminalTranscriptLine {
+  id?: string | number;
+  number?: number;
+  text: string;
+  timestamp?: string;
+  stream?: 'stdout' | 'stderr' | 'system';
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+}
+
+export interface TerminalTranscriptAction {
+  id?: string;
+  label: string;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  variant?: 'solid' | 'outline' | 'ghost' | 'text';
+  destructive?: boolean;
+  enabled?: boolean;
+  onInvoke?: () => void;
+}
+
+export interface TerminalTranscriptProps extends NodeProps {
+  lines?: readonly (string | TerminalTranscriptLine)[];
+  cursor?: { line: number; column: number };
+  lineNumbers?: boolean;
+  timestamps?: boolean;
+  selected?: string | number;
+  truncated?: boolean;
+  droppedLines?: number;
+  actions?: readonly TerminalTranscriptAction[];
+  onSelect?: (line: TerminalTranscriptLine, sourceIndex: number) => void;
+  emptyLabel?: string;
+}
+
+export const TerminalTranscript: ComponentType<TerminalTranscriptProps>;
+export const TERMINAL_TRANSCRIPT_LINE_LIMIT: 256;
+export const TERMINAL_TRANSCRIPT_LINE_BYTE_LIMIT: 2048;
+export const TERMINAL_TRANSCRIPT_BYTE_LIMIT: 65536;
+export const TERMINAL_TRANSCRIPT_ACTION_LIMIT: 8;
 
 /** A spacing or sizing quantity: steps on the 4px scale unless named. */
 export type Length = number | 'fill' | 'content' | { chars: number } | { step: number };
@@ -14,6 +78,22 @@ export type Edges = Length | { top?: Length; end?: Length; bottom?: Length; star
 
 /** An exact extent, or a floor and a ceiling. */
 export type Bounds = Length | { minimum?: Length; maximum?: Length };
+
+export interface JsonTreeEvent { path: string; type: string; value?: unknown; text?: string; }
+export interface JsonTreeProps {
+  value: unknown;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxStringLength?: number;
+  initiallyExpanded?: string[];
+  height?: Length | Bounds;
+  grow?: number | boolean;
+  onSelect?: (event: JsonTreeEvent) => void;
+  onCopy?: (event: JsonTreeEvent) => void;
+}
+export const JsonTree: import('react').ComponentType<JsonTreeProps>;
+export const ObjectInspector: typeof JsonTree;
+export function inspectJson(value: unknown, options?: Pick<JsonTreeProps, 'maxDepth' | 'maxNodes' | 'maxStringLength'>): { rows: Array<Record<string, unknown>>; limits: Record<string, number>; truncated: boolean };
 
 /** One selectable option offered by a choice control. */
 export interface Choice {
@@ -28,7 +108,11 @@ export interface ColumnSpec {
   width?: Length;
   align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
   sortable?: boolean;
+  editable?: boolean;
 }
+export const TABLE_COLUMN_LIMIT: 64;
+export const COLUMN_KEY_BYTE_LIMIT: 128;
+export const COLUMN_TITLE_BYTE_LIMIT: 256;
 
 /** One interaction, as the host reports it. */
 export interface Report {
@@ -37,6 +121,12 @@ export interface Report {
   id: string;
   value: unknown;
 }
+
+export interface SelectedCollectionRow { index: number; id: string; }
+export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
+export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
+export interface EditReport extends Report { source: number; version: number; row: SelectedCollectionRow; column: string; value: string; }
+export interface SortReport extends Report { source: number; version: number; column: string; descending: boolean; }
 
 /** What every component takes, whatever it is. */
 export interface NodeProps {
@@ -273,6 +363,8 @@ export interface ContainerProps extends NodeProps {
   rowSpan?: number;
   /** space between children; only a Step length has a pixel size */
   gap?: Length;
+  onDrag?: (report: Report) => void;
+  onDrop?: (report: Report) => void;
 }
 
 export interface SpacerProps extends NodeProps {
@@ -2065,7 +2157,7 @@ export interface AutocompleteProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
   onContext?: (report: Report) => void;
@@ -2638,7 +2730,7 @@ export interface SelectProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
 }
@@ -3146,11 +3238,13 @@ export interface DataTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
+  onEdit?: (report: EditReport) => void;
+  onSort?: (report: SortReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3181,11 +3275,11 @@ export interface KeyValueTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3216,11 +3310,11 @@ export interface TreeTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3251,11 +3345,11 @@ export interface EventStreamProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3286,11 +3380,11 @@ export interface FileBrowserProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -4708,6 +4802,360 @@ export interface CoverageViewProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
+export interface NetworkWaterfallProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface NetworkRequestProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface NetworkPhaseProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyGraphProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyNodeProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyEdgeProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyCycleProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface DependencyCycleMemberProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface QueryPlanProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** secondary text beside the label, or a tooltip where there is no room */
+  detail?: string;
+  /** space between children; only a Step length has a pixel size */
+  gap?: Length;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface QueryPlanNodeProps extends NodeProps {
+  children?: ReactNode;
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
+export interface QueryPlanMetricProps extends NodeProps {
+  /** marks an action as irreversible so automation requires confirmation */
+  destructive?: boolean;
+  /** defaults to visible when absent */
+  visible?: boolean;
+  /** explanation revealed by a pointer */
+  tooltip?: string;
+  /** an exact extent, or a floor and a ceiling */
+  width?: Length | Bounds;
+  /** an exact extent, or a floor and a ceiling */
+  height?: Length | Bounds;
+  /** a Length applies to all four sides; Edges names them separately */
+  pad?: Length | Edges;
+  /** placement along the main axis */
+  align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** placement along the cross axis */
+  justify?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
+  /** any value above zero expands the child on both axes */
+  grow?: number | boolean;
+  /** grid columns this child occupies; never below one */
+  span?: number;
+  /** grid rows this child occupies; never below one */
+  rowSpan?: number;
+  /** the node's caption */
+  label?: string;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
+  /** semantic weight */
+  tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
+}
+
 export interface DiffViewerProps extends NodeProps {
   children?: ReactNode;
   /** marks an action as irreversible so automation requires confirmation */
@@ -4828,8 +5276,6 @@ export interface StackFrameProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
-
-import type { ComponentType } from 'react';
 
 export const Column: ComponentType<ColumnProps>;
 export const Row: ComponentType<RowProps>;
@@ -4980,10 +5426,48 @@ export const DisassemblyView: ComponentType<DisassemblyViewProps>;
 export const TimelineView: ComponentType<TimelineViewProps>;
 export const TestReportView: ComponentType<TestReportViewProps>;
 export const CoverageView: ComponentType<CoverageViewProps>;
+export const NetworkWaterfall: ComponentType<NetworkWaterfallProps>;
+export const NetworkRequest: ComponentType<NetworkRequestProps>;
+export const NetworkPhase: ComponentType<NetworkPhaseProps>;
+export const DependencyGraph: ComponentType<DependencyGraphProps>;
+export const DependencyNode: ComponentType<DependencyNodeProps>;
+export const DependencyEdge: ComponentType<DependencyEdgeProps>;
+export const DependencyCycle: ComponentType<DependencyCycleProps>;
+export const DependencyCycleMember: ComponentType<DependencyCycleMemberProps>;
+export const QueryPlan: ComponentType<QueryPlanProps>;
+export const QueryPlanNode: ComponentType<QueryPlanNodeProps>;
+export const QueryPlanMetric: ComponentType<QueryPlanMetricProps>;
 export const DiffViewer: ComponentType<DiffViewerProps>;
 export const DiffLine: ComponentType<DiffLineProps>;
 export const StackTrace: ComponentType<StackTraceProps>;
 export const StackFrame: ComponentType<StackFrameProps>;
+
+export interface ConfirmActionProps {
+  authorityKey: string;
+  label: string;
+  confirmLabel: string;
+  question: string;
+  onConfirm: (authorityKey: string) => void | Promise<void>;
+  enabled?: boolean;
+  cancelLabel?: string;
+  pendingLabel?: string;
+  onCancel?: (authorityKey: string) => void;
+}
+export const ConfirmAction: ComponentType<ConfirmActionProps>;
+export const CONFIRM_ACTION_TEXT_BYTE_LIMIT: 1024;
+
+export interface ResourceStateProps extends NodeProps {
+  state: 'loading' | 'empty' | 'error' | 'ready';
+  loadingLabel?: string;
+  emptyLabel?: string;
+  emptyDetail?: string;
+  error?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+  children?: ReactNode;
+}
+export const ResourceState: ComponentType<ResourceStateProps>;
+export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
 
 /** Every tag name, in catalogue order. */
 export const tags: string[];
@@ -4997,258 +5481,13 @@ export function acceptsChildren(tag: string): boolean;
 /** Every prop and handler name a component accepts. */
 export const vocabulary: { props: string[]; handlers: string[] };
 
-export const SOCKET: string;
-export const PROTOCOL: number;
-/** Maximum Unicode characters retained by a LogView; Value patches append. */
+import type { ConnectOptions, HostEvent, PaneSelection, Session } from '@husklet/client';
+export * from '@husklet/client';
+
 export const LOG_VIEW_CHARACTER_LIMIT: 4096;
-
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'extensions' | 'extension-acquisitions' | 'workspace-events';
-export type Division = 'beside' | 'below';
-export interface WorkspaceInfo { name: string; architecture: string; image: string }
-export interface ExtensionSummary { name: string; image_digest: string; status: string }
-export type ExtensionCapability =
-  | 'workspace-read' | 'workspace-control' | 'workspace-events'
-  | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
-  | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
-  | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
-  | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
-  | 'extension-control' | 'extension-install' | 'filesystem-read'
-  | 'filesystem-write' | 'interface';
-export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[]; installed_image_digest: string | null }
-export interface ExtensionAcquisitionJob { job: string }
-export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
-export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }
-export interface ExtensionAcquisitionChange { job: string; revision: number; state: string; coalesced: number }
-export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
-export interface WorkspaceMount { host: string; container: string; read_only: boolean }
-export interface WorkspaceTerminal {
-  font_family: string | null;
-  font_size: number | null;
-  foreground: string | null;
-  background: string | null;
-  cursor_shape: string | null;
-  cursor_blink: boolean | null;
-}
-export interface WorkspaceConfiguration extends WorkspaceInfo {
-  generation?: string;
-  storage: string | null;
-  shell: string | null;
-  cpus: number | null;
-  memory_mb: number | null;
-  environment: [string, string][];
-  mounts: WorkspaceMount[];
-  docker_socket: boolean;
-  scrollback: number | null;
-  vpn: string | null;
-  execution_lifetime: 'persisted' | 'live' | 'ephemeral';
-  terminal: WorkspaceTerminal;
-}
-export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
-export interface ProcessList {
-  titles: string[]; processes: string[][]; observed_at_ms: number;
-  scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
-}
-export interface ContainerOutput {
-  stdout: number[]; stderr: number[]; truncated: boolean;
-  stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
-}
-export interface ExecutionSummary {
-  id: string; container_id: string; running: boolean; exit_code: number; pid: number;
-  command: string[]; user: string;
-}
-export interface ImageSummary { id: string; reference: string; size: number; created: number }
-export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
-export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface VolumeSummary { name: string; driver: string; generation: string }
-export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
-export interface PaneSummary {
-  slot: string;
-  working_directory: string | null;
-  command: string | null;
-  occupant: 'terminal' | 'surface';
-  provider: { extension: string; provider: string } | null;
-}
-export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
-export interface PaneText { slot: string; generation: number; revision: number; lines: string[]; cursor_column: number; cursor_row: number; truncated: boolean }
-export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
-export interface InspectablePane { slot: string; generation: number; revision: number; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
-export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
-export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
-export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
-export interface PaneSemanticTree { slot: string; revision: number; root: SemanticNode; truncated: boolean }
-export interface PaneSemanticAction { revision: number; node: number; action: SemanticActionKind; value?: string | null }
-export interface GridSize { columns: number; rows: number }
-export type LayoutNode =
-  | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
-  | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
-export interface TabTopology { id: string; title: string; root: LayoutNode }
-export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
-export interface FileEntry { path: string; directory: boolean; size: number }
-export type WorkspaceEvent =
-  | { event: 'key'; key: string; modifiers: string[]; pressed: boolean }
-  | { event: 'focus'; active: boolean }
-  | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
-export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
-export interface PaneSelection { pane_provider: string; slot: string }
-export interface InterfaceEventBase<I extends string, T extends string> {
-  interaction: I; trigger: T; node: number; id: string; slot?: string;
-}
-export type InterfaceEvent =
-  | InterfaceEventBase<'invoke', 'Invoke'>
-  | InterfaceEventBase<'submit', 'Submit'>
-  | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
-  | (InterfaceEventBase<'select', 'Select'> & { rows: number[] })
-  | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
-  | InterfaceEventBase<'close', 'Close'>
-  | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })
-  | (InterfaceEventBase<'key', 'Key'> & { key: string; keycode: number; modifiers: number; pressed: boolean })
-  | (InterfaceEventBase<'focus', 'Focus'> & { focused: boolean })
-  | (InterfaceEventBase<'pointer', 'Pointer'> & {
-      phase: 'enter' | 'motion' | 'leave' | 'press' | 'release';
-      x: number | null; y: number | null; button: number; modifiers: number;
-    });
-/** Protocol-1 interface spellings accepted from older hosts by the event router. */
-export type LegacyInterfaceEvent =
-  | { slot?: string; event: string; node: number; id: string; value?: unknown }
-  | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
-export type SnapshotEvent =
-  | { snapshot: 'containers'; of: ContainerSummary[] }
-  | { snapshot: 'images'; of: ImageSummary[] }
-  | { snapshot: 'volumes'; of: VolumeSummary[] }
-  | { snapshot: 'networks'; of: NetworkSummary[] }
-  | { snapshot: 'terminal'; of: TabSummary[] }
-  | { snapshot: 'pane_changes'; of: PaneChange }
-  | { snapshot: 'extensions'; of: ExtensionSummary[] }
-  | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
-  | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
-export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
-
-export class ExtensionError extends Error {
-  readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
-  readonly capability?: string;
-}
-
-export interface ConnectOptions {
-  path?: string;
-  pendingLimit?: number;
-  timeout?: number;
-  onRows?: (request: unknown, channel: number) => void;
-  onReply?: (reply: unknown) => void;
-  onEvent?: (event: HostEvent, channel: number) => void;
-  onEventError?: (error: unknown) => void;
-}
-
-export class Session {
-  static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
-  readonly ready: Promise<void>;
-  readonly granted: readonly string[];
-  call(method: string, params?: unknown): Promise<unknown>;
-  answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
-  close(): Promise<void>;
-}
-
 export function connect(options?: ConnectOptions): Promise<Session>;
-
-/** Observe host events with automatic unmount/session cleanup and a fresh render callback. */
 export function useHostEvents(session: Session, listener: (event: HostEvent, channel: number) => void): void;
-
-/** The latest pane chooser selection, optionally restricted to one provider ID. */
 export function usePaneSelection(session: Session, provider?: string | null): PaneSelection | null;
-
-export interface WorkspaceApi {
-  info(): Promise<WorkspaceInfo>;
-  list(): Promise<WorkspaceState[]>;
-  inspect(name: string): Promise<WorkspaceConfiguration>;
-  create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  /** Assign identity to the exact still-unchanged generation-less legacy record. */
-  adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  delete(name: string, generation: string): Promise<void>;
-  start(name: string): Promise<void>;
-  stop(name: string): Promise<void>;
-  restart(name: string): Promise<void>;
-  extensions: {
-    list(): Promise<ExtensionSummary[]>;
-    inspect(name: string): Promise<ExtensionSummary>;
-    enable(name: string, imageDigest: string): Promise<void>;
-    disable(name: string, imageDigest: string): Promise<void>;
-    remove(name: string, generation: string): Promise<void>;
-    startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
-    acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
-    cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
-    update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
-  };
-  containers: {
-    list(): Promise<ContainerSummary[]>;
-    inspect(id: string): Promise<ContainerSummary>;
-    processes(id: string): Promise<ProcessList>;
-    logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
-    execution(id: string): Promise<ExecutionSummary>;
-    signalExecution(id: string, signal: string): Promise<void>;
-    create(image: string, name: string): Promise<string>;
-    start(id: string): Promise<void>;
-    stop(id: string): Promise<void>;
-    remove(id: string): Promise<void>;
-    pause(id: string): Promise<void>;
-    unpause(id: string): Promise<void>;
-    restart(id: string): Promise<void>;
-    kill(id: string, signal: string): Promise<void>;
-    exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
-  };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
-  volumes: {
-    list(): Promise<VolumeSummary[]>;
-    inspect(name: string): Promise<VolumeSummary>;
-    create(name: string): Promise<VolumeSummary>;
-    remove(name: string, imageDigest: string): Promise<void>;
-  };
-  networks: {
-    list(): Promise<NetworkSummary[]>;
-    inspect(reference: string): Promise<NetworkSummary>;
-    create(name: string): Promise<string>;
-    remove(reference: string): Promise<void>;
-    connect(reference: string, container: string): Promise<void>;
-    disconnect(reference: string, container: string): Promise<void>;
-  };
-  terminal: {
-    panes(): Promise<PaneInventory>;
-    tabs(): Promise<TabSummary[]>;
-    topology(): Promise<TerminalTopology>;
-    openTab(title: string): Promise<string>;
-    split(slot: string, division: Division): Promise<string>;
-    spawn(slot: string, command: string[]): Promise<void>;
-    read(slot: string, lines?: number): Promise<PaneText>;
-    semantics(slot: string): Promise<PaneSemanticTree>;
-    act(slot: string, action: PaneSemanticAction): Promise<void>;
-    writeInput(slot: string, input: string | Iterable<number>): Promise<void>;
-    resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
-    close(slot: string): Promise<void>;
-    focus(slot: string): Promise<void>;
-    ratio(slot: string, ratio: number): Promise<void>;
-  };
-  files: {
-    list(path: string): Promise<FileEntry[]>;
-    read(path: string): Promise<number[]>;
-    write(path: string, contents: Iterable<number>): Promise<void>;
-    mkdir(path: string): Promise<void>;
-    rename(from: string, to: string): Promise<void>;
-    remove(path: string): Promise<void>;
-  };
-  subscribe(topic: Topic): Promise<void>;
-  unsubscribe(topic: Topic): Promise<void>;
-  watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
-  watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
-  watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
-}
-
-export function workspace(session: Session): WorkspaceApi;
-export const protocolCoverage: Readonly<{
-  available: Readonly<Record<string, readonly string[]>>;
-  unavailable: Readonly<Record<string, readonly string[]>>;
-}>;
-
 export type InterfaceSourceMutation =
   | { Open: { source: number; columns: readonly unknown[] } }
   | { Length: { source: number; version: number; rows: number } }

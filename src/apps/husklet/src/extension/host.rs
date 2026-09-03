@@ -15,9 +15,9 @@
 
 use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -96,7 +96,21 @@ pub enum Order {
 /// A non-blocking, bounded bridge from a workspace window to its extension.
 #[derive(Clone, Default)]
 pub struct Events {
-    inner: Arc<Mutex<EventQueue>>,
+    inner: Arc<EventBuffer>,
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct WeakEvents {
+    inner: Weak<EventBuffer>,
+}
+
+#[derive(Default)]
+struct EventBuffer {
+    queue: Mutex<EventQueue>,
+    /// GTK callbacks must never wait for the consumer. Count contention loss
+    /// separately so the next credited batch makes the observation gap visible.
+    contended: AtomicU64,
 }
 
 #[derive(Default)]
@@ -108,23 +122,39 @@ struct EventQueue {
 impl Events {
     pub const LIMIT: usize = 64;
 
+    /// A non-owning registration used by the GTK broadcaster.
+    pub fn downgrade(&self) -> WeakEvents {
+        WeakEvents {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     /// Records activity without ever waiting for the GTK main loop.
     pub fn observe(&self, event: hl_extension::WorkspaceEvent) {
-        let Ok(mut queue) = self.inner.try_lock() else { return };
-        if matches!(
-            event,
-            hl_extension::WorkspaceEvent::Pointer {
-                phase: hl_extension::PointerPhase::Move,
-                ..
-            }
-        ) && matches!(
-            queue.pending.back(),
-            Some(hl_extension::WorkspaceEvent::Pointer {
-                phase: hl_extension::PointerPhase::Move,
-                ..
-            })
-        ) {
+        let Ok(mut queue) = self.inner.queue.try_lock() else {
+            self.inner.contended.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let replaces_motion = matches!(
+            (&event, queue.pending.back()),
+            (
+                hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Move,
+                    slot,
+                    generation,
+                    ..
+                },
+                Some(hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Move,
+                    slot: former_slot,
+                    generation: former_generation,
+                    ..
+                })
+            ) if slot == former_slot && generation == former_generation
+        );
+        if replaces_motion {
             queue.pending.pop_back();
+            queue.dropped = queue.dropped.saturating_add(1);
         } else if queue.pending.len() == Self::LIMIT {
             queue.pending.pop_front();
             queue.dropped = queue.dropped.saturating_add(1);
@@ -133,16 +163,27 @@ impl Events {
     }
 
     pub(crate) fn drain(&self) -> Option<hl_extension::WorkspaceEventBatch> {
-        let Ok(mut queue) = self.inner.try_lock() else {
+        let Ok(mut queue) = self.inner.queue.try_lock() else {
             return None;
         };
-        if queue.pending.is_empty() && queue.dropped == 0 {
+        let contended = self.inner.contended.swap(0, Ordering::Relaxed);
+        if queue.pending.is_empty() && queue.dropped == 0 && contended == 0 {
             return None;
         }
         Some(hl_extension::WorkspaceEventBatch {
             events: queue.pending.drain(..).collect(),
-            dropped: std::mem::take(&mut queue.dropped),
+            dropped: std::mem::take(&mut queue.dropped).saturating_add(contended),
         })
+    }
+}
+
+impl WeakEvents {
+    /// Observes while the subscribed Host still owns the queue.
+    /// Returns false once the observer is stale so callers can prune it.
+    pub fn observe(&self, event: hl_extension::WorkspaceEvent) -> bool {
+        let Some(events) = self.inner.upgrade() else { return false };
+        Events { inner: events }.observe(event);
+        true
     }
 }
 
@@ -154,9 +195,14 @@ mod event_buffer_tests {
     fn motion(x: f64) -> WorkspaceEvent {
         WorkspaceEvent::Pointer {
             phase: PointerPhase::Move,
+            slot: "pane-1".into(),
+            generation: 4,
             x,
             y: 1.0,
             button: None,
+            modifiers: Vec::new(),
+            delta_x: None,
+            delta_y: None,
         }
     }
 
@@ -167,18 +213,71 @@ mod event_buffer_tests {
         events.observe(motion(2.0));
         let batch = events.drain().unwrap();
         assert_eq!(batch.events, vec![motion(2.0)]);
-        assert_eq!(batch.dropped, 0);
+        assert_eq!(batch.dropped, 1, "coalesced motion is visible as a dropped predecessor");
+    }
+
+    #[test]
+    fn motion_never_coalesces_across_identity_or_a_discrete_event() {
+        let events = Events::default();
+        events.observe(motion(1.0));
+        let mut other = motion(2.0);
+        if let WorkspaceEvent::Pointer { slot, .. } = &mut other {
+            *slot = "pane-2".into();
+        }
+        events.observe(other.clone());
+        let mut press = motion(3.0);
+        if let WorkspaceEvent::Pointer { phase, button, .. } = &mut press {
+            *phase = PointerPhase::Press;
+            *button = Some(1);
+        }
+        events.observe(press.clone());
+        events.observe(motion(4.0));
+
+        assert_eq!(events.drain().unwrap().events, vec![motion(1.0), other, press, motion(4.0)]);
     }
 
     #[test]
     fn overload_is_bounded_and_reported() {
         let events = Events::default();
         for index in 0..Events::LIMIT + 7 {
-            events.observe(WorkspaceEvent::Focus { active: index % 2 == 0 });
+            events.observe(WorkspaceEvent::Focus {
+                active: index % 2 == 0,
+                slot: None,
+                generation: None,
+            });
         }
         let batch = events.drain().unwrap();
         assert_eq!(batch.events.len(), Events::LIMIT);
         assert_eq!(batch.dropped, 7);
+    }
+
+    #[test]
+    fn callback_contention_never_waits_and_reports_the_loss() {
+        let events = Events::default();
+        let held = events.inner.queue.lock().unwrap();
+        events.observe(WorkspaceEvent::Focus {
+            active: true,
+            slot: None,
+            generation: None,
+        });
+        drop(held);
+
+        let batch = events.drain().expect("contention loss remains observable");
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.dropped, 1);
+        assert!(events.drain().is_none(), "loss is reported exactly once");
+    }
+
+    #[test]
+    fn a_dropped_subscriber_is_prunable_without_observation_work() {
+        let events = Events::default();
+        let weak = events.downgrade();
+        drop(events);
+        assert!(!weak.observe(WorkspaceEvent::Focus {
+            active: true,
+            slot: None,
+            generation: None,
+        }));
     }
 }
 
@@ -938,6 +1037,8 @@ mod tests {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 80,
+                rows: 24,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,
@@ -1012,6 +1113,7 @@ mod tests {
             enabled: true,
             installed_at: 1,
             pane_providers: Vec::new(),
+            declaration: Some(manifest.clone()),
         };
         let spec = SidecarSpec::new(
             &manifest,

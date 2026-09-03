@@ -7,7 +7,16 @@ mod cache;
 
 pub use cache::{Lookup, RowCache};
 
+use crate::render::SelectedRow;
 use crate::style::{Align, Length, Tone};
+use std::collections::BTreeSet;
+
+/// Maximum columns one virtual table may allocate in a host renderer.
+pub const TABLE_COLUMN_LIMIT: usize = 64;
+/// Maximum UTF-8 bytes in a stable column identity.
+pub const COLUMN_KEY_BYTE_LIMIT: usize = 128;
+/// Maximum UTF-8 bytes in a user-visible column title.
+pub const COLUMN_TITLE_BYTE_LIMIT: usize = 256;
 
 /// Identity of one data source within a session.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -70,21 +79,30 @@ impl RequestId {
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Column {
+    #[cfg_attr(feature = "wire", serde(deserialize_with = "deserialize_column_key"))]
     pub key: String,
+    #[cfg_attr(feature = "wire", serde(deserialize_with = "deserialize_column_title"))]
     pub title: String,
     pub width: Length,
     pub align: Align,
     pub sortable: bool,
+    #[cfg_attr(feature = "wire", serde(default))]
+    pub editable: bool,
 }
 
 impl Column {
     pub fn new(key: impl Into<String>, title: impl Into<String>) -> Self {
+        let key = key.into();
+        let title = title.into();
+        assert!(valid_column_key(&key), "invalid table column key");
+        assert!(valid_column_title(&title), "invalid table column title");
         Self {
-            key: key.into(),
-            title: title.into(),
+            key,
+            title,
             width: Length::Content,
             align: Align::Start,
             sortable: false,
+            editable: false,
         }
     }
 
@@ -105,6 +123,93 @@ impl Column {
         self.sortable = true;
         self
     }
+
+    #[must_use]
+    pub const fn editable(mut self) -> Self {
+        self.editable = true;
+        self
+    }
+}
+
+#[must_use]
+pub fn valid_column_key(value: &str) -> bool {
+    !value.is_empty() && value.len() <= COLUMN_KEY_BYTE_LIMIT
+}
+
+#[must_use]
+pub fn valid_column_title(value: &str) -> bool {
+    !value.is_empty() && value.len() <= COLUMN_TITLE_BYTE_LIMIT
+}
+
+/// Validates a complete schema before it can allocate renderer columns.
+pub fn validate_columns(columns: &[Column]) -> Result<(), &'static str> {
+    if columns.len() > TABLE_COLUMN_LIMIT {
+        return Err("table schema exceeds the column limit");
+    }
+    let mut keys = BTreeSet::new();
+    for column in columns {
+        if !valid_column_key(&column.key) {
+            return Err("table column key is empty or exceeds its byte limit");
+        }
+        if !valid_column_title(&column.title) {
+            return Err("table column title is empty or exceeds its byte limit");
+        }
+        if !keys.insert(column.key.as_str()) {
+            return Err("table column keys must be unique");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "wire")]
+fn deserialize_column_key<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    valid_column_key(&value)
+        .then_some(value)
+        .ok_or_else(|| serde::de::Error::custom("column key must be 1..=128 UTF-8 bytes"))
+}
+
+#[cfg(feature = "wire")]
+fn deserialize_column_title<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    valid_column_title(&value)
+        .then_some(value)
+        .ok_or_else(|| serde::de::Error::custom("column title must be 1..=256 UTF-8 bytes"))
+}
+
+#[cfg(feature = "wire")]
+pub(crate) fn deserialize_columns<'de, D>(deserializer: D) -> Result<Vec<Column>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let columns = <Vec<Column> as serde::Deserialize>::deserialize(deserializer)?;
+    validate_columns(&columns).map_err(serde::de::Error::custom)?;
+    Ok(columns)
+}
+
+/// One version-bound edit of a materialized virtual row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionEdit {
+    pub source: SourceId,
+    pub version: Version,
+    pub row: SelectedRow,
+    pub column: String,
+    pub value: String,
+}
+
+/// One version-bound request to reorder a virtual collection at its producer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionSort {
+    pub source: SourceId,
+    pub version: Version,
+    pub column: String,
+    pub descending: bool,
 }
 
 /// One rendered cell. Typed so alignment and formatting are the adapter's job,
@@ -268,6 +373,7 @@ impl RowWindow {
 pub enum SourceMutation {
     Open {
         source: SourceId,
+        #[cfg_attr(feature = "wire", serde(deserialize_with = "deserialize_columns"))]
         columns: Vec<Column>,
     },
     Length {
@@ -289,7 +395,35 @@ pub enum SourceMutation {
 
 #[cfg(test)]
 mod tests {
-    use super::RowRange;
+    use super::{
+        validate_columns, Column, RowRange, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT,
+    };
+
+    #[test]
+    fn columns_are_read_only_unless_editing_is_explicit() {
+        assert!(!Column::new("name", "Name").editable);
+        assert!(Column::new("name", "Name").editable().editable);
+    }
+
+    #[test]
+    fn table_schema_bounds_are_exact_and_keys_are_unique() {
+        let columns = (0..TABLE_COLUMN_LIMIT)
+            .map(|index| Column::new(format!("key-{index}"), "t".repeat(COLUMN_TITLE_BYTE_LIMIT)))
+            .collect::<Vec<_>>();
+        assert_eq!(columns[0].key.len(), "key-0".len());
+        assert_eq!(
+            Column::new("k".repeat(COLUMN_KEY_BYTE_LIMIT), "Title").key.len(),
+            COLUMN_KEY_BYTE_LIMIT
+        );
+        assert_eq!(validate_columns(&columns), Ok(()));
+
+        let mut overflow = columns.clone();
+        overflow.push(Column::new("overflow", "Overflow"));
+        assert!(validate_columns(&overflow).is_err());
+        let mut duplicate = columns;
+        duplicate[1].key = duplicate[0].key.clone();
+        assert!(validate_columns(&duplicate).is_err());
+    }
 
     #[test]
     fn block_alignment_snaps_down_to_the_containing_block() {

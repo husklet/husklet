@@ -13,8 +13,8 @@ use hl_rpc::{ChannelId, Flags, Frame, Hello, Kind};
 
 pub use hl_rpc::Coding;
 
-use crate::request::{Failure, Reply, Request};
 use crate::Welcome;
+use crate::request::{Failure, Reply, Request};
 
 /// The channel calls and their answers ride on.
 ///
@@ -29,7 +29,7 @@ pub const CALLS: ChannelId = ChannelId::new(2);
 /// Returns `Coding::Oversize` when the encoded message exceeds the payload
 /// limit, and `Coding::Malformed` when it cannot be serialized.
 pub fn welcome(welcome: &Welcome) -> Result<Frame, Coding> {
-    Ok(Frame::new(ChannelId::CONTROL, Kind::Request, payload(welcome)?))
+    Ok(Frame::new(ChannelId::CONTROL, Kind::Open, payload(welcome)?))
 }
 
 /// Decodes the host's opening frame.
@@ -38,7 +38,7 @@ pub fn welcome(welcome: &Welcome) -> Result<Frame, Coding> {
 /// Returns `Coding::Malformed` when the frame is not a control request or its
 /// payload is not a `Welcome`.
 pub fn read_welcome(frame: &Frame) -> Result<Welcome, Coding> {
-    expect(frame, Kind::Request, ChannelId::CONTROL)?;
+    expect(frame, Kind::Open, ChannelId::CONTROL)?;
     parse(frame)
 }
 
@@ -78,6 +78,11 @@ pub fn request(request: &Request) -> Result<Frame, Coding> {
 /// channel, or names a call this host does not implement.
 pub fn read_request(frame: &Frame) -> Result<Request, Coding> {
     expect(frame, Kind::Request, CALLS)?;
+    if !frame.flags.has(Flags::END) || frame.flags.has(Flags::ERROR) || frame.flags.has(Flags::COALESCED) {
+        return Err(Coding::Malformed(
+            "a call must be one complete, unflagged request".into(),
+        ));
+    }
     parse(frame)
 }
 
@@ -142,35 +147,57 @@ pub fn is_failure(frame: &Frame) -> bool {
 /// drift into subtly different node, handler, or addressed-slot spellings.
 #[must_use]
 pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
-    use hl_gui::Event;
-    let (name, node, id, detail) = match event {
-        Event::Invoke { node, id } => ("invoke", node, id, serde_json::Value::Null),
-        Event::Submit { node, id } => ("submit", node, id, serde_json::Value::Null),
-        Event::Change { node, id, value } => ("change", node, id, serde_json::json!({ "value": value })),
-        Event::Select { node, id, rows } => ("select", node, id, serde_json::json!({ "rows": rows })),
-        Event::Focus { node, id, focused } => ("focus", node, id, serde_json::json!({ "focused": focused })),
-        _ => return None,
-    };
-    let mut trigger = name.to_owned();
-    trigger.get_mut(0..1)?.make_ascii_uppercase();
-    let mut value = serde_json::json!({
-        "interaction": name, "trigger": trigger, "node": node, "id": id,
-    });
-    if let (Some(target), Some(fields)) = (value.as_object_mut(), detail.as_object()) {
-        target.extend(fields.clone());
-    }
-    if let (Some(slot), Some(target)) = (slot, value.as_object_mut()) {
-        target.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
-    }
-    serde_json::to_vec(&value).ok()
+    payload(&crate::UiEvent::of(event, slot)?).ok()
 }
 
-fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
-    hl_rpc::payload(value)
+/// Encodes a cross-language JSON payload while refusing integers JavaScript
+/// cannot distinguish exactly.
+///
+/// # Errors
+/// Returns [`Coding::Malformed`] for an unsafe integer or serialization error,
+/// and [`Coding::Oversize`] when the framed payload bound is exceeded.
+pub fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
+    let value = serde_json::to_value(value).map_err(|error| Coding::Malformed(error.to_string()))?;
+    safe_numbers(&value)?;
+    hl_rpc::payload(&value)
 }
 
 fn parse<T: serde::de::DeserializeOwned>(frame: &Frame) -> Result<T, Coding> {
-    serde_json::from_slice(&frame.payload).map_err(|error| Coding::Malformed(error.to_string()))
+    let value: serde_json::Value =
+        serde_json::from_slice(&frame.payload).map_err(|error| Coding::Malformed(error.to_string()))?;
+    safe_numbers(&value)?;
+    serde_json::from_value(value).map_err(|error| Coding::Malformed(error.to_string()))
+}
+
+fn safe_numbers(value: &serde_json::Value) -> Result<(), Coding> {
+    match value {
+        serde_json::Value::Number(number) => {
+            let unsafe_integer = number
+                .as_u64()
+                .is_some_and(|value| value > crate::JSON_SAFE_INTEGER_MAX)
+                || number.as_i64().is_some_and(|value| {
+                    value < -(crate::JSON_SAFE_INTEGER_MAX as i64) || value > crate::JSON_SAFE_INTEGER_MAX as i64
+                });
+            if unsafe_integer {
+                return Err(Coding::Malformed(format!(
+                    "integer {number} exceeds the lossless JSON boundary {}",
+                    crate::JSON_SAFE_INTEGER_MAX
+                )));
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                safe_numbers(value)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                safe_numbers(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
@@ -188,4 +215,228 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{interaction, read_request, request, safe_numbers, welcome};
+    use crate::{
+        Capability, ChannelId, ExtensionName, Frame, Grant, JSON_SAFE_INTEGER_MAX, Kind, Limits, PaneChange,
+        PaneChangeKind, Request, Snapshot, Welcome,
+    };
+    use hl_gui::{CollectionSelection, Event, EventId, NodeId, SelectedRow, SourceId, Version};
+
+    #[test]
+    fn host_greeting_uses_the_distinct_open_control_frame() {
+        let frame = welcome(&Welcome {
+            protocol: crate::PROTOCOL,
+            host: "husklet".into(),
+            workspace: "dev".into(),
+            peer: ExtensionName::new("fixture").unwrap(),
+            granted: Grant::new([Capability::WorkspaceRead]),
+            limits: Limits::default(),
+        })
+        .expect("welcome encodes");
+        assert_eq!(frame.channel, ChannelId::CONTROL);
+        assert_eq!(frame.kind, Kind::Open);
+    }
+
+    #[test]
+    fn collection_selection_encodes_generation_and_producer_identity() {
+        let payload = interaction(
+            &Event::Select {
+                node: NodeId::new(9),
+                id: EventId::new("9:Select"),
+                rows: vec![42],
+                collection: Some(CollectionSelection {
+                    source: SourceId::new(7),
+                    version: Version::new(3),
+                    rows: vec![SelectedRow { index: 42, id: 90_042 }],
+                }),
+            },
+            Some("surface-1"),
+        )
+        .expect("selection is encodable");
+        let value: serde_json::Value = serde_json::from_slice(&payload).expect("JSON event");
+        assert_eq!(value["rows"], serde_json::json!([42]));
+        assert_eq!(
+            value["collection"],
+            serde_json::json!({
+                "source": 7, "version": 3, "rows": [{ "index": 42, "id": "90042" }]
+            })
+        );
+    }
+
+    #[test]
+    fn aliased_toolkit_signals_preserve_the_bound_trigger_and_opaque_event_id() {
+        let node = NodeId::new(7);
+        for (event, interaction_name, trigger) in [
+            (
+                Event::Activate {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                },
+                "invoke",
+                "Activate",
+            ),
+            (
+                Event::Toggle {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                    value: hl_gui::PropValue::Flag(true),
+                },
+                "change",
+                "Toggle",
+            ),
+            (
+                Event::Expand {
+                    node,
+                    id: EventId::new("opaque/not-a-trigger"),
+                    value: hl_gui::PropValue::Flag(true),
+                },
+                "change",
+                "Expand",
+            ),
+        ] {
+            let payload = interaction(&event, Some("pane-7")).expect("interaction payload");
+            let value: serde_json::Value = serde_json::from_slice(&payload).expect("JSON event");
+            assert_eq!(value["interaction"], interaction_name);
+            assert_eq!(value["trigger"], trigger);
+            assert_eq!(value["id"], "opaque/not-a-trigger");
+        }
+    }
+
+    #[test]
+    fn every_interactive_toolkit_event_crosses_the_socket_with_its_detail() {
+        let node = NodeId::new(9);
+        let id = || EventId::new("9:event");
+        let cases = [
+            (
+                Event::Scroll {
+                    node,
+                    id: id(),
+                    dx: 1.25,
+                    dy: -2.5,
+                },
+                "scroll",
+                serde_json::json!({ "dx": 1.25, "dy": -2.5 }),
+            ),
+            (Event::Close { node, id: id() }, "close", serde_json::json!({})),
+            (
+                Event::Context {
+                    node,
+                    id: id(),
+                    x: 12.0,
+                    y: 34.0,
+                },
+                "context",
+                serde_json::json!({ "x": 12.0, "y": 34.0 }),
+            ),
+            (
+                Event::Key {
+                    node,
+                    id: id(),
+                    key: "Return".into(),
+                    keycode: 36,
+                    modifiers: 5,
+                    pressed: true,
+                },
+                "key",
+                serde_json::json!({ "key": "Return", "keycode": 36, "modifiers": 5, "pressed": true }),
+            ),
+            (
+                Event::Pointer {
+                    node,
+                    id: id(),
+                    phase: hl_gui::PointerPhase::Release,
+                    x: Some(4.0),
+                    y: None,
+                    button: 1,
+                    modifiers: 2,
+                },
+                "pointer",
+                serde_json::json!({ "phase": "release", "x": 4.0, "y": null, "button": 1, "modifiers": 2 }),
+            ),
+            (Event::Drag { node, id: id() }, "drag", serde_json::json!({})),
+            (
+                Event::Drop {
+                    node,
+                    id: id(),
+                    source: NodeId::new(4),
+                    x: 7.0,
+                    y: 8.0,
+                },
+                "drop",
+                serde_json::json!({ "source": 4, "x": 7.0, "y": 8.0 }),
+            ),
+        ];
+        for (event, name, detail) in cases {
+            let payload = interaction(&event, Some("surface-1")).expect("event is socket-visible");
+            let value: serde_json::Value = serde_json::from_slice(&payload).expect("event JSON");
+            assert_eq!(value["interaction"], name);
+            assert_eq!(
+                value["trigger"],
+                format!("{}{}", name[..1].to_ascii_uppercase(), &name[1..])
+            );
+            assert_eq!(value["node"], 9);
+            assert_eq!(value["id"], "9:event");
+            assert_eq!(value["slot"], "surface-1");
+            for (field, expected) in detail.as_object().unwrap() {
+                assert_eq!(&value[field], expected, "{name}.{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_typed_payload_refuses_integers_javascript_cannot_preserve() {
+        let boundary = Request::ExtensionAcquisitionCancel {
+            job: "job-1".into(),
+            revision: JSON_SAFE_INTEGER_MAX,
+        };
+        assert_eq!(
+            read_request(&request(&boundary).expect("safe boundary")).unwrap(),
+            boundary
+        );
+
+        let unsafe_outbound = Request::ExtensionAcquisitionCancel {
+            job: "job-1".into(),
+            revision: JSON_SAFE_INTEGER_MAX + 1,
+        };
+        assert!(
+            request(&unsafe_outbound)
+                .unwrap_err()
+                .to_string()
+                .contains("lossless JSON boundary")
+        );
+
+        let unsafe_inbound = Frame::new(
+            ChannelId::new(2),
+            Kind::Request,
+            format!(
+                r#"{{"call":"extension_acquisition_cancel","with":{{"job":"job-1","revision":{}}}}}"#,
+                JSON_SAFE_INTEGER_MAX + 1
+            )
+            .into_bytes(),
+        );
+        assert!(
+            read_request(&unsafe_inbound)
+                .unwrap_err()
+                .to_string()
+                .contains("lossless JSON boundary")
+        );
+        assert!(safe_numbers(&serde_json::json!(-(JSON_SAFE_INTEGER_MAX as i64) - 1)).is_err());
+        assert!(
+            Snapshot::PaneChanges(PaneChange {
+                slot: "pane-1".into(),
+                kind: PaneChangeKind::Terminal,
+                revision: JSON_SAFE_INTEGER_MAX + 1,
+                generation: 1,
+                coalesced: 0,
+            })
+            .payload()
+            .unwrap_err()
+            .to_string()
+            .contains("lossless JSON boundary")
+        );
+    }
 }

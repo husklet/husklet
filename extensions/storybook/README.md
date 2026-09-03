@@ -10,7 +10,7 @@ A component playground, written as a Husklet extension in React. Three panes:
 
 ## Where it gets its knowledge
 
-Everything — the families, the 133 components, each component's properties and
+Everything — the families, every current component, each component's properties and
 interactions, the 42-property vocabulary, the members of each closed
 vocabulary, and which control edits which property — is read from
 `src/catalogue.json`, which the library emits about itself:

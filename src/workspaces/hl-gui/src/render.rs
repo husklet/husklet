@@ -1,6 +1,6 @@
 //! The toolkit port. Implementors live in the embedding application, never here.
 
-use crate::data::{RowRequest, RowWindow};
+use crate::data::{RowRequest, RowWindow, SourceId, Version};
 use crate::node::{EventId, NodeId, Patch, Tree};
 use crate::style::Theme;
 
@@ -46,7 +46,23 @@ pub enum Event {
         node: NodeId,
         id: EventId,
     },
+    /// Activation is distinct from invocation even when a toolkit exposes
+    /// both through the same signal.
+    Activate {
+        node: NodeId,
+        id: EventId,
+    },
     Change {
+        node: NodeId,
+        id: EventId,
+        value: crate::node::PropValue,
+    },
+    Toggle {
+        node: NodeId,
+        id: EventId,
+        value: crate::node::PropValue,
+    },
+    Expand {
         node: NodeId,
         id: EventId,
         value: crate::node::PropValue,
@@ -59,6 +75,17 @@ pub enum Event {
         node: NodeId,
         id: EventId,
         rows: Vec<u64>,
+        collection: Option<CollectionSelection>,
+    },
+    Edit {
+        node: NodeId,
+        id: EventId,
+        edit: crate::data::CollectionEdit,
+    },
+    Sort {
+        node: NodeId,
+        id: EventId,
+        sort: crate::data::CollectionSort,
     },
     Scroll {
         node: NodeId,
@@ -98,8 +125,36 @@ pub enum Event {
         button: u32,
         modifiers: u32,
     },
+    /// A bounded in-process drag began from this node. No host or file data is exposed.
+    Drag {
+        node: NodeId,
+        id: EventId,
+    },
+    /// A bounded in-process node marker was dropped on this node.
+    Drop {
+        node: NodeId,
+        id: EventId,
+        source: NodeId,
+        x: f64,
+        y: f64,
+    },
     /// The host needs a window of rows it does not have cached.
     Rows(RowRequest),
+}
+
+/// Immutable authority for rows selected from one version of a windowed source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionSelection {
+    pub source: SourceId,
+    pub version: Version,
+    pub rows: Vec<SelectedRow>,
+}
+
+/// A visible position paired with the producer-owned identity delivered there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedRow {
+    pub index: u64,
+    pub id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

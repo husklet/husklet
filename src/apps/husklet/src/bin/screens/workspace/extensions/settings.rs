@@ -35,6 +35,8 @@ pub const REFUSAL: &str = "hl-extension-refusal";
 pub const CARD: &str = "hl-extension-card";
 /// Wrapping action region inside a lifecycle card.
 pub const ACTIONS: &str = "hl-extension-actions";
+/// Wrapping, visually separate destructive controls inside the action region.
+pub const REMOVAL_ACTIONS: &str = "hl-extension-removal-actions";
 
 /// One extension's lifecycle card.
 pub struct Settings;
@@ -68,6 +70,10 @@ impl Settings {
         main.append(&standing);
         main.append(&capabilities(entry));
         let refusal = line("", REFUSAL);
+        // Confirmation, cleanup progress, and retryable lifecycle failures all
+        // replace this text in place. Announce those transitions without
+        // moving focus away from the confirmation or retry controls.
+        refusal.set_accessible_role(gtk::AccessibleRole::Status);
         refusal.set_visible(false);
         main.append(&actions(shelf, entry, &refusal, &standing, semantics, update));
         main.append(&refusal);
@@ -135,6 +141,7 @@ impl Settings {
 /// The extension's own name, which is also what its pages are labelled with.
 fn heading(name: &ExtensionName) -> gtk::Label {
     let label = gtk::Label::new(Some(&name.to_string()));
+    label.set_accessible_role(gtk::AccessibleRole::Heading);
     label.add_css_class("dhead");
     label.set_xalign(0.0);
     label
@@ -150,7 +157,9 @@ fn standing(stage: Stage) -> gtk::Label {
         Stage::Vacancy => "not installed".to_owned(),
         Stage::Standby => "disabled".to_owned(),
         Stage::Duty => "enabled".to_owned(),
-        Stage::Fault { restarts } => format!("faulted after {restarts} restarts"),
+        Stage::Fault { restarts } => {
+            format!("enabled, but stopped after {restarts} failed starts; retry or disable it")
+        }
     };
     line(&said, STANDING)
 }
@@ -194,7 +203,7 @@ fn actions(
             -1,
         );
     }
-    if entry.stage == Stage::Duty {
+    if entry.stage == Stage::Duty || entry.stage.is_fault() {
         row.insert(
             &action(shelf, entry, refusal, "Disable", DISABLE, Deed::Disable, semantics),
             -1,
@@ -263,7 +272,12 @@ fn action(
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let refusal = refusal.clone();
-    button.connect_clicked(move |_| commit(&shelf, &name, &image_digest, deed, &refusal));
+    button.connect_clicked(move |button| {
+        let restore_focus = button.has_focus();
+        if commit(&shelf, &name, &image_digest, deed, &refusal) && restore_focus {
+            focus_replacement(&shelf, deed);
+        }
+    });
     let name = entry.name.clone();
     let image_digest = entry.image_digest.clone();
     let semantic_button = button.clone();
@@ -278,7 +292,7 @@ fn action(
         ],
         Rc::new(move |action, _| match action {
             super::super::semantic::ActionKind::Invoke => {
-                commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal)
+                let _ = commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal);
             }
             super::super::semantic::ActionKind::Focus => {
                 semantic_button.grab_focus();
@@ -293,14 +307,37 @@ fn action(
 ///
 /// A refusal is shown on the page rather than logged, because the person is
 /// standing in front of the thing they just asked for.
-fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) {
+fn commit(shelf: &Rc<Shelf>, name: &ExtensionName, image_digest: &str, deed: Deed, refusal: &gtk::Label) -> bool {
     let done = apply(shelf, name, image_digest, deed);
     if let Err(fault) = done {
         refusal.set_text(&fault.to_string());
         refusal.set_visible(true);
-        return;
+        return false;
     }
     shelf.refresh(name);
+    true
+}
+
+fn focus_replacement(shelf: &Shelf, deed: Deed) {
+    let class = match deed {
+        Deed::Enable | Deed::Retry => DISABLE,
+        Deed::Disable => ENABLE,
+    };
+    let Some(page) = shelf.view().and_then(|view| view.page(super::super::Page::Extensions.title())) else {
+        return;
+    };
+    let mut pending = vec![page];
+    while let Some(widget) = pending.pop() {
+        if widget.has_css_class(class) {
+            widget.grab_focus();
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            pending.push(current);
+        }
+    }
 }
 
 /// The roster call one deed stands for, with the borrow released before the
@@ -322,8 +359,17 @@ fn removal(
     refusal: &gtk::Label,
     standing: &gtk::Label,
     semantics: &super::super::semantic::Registry,
-) -> gtk::Box {
-    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+) -> gtk::FlowBox {
+    let controls = gtk::FlowBox::new();
+    controls.add_css_class(REMOVAL_ACTIONS);
+    controls.set_selection_mode(gtk::SelectionMode::None);
+    controls.set_min_children_per_line(1);
+    // The hidden trigger keeps its FlowBox seat while confirmation is open;
+    // admitting all three seats keeps the two visible answers inline whenever
+    // they fit, while the layout still wraps them independently when compact.
+    controls.set_max_children_per_line(3);
+    controls.set_column_spacing(8);
+    controls.set_row_spacing(8);
     let remove = gtk::Button::with_label("Remove");
     remove.add_css_class(REMOVE);
     let confirm = gtk::Button::with_label("Confirm removal");
@@ -332,9 +378,9 @@ fn removal(
     let cancel = gtk::Button::with_label("Cancel");
     cancel.add_css_class(CANCEL_REMOVE);
     cancel.set_visible(false);
-    controls.append(&remove);
-    controls.append(&confirm);
-    controls.append(&cancel);
+    controls.insert(&remove, -1);
+    controls.insert(&confirm, -1);
+    controls.insert(&cancel, -1);
     for (label, button) in [
         ("Remove", &remove),
         ("Confirm removal", &confirm),
@@ -385,6 +431,7 @@ fn removal(
             remove.set_visible(false);
             confirm.set_visible(true);
             cancel.set_visible(true);
+            confirm.grab_focus();
             semantics.set_disabled(&remove_path, true);
             semantics.set_disabled(&confirm_path, false);
             semantics.set_disabled(&cancel_path, false);
@@ -406,6 +453,7 @@ fn removal(
             remove.set_visible(true);
             confirm.set_visible(false);
             cancel.set_visible(false);
+            remove.grab_focus();
             semantics.set_disabled(&remove_path, false);
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);

@@ -133,7 +133,7 @@ fn send<S: Write>(wire: &mut Wire<S>, request: &Request) -> Result<(), Outcome> 
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Outcome> {
-    serde_json::to_vec(value).map_err(|error| Outcome::Malformed(error.to_string()))
+    hl_extension::codec::payload(value).map_err(|error| Outcome::Malformed(error.to_string()))
 }
 
 fn decode<T: serde::de::DeserializeOwned>(frame: &Frame) -> Result<T, Outcome> {

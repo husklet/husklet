@@ -45,26 +45,25 @@ impl Overview<'_> {
             Some("Blank = auto (bash -il, else sh -i)."),
         ));
 
-        let sections = gtk::FlowBox::new();
-        sections.add_css_class("settings-grid");
-        sections.set_selection_mode(gtk::SelectionMode::None);
-        sections.set_min_children_per_line(1);
-        sections.set_max_children_per_line(2);
-        sections.set_column_spacing(14);
-        sections.set_row_spacing(14);
-        sections.set_homogeneous(false);
-        for card in [
-            shell,
-            Self::decorate(form.terminal(), "Terminal appearance and history for each new tab."),
-            Self::decorate(form.resources(), "Optional limits for workloads in this workspace."),
-            Self::decorate(form.environment(), "Variables inherited by every new shell."),
-            Self::decorate(form.mounts(), "Host folders made available inside the workspace."),
-            Self::decorate(form.docker(), "Control access to the host-compatible Docker API."),
-            Self::decorate(form.network(), "Configure how this workspace reaches private networks."),
-        ] {
-            sections.insert(&card, -1);
-        }
-        main.append(&sections);
+        let terminal = Self::group(
+            "Terminal defaults",
+            [
+                shell,
+                Self::decorate(form.terminal(), "Terminal appearance and history for each new tab."),
+            ],
+        );
+        let runtime = Self::group(
+            "Workspace runtime",
+            [
+                Self::decorate(form.resources(), "Optional limits for workloads in this workspace."),
+                Self::decorate(form.environment(), "Variables inherited by every new shell."),
+                Self::decorate(form.mounts(), "Host folders made available inside the workspace."),
+                Self::decorate(form.docker(), "Control access to the host-compatible Docker API."),
+                Self::decorate(form.network(), "Configure how this workspace reaches private networks."),
+            ],
+        );
+        main.append(&terminal);
+        main.append(&runtime);
 
         Self::populate(&form, workspace);
         let save = Self::save_row(Rc::clone(&form), workspace.clone(), semantics);
@@ -161,6 +160,31 @@ impl Overview<'_> {
         card
     }
 
+    /// A presentation-only group around existing settings cards.
+    fn group<const N: usize>(title: &str, cards: [gtk::Box; N]) -> gtk::Box {
+        let group = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        group.add_css_class("settings-group");
+        let heading = gtk::Label::new(Some(title));
+        heading.set_accessible_role(gtk::AccessibleRole::Heading);
+        heading.add_css_class("settings-group-title");
+        heading.set_xalign(0.0);
+        group.append(&heading);
+
+        let grid = gtk::FlowBox::new();
+        grid.add_css_class("settings-grid");
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_min_children_per_line(1);
+        grid.set_max_children_per_line(2);
+        grid.set_column_spacing(14);
+        grid.set_row_spacing(14);
+        grid.set_homogeneous(false);
+        for card in cards {
+            grid.insert(&card, -1);
+        }
+        group.append(&grid);
+        group
+    }
+
     fn populate(form: &Form, workspace: &WorkspaceConfig) {
         form.name.set_text(&workspace.name);
         form.image.set_text(&workspace.image);
@@ -194,9 +218,15 @@ impl Overview<'_> {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("settings-save-row");
         let status = gtk::Label::new(Some("No unsaved changes."));
+        // Saving, validation, and dirty-state changes all replace this text in
+        // place. Expose it as a status so the result is announced without
+        // moving keyboard focus away from the field or Save button.
+        status.set_accessible_role(gtk::AccessibleRole::Status);
         status.add_css_class("fhint");
         status.set_xalign(0.0);
         status.set_hexpand(true);
+        status.set_wrap(true);
+        status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
 
         let save = gtk::Button::with_label("Save changes");
         save.add_css_class("btn");
@@ -305,6 +335,8 @@ impl Overview<'_> {
         register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
         register_switch(semantics, "settings/cursor-blink", "Cursor blink", &form.cursor_blink);
         register_switch(semantics, "settings/docker", "Docker socket", &form.features.docker);
+        register_button(semantics, "settings/environment/add", "Add variable", &form.env_add);
+        register_button(semantics, "settings/mount/add", "Add mount", &form.mount_add);
 
         semantics.register(
             "settings/workspace-name",
@@ -373,6 +405,26 @@ impl Overview<'_> {
         let registry = semantics.clone();
         save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
+}
+
+fn register_button(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, button: &gtk::Button) {
+    use screens::workspace::semantic::ActionKind;
+    let invoked = button.clone();
+    let focused = button.clone();
+    semantics.register(
+        path,
+        "button",
+        Some(label),
+        None,
+        &[ActionKind::Invoke, ActionKind::Focus],
+        Rc::new(move |action, _| match action {
+            ActionKind::Invoke => invoked.emit_clicked(),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
 }
 
 fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Form) {
@@ -462,12 +514,9 @@ fn register_font(semantics: &screens::workspace::semantic::Registry, path: &str,
     );
     let registry = semantics.clone();
     let path = path.to_owned();
-    input.widget().connect_font_desc_notify(move |input| {
-        let family = input
-            .font_desc()
-            .and_then(|description| description.family().map(|family| family.to_string()))
-            .unwrap_or_default();
-        registry.update(&path, Value::Public(&family), !input.is_sensitive());
+    let widget = input.widget().clone();
+    input.connect_value_changed(move |family| {
+        registry.update(&path, Value::Public(family), !widget.is_sensitive());
     });
 }
 
@@ -630,15 +679,49 @@ mod tests {
                     .any(|line| line.contains("Running tabs keep their current settings")),
                 "apply timing is explained before saving"
             );
-
-            let grid = widgets
+            assert_eq!(
+                text.iter()
+                    .filter(|line| matches!(line.as_str(), "Terminal defaults" | "Workspace runtime"))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["Terminal defaults", "Workspace runtime"],
+                "settings cards are split into two plainly named groups"
+            );
+            let group_headings: Vec<_> = widgets
                 .iter()
-                .find(|widget| widget.has_css_class("settings-grid"))
-                .and_then(|widget| widget.downcast_ref::<gtk::FlowBox>())
-                .expect("settings has a responsive card grid");
-            assert_eq!(grid.min_children_per_line(), 1);
-            assert_eq!(grid.max_children_per_line(), 2);
-            assert_eq!(grid.observe_children().n_items(), 7);
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .filter(|label| matches!(label.text().as_str(), "Terminal defaults" | "Workspace runtime"))
+                .collect();
+            assert_eq!(group_headings.len(), 2);
+            assert!(
+                group_headings
+                    .iter()
+                    .all(|heading| heading.accessible_role() == gtk::AccessibleRole::Heading),
+                "visual settings groups must also be announced as headings"
+            );
+
+            let grids: Vec<_> = widgets
+                .iter()
+                .filter(|widget| widget.has_css_class("settings-grid"))
+                .map(|widget| {
+                    widget
+                        .downcast_ref::<gtk::FlowBox>()
+                        .expect("settings grids are flow boxes")
+                })
+                .collect();
+            assert_eq!(grids.len(), 2);
+            assert_eq!(
+                grids
+                    .iter()
+                    .map(|grid| grid.observe_children().n_items())
+                    .collect::<Vec<_>>(),
+                [2, 5],
+                "all seven existing cards remain in their intended groups"
+            );
+            for grid in grids {
+                assert_eq!(grid.min_children_per_line(), 1);
+                assert_eq!(grid.max_children_per_line(), 2);
+            }
 
             let window = gtk::Window::builder()
                 .default_width(300)
@@ -653,6 +736,48 @@ mod tests {
                 "a narrow settings page must not require horizontal scrolling: upper={} page_size={}",
                 horizontal.upper(),
                 horizontal.page_size()
+            );
+            window.close();
+
+            let compact_page = Overview::new(&workspace, None)
+                .settings(&crate::screens::workspace::semantic::Registry::new("workspace"));
+            let shell = crate::screens::workspace::View::new([
+                (crate::screens::workspace::Page::Settings, compact_page.clone().upcast()),
+                (
+                    crate::screens::workspace::Page::Extensions,
+                    gtk::Box::new(gtk::Orientation::Vertical, 0).upcast(),
+                ),
+            ]);
+            let window = gtk::Window::builder()
+                .default_width(400)
+                .default_height(600)
+                .child(&shell.widget)
+                .build();
+            window.present();
+            while gtk::glib::MainContext::default().iteration(false) {}
+            assert_eq!(window.width(), 400, "the workspace remains at its compact requested width");
+            let navigation = shell
+                .widget
+                .first_child()
+                .and_downcast::<gtk::Paned>()
+                .expect("workspace navigation split");
+            assert!(
+                navigation.position() <= 110,
+                "fixed navigation must yield compact horizontal space to Settings"
+            );
+            let identity = descendants(compact_page.upcast_ref())
+                .into_iter()
+                .find(|widget| widget.has_css_class("settings-identity"))
+                .expect("Settings identity card");
+            assert!(
+                identity.width() <= compact_page.width(),
+                "Settings card must fit its compact viewport: card={} viewport={}",
+                identity.width(),
+                compact_page.width()
+            );
+            assert!(
+                compact_page.hadjustment().upper() <= compact_page.hadjustment().page_size() + 1.0,
+                "fixed navigation must leave Settings horizontally usable at the 400px application minimum"
             );
             window.close();
             assert!(
@@ -673,13 +798,27 @@ mod tests {
             let registry = Registry::new("workspace");
             let page = Overview::new(&workspace, None).settings(&registry);
             let window = gtk::Window::builder()
-                .default_width(1000)
+                .default_width(300)
                 .default_height(760)
                 .child(&page)
                 .build();
             window.present();
             while gtk::glib::MainContext::default().iteration(false) {}
             let initial_focus = focus_chain(&window);
+            let status = descendants(page.upcast_ref())
+                .into_iter()
+                .find_map(|widget| {
+                    widget
+                        .downcast::<gtk::Label>()
+                        .ok()
+                        .filter(|label| label.text().as_str() == "No unsaved changes.")
+                })
+                .expect("settings exposes visible save feedback");
+            assert_eq!(
+                status.accessible_role(),
+                gtk::AccessibleRole::Status,
+                "save, validation, and dirty-state feedback must be announced"
+            );
             let eligible: Vec<_> = descendants(page.upcast_ref())
                 .into_iter()
                 .filter(|widget| {
@@ -737,6 +876,8 @@ mod tests {
             assert!(labels.contains(&"Text color"));
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
+            assert!(labels.contains(&"Add variable"));
+            assert!(labels.contains(&"Add mount"));
             assert!(labels.contains(&"Save changes"));
             assert!(snapshot.root.children.iter().any(|node| {
                 node.label.as_deref() == Some("Settings status") && node.value.as_deref() == Some("No unsaved changes.")
@@ -778,6 +919,35 @@ mod tests {
                     );
                 }
             }
+            let entries_before = descendants(page.upcast_ref())
+                .iter()
+                .filter(|widget| widget.is::<gtk::Entry>())
+                .count();
+            let add_variable = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Add variable"))
+                .expect("visible environment row creation has semantics");
+            assert_eq!(add_variable.role, "button");
+            assert!(add_variable.actions.contains(&ActionKind::Invoke));
+            assert!(add_variable.actions.contains(&ActionKind::Focus));
+            registry
+                .act(&Action {
+                    revision: snapshot.revision,
+                    node: add_variable.id,
+                    action: ActionKind::Invoke,
+                    value: None,
+                })
+                .expect("semantic invocation reaches the live Add variable button");
+            assert_eq!(
+                descendants(page.upcast_ref())
+                    .iter()
+                    .filter(|widget| widget.is::<gtk::Entry>())
+                    .count(),
+                entries_before + 2,
+                "semantic row creation adds the same key/value inputs as a click"
+            );
             let pristine_save = snapshot
                 .root
                 .children
@@ -997,6 +1167,17 @@ mod tests {
                             .is_some_and(|value| value != "Unsaved changes." && !value.is_empty())
                 }),
                 "validation failure replaces generic dirty status with an actionable explanation"
+            );
+            assert!(
+                status.layout().line_count() > 1,
+                "the validation explanation must wrap rather than clip beside Save at narrow widths"
+            );
+            let horizontal = page.hadjustment();
+            assert!(
+                horizontal.upper() <= horizontal.page_size() + 1.0,
+                "invalid Settings must remain horizontally bounded: upper={} page_size={}",
+                horizontal.upper(),
+                horizontal.page_size()
             );
             window.close();
         }) {

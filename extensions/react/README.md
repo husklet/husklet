@@ -21,31 +21,40 @@ Start from the complete context shipped in this package:
 ```sh
 cp -R node_modules/@husklet/react/examples/starter my-extension
 cd my-extension
+npm install
+npm test
 docker build -t my-extension .
 ```
 
-[`examples/starter`](examples/starter) contains `main.js`, `extension.toml`,
-and its Dockerfile. The manifest label names the file inside the image—the host
+[`examples/starter`](examples/starter) is a standalone Node project containing
+`package.json`, `main.js`, `extension.toml`, and its Dockerfile. Its SDK dependency
+is bound to the same version as the package that supplied the starter. The manifest
+label names the file inside the image—the host
 does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
-base image's non-root runtime. Pin `HUSKLET_REACT_IMAGE` to the release version
-you tested before publishing an extension; `latest` is only the starter default.
+base image's non-root runtime. The starter defaults to the immutable base-image
+tag released with this SDK; override `HUSKLET_REACT_IMAGE` deliberately when
+testing against another runtime.
 
-```jsx
+`npm start` reports missing sockets, handshake failures, and unexpected host EOF
+on stderr and exits nonzero. `SIGINT` and `SIGTERM` close an established session
+without reporting a false failure. It never reconnects automatically: the socket
+is an authority credential, so a replacement must be launched and granted by the
+host. The host validates `extension.toml` before starting the image; `npm start`
+alone exercises the entrypoint and cannot validate image manifest registration.
+
+```js
 import React, { useState } from 'react';
-import { connect, render, Column, Button, Text } from '@husklet/react';
+import { Button, Column, Text, connect, render } from '@husklet/react';
 
 function App() {
   const [count, setCount] = useState(0);
-  return (
-    <Column gap={2} pad={4}>
-      <Text scale="title">Clicked {count} times</Text>
-      <Button label="Go" tone="accent" onInvoke={() => setCount(count + 1)} />
-    </Column>
-  );
+  return React.createElement(Column, { gap: 2, pad: 4 },
+    React.createElement(Text, { label: `Clicked ${count} times`, scale: 'title' }),
+    React.createElement(Button, { label: 'Go', tone: 'accent', onInvoke: () => setCount(count + 1) }));
 }
 
 const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
-render(<App />, session, { title: 'My Extension' });
+render(React.createElement(App), session, { title: 'My Extension' });
 ```
 
 ## Pane providers
@@ -66,7 +75,7 @@ Choosing that entry sends a typed `PaneSelection` carrying both the provider ID
 and the stable workspace slot that selected it. Use that event to select the
 view rendered by the extension's existing root:
 
-```jsx
+```js
 import React from 'react';
 import { connect, render, LogView, Text, usePaneSelection } from '@husklet/react';
 
@@ -75,11 +84,11 @@ const session = await connect();
 function App() {
   const selection = usePaneSelection(session, 'logs');
   return selection
-    ? <LogView value={`Logs selected in ${selection.slot}`} />
-    : <Text value="Choose Service logs from a pane menu" />;
+    ? React.createElement(LogView, { value: `Logs selected in ${selection.slot}` })
+    : React.createElement(Text, { label: 'Choose Service logs from a pane menu' });
 }
 
-render(<App />, session, { title: 'My Extension' });
+render(React.createElement(App), session, { title: 'My Extension' });
 ```
 
 The host sends only providers declared by this extension. The `slot` lets state
@@ -90,7 +99,10 @@ cleanup and fresh-callback behavior for other typed `HostEvent` handling.
 Current interface events form a discriminated union on `interaction`: checking
 for `"key"`, for example, makes `key`, `keycode`, `modifiers`, and `pressed`
 required, while a pointer event exposes its finite phase vocabulary and nullable
-coordinates. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
+coordinates. A `Container` can bind `onDrag` and `onDrop` for in-process
+reordering: drop reports only the bounded source node identity and local `x`/`y`
+coordinates. Arbitrary files, MIME data, clipboard contents, and cross-process
+payloads are deliberately not exposed. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
 that used the older `event` envelope; new code should narrow `InterfaceEvent`.
 
 ## Workspace API
@@ -105,10 +117,23 @@ import { connect, workspace } from '@husklet/react';
 const session = await connect({ timeout: 10_000, pendingLimit: 32 });
 const host = workspace(session);
 const configuration = await host.inspect('backend');
+if (!configuration.generation) throw new Error('inspection omitted workspace generation');
 await host.stop('backend');
-await host.update('backend', { ...configuration, memory_mb: 4096 });
+await host.update('backend', configuration.generation, { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
+const created = await host.containers.create({
+  image: 'alpine:3.20',
+  name: 'worker',
+  command: ['sleep', '300'],
+  environment: [['MODE', 'development']],
+  mounts: [{ volume: 'build-cache', target: '/cache', read_only: false }],
+  ports: [{ container: 8080, host: null, protocol: 'tcp' }],
+  memory_mb: 512,
+  cpus: 2,
+  pids_limit: 128,
+});
+await host.containers.start(created);
 await host.containers.stop(containers[0].id);
 const pane = await host.containers.attachTerminal(containers[0].id, ['sh', '-i']);
 const processes = await host.containers.processes(containers[0].id);
@@ -120,10 +145,13 @@ await host.files.rename('project/generated/config.json', 'project/generated/app.
 ```
 
 Container reads include bounded logs, initial-process snapshots, and execution
-inspection. Process PIDs are point-in-time display values and may be reused;
-`stop`, `remove`, and `kill` accept only complete immutable container IDs returned
-by inventory or inspection; `signalExecution` likewise requires an immutable
-execution ID. Names, prefixes, and snapshot PIDs remain useful only for bounded
+inspection. A process snapshot names the complete immutable container ID actually
+sampled; its PIDs remain point-in-time display values and may be reused;
+`start`, `stop`, `pause`, `unpause`, `restart`, `remove`, `kill`, and `exec`
+accept only complete immutable container IDs returned by inventory or inspection.
+Execution inspection, output replay, waiting, signaling, and removal all require
+the complete immutable execution ID returned by the bounded execution catalogue.
+Names, prefixes, and snapshot PIDs remain useful only for bounded
 lookup and display. The explicit control grant covers pause,
 unpause, restart, kill, and detached `exec`. Image inspection and pulls may use
 human tags, but removal requires the complete `sha256:` digest returned by
@@ -137,28 +165,53 @@ pane disconnects.
 Volume removal takes both its canonical name and the 32-hex `generation` returned
 by inventory or inspection. The host compares that generation atomically, so a
 removed and recreated same-name volume needs fresh consent.
-The host currently publishes changed full snapshots for `containers`,
-`images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
+The host publishes bounded change feeds for container and execution inventories,
+image pulls, panes, extensions and their acquisitions, workspace lifecycle and
+input events, plus the legacy image, volume, network, and terminal snapshots. Start and stop those credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
-through `connect({ onEvent })` or `session.onEvent()`.
+through `connect({ onEvent })` or `session.onEvent()`. An acknowledged final
+unsubscribe retires the host channel and discards any coalesced snapshot, so
+later subscriptions start with fresh credit and state.
 
 Terminal control is pane-addressed and promise-based as well. `terminal.read`
-returns at most 2,000 lines, `terminal.writeInput` accepts at most 65,536 raw
+returns at most 2,000 lines with the cursor and grid dimensions from the same
+authoritative screen snapshot; `terminal.splitObserved(slot, generation, revision, division)`
+splits only that exact snapshot (the legacy `split` remains for compatibility);
+`terminal.spawnObserved(slot, generation, revision, argv)` similarly prevents a
+stale slot from running argv in a replacement terminal (legacy `spawn` remains);
+`terminal.ratioObserved` binds layout resizing to the same cursor while legacy
+`ratio` remains available;
+`terminal.resizeGridObserved` binds PTY resizing to the same cursor while legacy
+`resizeGrid` remains available;
+`terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
-through 1,000. `terminal.topology()` returns the current nested tab/split tree;
+through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
+the exact pane snapshot returned by inventory/read; legacy `close(slot)` remains
+for compatibility. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.
+Use `terminal.switchOccupantObserved(slot, generation, revision, target)` for an
+observe-then-switch workflow; the generation-only method remains for compatibility.
 
 `protocolCoverage` is the machine-readable inventory of what this protocol
-version really supports. Workspace creation, configuration and lifecycle are
+version really supports. Its image inventory includes the implemented bounded
+list/inspect and pull calls plus digest-bound removal and confirmed prune
+authority; callers do not need to infer those operations from TypeScript alone.
+Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
-delete the workspace hosting it. The `unavailable` section names remaining
-areas such as drag/drop events;
-those names deliberately are not callable methods. `Session.onEvent` is
+delete the workspace hosting it. Names under `unavailable` deliberately are not
+callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send. Interface handlers
 receive bounded key, focus, and pointer details, while the credit-controlled
 `workspace-events` subscription carries workspace-level key, focus, and pointer
-events. Neither is a promise that every global workspace snapshot is published.
+activity. Its `dropped` count includes queue pressure, motion coalescing, and
+native callback contention, so consumers can detect every observation gap.
+Pointer events identify the exact pane slot and occupant generation,
+use pane-local coordinates, and distinguish motion, boundary, button, context,
+and scroll phases with bounded modifiers and deltas. Key and window-focus
+events also carry the focused terminal slot/generation when a terminal owns
+focus, or explicit null identity while window chrome owns it. Neither is a promise that
+every global workspace snapshot is published.
 
 ## Props
 
@@ -179,12 +232,48 @@ exported by name from the package root.
 - **Text children are the label.** `<Text>hello</Text>` and
   `<Text label="hello" />` are the same thing; bare text has no widget.
 - **A handler is `on` plus the trigger**: `onInvoke`, `onChange`, `onSubmit`,
-  `onSelect`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
+  `onSelect`, `onEdit`, `onSort`, `onActivate`, `onToggle`, `onExpand`, `onScroll`, `onClose`,
   `onContext`. The event identity is derived from the node and the trigger, so
   re-rendering with a fresh closure rebinds locally and sends no patch. The
   callback receives `{trigger, node, id, value}`.
 
+Editable virtual tables remain producer-controlled. Mark only intended columns
+with `{editable: true}` and handle `onEdit` as a proposal carrying
+`{source, version, row: {index, id}, column, value}`. Compare `source` and
+`version` with the current collection and use the immutable row `id`; reject a
+stale proposal without mutating data. The native cell restores its authoritative
+bound value immediately. After validation and persistence succeed, advance the
+source version and publish a new bounded row window to display the accepted
+value. Show rejection feedback separately rather than leaving an uncommitted
+draft in the table.
+
+Sortable virtual tables use the same authority rule. Mark only intended columns
+with `{sortable: true}` and handle `onSort` as a proposal carrying
+`{source, version, column, descending}`. Refuse a stale version or an undeclared
+column, then publish a newer source version after accepting the order. The native
+header shows direction but never locally reorders partial virtual windows.
+
 `vocabulary` exports both lists, and `tags` exports every component name.
+
+### Terminal transcript
+
+`TerminalTranscript` is a native, selectable text projection for terminal
+inspection. It accepts string lines or `{id, number, text, timestamp, stream,
+tone}` records, an optional `{line, column}` cursor, line-number/timestamp
+toggles, and bounded explicit actions. The component keeps the newest 256
+lines, no more than 2,048 UTF-8 bytes per line or 65,536 bytes overall, and
+shows when content was truncated. `onSelect` receives the retained line rather
+than asking consumers to recover identity from rendered text.
+
+### Command palette
+
+`CommandPaletteView` composes the native command input, grouped result list,
+empty state, and semantic buttons into a keyboard-first picker. It fuzzy
+matches titles, groups, and keywords; preserves stable command IDs; skips
+disabled commands during keyboard traversal; and forwards destructive metadata
+to automation. It accepts at most 256 commands, 128 UTF-8 query bytes, and 256
+UTF-8 bytes for displayed command fields. The lower-level `CommandPalette`
+input remains exported for custom compositions.
 
 ## Tests
 

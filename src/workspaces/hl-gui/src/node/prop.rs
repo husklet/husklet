@@ -120,7 +120,7 @@ pub enum PropValue {
     Align(Align),
     Orientation(Orientation),
     Choices(Vec<Choice>),
-    Schema(Vec<Column>),
+    Schema(#[cfg_attr(feature = "wire", serde(deserialize_with = "crate::data::deserialize_columns"))] Vec<Column>),
     Source(SourceId),
     Nothing,
 }
@@ -236,6 +236,8 @@ pub enum Trigger {
     Change,
     Submit,
     Select,
+    Edit,
+    Sort,
     Activate,
     Toggle,
     Expand,
@@ -245,6 +247,8 @@ pub enum Trigger {
     Key,
     Focus,
     Pointer,
+    Drag,
+    Drop,
 }
 
 /// Stable producer-owned identity for a reaction, echoed back on every event.

@@ -18,3 +18,4 @@ workspace = true
 
 [dev-dependencies]
 hl-extension = { path = "../hl-extension" }
+serde_json.workspace = true

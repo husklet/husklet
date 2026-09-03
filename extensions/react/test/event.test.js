@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { connect, render, useHostEvents, usePaneSelection } from '../src/index.js';
-import { Button, Column, Text } from '../src/components.js';
+import { Button, Column, Container, DataTable, Text } from '../src/components.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -121,6 +121,28 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   stage.close();
 });
 
+test('a slotless compatibility event never guesses between multiple surfaces', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let firstInvoked = 0;
+  let secondInvoked = 0;
+  const first = render(h(Button, { label: 'First', onInvoke: () => (firstInvoked += 1) }), session, { title: 'First' });
+  const second = render(h(Button, { label: 'Second', onInvoke: () => (secondInvoked += 1) }), session, {
+    split: { slot: 'surface-1', division: 'beside' },
+  });
+  await Promise.all([first.ready, second.ready]);
+  await until(() => stage.calls.filter((call) => call.call === 'interface_render_at').length === 2);
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual([firstInvoked, secondInvoked], [0, 0]);
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke', slot: 'surface-2' });
+  await until(() => secondInvoked === 1);
+  assert.equal(firstInvoked, 0);
+  await Promise.all([first.close(), second.close()]);
+  session.close();
+  stage.close();
+});
+
 test('the client refuses a thirty-third live root before opening it', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
@@ -188,6 +210,62 @@ test('bounded keyboard, focus and pointer details reach their React handlers', a
   stage.close();
 });
 
+test('a version-bound virtual row edit reaches only its DataTable handler', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let seen = null;
+  render(h(DataTable, { source: 7, schema: [{ key: 'name', editable: true }], onEdit: (event) => { seen = event; } }), session);
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const edit = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Edit').SetHandler;
+  await stage.push({ interaction: 'edit', trigger: 'Edit', node: edit.id, id: edit.handler.id, source: 7, version: 4, row: { index: 9, id: 'immutable-9' }, column: 'name', value: 'renamed' });
+  await until(() => seen !== null);
+  assert.deepEqual({ source: seen.source, version: seen.version, row: seen.row, column: seen.column, value: seen.value }, {
+    source: 7, version: 4, row: { index: 9, id: 'immutable-9' }, column: 'name', value: 'renamed',
+  });
+  session.close();
+  stage.close();
+});
+
+test('a version-bound native sort reaches only its DataTable handler', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let seen = null;
+  render(h(DataTable, { source: 7, schema: [{ key: 'name', sortable: true }], onSort: (event) => { seen = event; } }), session);
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const sort = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Sort').SetHandler;
+  await stage.push({ interaction: 'sort', trigger: 'Sort', node: sort.id, id: sort.handler.id, source: 7, version: 4, column: 'name', descending: true });
+  await until(() => seen !== null);
+  assert.deepEqual({ source: seen.source, version: seen.version, column: seen.column, descending: seen.descending }, {
+    source: 7, version: 4, column: 'name', descending: true,
+  });
+  session.close();
+  stage.close();
+});
+
+test('bounded internal drag and drop metadata reaches the exact React handlers', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  render(h(Column, null, h(Container, {
+    onDrag: (event) => seen.push(event),
+    onDrop: (event) => seen.push(event),
+  })), session, { title: 'Drag and drop' });
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const drag = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Drag').SetHandler;
+  const drop = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Drop').SetHandler;
+  await stage.push({ interaction: 'drag', trigger: 'Drag', node: drag.id, id: drag.handler.id, slot: 'surface-1' });
+  await stage.push({ interaction: 'drop', trigger: 'Drop', node: drop.id, id: drop.handler.id, slot: 'surface-1', source: 4, x: 2, y: 3 });
+  await until(() => seen.length === 2);
+  assert.deepEqual(seen.map(({ trigger }) => trigger), ['Drag', 'Drop']);
+  assert.equal(seen[0].slot, 'surface-1');
+  assert.deepEqual([seen[1].source, seen[1].x, seen[1].y], [4, 2, 3]);
+  session.close();
+  stage.close();
+});
+
 test('a re-render rebinds the callback without a patch', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
@@ -249,7 +327,6 @@ test('the pane-selection hook filters providers and exposes stable slot identity
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
 
-  await stage.push({ pane_provider: 'logs' });
   await stage.push({ pane_provider: 'images', slot: 'pane-wrong' });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(labels().includes('Logs in pane-wrong'), false, 'a different provider changed the selected view');

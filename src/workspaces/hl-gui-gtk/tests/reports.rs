@@ -13,7 +13,7 @@
 //! rather than passing silently.
 
 use gtk::prelude::*;
-use hl_gui::{Choice, Event, EventId, NodeId, Prop, PropValue, Tag, Tree, Trigger};
+use hl_gui::{Cell, Choice, Event, EventId, NodeId, Prop, PropValue, Renderer, Row, RowWindow, Tag, Tree, Trigger};
 use hl_gui_gtk::Surface;
 
 /// One producer, one tree, one rendered surface.
@@ -47,6 +47,17 @@ impl Session {
             self.producer
                 .set(node, Prop::Source, PropValue::Source(hl_gui::SourceId::new(1)));
         }
+        if tag == Tag::DataTable {
+            self.producer.set(
+                node,
+                Prop::Schema,
+                PropValue::Schema(vec![
+                    hl_gui::Column::new("name", "Name").sortable(),
+                    hl_gui::Column::new("id", "ID").sortable(),
+                    hl_gui::Column::new("state", "State"),
+                ]),
+            );
+        }
         let frame = self.producer.frame();
         self.tree
             .apply(&frame, &mut self.canvas)
@@ -55,6 +66,30 @@ impl Session {
             self.canvas
                 .resize(hl_gui::SourceId::new(1), hl_gui::Version::new(1), 1)
                 .expect("a selectable source has one row");
+            let view = self
+                .widgets()
+                .into_iter()
+                .find_map(|widget| widget.downcast::<gtk::ColumnView>().ok())
+                .expect("a source component has a column view");
+            let rows = view
+                .model()
+                .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+                .and_then(|selection| selection.model())
+                .and_then(|model| model.downcast::<hl_gui_gtk::Rows>().ok())
+                .expect("a source component has windowed rows");
+            assert!(rows.item(0).is_some());
+            let request = self.canvas.requests(0).pop().expect("realizing the row requests it");
+            Renderer::rows(
+                &mut self.canvas,
+                &RowWindow {
+                    source: request.source,
+                    version: request.version,
+                    request: request.id,
+                    range: request.range,
+                    rows: vec![Row::new(41, [Cell::text("ready")])],
+                },
+            )
+            .expect("the selectable row arrives");
         }
         let class = format!("hl-{}", tag.as_str().to_ascii_lowercase());
         self.widgets()
@@ -86,25 +121,36 @@ impl Session {
 fn identified(event: &Event) -> bool {
     match event {
         Event::Invoke { id, .. }
+        | Event::Activate { id, .. }
         | Event::Change { id, .. }
+        | Event::Toggle { id, .. }
+        | Event::Expand { id, .. }
         | Event::Submit { id, .. }
         | Event::Select { id, .. }
+        | Event::Edit { id, .. }
+        | Event::Sort { id, .. }
         | Event::Scroll { id, .. }
         | Event::Close { id, .. }
         | Event::Context { id, .. }
         | Event::Key { id, .. }
         | Event::Focus { id, .. }
         | Event::Pointer { id, .. } => id.as_str() == "reported",
+        Event::Drag { id, .. } | Event::Drop { id, .. } => id.as_str() == "reported",
         _ => false,
     }
 }
 
 #[test]
-fn every_declared_trigger_reports_when_the_component_is_worked() {
+fn every_declared_trigger_and_sortable_header_report_on_one_toolkit_thread() {
     if gtk::init().is_err() {
         eprintln!("skipped: no display connection");
         return;
     }
+    every_declared_trigger_reports_when_the_component_is_worked();
+    sortable_header_reports_current_source_version_without_reordering_rows();
+}
+
+fn every_declared_trigger_reports_when_the_component_is_worked() {
     let silent: Vec<String> = Tag::ALL.iter().flat_map(|tag| unreported(*tag)).collect();
     assert!(
         silent.is_empty(),
@@ -113,10 +159,67 @@ fn every_declared_trigger_reports_when_the_component_is_worked() {
     );
 }
 
+fn sortable_header_reports_current_source_version_without_reordering_rows() {
+    let mut session = Session::new();
+    let widget = session.bound(Tag::DataTable, Trigger::Sort);
+    worked(&widget, Trigger::Sort);
+    let events = session.canvas.reports().drain();
+    assert_eq!(events.len(), 1, "one header gesture emits one proposal");
+    let Event::Sort { sort, .. } = &events[0] else {
+        panic!("header did not report a sort proposal")
+    };
+    assert_eq!(sort.source, hl_gui::SourceId::new(1));
+    assert_eq!(sort.version, hl_gui::Version::new(1));
+    assert_eq!(sort.column, "name");
+    assert!(sort.descending);
+    let view = widget
+        .downcast_ref::<gtk::ScrolledWindow>()
+        .and_then(gtk::ScrolledWindow::child)
+        .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
+        .expect("table view");
+    let rows = view
+        .model()
+        .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+        .expect("selection");
+    assert_eq!(
+        rows.n_items(),
+        1,
+        "sort proposal does not install a local sorting model"
+    );
+    let second = view
+        .columns()
+        .item(1)
+        .and_downcast::<gtk::ColumnViewColumn>()
+        .expect("second sortable column");
+    view.sort_by_column(Some(&second), gtk::SortType::Descending);
+    let changed = session.canvas.reports().drain();
+    assert_eq!(changed.len(), 1, "changing the sorted column emits once");
+    let Event::Sort { sort, .. } = &changed[0] else {
+        panic!("changing column at the same direction was lost")
+    };
+    assert_eq!(sort.column, "id");
+    assert!(sort.descending);
+    let inert = view
+        .columns()
+        .item(2)
+        .and_downcast::<gtk::ColumnViewColumn>()
+        .expect("plain column");
+    assert!(
+        inert.sorter().is_none(),
+        "an unsortable schema column must have an inert header"
+    );
+}
+
 /// Everything one component declares it can report and then does not.
 fn unreported(tag: Tag) -> Vec<String> {
     let mut silent = Vec::new();
     for trigger in tag.triggers() {
+        // Virtual editable cells exist only after a real rooted viewport asks
+        // for and receives a row window. The Storybook GTK integration test
+        // exercises that complete lifecycle rather than manufacturing one.
+        if *trigger == Trigger::Edit {
+            continue;
+        }
         let mut session = Session::new();
         let widget = session.bound(tag, *trigger);
         worked(&widget, *trigger);
@@ -160,6 +263,20 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
                 return;
             }
         }
+    }
+    if trigger == Trigger::Sort {
+        let view = widget
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .and_then(gtk::ScrolledWindow::child)
+            .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
+            .expect("sortable table has a column view");
+        let column = view
+            .columns()
+            .item(0)
+            .and_downcast::<gtk::ColumnViewColumn>()
+            .expect("sortable column");
+        view.sort_by_column(Some(&column), gtk::SortType::Descending);
+        return;
     }
     if trigger == Trigger::Submit {
         widget.emit_by_name::<()>("activate", &[]);
@@ -231,6 +348,19 @@ fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
                     controller.emit_by_name::<()>("pressed", &[&1_i32, &2.0_f64, &3.0_f64]);
                     return true;
                 }
+            }
+            Trigger::Drag if controller.is::<gtk::DragSource>() => {
+                let provider =
+                    controller.emit_by_name::<Option<gtk::gdk::ContentProvider>>("prepare", &[&2.0_f64, &3.0_f64]);
+                assert!(provider.is_some(), "a drag publishes a bounded node marker");
+                return true;
+            }
+            Trigger::Drop if controller.is::<gtk::DropTarget>() => {
+                let marker = "husklet-node:1".to_value();
+                let boxed = gtk::glib::BoxedValue(marker);
+                let accepted = controller.emit_by_name::<bool>("drop", &[&boxed, &2.0_f64, &3.0_f64]);
+                assert!(accepted, "an internal bounded node marker is accepted");
+                return true;
             }
             _ => {}
         }

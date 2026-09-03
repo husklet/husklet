@@ -12,6 +12,7 @@ import {
   Heading,
   InlineMessage,
   Progress,
+  Select,
   Spinner,
   Text,
 } from '@husklet/react';
@@ -56,6 +57,8 @@ export const acquisitionStates = [
 
 export function AcquisitionProgressStory() {
   const [event, setEvent] = useState('No acquisition action invoked.');
+  const [selected, setSelected] = useState(acquisitionStates[0].key);
+  const state = acquisitionStates.find(({ key }) => key === selected) ?? acquisitionStates[0];
   return h(
     Column,
     { gap: 3, grow: true },
@@ -66,7 +69,13 @@ export function AcquisitionProgressStory() {
       wrap: true,
       color: 'text-dim',
     }),
-    ...acquisitionStates.map((state) => h(AcquisitionState, { key: state.key, state, onAction: (label) => setEvent(`${label} invoked for ${state.key}.`) })),
+    h(Select, {
+      key: 'state',
+      value: state.key,
+      choices: acquisitionStates.map(({ key, title }) => ({ value: key, label: title })),
+      onChange: ({ value }) => setSelected(String(value ?? acquisitionStates[0].key)),
+    }),
+    h(AcquisitionState, { key: state.key, state, onAction: (label) => setEvent(`${label} invoked for ${state.key}.`) }),
     h(InlineMessage, { key: 'event', label: event, tone: 'neutral' }),
   );
 }

@@ -60,19 +60,38 @@ impl LayoutManagerImpl for Weave {
     }
 
     fn measure(&self, widget: &gtk::Widget, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-        let lines = self.lines(widget, for_size);
         let spacing = self.spacing.get();
         if orientation == self.direction.get() {
-            // A wrapping container can always be as narrow as its widest
-            // child; its natural size is the whole run on one line.
-            let widest = lines
+            let unconstrained = self.lines(widget, -1);
+            let floor = unconstrained
                 .iter()
                 .flat_map(|line| &line.children)
                 .map(|(child, _, _)| minimum(child, self.direction.get() == gtk::Orientation::Vertical))
-                .max();
-            let natural = lines.iter().map(|line| line.main).max().unwrap_or(0);
-            return (widest.unwrap_or(0), natural.max(widest.unwrap_or(0)), -1, -1);
+                .max()
+                .unwrap_or(0);
+            let natural = unconstrained.iter().map(|line| line.main).max().unwrap_or(0).max(floor);
+            let minimum = if for_size < 0 {
+                floor
+            } else {
+                // GTK may ask the inverse half of height-for-width (or
+                // width-for-height) while checking a widget's geometry. Find
+                // the narrowest main-axis extent whose wrapped cross extent
+                // actually fits the supplied constraint.
+                let mut low = floor;
+                let mut high = natural;
+                while low < high {
+                    let candidate = low + (high - low) / 2;
+                    if extent(&self.lines(widget, candidate), spacing) <= for_size {
+                        high = candidate;
+                    } else {
+                        low = candidate + 1;
+                    }
+                }
+                low
+            };
+            return (minimum, natural, -1, -1);
         }
+        let lines = self.lines(widget, for_size);
         let stacked = extent(&lines, spacing);
         (stacked, stacked, -1, -1)
     }
@@ -80,10 +99,11 @@ impl LayoutManagerImpl for Weave {
     fn allocate(&self, widget: &gtk::Widget, width: i32, height: i32, _baseline: i32) {
         let spacing = self.spacing.get();
         let vertical = self.direction.get() == gtk::Orientation::Vertical;
+        let reverse = !vertical && widget.direction() == gtk::TextDirection::Rtl;
         let room = if vertical { height } else { width };
         let mut cross = 0;
         for line in self.lines(widget, room) {
-            self.line(&line, cross, vertical);
+            self.line(&line, cross, vertical, room, reverse);
             cross += line.cross + spacing;
         }
     }
@@ -111,20 +131,46 @@ impl Weave {
         lines
     }
 
-    /// Places one line's children, each at its natural main size.
-    fn line(&self, line: &Line, cross: i32, vertical: bool) {
+    /// Places one line's children, sharing spare room among children that ask
+    /// to grow just as a non-wrapping box does.
+    fn line(&self, line: &Line, cross: i32, vertical: bool, room: i32, reverse: bool) {
         let spacing = self.spacing.get();
-        let mut main = 0;
+        let expanding = line
+            .children
+            .iter()
+            .filter(|(child, _, _)| if vertical { child.vexpands() } else { child.hexpands() })
+            .count();
+        let expanding = i32::try_from(expanding).unwrap_or(i32::MAX);
+        let spare = room.saturating_sub(line.main);
+        let share = if expanding == 0 { 0 } else { spare / expanding };
+        let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
+        let mut main = if reverse { room } else { 0 };
         for (child, extent, _) in &line.children {
+            let expands = if vertical { child.vexpands() } else { child.hexpands() };
+            let bonus = if expands {
+                let bonus = share + i32::from(remainder > 0);
+                remainder = remainder.saturating_sub(1);
+                bonus
+            } else {
+                0
+            };
+            let extent = extent + bonus;
+            if reverse {
+                main -= extent;
+            }
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
             let (width, height) = if vertical {
-                (line.cross, *extent)
+                (line.cross, extent)
             } else {
-                (*extent, line.cross)
+                (extent, line.cross)
             };
             let shift = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x as f32, y as f32));
             child.allocate(width, height, -1, Some(shift));
-            main += extent + spacing;
+            if reverse {
+                main -= spacing;
+            } else {
+                main += extent + spacing;
+            }
         }
     }
 }

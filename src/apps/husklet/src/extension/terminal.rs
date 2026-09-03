@@ -15,8 +15,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use hl_extension::port::{
-    Division, GridSize, HostError, PaneInventory, PaneSemanticAction, PaneSemanticTree, PaneText, TabSummary,
-    TerminalSurface, TerminalTopology,
+    Division, GridSize, HostError, PaneInventory, PaneOccupantTarget, PaneSemanticAction, PaneSemanticTree, PaneText,
+    TabSummary, TerminalSurface, TerminalTopology,
 };
 
 /// How long a relayed call waits for the window to answer.
@@ -85,6 +85,8 @@ pub enum Request {
     /// Raw bytes written to the named pane.
     Write {
         slot: String,
+        generation: u64,
+        revision: u64,
         contents: Vec<u8>,
     },
     /// Exact PTY grid requested for the named pane.
@@ -102,12 +104,22 @@ pub enum Request {
         /// The pane being focused.
         slot: String,
     },
+    /// The tab containing this live pane receives a new visible title.
+    Retitle {
+        slot: String,
+        title: String,
+    },
     /// How much of its split the named pane takes.
     Ratio {
         /// The pane being resized.
         slot: String,
         /// The fraction of the split the pane takes.
         ratio: f64,
+    },
+    SwitchOccupant {
+        slot: String,
+        generation: u64,
+        target: PaneOccupantTarget,
     },
     /// A pane split off the named slot, holding an extension's interface.
     Surface {
@@ -269,6 +281,14 @@ impl TerminalSurface for Relay {
         }
     }
 
+    fn switch_occupant(&self, slot: &str, generation: u64, target: &PaneOccupantTarget) -> Result<(), HostError> {
+        self.done(Request::SwitchOccupant {
+            slot: slot.into(),
+            generation,
+            target: target.clone(),
+        })
+    }
+
     /// # Errors
     /// Returns a host failure when no window is drawing this workspace.
     fn open_tab(&self, title: &str) -> Result<String, HostError> {
@@ -329,9 +349,11 @@ impl TerminalSurface for Relay {
         }
     }
 
-    fn write(&self, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, slot: &str, generation: u64, revision: u64, contents: &[u8]) -> Result<(), HostError> {
         self.done(Request::Write {
             slot: slot.to_owned(),
+            generation,
+            revision,
             contents: contents.to_vec(),
         })
     }
@@ -353,6 +375,13 @@ impl TerminalSurface for Relay {
     /// Returns a host failure when no window is drawing this workspace.
     fn focus(&self, slot: &str) -> Result<(), HostError> {
         self.done(Request::Focus { slot: slot.to_owned() })
+    }
+
+    fn retitle(&self, slot: &str, title: &str) -> Result<(), HostError> {
+        self.done(Request::Retitle {
+            slot: slot.to_owned(),
+            title: title.to_owned(),
+        })
     }
 
     /// # Errors
@@ -385,7 +414,7 @@ fn unreachable() -> HostError {
 #[cfg(test)]
 mod tests {
     use super::{Answer, Relay, Request};
-    use hl_extension::port::{Division, GridSize, TerminalSurface as _};
+    use hl_extension::port::{Division, GridSize, PaneOccupantTarget, TerminalSurface as _};
 
     #[test]
     fn a_call_carries_its_request_and_takes_back_what_the_window_answered() {
@@ -442,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_input_and_grid_cross_the_thread_boundary_unchanged() {
+    fn raw_input_grid_and_unicode_title_cross_the_thread_boundary_unchanged() {
         let (relay, errands) = Relay::open();
         let window = std::thread::spawn(move || {
             let input = errands.recv().expect("input errand");
@@ -450,6 +479,8 @@ mod tests {
                 input.request(),
                 &Request::Write {
                     slot: "shell-1".into(),
+                    generation: 3,
+                    revision: 5,
                     contents: b"printf x".to_vec()
                 }
             );
@@ -463,12 +494,53 @@ mod tests {
                 }
             );
             grid.answer(Ok(Answer::Done));
+            let retitle = errands.recv().expect("retitle errand");
+            assert_eq!(
+                retitle.request(),
+                &Request::Retitle {
+                    slot: "shell-1".into(),
+                    title: " Build 🧪 ".into()
+                }
+            );
+            retitle.answer(Ok(Answer::Done));
         });
 
-        relay.write("shell-1", b"printf x").expect("input");
+        relay.write("shell-1", 3, 5, b"printf x").expect("input");
         relay
             .resize_grid("shell-1", GridSize { columns: 120, rows: 40 })
             .expect("grid");
+        relay.retitle("shell-1", " Build 🧪 ").expect("retitle");
+        window.join().expect("window thread");
+    }
+
+    #[test]
+    fn occupant_cas_crosses_the_thread_boundary_unchanged() {
+        let (relay, errands) = Relay::open();
+        let window = std::thread::spawn(move || {
+            let errand = errands.recv().expect("switch errand");
+            assert_eq!(
+                errand.request(),
+                &Request::SwitchOccupant {
+                    slot: "shell-1".into(),
+                    generation: 41,
+                    target: PaneOccupantTarget::Surface {
+                        extension: "demo".into(),
+                        provider: "main".into()
+                    },
+                }
+            );
+            errand.answer(Ok(Answer::Done));
+        });
+        relay
+            .switch_occupant(
+                "shell-1",
+                41,
+                &PaneOccupantTarget::Surface {
+                    extension: "demo".into(),
+                    provider: "main".into(),
+                },
+            )
+            .expect("switch");
         window.join().expect("window thread");
     }
 

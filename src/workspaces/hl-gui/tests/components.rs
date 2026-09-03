@@ -1,7 +1,8 @@
 //! Public-contract coverage for the retained tree and its mutation rules.
 
 use hl_gui::{
-    Fault, Frame, NodeId, Patch, Prop, PropValue, Renderer, RowWindow, Surface, Tag, Theme, Tree, TreeError, Trigger,
+    Column, Fault, Frame, NodeId, Patch, Prop, PropValue, Renderer, RowWindow, Surface, TABLE_COLUMN_LIMIT, Tag, Theme,
+    Tree, TreeError, Trigger,
 };
 
 /// Records what an adapter would have been asked to do, so tree semantics are
@@ -79,6 +80,25 @@ fn bounded_frame_preflight_preserves_the_last_valid_tree_and_sequence() {
     assert_eq!(tree.len(), 2);
     assert_eq!(tree.sequence(), 1);
     assert_eq!(trace.applied.len(), 2, "preflight calls no renderer");
+}
+
+#[test]
+fn table_schema_is_refused_before_tree_or_renderer_mutation() {
+    let table = NodeId::new(1);
+    let (tree, trace) = tree_with(vec![Patch::Create { id: table, tag: Tag::DataTable }]);
+    let invalid = Frame {
+        sequence: 2,
+        patches: vec![Patch::SetProp {
+            id: table,
+            prop: Prop::Schema,
+            value: PropValue::Schema(
+                (0..=TABLE_COLUMN_LIMIT).map(|index| Column::new(format!("key-{index}"), "Title")).collect(),
+            ),
+        }],
+    };
+    assert!(matches!(tree.preflight(&invalid, 100), Err(TreeError::InvalidSchema(_))));
+    assert_eq!(tree.sequence(), 1);
+    assert_eq!(trace.applied.len(), 1, "invalid schema reached no renderer");
 }
 
 #[test]

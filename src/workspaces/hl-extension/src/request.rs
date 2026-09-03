@@ -142,6 +142,10 @@ pub enum Request {
     ContainerRestart {
         id: String,
     },
+    ContainerRename {
+        id: String,
+        name: String,
+    },
     ContainerKill {
         id: String,
         signal: String,
@@ -200,6 +204,8 @@ pub enum Request {
     NetworkConnect {
         reference: String,
         container: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
     },
     NetworkDisconnect {
         reference: String,
@@ -215,8 +221,22 @@ pub enum Request {
         slot: String,
         division: Division,
     },
+    /// Splits only the exact pane occupant snapshot the caller observed.
+    TerminalSplitObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        division: Division,
+    },
     TerminalSpawn {
         slot: String,
+        command: Vec<String>,
+    },
+    /// Runs a command only in the exact terminal snapshot the caller observed.
+    TerminalSpawnObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
         command: Vec<String>,
     },
     TerminalReadPane {
@@ -232,6 +252,8 @@ pub enum Request {
     },
     TerminalWritePane {
         slot: String,
+        generation: u64,
+        revision: u64,
         contents: Vec<u8>,
     },
     TerminalResizeGrid {
@@ -239,15 +261,53 @@ pub enum Request {
         columns: u16,
         rows: u16,
     },
+    TerminalResizeGridObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        columns: u16,
+        rows: u16,
+    },
     TerminalClosePane {
         slot: String,
+    },
+    /// Closes only the exact pane occupant snapshot the caller observed.
+    TerminalClosePaneObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
     },
     TerminalFocusPane {
         slot: String,
     },
+    TerminalFocusPaneObserved { slot: String, generation: u64, revision: u64 },
+    TerminalRetitlePane {
+        slot: String,
+        title: String,
+    },
+    TerminalRetitlePaneObserved { slot: String, generation: u64, revision: u64, title: String },
     TerminalRatio {
         slot: String,
         ratio: f64,
+    },
+    /// Resizes only the exact pane snapshot the caller observed.
+    TerminalRatioObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        ratio: f64,
+    },
+    TerminalSwitchOccupant {
+        slot: String,
+        generation: u64,
+        target: crate::port::PaneOccupantTarget,
+    },
+    /// Switches only the exact pane occupant snapshot the caller observed.
+    TerminalSwitchOccupantObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        target: crate::port::PaneOccupantTarget,
     },
     FilesystemList {
         path: RelativePath,
@@ -255,10 +315,20 @@ pub enum Request {
     FilesystemRead {
         path: RelativePath,
     },
+    FilesystemReadRange {
+        path: RelativePath,
+        offset: u64,
+        limit: usize,
+        observed: Option<String>,
+    },
     FilesystemStat {
         path: RelativePath,
     },
     FilesystemWrite {
+        path: RelativePath,
+        contents: Vec<u8>,
+    },
+    FilesystemCreateObserved {
         path: RelativePath,
         contents: Vec<u8>,
     },
@@ -269,9 +339,11 @@ pub enum Request {
         from: RelativePath,
         to: RelativePath,
     },
+    FilesystemRenameObserved { from: RelativePath, to: RelativePath, observed: String },
     FilesystemRemove {
         path: RelativePath,
     },
+    FilesystemRemoveObserved { path: RelativePath, observed: String },
     InterfaceOpenTab {
         title: String,
     },
@@ -342,6 +414,7 @@ impl Request {
             | Self::ContainerPause { .. }
             | Self::ContainerUnpause { .. }
             | Self::ContainerRestart { .. }
+            | Self::ContainerRename { .. }
             | Self::ContainerKill { .. }
             | Self::ExecutionKill { .. }
             | Self::ExecutionRemove { .. }
@@ -365,25 +438,38 @@ impl Request {
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalOpenTab { .. }
             | Self::TerminalSplit { .. }
+            | Self::TerminalSplitObserved { .. }
             | Self::TerminalSpawn { .. }
+            | Self::TerminalSpawnObserved { .. }
             | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
+            | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
+            | Self::TerminalClosePaneObserved { .. }
             | Self::TerminalFocusPane { .. }
-            | Self::TerminalRatio { .. } => Capability::TerminalControl,
+            | Self::TerminalFocusPaneObserved { .. }
+            | Self::TerminalRetitlePane { .. }
+            | Self::TerminalRetitlePaneObserved { .. }
+            | Self::TerminalRatio { .. }
+            | Self::TerminalRatioObserved { .. }
+            | Self::TerminalSwitchOccupant { .. }
+            | Self::TerminalSwitchOccupantObserved { .. } => Capability::TerminalControl,
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemStat { .. } => {
+            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemReadRange { .. } | Self::FilesystemStat { .. } => {
                 Capability::FilesystemRead
             }
             Self::FilesystemWrite { .. }
+            | Self::FilesystemCreateObserved { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
-            | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
+            | Self::FilesystemRenameObserved { .. }
+            | Self::FilesystemRemove { .. }
+            | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -402,11 +488,14 @@ impl Request {
         match self {
             Self::FilesystemList { path }
             | Self::FilesystemRead { path }
+            | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }
+            | Self::FilesystemCreateObserved { path, .. }
             | Self::FilesystemMkdir { path }
-            | Self::FilesystemRemove { path } => Some(path),
-            Self::FilesystemRename { from, .. } => Some(from),
+            | Self::FilesystemRemove { path }
+            | Self::FilesystemRemoveObserved { path, .. } => Some(path),
+            Self::FilesystemRename { from, .. } | Self::FilesystemRenameObserved { from, .. } => Some(from),
             _ => None,
         }
     }
@@ -519,6 +608,7 @@ pub enum Reply {
     Entries(Vec<Entry>),
     Entry(Entry),
     Contents(Vec<u8>),
+    FileRange(crate::port::FileRange),
     Identity(String),
     Done,
 }
@@ -574,6 +664,7 @@ mod tests {
             Request::PaneSemanticAction {
                 slot: "7".into(),
                 action: crate::port::PaneSemanticAction {
+                    generation: 0,
                     revision: 1,
                     node: 2,
                     action: crate::port::SemanticActionKind::Invoke,
@@ -600,6 +691,7 @@ mod tests {
                 spec: crate::port::ContainerCreateSpec {
                     image: "alpine:3.20".into(),
                     name: "worker".into(),
+                    hostname: None,
                     entrypoint: None,
                     command: Vec::new(),
                     environment: Vec::new(),
@@ -646,6 +738,18 @@ mod tests {
     }
 
     #[test]
+    fn revision_only_semantic_actions_fail_closed_at_the_wire_boundary() {
+        let legacy = serde_json::json!({
+            "call": "pane_semantic_action",
+            "with": {
+                "slot": "7",
+                "action": { "revision": 1, "node": 2, "action": "invoke", "value": null }
+            }
+        });
+        assert!(serde_json::from_value::<Request>(legacy).is_err());
+    }
+
+    #[test]
     fn reading_a_panes_text_is_gated_apart_from_listing_panes() {
         assert_eq!(Request::TerminalTabs.capability(), Capability::TerminalRead);
         assert_eq!(
@@ -658,9 +762,20 @@ mod tests {
         );
         for request in [
             Request::TerminalClosePane { slot: "1".into() },
+            Request::TerminalClosePaneObserved { slot: "1".into(), generation: 2, revision: 3 },
             Request::TerminalFocusPane { slot: "1".into() },
+            Request::TerminalRetitlePane {
+                slot: "1".into(),
+                title: "Build logs".into(),
+            },
             Request::TerminalRatio {
                 slot: "1".into(),
+                ratio: 0.5,
+            },
+            Request::TerminalRatioObserved {
+                slot: "1".into(),
+                generation: 2,
+                revision: 3,
                 ratio: 0.5,
             },
         ] {
@@ -739,5 +854,21 @@ mod tests {
         let accepted: Request =
             serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\"}}").expect("valid");
         assert_eq!(accepted, Request::ContainerStop { id: "c1".into() });
+
+        let rename = Request::ContainerRename {
+            id: "a".repeat(64),
+            name: "worker_2.prod".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&rename).expect("rename wire request"),
+            serde_json::json!({
+                "call": "container_rename",
+                "with": { "id": "a".repeat(64), "name": "worker_2.prod" }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Request>(serde_json::to_value(&rename).unwrap()).unwrap(),
+            rename
+        );
     }
 }

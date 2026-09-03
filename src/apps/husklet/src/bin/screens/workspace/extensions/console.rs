@@ -9,13 +9,13 @@ use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
 use hl_extension::port::{
-    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PANE_INVENTORY_LIMIT, PaneInventory,
-    PaneKind, PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology,
+    Division, GridSize, HostError, InspectablePane, LayoutNode, Occupant, PaneInventory, PaneKind, PaneOccupantTarget,
+    PaneProviderIdentity, PaneSummary, PaneText, TabSummary, TabTopology, TerminalTopology, PANE_INVENTORY_LIMIT,
 };
 use vte4::prelude::*;
 
 use super::super::terminal::{
-    Adjustment, Occupancy, PaneChrome, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+    Adjustment, Occupancy, PaneChooser, PaneChrome, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
 };
 
 /// How often the window looks for errands.
@@ -90,11 +90,19 @@ impl Console {
             Request::SemanticAction { slot, action } => {
                 Self::semantic_action(window, slot, action).map(|()| Answer::Done)
             }
-            Request::Write { slot, contents } => Self::write(window, slot, contents).map(|()| Answer::Done),
+            Request::Write { slot, generation, revision, contents } => {
+                Self::write(window, slot, *generation, *revision, contents).map(|()| Answer::Done)
+            }
             Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
             Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
+            Request::Retitle { slot, title } => Self::retitle(window, slot, title).map(|()| Answer::Done),
             Request::Ratio { slot, ratio } => Self::ratio(window, slot, *ratio).map(|()| Answer::Done),
+            Request::SwitchOccupant {
+                slot,
+                generation,
+                target,
+            } => Self::switch_occupant(window, slot, *generation, target).map(|()| Answer::Done),
             Request::Surface { origin, slot, division } => {
                 Self::surface(window, origin.as_deref(), slot, *division).map(Answer::Slot)
             }
@@ -133,17 +141,17 @@ impl Console {
         Ok(TerminalTopology { active_tab, tabs })
     }
 
-    fn pane_inventory(window: &Rc<TermWin>) -> Result<PaneInventory, HostError> {
+    pub(super) fn pane_inventory(window: &Rc<TermWin>) -> Result<PaneInventory, HostError> {
         let topology = Self::topology(window)?;
         let mut panes = Vec::new();
         for tab in topology.tabs {
-            Self::inventory_node(&tab.root, &tab.id, &tab.title, &mut panes);
+            Self::inventory_node(window, &tab.root, &tab.id, &tab.title, &mut panes);
         }
-        if Window::gallery(window).is_some_and(|gallery| gallery.native_semantics("workspace").is_ok()) {
+        if let Some(semantics) = Window::gallery(window).and_then(|gallery| gallery.native_semantics("workspace").ok()) {
             panes.push(InspectablePane {
                 slot: "workspace".into(),
-                generation: 0,
-                revision: 0,
+                generation: semantics.generation,
+                revision: semantics.revision,
                 kind: PaneKind::Native,
                 provider: None,
                 tab: None,
@@ -156,25 +164,38 @@ impl Console {
         Ok(PaneInventory { panes, truncated })
     }
 
-    fn inventory_node(node: &LayoutNode, tab: &str, title: &str, panes: &mut Vec<InspectablePane>) {
+    fn inventory_node(
+        window: &Rc<TermWin>,
+        node: &LayoutNode,
+        tab: &str,
+        title: &str,
+        panes: &mut Vec<InspectablePane>,
+    ) {
         match node {
             LayoutNode::Pane { pane, focused, .. } => panes.push(InspectablePane {
                 slot: pane.slot.clone(),
-                generation: 0,
+                generation: if pane.occupant == Occupant::Surface {
+                    pane.provider
+                        .as_ref()
+                        .and_then(|provider| Window::gallery(window)?.generation(&provider.extension))
+                        .unwrap_or(0)
+                } else {
+                    0
+                },
                 revision: 0,
                 kind: if pane.occupant == Occupant::Surface {
                     PaneKind::Surface
                 } else {
                     PaneKind::Terminal
                 },
-                provider: pane.provider.clone(),
+                provider: (pane.occupant == Occupant::Surface).then(|| pane.provider.clone()).flatten(),
                 tab: Some(tab.to_owned()),
                 title: Some(title.to_owned()),
                 focused: *focused,
             }),
             LayoutNode::Split { first, second, .. } => {
-                Self::inventory_node(first, tab, title, panes);
-                Self::inventory_node(second, tab, title, panes);
+                Self::inventory_node(window, first, tab, title, panes);
+                Self::inventory_node(window, second, tab, title, panes);
             }
         }
     }
@@ -292,7 +313,24 @@ impl Console {
             .native_requirement(node)
     }
 
-    fn write(window: &Rc<TermWin>, slot: &str, contents: &[u8]) -> Result<(), HostError> {
+    pub(super) fn write(
+        window: &Rc<TermWin>,
+        slot: &str,
+        generation: u64,
+        revision: u64,
+        contents: &[u8],
+    ) -> Result<(), HostError> {
+        let observed = Self::pane_inventory(window)?
+            .panes
+            .into_iter()
+            .find(|pane| pane.slot == slot)
+            .ok_or_else(|| absent(slot))?;
+        if observed.kind != PaneKind::Terminal || observed.generation != generation || observed.revision != revision {
+            return Err(HostError::Conflict(format!(
+                "stale pane identity for {slot}: expected {generation}/{revision}, current {}/{} ({:?})",
+                observed.generation, observed.revision, observed.kind
+            )));
+        }
         let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
         terminal.feed_child(contents);
         Ok(())
@@ -330,12 +368,65 @@ impl Console {
         Err(absent(slot))
     }
 
+    fn retitle(window: &Rc<TermWin>, slot: &str, title: &str) -> Result<(), HostError> {
+        let pane = Panes::at(window, slot).ok_or_else(|| absent(slot))?;
+        if Window::retitle_pane(window, &pane.widget, title) {
+            return Ok(());
+        }
+        Err(absent(slot))
+    }
+
     /// Sets how much of its split one pane takes.
     fn ratio(window: &Rc<TermWin>, slot: &str, ratio: f64) -> Result<(), HostError> {
         match Panes::ratio(window, slot, ratio) {
             Adjustment::Set => Ok(()),
             Adjustment::Whole => Err(HostError::Conflict(format!("{slot} is not inside a split"))),
             Adjustment::Absent => Err(absent(slot)),
+        }
+    }
+
+    pub(super) fn switch_occupant(
+        window: &Rc<TermWin>,
+        slot: &str,
+        generation: u64,
+        target: &PaneOccupantTarget,
+    ) -> Result<(), HostError> {
+        let current = Self::pane_inventory(window)?
+            .panes
+            .into_iter()
+            .find(|pane| pane.slot == slot)
+            .ok_or_else(|| absent(slot))?;
+        if current.generation != generation {
+            return Err(HostError::Conflict(format!(
+                "pane {slot} changed since generation {generation}"
+            )));
+        }
+        match target {
+            PaneOccupantTarget::Terminal => {
+                let _ = PaneChooser::terminal_in(window, Some(slot));
+            }
+            PaneOccupantTarget::Surface { extension, provider } => {
+                let _ = PaneChooser::provider_in(window, Some(slot), extension, provider);
+            }
+        }
+        let after = Self::pane_inventory(window)?
+            .panes
+            .into_iter()
+            .find(|pane| pane.slot == slot)
+            .ok_or_else(|| absent(slot))?;
+        let matches = match target {
+            PaneOccupantTarget::Terminal => after.kind == PaneKind::Terminal,
+            PaneOccupantTarget::Surface { extension, provider } => after
+                .provider
+                .as_ref()
+                .is_some_and(|held| &held.extension == extension && &held.provider == provider),
+        };
+        if matches {
+            Ok(())
+        } else {
+            Err(HostError::Conflict(format!(
+                "pane {slot} could not switch to the requested occupant"
+            )))
         }
     }
 

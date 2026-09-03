@@ -192,9 +192,13 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
 }
 
 fn summary(entry: super::roster::Entry) -> ExtensionSummary {
+    let enabled = !matches!(entry.stage, Stage::Standby | Stage::Vacancy);
     ExtensionSummary {
         name: entry.name.to_string(),
         image_digest: entry.image_digest,
+        version: entry.version,
+        enabled,
+        pane_providers: entry.pane_providers,
         status: match entry.stage {
             Stage::Vacancy => "vacancy".into(),
             Stage::Standby => "standby".into(),
@@ -276,5 +280,25 @@ mod tests {
 
         assert!(management.remove("absent", &format!("sha256:{}", "a".repeat(64))).is_err());
         assert!(events.drain().is_none());
+    }
+
+    #[test]
+    fn summary_exposes_enabled_digest_bound_provider_declarations() {
+        let provider = hl_extension::PaneProvider {
+            id: ExtensionName::new("main").unwrap(),
+            title: "Workspace manager".into(),
+            icon: Some("applications-system-symbolic".into()),
+        };
+        let value = summary(super::super::roster::Entry {
+            name: ExtensionName::new("manager").unwrap(),
+            image_digest: format!("sha256:{}", "d".repeat(64)),
+            version: "2.1.0".into(),
+            granted: Grant::new([hl_extension::Capability::Interface]),
+            stage: Stage::Duty,
+            pane_providers: vec![provider.clone()],
+        });
+        assert!(value.enabled);
+        assert_eq!(value.version, "2.1.0");
+        assert_eq!(value.pane_providers, vec![provider]);
     }
 }

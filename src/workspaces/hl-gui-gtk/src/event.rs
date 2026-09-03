@@ -20,6 +20,7 @@ const REPORT_LIMIT: usize = 1024;
 #[derive(Clone, Debug, Default)]
 pub struct Reports {
     queue: Rc<RefCell<VecDeque<Event>>>,
+    authorities: Rc<RefCell<HashMap<(NodeId, Trigger), EventId>>>,
 }
 
 impl Reports {
@@ -46,6 +47,26 @@ impl Reports {
         queue.push_back(event);
     }
 
+    pub(crate) fn bind(&self, node: NodeId, trigger: Trigger, id: EventId) {
+        self.authorities.borrow_mut().insert((node, trigger), id);
+    }
+
+    pub(crate) fn id(&self, node: NodeId, trigger: Trigger) -> Option<EventId> {
+        self.authorities.borrow().get(&(node, trigger)).cloned()
+    }
+
+    /// Drops interaction whose producer authority was withdrawn before the
+    /// host had a chance to drain it.
+    pub(crate) fn withdraw(&self, node: NodeId, trigger: Option<Trigger>) {
+        self.authorities
+            .borrow_mut()
+            .retain(|(held, kind), _| *held != node || trigger.is_some_and(|wanted| wanted != *kind));
+        self.queue.borrow_mut().retain(|event| {
+            event_authority(event)
+                .is_none_or(|(held, kind)| held != node || trigger.is_some_and(|wanted| wanted != kind))
+        });
+    }
+
     /// Takes everything reported since the previous drain.
     #[must_use]
     pub fn drain(&self) -> Vec<Event> {
@@ -56,6 +77,29 @@ impl Reports {
     pub fn is_empty(&self) -> bool {
         self.queue.borrow().is_empty()
     }
+}
+
+fn event_authority(event: &Event) -> Option<(NodeId, Trigger)> {
+    Some(match event {
+        Event::Invoke { node, .. } => (*node, Trigger::Invoke),
+        Event::Activate { node, .. } => (*node, Trigger::Activate),
+        Event::Change { node, .. } => (*node, Trigger::Change),
+        Event::Toggle { node, .. } => (*node, Trigger::Toggle),
+        Event::Expand { node, .. } => (*node, Trigger::Expand),
+        Event::Submit { node, .. } => (*node, Trigger::Submit),
+        Event::Select { node, .. } => (*node, Trigger::Select),
+        Event::Edit { node, .. } => (*node, Trigger::Edit),
+        Event::Sort { node, .. } => (*node, Trigger::Sort),
+        Event::Scroll { node, .. } => (*node, Trigger::Scroll),
+        Event::Close { node, .. } => (*node, Trigger::Close),
+        Event::Context { node, .. } => (*node, Trigger::Context),
+        Event::Key { node, .. } => (*node, Trigger::Key),
+        Event::Focus { node, .. } => (*node, Trigger::Focus),
+        Event::Pointer { node, .. } => (*node, Trigger::Pointer),
+        Event::Drag { node, .. } => (*node, Trigger::Drag),
+        Event::Drop { node, .. } => (*node, Trigger::Drop),
+        _ => return None,
+    })
 }
 
 fn replaceable(event: &Event) -> bool {
@@ -134,6 +178,7 @@ pub(crate) struct Bindings {
 impl Bindings {
     /// Points a trigger at an identity, connecting the signal on first use.
     pub(crate) fn set(&mut self, widget: &gtk::Widget, node: NodeId, handler: &Handler, reports: &Reports) {
+        reports.bind(node, handler.trigger, handler.id.clone());
         let key = (node, handler.trigger);
         if let Some(slot) = self.slots.get(&key) {
             slot.set(handler.id.clone());
@@ -162,19 +207,111 @@ impl Bindings {
 fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, reports: &Reports) {
     let target = crate::component::slot::editable(widget).unwrap_or_else(|| widget.clone());
     match trigger {
-        Trigger::Invoke | Trigger::Activate => invoke(widget, node, slot, reports),
+        Trigger::Invoke => invoke(widget, node, slot, reports),
+        Trigger::Activate => activate(widget, node, slot, reports),
         Trigger::Change => change(&target, node, slot, reports),
         Trigger::Submit => submit(&target, node, slot, reports),
         Trigger::Toggle => toggle(widget, node, slot, reports),
         Trigger::Expand => expand(widget, node, slot, reports),
         Trigger::Select => select(widget, node, slot, reports),
+        // Editable collection cells consult the current authority at commit
+        // time; their virtualized factories are installed with the schema.
+        Trigger::Edit => {}
+        Trigger::Sort => sort(&target, node, slot, reports),
         Trigger::Scroll => scroll(widget, node, slot, reports),
         Trigger::Close => close(widget, node, slot, reports),
         Trigger::Context => context(&target, node, slot, reports),
         Trigger::Key => key(&target, node, slot, reports),
         Trigger::Focus => focus(&target, node, slot, reports),
         Trigger::Pointer => pointer(widget, node, slot, reports),
+        Trigger::Drag => drag(widget, node, slot, reports),
+        Trigger::Drop => drop_target(widget, node, slot, reports),
     }
+}
+
+fn sort(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(view) = crate::component::table::columns(widget) else {
+        return;
+    };
+    let Some(sorter) = view
+        .sorter()
+        .and_then(|sorter| sorter.downcast::<gtk::ColumnViewSorter>().ok())
+    else {
+        return;
+    };
+    let view = view.downgrade();
+    let reports = reports.clone();
+    let slot = slot.clone();
+    sorter.connect_changed(move |sorter, _| {
+        let (Some(view), Some(id), Some(column)) = (view.upgrade(), slot.id(), sorter.primary_sort_column()) else {
+            return;
+        };
+        let Some(key) = column.id() else { return };
+        let Some(model) = view
+            .model()
+            .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+            .and_then(|selection| selection.model())
+            .and_then(|model| model.downcast::<crate::rows::Rows>().ok())
+        else {
+            return;
+        };
+        reports.push(Event::Sort {
+            node,
+            id,
+            sort: hl_gui::CollectionSort {
+                source: model.source(),
+                version: model.version(),
+                column: key.to_string(),
+                descending: sorter.primary_sort_order() == gtk::SortType::Descending,
+            },
+        });
+    });
+}
+
+fn drag(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let source = gtk::DragSource::new();
+    source.set_actions(gtk::gdk::DragAction::MOVE);
+    let slot = slot.clone();
+    let reports = reports.clone();
+    source.connect_prepare(move |_, _, _| {
+        let id = slot.id()?;
+        reports.push(Event::Drag { node, id });
+        let marker = format!("husklet-node:{}", node.raw());
+        Some(gtk::gdk::ContentProvider::for_value(&marker.to_value()))
+    });
+    widget.add_controller(source);
+}
+
+fn drop_target(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
+    let slot = slot.clone();
+    let reports = reports.clone();
+    target.connect_drop(move |_, value, x, y| {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let Ok(marker) = value.get::<String>() else {
+            return false;
+        };
+        let Some(raw) = marker
+            .strip_prefix("husklet-node:")
+            .and_then(|raw| raw.parse::<u64>().ok())
+        else {
+            return false;
+        };
+        let Some(id) = slot.id() else {
+            return false;
+        };
+        reports.push(Event::Drop {
+            node,
+            id,
+            source: NodeId::new(raw),
+            x,
+            y,
+        });
+        true
+    });
+    widget.add_controller(target);
 }
 
 fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
@@ -188,6 +325,15 @@ fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
             reports.push(Event::Invoke { node, id });
         }
     });
+}
+
+fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(button) = widget.downcast_ref::<gtk::Button>() else {
+        return;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    button.connect_clicked(move |_| identified(&reports, &slot, |id| Event::Activate { node, id }));
 }
 
 /// Connects whichever way this widget holds a value.
@@ -240,6 +386,7 @@ fn select(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
                 node,
                 id,
                 rows: vec![u64::from(drop.selected())],
+                collection: None,
             });
         });
         return;
@@ -264,13 +411,24 @@ fn connect_selection(view: &gtk::ColumnView, node: NodeId, slot: &Slot, reports:
     let slot = slot.clone();
     selection.connect_selection_changed(move |selection, _, _| {
         let bitset = selection.selection();
-        let rows = gtk::BitsetIter::init_first(&bitset)
+        let rows: Vec<u64> = gtk::BitsetIter::init_first(&bitset)
             .into_iter()
             .flat_map(|(iter, first)| std::iter::once(first).chain(iter))
             .take(SELECTION_LIMIT as usize)
             .map(u64::from)
             .collect();
-        identified(&reports, &slot, |id| Event::Select { node, id, rows });
+        let Some(model) = selection.model().and_then(|model| model.downcast::<crate::Rows>().ok()) else {
+            return;
+        };
+        let Some(collection) = model.selection(&rows) else {
+            return;
+        };
+        identified(&reports, &slot, |id| Event::Select {
+            node,
+            id,
+            rows,
+            collection: Some(collection),
+        });
     });
 }
 
@@ -550,7 +708,7 @@ fn expand(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Expand {
             node,
             id,
             value: PropValue::Flag(expander.is_expanded()),
@@ -594,7 +752,7 @@ fn pressed(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Toggle {
             node,
             id,
             value: PropValue::Flag(toggle.is_active()),
@@ -612,7 +770,7 @@ fn check(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
         let Some(id) = slot.id() else {
             return;
         };
-        reports.push(Event::Change {
+        reports.push(Event::Toggle {
             node,
             id,
             value: PropValue::Flag(check.is_active()),
@@ -628,7 +786,7 @@ fn switch(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     let slot = slot.clone();
     switch.connect_state_set(move |_, state| {
         if let Some(id) = slot.id() {
-            reports.push(Event::Change {
+            reports.push(Event::Toggle {
                 node,
                 id,
                 value: PropValue::Flag(state),

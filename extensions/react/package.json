@@ -41,6 +41,7 @@
     "types": "npm run catalogue && node tools/types.js"
   },
   "dependencies": {
+    "@husklet/client": "0.1.0",
     "react-reconciler": "^0.29.2"
   },
   "engines": {

@@ -31,7 +31,26 @@ pub(crate) struct TermWin {
     /// The window is closing; child exits should not mutate the saved layout during teardown.
     closing: Cell<bool>,
     overview_page: Option<screens::workspace::Page>,
-    observers: RefCell<Vec<hl::extension::Events>>,
+    observers: RefCell<Vec<hl::extension::WeakEvents>>,
+    last_pointer: RefCell<Option<PointerTarget>>,
+}
+
+#[derive(Clone)]
+struct PointerTarget {
+    slot: String,
+    generation: u64,
+    x: f64,
+    y: f64,
+}
+
+const POINTER_NUMBER_LIMIT: f64 = 1_000_000.0;
+
+fn bounded_pointer_number(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-POINTER_NUMBER_LIMIT, POINTER_NUMBER_LIMIT)
+    } else {
+        0.0
+    }
 }
 
 pub(crate) struct PaneRegistration {
@@ -71,6 +90,7 @@ impl SurfaceRegistration {
 pub(crate) struct TabEntry {
     name: String,
     button: gtk::Box,
+    title: gtk::Label,
     persisted: bool,
 }
 
@@ -202,28 +222,90 @@ fn editable_captures(focused: bool, shortcut: Option<Shortcut>) -> bool {
 
 impl SplitAction {
     pub(crate) fn focused(window: &Rc<TermWin>, vertical: bool) {
-        let Some(terminal) = window.focused.borrow().clone() else {
+        let Some(pane) = PaneChooser::selected(window) else {
             return;
         };
+        let terminal = pane
+            .content
+            .clone()
+            .downcast::<vte4::Terminal>()
+            .ok()
+            .or_else(|| window.displaced.borrow().get(&pane.slot).cloned());
+        let Some(terminal) = terminal else { return };
         let orientation = if vertical {
             gtk::Orientation::Vertical
         } else {
             gtk::Orientation::Horizontal
         };
-        PaneView::new(window, &terminal).split(orientation);
+        PaneView::split_at(window, &pane, &terminal, orientation);
     }
 }
 
 impl TermWin {
     pub(crate) fn observer(&self) -> hl::extension::Events {
         let events = hl::extension::Events::default();
-        self.observers.borrow_mut().push(events.clone());
+        self.observers.borrow_mut().push(events.downgrade());
         events
     }
 
     fn broadcast(&self, event: hl_extension::WorkspaceEvent) {
-        for observer in self.observers.borrow().iter() {
-            observer.observe(event.clone());
+        self.observers
+            .borrow_mut()
+            .retain(|observer| observer.observe(event.clone()));
+    }
+
+    fn focused_event_identity(window: &Rc<Self>, focus: Option<gtk::Widget>) -> (Option<String>, Option<u64>) {
+        let mut widget = focus;
+        let terminal = loop {
+            let Some(current) = widget else { return (None, None) };
+            if let Ok(terminal) = current.clone().downcast::<vte4::Terminal>() {
+                break terminal;
+            }
+            widget = current.parent();
+        };
+        let slot = Slots::new(window).of(&terminal);
+        let generation = slot.as_ref().map(|_| 0);
+        (slot, generation)
+    }
+
+    fn pointer_target(window: &Rc<Self>, x: f64, y: f64) -> Option<PointerTarget> {
+        let mut widget = window.stack.pick(x, y, gtk::PickFlags::DEFAULT)?;
+        while !PaneChrome::is(&widget) {
+            widget = widget.parent()?;
+        }
+        let pane = Panes::all(window).into_iter().find(|pane| pane.widget == widget)?;
+        let point = window
+            .stack
+            .compute_point(&pane.widget, &gtk::graphene::Point::new(x as f32, y as f32))?;
+        let generation = Slots::new(window)
+            .surface(&pane.content)
+            .and_then(|(_, extension, _)| Window::gallery(window)?.generation(&extension))
+            .unwrap_or(0);
+        Some(PointerTarget {
+            slot: pane.slot,
+            generation,
+            x: bounded_pointer_number(f64::from(point.x())),
+            y: bounded_pointer_number(f64::from(point.y())),
+        })
+    }
+
+    fn pointer_event(
+        target: &PointerTarget,
+        phase: hl_extension::PointerPhase,
+        button: Option<u32>,
+        modifiers: gtk::gdk::ModifierType,
+        delta: Option<(f64, f64)>,
+    ) -> hl_extension::WorkspaceEvent {
+        hl_extension::WorkspaceEvent::Pointer {
+            phase,
+            slot: target.slot.clone(),
+            generation: target.generation,
+            x: target.x,
+            y: target.y,
+            button,
+            modifiers: modifier_names(modifiers),
+            delta_x: delta.map(|(x, _)| bounded_pointer_number(x)),
+            delta_y: delta.map(|(_, y)| bounded_pointer_number(y)),
         }
     }
 
@@ -276,6 +358,24 @@ impl Clipboard {
 }
 
 impl Window {
+    #[cfg(test)]
+    pub(crate) fn pointer_test_point(window: &Rc<TermWin>, slot: &str) -> Option<(f64, f64)> {
+        let pane = Panes::at(window, slot)?;
+        let point = pane.widget.compute_point(
+            &window.stack,
+            &gtk::graphene::Point::new(
+                pane.widget.width() as f32 / 2.0,
+                pane.widget.height() as f32 / 2.0,
+            ),
+        )?;
+        Some((f64::from(point.x()), f64::from(point.y())))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pointer_test_target(window: &Rc<TermWin>, x: f64, y: f64) -> Option<(String, u64, f64, f64)> {
+        TermWin::pointer_target(window, x, y).map(|target| (target.slot, target.generation, target.x, target.y))
+    }
+
     /// Every tab, as its name, its widget, and the pane slots inside it.
     ///
     /// The terminal window is the only thing that knows this, and an extension
@@ -334,6 +434,14 @@ impl Window {
             .map(TabEntry::title)
     }
 
+    pub(crate) fn retitle_pane(window: &Rc<TermWin>, pane: &gtk::Widget, title: &str) -> bool {
+        let Some(page) = Page::of(window, pane) else { return false };
+        let mut entries = window.entries.borrow_mut();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else { return false };
+        entry.retitle(title);
+        true
+    }
+
     pub(crate) fn active_tab(window: &Rc<TermWin>) -> Option<String> {
         window.stack.visible_child_name().map(|name| name.to_string())
     }
@@ -373,6 +481,7 @@ impl Window {
             closing: Cell::new(false),
             overview_page: None,
             observers: RefCell::new(Vec::new()),
+            last_pointer: RefCell::new(None),
         })
     }
 
@@ -448,6 +557,7 @@ impl Window {
             closing: Cell::new(false),
             overview_page,
             observers: RefCell::new(Vec::new()),
+            last_pointer: RefCell::new(None),
         });
         Search::wire(&tw);
 
@@ -457,11 +567,15 @@ impl Window {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let tw = tw.clone();
+            let root = window.clone();
             keys.connect_key_pressed(move |_, key, _c, state| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: true,
+                    slot,
+                    generation,
                 });
                 let shortcut = Shortcut::from_key(key, state);
                 // Window shortcuts are captured before the focused widget sees them. Text-editing
@@ -519,11 +633,15 @@ impl Window {
         }
         {
             let tw = tw.clone();
+            let root = window.clone();
             keys.connect_key_released(move |_, key, _c, state| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.to_string()),
+                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: false,
+                    slot,
+                    generation,
                 });
             });
         }
@@ -532,43 +650,138 @@ impl Window {
         let motion = gtk::EventControllerMotion::new();
         {
             let tw = tw.clone();
-            motion.connect_motion(move |_, x, y| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Move,
-                    x,
-                    y,
-                    button: None,
-                })
+            motion.connect_motion(move |controller, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let previous = tw.last_pointer.replace(Some(target.clone()));
+                if let Some(previous) = previous.filter(|previous| {
+                    previous.slot != target.slot || previous.generation != target.generation
+                }) {
+                    tw.broadcast(TermWin::pointer_event(
+                        &previous,
+                        hl_extension::PointerPhase::Leave,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Enter,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                }
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Move,
+                    None,
+                    controller.current_event_state(),
+                    None,
+                ));
             });
         }
         {
             let tw = tw.clone();
-            motion.connect_enter(move |_, x, y| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Enter,
-                    x,
-                    y,
-                    button: None,
-                });
+            motion.connect_enter(move |controller, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Enter,
+                    None,
+                    controller.current_event_state(),
+                    None,
+                ));
+                tw.last_pointer.replace(Some(target));
             });
         }
         {
             let tw = tw.clone();
-            motion.connect_leave(move |_| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Leave,
-                    x: 0.0,
-                    y: 0.0,
-                    button: None,
-                });
+            motion.connect_leave(move |controller| {
+                if let Some(target) = tw.last_pointer.borrow_mut().take() {
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Leave,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                }
             });
         }
-        window.add_controller(motion);
+        tw.stack.add_controller(motion);
+
+        let clicks = gtk::GestureClick::new();
+        clicks.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let tw = tw.clone();
+            clicks.connect_pressed(move |gesture, _, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Press,
+                    Some(gesture.current_button()),
+                    gesture.current_event_state(),
+                    None,
+                ));
+                tw.last_pointer.replace(Some(target));
+            });
+        }
+        {
+            let tw = tw.clone();
+            clicks.connect_released(move |gesture, _, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let button = gesture.current_button();
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Release,
+                    Some(button),
+                    gesture.current_event_state(),
+                    None,
+                ));
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    if button == 3 {
+                        hl_extension::PointerPhase::Context
+                    } else {
+                        hl_extension::PointerPhase::Click
+                    },
+                    Some(button),
+                    gesture.current_event_state(),
+                    None,
+                ));
+            });
+        }
+        tw.stack.add_controller(clicks);
+
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+        {
+            let tw = tw.clone();
+            scroll.connect_scroll(move |controller, dx, dy| {
+                let target = controller
+                    .current_event()
+                    .and_then(|event| event.position())
+                    .and_then(|(x, y)| TermWin::pointer_target(&tw, x, y));
+                if let Some(target) = target {
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Scroll,
+                        None,
+                        controller.current_event_state(),
+                        Some((dx, dy)),
+                    ));
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        tw.stack.add_controller(scroll);
         {
             let tw = tw.clone();
             window.connect_is_active_notify(move |window| {
+                let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(window));
                 tw.broadcast(hl_extension::WorkspaceEvent::Focus {
                     active: window.is_active(),
+                    slot,
+                    generation,
                 })
             });
         }
@@ -757,5 +970,23 @@ mod shortcut_tests {
             assert!(!editable_captures(true, Some(shortcut)));
         }
         assert!(!editable_captures(true, None));
+    }
+}
+
+#[cfg(test)]
+mod workspace_event_identity_tests {
+    use super::*;
+
+    #[test]
+    fn focused_terminal_identity_is_reported_and_search_focus_is_explicitly_absent() {
+        assert!(crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let terminal = vte4::Terminal::new();
+            Slots::new(&tw).hold(&terminal, "pane-stable".into());
+            assert_eq!(TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())), (Some("pane-stable".into()), Some(0)));
+
+            assert_eq!(TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())), (None, None));
+        }), "workspace event identity requires an Xvfb display");
     }
 }

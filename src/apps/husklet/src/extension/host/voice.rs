@@ -38,7 +38,7 @@ pub(crate) fn speak_at(voice: &Voice, event: &hl_extension::SurfaceEvent) {
 
 /// Tells an extension which of its manifest-declared pane views was selected.
 pub(super) fn speak_provider(voice: &Voice, selection: &hl_extension::PaneSelection) {
-    let Ok(payload) = serde_json::to_vec(selection) else {
+    let Ok(payload) = hl_extension::codec::payload(selection) else {
         return;
     };
     voice.say(&Frame::new(EVENTS, Kind::Event, payload));
@@ -50,8 +50,11 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     if matches!(
         event,
         hl_gui::Event::Invoke { .. }
+            | hl_gui::Event::Activate { .. }
             | hl_gui::Event::Submit { .. }
             | hl_gui::Event::Change { .. }
+            | hl_gui::Event::Toggle { .. }
+            | hl_gui::Event::Expand { .. }
             | hl_gui::Event::Select { .. }
             | hl_gui::Event::Focus { .. }
     ) {
@@ -60,8 +63,11 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
     let mut value = match event {
         hl_gui::Event::Rows(request) => serde_json::to_value(request).ok()?,
         hl_gui::Event::Invoke { .. }
+        | hl_gui::Event::Activate { .. }
         | hl_gui::Event::Submit { .. }
         | hl_gui::Event::Change { .. }
+        | hl_gui::Event::Toggle { .. }
+        | hl_gui::Event::Expand { .. }
         | hl_gui::Event::Select { .. }
         | hl_gui::Event::Focus { .. } => unreachable!("shared interaction encoder handled this event"),
         hl_gui::Event::Scroll { node, id, dx, dy } => {
@@ -101,14 +107,19 @@ fn carriage(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>> {
                 "button": button, "modifiers": modifiers,
             }),
         ),
+        hl_gui::Event::Drag { node, id } => envelope("drag", *node, id),
+        hl_gui::Event::Drop { node, id, source, x, y } => details(
+            "drop",
+            *node,
+            id,
+            serde_json::json!({ "source": source.raw(), "x": x, "y": y }),
+        ),
         _ => return None,
     };
     if let (Some(slot), Some(object)) = (slot, value.as_object_mut()) {
         object.insert("slot".into(), serde_json::Value::String(slot.to_owned()));
     }
-    serde_json::to_vec(&value)
-        .ok()
-        .filter(|payload| payload.len() <= Frame::PAYLOAD_LIMIT)
+    hl_extension::codec::payload(&value).ok()
 }
 
 /// The shape every interaction is sent in.
@@ -132,7 +143,6 @@ fn details(
     }
     carried
 }
-
 
 #[derive(Clone, Default)]
 pub(crate) struct Voice {
@@ -194,7 +204,7 @@ impl Voice {
                 if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&first.payload) {
                     if let Some(object) = value.as_object_mut() {
                         object.insert("dropped".into(), dropped.into());
-                        if let Ok(payload) = serde_json::to_vec(&value) {
+                        if let Ok(payload) = hl_extension::codec::payload(&value) {
                             first.payload = payload;
                         }
                     }
@@ -211,16 +221,21 @@ impl Voice {
 
 #[cfg(test)]
 mod tests {
-    use super::{carriage, Frame, Kind, Voice};
+    use super::{Frame, Kind, Voice, carriage};
 
     #[test]
     fn ui_event_flood_is_bounded_without_writing_a_socket() {
         let voice = Voice::default();
         voice.hold();
         for index in 0..Voice::LIMIT + 7 {
-            voice.say(&Frame::new(super::EVENTS, Kind::Event, serde_json::to_vec(&serde_json::json!({
-                "interaction": "pointer", "id": "motion", "node": 1, "x": index,
-            })).unwrap()));
+            voice.say(&Frame::new(
+                super::EVENTS,
+                Kind::Event,
+                serde_json::to_vec(&serde_json::json!({
+                    "interaction": "pointer", "id": "motion", "node": 1, "x": index,
+                }))
+                .unwrap(),
+            ));
         }
         let drained = voice.drain();
         assert_eq!(drained.len(), Voice::LIMIT);
@@ -330,5 +345,39 @@ mod tests {
             pressed: true,
         };
         assert!(carriage(&oversized, Some("pane-stable")).is_none());
+    }
+
+    #[test]
+    fn drag_and_drop_carry_only_bounded_internal_identity_and_local_position() {
+        let drag = carriage(
+            &hl_gui::Event::Drag {
+                node: hl_gui::NodeId::new(4),
+                id: hl_gui::EventId::new("drag-card"),
+            },
+            Some("pane-stable"),
+        )
+        .expect("drag");
+        let dropped = carriage(
+            &hl_gui::Event::Drop {
+                node: hl_gui::NodeId::new(7),
+                id: hl_gui::EventId::new("drop-list"),
+                source: hl_gui::NodeId::new(4),
+                x: 12.5,
+                y: 8.0,
+            },
+            Some("pane-stable"),
+        )
+        .expect("drop");
+        let drag: serde_json::Value = serde_json::from_slice(&drag).expect("json");
+        let dropped: serde_json::Value = serde_json::from_slice(&dropped).expect("json");
+        assert_eq!(drag, serde_json::json!({
+            "interaction": "drag", "trigger": "Drag", "node": 4,
+            "id": "drag-card", "slot": "pane-stable"
+        }));
+        assert_eq!(dropped, serde_json::json!({
+            "interaction": "drop", "trigger": "Drop", "node": 7,
+            "id": "drop-list", "slot": "pane-stable", "source": 4,
+            "x": 12.5, "y": 8.0
+        }));
     }
 }

@@ -15,8 +15,31 @@ expect_literal() {
 }
 
 expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/react/Dockerfile 'ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32'
+expect_literal extensions/react/Dockerfile 'ARG NODE_VERSION=22.23.2'
+expect_literal extensions/react/Dockerfile 'ARG NPM_VERSION=10.9.8'
+expect_literal extensions/react/Dockerfile 'COPY react/image-runtime/package.json react/image-runtime/package-lock.json ./'
+expect_literal extensions/react/Dockerfile '    && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \'
+expect_literal extensions/react/Dockerfile '    && tar -xzf /opt/husklet-sdk/husklet-client-*.tgz --strip-components=1 -C node_modules/@husklet/client \'
+expect_literal extensions/react/Dockerfile '    && tar -xzf /opt/husklet-sdk/husklet-react-*.tgz --strip-components=1 -C node_modules/@husklet/react \'
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
 expect_literal extensions/react/Dockerfile 'LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"'
+expect_literal extensions/react/Dockerfile 'LABEL husklet.extension.node.version="${NODE_VERSION}"'
+expect_literal extensions/react/Dockerfile 'LABEL husklet.extension.npm.version="${NPM_VERSION}"'
+expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
+expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
+expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
+
+node -e '
+  const fs = require("node:fs");
+  const root = process.argv[1];
+  const manifest = JSON.parse(fs.readFileSync(`${root}/extensions/react/image-runtime/package.json`));
+  const lock = JSON.parse(fs.readFileSync(`${root}/extensions/react/image-runtime/package-lock.json`));
+  if (lock.lockfileVersion !== 3 || lock.packages[""].dependencies.react !== manifest.dependencies.react || lock.packages[""].dependencies["react-reconciler"] !== manifest.dependencies["react-reconciler"]) process.exit(1);
+  for (const [name, entry] of Object.entries(lock.packages)) {
+    if (name && (!entry.version || !entry.integrity)) throw new Error(`${name} is not immutable`);
+  }
+' "$root"
 
 workflow="$root/.github/workflows/release.yml"
 [[ "$(grep -Fc 'platforms: linux/amd64,linux/arm64' "$workflow")" == 2 ]] \
@@ -25,6 +48,8 @@ workflow="$root/.github/workflows/release.yml"
   || fail "release must build both architectures before both image publication steps"
 [[ "$(grep -Fc '.github/scripts/smoke-extension-image.sh' "$workflow")" == 2 ]] \
   || fail "release must run the packaged-image smoke before both publication steps"
+[[ "$(grep -Fc '.github/scripts/verify-published-extension-image.sh' "$workflow")" == 2 ]] \
+  || fail "release must verify both published multi-architecture registry manifests"
 
 for extension in storybook workspace-manager; do
   dockerfile="extensions/$extension/Dockerfile"

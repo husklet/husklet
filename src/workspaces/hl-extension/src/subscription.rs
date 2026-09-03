@@ -3,7 +3,7 @@
 //! Routing, credit, and the bulk byte streams are `hl-rpc`'s; what is in a
 //! listing is this domain's, and is here.
 
-use hl_rpc::{Coding, Frame};
+use hl_rpc::Coding;
 
 use crate::port::{
     ContainerSummary, ExecutionList, ExtensionSummary, ImagePullChange, ImageSummary, NetworkSummary, TabSummary,
@@ -71,15 +71,31 @@ pub enum WorkspaceEvent {
         key: String,
         modifiers: Vec<String>,
         pressed: bool,
+        /// Focused terminal pane, or none when window chrome owns the key.
+        #[serde(default)]
+        slot: Option<String>,
+        /// Occupant generation paired with `slot`.
+        #[serde(default)]
+        generation: Option<u64>,
     },
     Focus {
         active: bool,
+        /// Focused terminal pane at the window transition, when there is one.
+        #[serde(default)]
+        slot: Option<String>,
+        #[serde(default)]
+        generation: Option<u64>,
     },
     Pointer {
         phase: PointerPhase,
+        slot: String,
+        generation: u64,
         x: f64,
         y: f64,
         button: Option<u32>,
+        modifiers: Vec<String>,
+        delta_x: Option<f64>,
+        delta_y: Option<f64>,
     },
 }
 
@@ -89,6 +105,11 @@ pub enum PointerPhase {
     Move,
     Enter,
     Leave,
+    Press,
+    Release,
+    Click,
+    Context,
+    Scroll,
 }
 
 /// A bounded observation batch. `dropped` makes overload visible to consumers.
@@ -158,11 +179,7 @@ impl Snapshot {
     /// Returns `Coding::Oversize` when the encoded listing exceeds the payload
     /// limit, and `Coding::Malformed` when it cannot be serialized.
     pub fn payload(&self) -> Result<Vec<u8>, Coding> {
-        let bytes = serde_json::to_vec(self).map_err(|error| Coding::Malformed(error.to_string()))?;
-        if bytes.len() > Frame::PAYLOAD_LIMIT {
-            return Err(Coding::Oversize(bytes.len()));
-        }
-        Ok(bytes)
+        crate::codec::payload(self)
     }
 
     /// Applies transport coalescing immediately before delivery. Keeping this

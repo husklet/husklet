@@ -23,13 +23,20 @@ mod manifest;
 pub mod port;
 mod request;
 mod session;
+pub mod specification;
 mod subscription;
+mod ui_event;
+
+#[cfg(test)]
+#[path = "../build_support.rs"]
+#[allow(dead_code)]
+mod build_support;
 
 pub use capability::{Capability, Grant};
 pub use codec::Coding;
 pub use hl_rpc::{
     Authority, ChannelId, Channels, Compatibility, Denial, Emission, Flags, Frame, Hello, Kind, Limits, Malformed,
-    PROTOCOL, Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire,
+    Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
 };
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
@@ -50,6 +57,11 @@ pub use subscription::{
     ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
     WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
+pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow};
+
+/// Largest integer encoded as a JSON number on the cross-language wire.
+/// JavaScript cannot distinguish consecutive integers beyond this boundary.
+pub const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 
 /// The host's opening frame, carrying this domain's grant.
 pub type Welcome = hl_rpc::Welcome<Capability>;

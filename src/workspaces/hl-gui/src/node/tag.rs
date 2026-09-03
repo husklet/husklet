@@ -175,7 +175,7 @@ catalogue! {
     Splitter: children, props[Orientation, Position], triggers[],
     Stack: children, props[], triggers[],
     Overlay: children, props[], triggers[],
-    Container: children, props[Gap], triggers[],
+    Container: children, props[Gap], triggers[Drag, Drop],
     Spacer: leaf, props[], triggers[],
     Separator: leaf, props[Orientation], triggers[],
 
@@ -280,7 +280,7 @@ catalogue! {
     TableRow: children, props[Gap], triggers[],
     TableCell: leaf, props[Label, Value, Ellipsize, Wrap, Tone], triggers[],
     TableSortLabel: leaf, props[Label, Icon, Enabled, Tone], triggers[Invoke],
-    DataTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
+    DataTable: leaf, props[Schema, Source], triggers[Select, Edit, Sort, Scroll, Key, Focus, Pointer, Context],
     KeyValueTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TreeTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     EventStream: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
@@ -341,6 +341,17 @@ catalogue! {
     TimelineView: leaf, props[Value, Tone], triggers[],
     TestReportView: leaf, props[Value, Tone], triggers[],
     CoverageView: leaf, props[Value, Tone], triggers[],
+    NetworkWaterfall: children, props[Label, Detail, Gap, Tone], triggers[],
+    NetworkRequest: children, props[Label, Value, Tone], triggers[],
+    NetworkPhase: leaf, props[Label, Value, Tone], triggers[],
+    DependencyGraph: children, props[Label, Detail, Gap, Tone], triggers[],
+    DependencyNode: children, props[Label, Value, Tone], triggers[],
+    DependencyEdge: leaf, props[Label, Value, Tone], triggers[],
+    DependencyCycle: children, props[Label, Detail, Tone], triggers[],
+    DependencyCycleMember: leaf, props[Label, Value, Tone], triggers[],
+    QueryPlan: children, props[Label, Detail, Gap, Tone], triggers[],
+    QueryPlanNode: children, props[Label, Value, Tone], triggers[],
+    QueryPlanMetric: leaf, props[Label, Value, Tone], triggers[],
     DiffViewer: children, props[Gap, Orientation], triggers[],
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
     StackTrace: children, props[Gap], triggers[],
@@ -349,7 +360,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVERY, Prop, Tag, Trigger};
+    use super::{Prop, Tag, Trigger, EVERY};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

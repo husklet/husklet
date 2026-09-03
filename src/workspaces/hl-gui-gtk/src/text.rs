@@ -76,6 +76,14 @@ fn framed(widget: &gtk::Widget, tag: Tag, content: &str) -> bool {
     }
     if let Some(caption) = slot::caption(widget) {
         caption.set_text(content);
+        if let Some(editable) = slot::editable(widget) {
+            // The visible caption must name the control assistive technology
+            // and mnemonic navigation actually operate, not only its wrapper.
+            if editable.is_focusable() {
+                caption.set_mnemonic_widget(Some(&editable));
+            }
+            editable.update_relation(&[gtk::accessible::Relation::LabelledBy(&[caption.upcast_ref()])]);
+        }
         return true;
     }
     plotted(widget, tag, content)
@@ -118,6 +126,18 @@ fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     }
     if tag == Tag::CoverageView {
         return content::coverage(widget, content);
+    }
+    if matches!(tag, Tag::NetworkRequest | Tag::NetworkPhase) {
+        return content::network_value(widget, tag, content);
+    }
+    if matches!(
+        tag,
+        Tag::DependencyNode | Tag::DependencyEdge | Tag::DependencyCycleMember
+    ) {
+        return content::dependency_value(widget, content);
+    }
+    if matches!(tag, Tag::QueryPlanNode | Tag::QueryPlanMetric) {
+        return content::query_value(widget, content);
     }
     if tag == Tag::MarkdownView {
         return content::markdown(widget, content);

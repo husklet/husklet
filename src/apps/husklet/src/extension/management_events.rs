@@ -112,11 +112,17 @@ mod tests {
             name: "old".into(),
             image_digest: "sha256:old".into(),
             status: "standby".into(),
+            version: "1.0.0".into(),
+            enabled: false,
+            pane_providers: Vec::new(),
         }]);
         events.inventory(vec![ExtensionSummary {
             name: "new".into(),
             image_digest: "sha256:new".into(),
             status: "duty".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
         }]);
         let job = AcquisitionJob::test(7);
         events.acquisition(job, snapshot("first", 1));

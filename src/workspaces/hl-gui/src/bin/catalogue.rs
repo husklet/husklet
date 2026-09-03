@@ -413,6 +413,17 @@ fn family(tag: Tag) -> &'static str {
         | Tag::TimelineView
         | Tag::TestReportView
         | Tag::CoverageView
+        | Tag::NetworkWaterfall
+        | Tag::NetworkRequest
+        | Tag::NetworkPhase
+        | Tag::DependencyGraph
+        | Tag::DependencyNode
+        | Tag::DependencyEdge
+        | Tag::DependencyCycle
+        | Tag::DependencyCycleMember
+        | Tag::QueryPlan
+        | Tag::QueryPlanNode
+        | Tag::QueryPlanMetric
         | Tag::DiffViewer
         | Tag::DiffLine => "content",
         Tag::StackTrace | Tag::StackFrame => "content",
@@ -713,7 +724,7 @@ const PROPS: &[Entry] = &[
         group: "collection",
         editor: "schema",
         values: &["Schema"],
-        note: "table columns: key, title, width as a Length, align, sortable",
+        note: "table columns: key, title, width as a Length, align, sortable, editable",
     },
     Entry {
         prop: Prop::Source,
@@ -858,7 +869,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
+    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

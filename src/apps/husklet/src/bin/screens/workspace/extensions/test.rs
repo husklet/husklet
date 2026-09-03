@@ -34,30 +34,38 @@ const SURFACE: &str = "hl-test-surface";
 #[test]
 fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
-        the_sidebar_lists_exactly_what_the_workspace_recorded();
+        the_sidebar_is_fixed_independent_of_what_the_workspace_recorded();
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
+        a_fault_can_be_deliberately_disabled();
+        a_fault_withdraws_ready_provider_until_a_fresh_retry_frame();
         fault_removal_actions_wrap_at_narrow_and_wide_sizes();
         the_settings_actions_drive_the_installation();
         lifecycle_actions_share_keyboard_and_semantic_focus();
         native_extension_cards_are_semantic_and_actionable();
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
-        management_extension_reconciles_native_fallback_pages();
-        docker_hub_references_are_explained_and_validated_before_acquisition();
+        extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue();
+        the_catalogue_has_a_readable_page_heading_at_narrow_and_wide_sizes();
+        registry_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
-        a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
+        a_stale_update_failure_invalidates_consent_and_requires_reinspection();
         remote_image_progress_precedes_the_consent_prompt();
         cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
         closing_the_catalogue_cancels_its_exact_acquisition_before_reentry();
         a_failed_registry_read_can_be_retried_without_duplicate_work();
+        #[cfg(feature = "native-test-hooks")]
+        registry_install_enables_a_real_image_selected_provider();
         a_declined_image_records_nothing();
         a_click_on_a_rendered_button_reaches_the_extension();
         stale_provider_generations_cannot_authorize_replacements();
         failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::stale_pane_identity_cannot_authorize_terminal_input();
+        panes::pointer_hit_testing_captures_the_exact_pane_slot();
+        panes::retitling_a_live_pane_preserves_its_slot_process_and_layout();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
@@ -65,8 +73,11 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::providers_are_advertised_only_with_a_readable_projection();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::a_surface_pane_can_split_and_return_without_losing_its_identity();
+        panes::the_shipped_storybook_is_discoverable_as_a_pane_provider();
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
+        panes::a_stale_open_chooser_cannot_select_a_replaced_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
         panes::disabling_an_extension_restores_its_surface_pane_terminal();
         panes::removing_an_extension_restores_its_surface_pane_terminal();
@@ -79,6 +90,42 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
     }
 }
+#[cfg(feature = "client-e2e")]
+#[test]
+fn a_real_client_discovers_native_terminal_and_rust_extension_surfaces() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| panes::client_socket_changes_native_ui());
+    assert!(ran, "the explicit client integration target requires an X display");
+}
+
+
+fn the_catalogue_has_a_readable_page_heading_at_narrow_and_wide_sizes() {
+    for width in [300, 1_000] {
+        let fixture = Fixture::new(&[]);
+        fixture.view.select_name(Page::Extensions.title());
+        let window = gtk::Window::builder()
+            .default_width(width)
+            .default_height(600)
+            .child(&fixture.view.widget)
+            .build();
+        window.present();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let labels: Vec<_> = descendants(fixture._catalogue.viewport().upcast_ref())
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+            .collect();
+        let title = labels
+            .iter()
+            .find(|label| label.text() == "Extensions")
+            .unwrap_or_else(|| panic!("Extensions page title is absent at {width}px"));
+        assert!(title.is_visible());
+        assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
+        let installed = labels
+            .iter()
+            .find(|label| label.text() == "Installed")
+            .expect("Installed section");
+        assert!(title.allocation().y() <= installed.allocation().y());
+    }
+}
 
 #[test]
 fn a_terminal_projection_carries_rendered_text_and_cursor() {
@@ -88,13 +135,6 @@ fn a_terminal_projection_carries_rendered_text_and_cursor() {
     if !ran {
         eprintln!("skipped: no display connection, so a terminal pane cannot be rendered");
     }
-}
-
-#[cfg(feature = "mcp-e2e")]
-#[test]
-fn a_real_mcp_client_discovers_native_terminal_and_rust_extension_surfaces() {
-    let ran = crate::test_support::on_the_toolkit_thread(|| panes::mcp_socket_changes_native_ui());
-    assert!(ran, "the explicit MCP integration target requires an X display");
 }
 
 fn native_extension_cards_are_semantic_and_actionable() {
@@ -114,9 +154,10 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Granted capabilities"))
         .expect("the consented authority is visible to agents");
-    assert!(grants.value.as_deref().is_some_and(|value| {
-        value.contains("interface") && value.contains("container-read")
-    }));
+    assert!(grants
+        .value
+        .as_deref()
+        .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
     let enable = snapshot
         .root
         .children
@@ -181,7 +222,7 @@ impl Fixture {
             record(&roster, name, *enabled);
         }
         let view = Rc::new(View::new([
-            (Page::Overview, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+            (Page::Settings, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
             (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
         ]));
         let surfaces: Surfaces = Rc::new(|_| {
@@ -189,14 +230,15 @@ impl Fixture {
             widget.add_css_class(SURFACE);
             widget.upcast()
         });
-        let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), Rc::new(|_| {}), cleanup);
+        let shelf = Shelf::with_cleanup(&view, &roster, surfaces, Rc::new(|_| {}), cleanup);
         shelf.install();
         let inspection: Inspection = Rc::new(|_| PendingInspection::detached(std::sync::mpsc::channel().1));
         let catalogue = Catalogue::new(&shelf, inspection);
+        shelf.catalogue().append(catalogue.viewport());
         view.page(Page::Extensions.title())
             .and_downcast::<gtk::Box>()
             .expect("extensions page")
-            .append(catalogue.viewport());
+            .append(shelf.content());
         Self {
             _storage: storage,
             view,
@@ -213,7 +255,7 @@ impl Fixture {
 
     /// The first widget on a page carrying a style class.
     fn tagged(&self, page: &str, class: &str) -> Option<gtk::Widget> {
-        let page = self.view.page(page)?;
+        let page = self.shelf.content().child_by_name(page)?;
         descendants(&page)
             .into_iter()
             .find(|widget| widget.has_css_class(class))
@@ -348,39 +390,25 @@ fn until_gui(condition: impl Fn() -> bool) -> bool {
     false
 }
 
-fn the_sidebar_lists_exactly_what_the_workspace_recorded() {
+fn the_sidebar_is_fixed_independent_of_what_the_workspace_recorded() {
     let fixture = Fixture::new(&[("alpha", false), ("zulu", true)]);
 
     let listed = fixture.view.entries();
 
-    assert!(listed.contains(&"alpha".to_owned()), "got {listed:?}");
-    assert!(listed.contains(&"zulu".to_owned()), "got {listed:?}");
-    assert!(
-        !listed.iter().any(|entry| entry.ends_with(" settings")),
-        "lifecycle cards do not duplicate the sidebar: {listed:?}"
-    );
-    assert!(
-        !listed.contains(&"other".to_owned()),
-        "only this workspace's extensions are listed"
-    );
-    assert_eq!(
-        listed.iter().filter(|entry| entry.as_str() == "alpha").count(),
-        1,
-        "one entry per extension"
-    );
+    assert_eq!(listed, ["Settings", "Extensions"]);
 }
 
 fn selecting_an_extension_shows_the_surface_it_draws() {
     let fixture = Fixture::new(&[("alpha", true)]);
 
-    fixture.view.select_name("alpha");
+    assert!(fixture.shelf.open(&named("alpha")));
 
-    assert_eq!(fixture.view.shown().as_deref(), Some("alpha"));
+    assert_eq!(fixture.view.shown().as_deref(), Some("Extensions"));
     assert!(
         fixture.tagged("alpha", SURFACE).is_some(),
         "the extension's own surface is the page"
     );
-    assert_eq!(fixture.view.entries(), ["Overview", "Extensions", "alpha"]);
+    assert_eq!(fixture.view.entries(), ["Settings", "Extensions"]);
 }
 
 fn the_settings_page_says_where_an_extension_stands() {
@@ -417,34 +445,140 @@ fn a_live_host_fault_reaches_central_settings_and_can_retry() {
         .extension_tagged("alpha", settings::STANDING)
         .and_downcast::<gtk::Label>()
         .expect("central settings standing");
-    assert_eq!(standing.text(), "faulted after 5 restarts");
+    assert_eq!(
+        standing.text(),
+        "enabled, but stopped after 5 failed starts; retry or disable it"
+    );
     assert!(fixture.extension_tagged("alpha", settings::RETRY).is_some());
+    assert!(fixture.extension_tagged("alpha", settings::DISABLE).is_some());
+    assert!(
+        fixture.extension_tagged("alpha", settings::ENABLE).is_none(),
+        "a fault cannot advertise an enable action that leaves it faulted"
+    );
 
     fixture.act("alpha", settings::RETRY);
 
     assert_eq!(fixture.stage("alpha"), Stage::Duty);
-    assert!(fixture.view.holds("alpha"), "retry remounts the extension surface");
+    assert!(
+        fixture.shelf.content().child_by_name("alpha").is_some(),
+        "retry remounts the extension surface"
+    );
     assert!(
         fixture.extension_tagged("alpha", settings::REMOVE).is_some(),
         "retry did not remove it"
     );
 }
 
-fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
+fn a_fault_can_be_deliberately_disabled() {
     let fixture = Fixture::new(&[("alpha", true)]);
     fixture.shelf.fault(&named("alpha"), 5);
-    fixture.act("alpha", settings::REMOVE);
-    let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
-    let actions = descendants(&root)
-        .into_iter()
-        .find(|widget| widget.has_css_class(settings::ACTIONS))
-        .and_downcast::<gtk::FlowBox>()
-        .expect("faulted lifecycle card has a wrapping action region");
 
-    for width in [300, 1_200] {
-        root.measure(gtk::Orientation::Horizontal, -1);
-        root.measure(gtk::Orientation::Vertical, width);
-        root.allocate(width, 1_000, -1, None);
+    fixture.act("alpha", settings::DISABLE);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Standby);
+    assert!(fixture.extension_tagged("alpha", settings::RETRY).is_none());
+    assert!(fixture.extension_tagged("alpha", settings::ENABLE).is_some());
+}
+
+fn a_fault_withdraws_ready_provider_until_a_fresh_retry_frame() {
+    let storage = tempfile::tempdir().expect("storage");
+    let roster = Rc::new(RefCell::new(
+        Roster::open(Directory::open(storage.path()).expect("directory")).expect("roster"),
+    ));
+    let mut described = manifest("sample");
+    described.pane_providers.push(hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    });
+    roster
+        .borrow_mut()
+        .register(&described, "sha256:aaaa", &described.capabilities, 1)
+        .expect("registered");
+    roster.borrow_mut().enable(&described.name).expect("enabled");
+    let view = Rc::new(View::new([
+        (Page::Settings, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+        (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+    ]));
+    let gallery = Gallery::new();
+    let generations = Rc::new(RefCell::new(Vec::new()));
+    let shown = gallery.clone();
+    let recorded = Rc::clone(&generations);
+    let surfaces: Surfaces = Rc::new(move |entry| {
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        let generation = shown.enrol(
+            entry.name.as_str(),
+            &interface,
+            &home,
+            &entry.pane_providers,
+            Rc::new(|_| {}),
+        );
+        shown.enrol_semantics(
+            entry.name.as_str(),
+            Rc::new(|_| Err(hl_extension::HostError::Absent("test projection".into()))),
+            Rc::new(|_, _| Ok(())),
+        );
+        recorded.borrow_mut().push(generation);
+        home.upcast()
+    });
+    let withdrawn = gallery.clone();
+    let shelf = Shelf::with_lifecycle(
+        &view,
+        &roster,
+        surfaces,
+        Rc::new(move |name| withdrawn.withdraw(name.as_str())),
+    );
+    shelf.install();
+    let first = generations.borrow()[0];
+    gallery.ready("sample", first);
+    assert_eq!(gallery.providers().len(), 1, "the accepted generation is advertised");
+
+    shelf.fault(&named("sample"), 5);
+
+    let fault_generation = *generations.borrow().last().expect("last Duty surface generation");
+    assert_eq!(fault_generation, first, "fault does not start a replacement surface");
+    assert!(
+        gallery.providers().is_empty(),
+        "fault synchronously withdraws provider authority"
+    );
+
+    roster.borrow_mut().retry(&named("sample")).expect("retry");
+    shelf.refresh(&named("sample"));
+    let retry_generation = *generations.borrow().last().expect("retry generation");
+    assert_ne!(retry_generation, fault_generation);
+    assert!(
+        gallery.providers().is_empty(),
+        "retry remains private before its accepted frame"
+    );
+    gallery.ready("sample", retry_generation);
+    assert_eq!(
+        gallery.providers().len(),
+        1,
+        "only the accepted retry generation is advertised"
+    );
+}
+
+fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
+    for width in [300, 480, 1_200] {
+        let fixture = Fixture::new(&[("alpha", true)]);
+        fixture.shelf.fault(&named("alpha"), 5);
+        fixture.act("alpha", settings::REMOVE);
+        fixture.view.select_name(Page::Extensions.title());
+        let window = gtk::Window::builder()
+            .default_width(width)
+            .default_height(700)
+            .child(&fixture.view.widget)
+            .build();
+        window.present();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let root = fixture._catalogue.widget().clone().upcast::<gtk::Widget>();
+        let actions = descendants(&root)
+            .into_iter()
+            .find(|widget| widget.has_css_class(settings::ACTIONS))
+            .and_downcast::<gtk::FlowBox>()
+            .expect("faulted lifecycle card has a wrapping action region");
         let children = descendants(actions.upcast_ref())
             .into_iter()
             .filter(|widget| widget.parent().as_ref() == Some(actions.upcast_ref()))
@@ -461,11 +595,42 @@ fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {
             }),
             "lifecycle actions overflowed at {width}px"
         );
+        let removal = descendants(&root)
+            .into_iter()
+            .find(|widget| widget.has_css_class(settings::REMOVAL_ACTIONS))
+            .and_downcast::<gtk::FlowBox>()
+            .expect("removal controls have their own responsive group");
         if width == 300 {
-            let first_y = children[0].allocation().y();
-            assert!(
-                children.iter().any(|child| child.allocation().y() > first_y),
-                "the worst-case fault confirmation did not wrap at 300px"
+            removal.measure(gtk::Orientation::Horizontal, -1);
+            removal.measure(gtk::Orientation::Vertical, 180);
+            removal.allocate(180, 120, -1, None);
+        }
+        let seats = descendants(removal.upcast_ref())
+            .into_iter()
+            .filter(|widget| {
+                widget.parent().as_ref() == Some(removal.upcast_ref())
+                    && descendants(widget).into_iter().any(|child| {
+                        child.is_visible() && child.downcast_ref::<gtk::Button>().is_some()
+                    })
+            })
+            .collect::<Vec<_>>();
+        let destructive = descendants(removal.upcast_ref())
+            .into_iter()
+            .filter(|widget| widget.is_visible() && widget.downcast_ref::<gtk::Button>().is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(destructive.len(), 2, "confirmation and cancellation remain reachable");
+        assert!(destructive.iter().all(|child| {
+            let allocation = child.allocation();
+            allocation.x() >= 0 && allocation.x() + allocation.width() <= removal.width()
+        }), "destructive controls overflowed at {width}px");
+        assert_eq!(seats.len(), 2);
+        if width == 300 {
+            assert_ne!(seats[0].allocation().y(), seats[1].allocation().y(), "compact confirmation must reflow");
+        } else {
+            assert_eq!(
+                seats[0].allocation().y(),
+                seats[1].allocation().y(),
+                "confirmation should remain inline when {width}px has room"
             );
         }
     }
@@ -499,12 +664,50 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
     while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!((window.width(), window.height()), (300, 420));
     assert!(
+        fixture.view.sidebar.width() < 190,
+        "fixed navigation yields space to Settings and Extensions on a compact window"
+    );
+    assert!(
         fixture._catalogue.viewport().vexpands(),
         "the catalogue consumes the bounded page height"
     );
     assert!(
         fixture._catalogue.viewport().vadjustment().upper() > fixture._catalogue.viewport().vadjustment().page_size(),
         "the narrow catalogue scrolls instead of imposing its full natural height"
+    );
+    assert!(
+        fixture._catalogue.viewport().hadjustment().upper()
+            <= fixture._catalogue.viewport().hadjustment().page_size() + 1.0,
+        "the image field and registry guidance reflow instead of clipping the compact catalogue"
+    );
+    let reference = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::REFERENCE))
+        .expect("extension image reference field");
+    assert_eq!(
+        reference.downcast_ref::<gtk::Entry>().expect("reference is an entry").width_chars(),
+        1,
+        "the placeholder must not become the image field's minimum width"
+    );
+    assert!(
+        reference.width() <= fixture._catalogue.viewport().width(),
+        "image field must fit its compact viewport: field={} viewport={}",
+        reference.width(),
+        fixture._catalogue.viewport().width()
+    );
+    let installed_heading = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .find_map(|widget| {
+            widget
+                .downcast::<gtk::Label>()
+                .ok()
+                .filter(|label| label.has_css_class("dhead") && label.text() == "alpha")
+        })
+        .expect("installed extension card heading");
+    assert_eq!(
+        installed_heading.accessible_role(),
+        gtk::AccessibleRole::Heading,
+        "installed cards must be navigable by heading at compact width"
     );
     let focusable: Vec<_> = descendants(fixture.view.widget.upcast_ref())
         .into_iter()
@@ -533,7 +736,10 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .build();
     window.present();
     while gtk::glib::MainContext::default().iteration(false) {}
-    assert_eq!(window.width(), 1_200, "the same live page reallocates at wide size");
+    assert!(
+        window.width() >= 640,
+        "the same live page remains usable after wide reallocation"
+    );
 
     let initial = fixture.view.semantic_snapshot();
     let enable = initial
@@ -558,6 +764,18 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             .and_then(|button| button.label()),
         Some("Enable".into())
     );
+    gtk::prelude::RootExt::focus(&window)
+        .and_downcast::<gtk::Button>()
+        .expect("focused Enable button")
+        .emit_clicked();
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Disable".into()),
+        "keyboard lifecycle activation keeps focus on its logical replacement"
+    );
 
     let removal = fixture.view.semantic_snapshot();
     let remove = removal
@@ -573,7 +791,10 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .find(|node| node.label.as_deref() == Some("Confirm removal"))
         .unwrap();
     assert!(confirm.disabled, "hidden confirmation is not focusable");
-    assert!(confirm.actions.is_empty(), "disabled native controls advertise no actions");
+    assert!(
+        confirm.actions.is_empty(),
+        "disabled native controls advertise no actions"
+    );
     assert!(matches!(
         fixture.view.semantic_action(&Action {
             revision: removal.revision,
@@ -599,6 +820,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             value: None,
         })
         .unwrap();
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Confirm removal".into()),
+        "revealing confirmation moves keyboard focus off the hidden Remove control"
+    );
     let asking = fixture.view.semantic_snapshot();
     let confirm = asking
         .root
@@ -613,13 +841,22 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Remove"))
         .unwrap();
-    assert!(remove.disabled, "the hidden first-step action cannot bypass confirmation state");
+    assert!(
+        remove.disabled,
+        "the hidden first-step action cannot bypass confirmation state"
+    );
+    let cancel = asking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Cancel removal"))
+        .unwrap();
     fixture
         .view
         .semantic_action(&Action {
             revision: asking.revision,
-            node: confirm.id,
-            action: ActionKind::Focus,
+            node: cancel.id,
+            action: ActionKind::Invoke,
             value: None,
         })
         .unwrap();
@@ -627,8 +864,8 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         gtk::prelude::RootExt::focus(&window)
             .and_downcast::<gtk::Button>()
             .and_then(|button| button.label()),
-        Some("Confirm removal".into()),
-        "semantic Focus follows the currently visible confirmation"
+        Some("Remove".into()),
+        "cancelling returns keyboard focus to the restored Remove control"
     );
     window.close();
 }
@@ -646,7 +883,10 @@ fn removing_an_extension_takes_its_pages_with_it() {
     assert!(until_gui(|| fixture.stage("alpha") == Stage::Vacancy));
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
-    assert!(!fixture.view.holds("alpha"), "its surface is off the shell");
+    assert!(
+        fixture.shelf.content().child_by_name("alpha").is_none(),
+        "its surface is off the shell"
+    );
     assert!(
         fixture.extension_tagged("alpha", settings::STANDING).is_none(),
         "its lifecycle card is gone"
@@ -708,6 +948,15 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
     }));
     assert_eq!(fixture.stage("alpha"), Stage::Standby);
     assert_eq!(attempts.load(Ordering::Acquire), 1);
+    let refusal = fixture
+        .extension_tagged("alpha", settings::REFUSAL)
+        .and_downcast::<gtk::Label>()
+        .expect("the failed removal remains visible beside its retry");
+    assert_eq!(
+        refusal.accessible_role(),
+        gtk::AccessibleRole::Status,
+        "removal progress and retryable failure must be announced without moving focus"
+    );
     let failed = fixture.view.semantic_snapshot();
     assert!(failed.root.children.iter().any(|node| {
         node.label.as_deref() == Some("alpha") && node.value.as_deref() == Some("disabled · removal failed")
@@ -743,105 +992,58 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
     );
 }
 
-fn management_extension_reconciles_native_fallback_pages() {
+fn extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue() {
     let storage = tempfile::tempdir().expect("temporary directory");
     let roster = Rc::new(RefCell::new(
         Roster::open(Directory::open(storage.path()).expect("storage")).expect("roster"),
     ));
-    record(&roster, super::MANAGEMENT_EXTENSION, true);
-    let overview = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let containers = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let managed = named("workspace-manager");
+    record(&roster, managed.as_str(), true);
     let view = Rc::new(View::new([
         (Page::Settings, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
         (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
     ]));
-    let fallback = [
-        (Page::Overview, overview.upcast::<gtk::Widget>()),
-        (Page::Containers, containers.upcast()),
-    ];
-    for (page, widget) in &fallback {
-        view.attach(page.title(), widget);
-    }
-    let weak = Rc::downgrade(&view);
-    let reconcile = Rc::new(move |managed: bool| {
-        let Some(view) = weak.upgrade() else { return };
-        for (page, widget) in &fallback {
-            if managed {
-                view.detach(page.title());
-            } else if !view.holds(page.title()) {
-                view.attach(page.title(), widget);
-            }
-        }
-    });
     let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
     let withdrawals = Rc::new(Cell::new(0));
     let counted = Rc::clone(&withdrawals);
     let withdraw = Rc::new(move |name: &ExtensionName| {
-        if name.as_str() == super::MANAGEMENT_EXTENSION {
+        if name.as_str() == "workspace-manager" {
             counted.set(counted.get() + 1);
         }
     });
-    let shelf = Shelf::with_lifecycle(&view, &roster, surfaces, reconcile, withdraw);
+    let shelf = Shelf::with_lifecycle(&view, &roster, surfaces, withdraw);
     shelf.install();
-
-    let assert_pages = |managed: bool| {
-        let entries = view.entries();
-        for title in [Page::Overview.title(), Page::Containers.title()] {
-            assert_eq!(
-                entries.iter().filter(|entry| entry.as_str() == title).count(),
-                usize::from(!managed),
-                "{title} ownership must follow Duty without duplicates: {entries:?}"
-            );
-        }
-        assert_eq!(
-            entries
-                .iter()
-                .filter(|entry| entry.as_str() == super::MANAGEMENT_EXTENSION)
-                .count(),
-            1,
-            "the extension surface itself is never duplicated: {entries:?}"
-        );
-    };
-    assert_pages(true);
+    assert_eq!(view.entries(), ["Settings", "Extensions"]);
+    assert!(shelf.open(&managed), "Duty surface opens inside Extensions");
+    assert_eq!(view.shown().as_deref(), Some("Extensions"));
 
     let before = withdrawals.get();
-    roster
-        .borrow_mut()
-        .disable(&named(super::MANAGEMENT_EXTENSION))
-        .expect("disabled");
-    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
-    assert_pages(false);
+    roster.borrow_mut().disable(&managed).expect("disabled");
+    shelf.refresh(&managed);
+    assert!(!shelf.open(&managed), "disabled surface fails closed");
+    assert_eq!(view.entries(), ["Settings", "Extensions"]);
     assert!(
         withdrawals.get() > before,
-        "disable withdraws any provider panes before fallback returns"
+        "disable withdraws provider panes before catalogue recovery"
     );
 
-    roster
-        .borrow_mut()
-        .enable(&named(super::MANAGEMENT_EXTENSION))
-        .expect("enabled");
-    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
-    assert_pages(true);
+    roster.borrow_mut().enable(&managed).expect("enabled");
+    shelf.refresh(&managed);
+    assert!(shelf.open(&managed));
 
     let before = withdrawals.get();
-    roster
-        .borrow_mut()
-        .fault(&named(super::MANAGEMENT_EXTENSION), 3)
-        .expect("fault recorded");
-    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
-    assert_pages(false);
+    roster.borrow_mut().fault(&managed, 3).expect("fault recorded");
+    shelf.refresh(&managed);
+    assert!(!shelf.open(&managed), "faulted surface fails closed");
     assert!(
         withdrawals.get() > before,
-        "fault withdraws provider panes before fallback returns"
+        "fault withdraws provider panes before catalogue recovery"
     );
 
     let before = withdrawals.get();
-    roster
-        .borrow_mut()
-        .retry(&named(super::MANAGEMENT_EXTENSION))
-        .expect("retry returns to duty");
-    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
-    assert_pages(true);
+    roster.borrow_mut().retry(&managed).expect("retry returns to duty");
+    shelf.refresh(&managed);
+    assert!(shelf.open(&managed));
     assert!(
         withdrawals.get() > before,
         "retry replaces the faulted surface before taking ownership"
@@ -850,38 +1052,13 @@ fn management_extension_reconciles_native_fallback_pages() {
     let before = withdrawals.get();
     roster
         .borrow_mut()
-        .remove(&named(super::MANAGEMENT_EXTENSION))
+        .remove(&managed)
         .expect("removed management extension");
-    shelf.refresh(&named(super::MANAGEMENT_EXTENSION));
-    assert_eq!(
-        roster.borrow().stage(&named(super::MANAGEMENT_EXTENSION)),
-        Stage::Vacancy
-    );
-    assert!(view.holds(Page::Overview.title()));
-    assert!(view.holds(Page::Containers.title()));
-    assert_eq!(
-        view.entries()
-            .iter()
-            .filter(|entry| entry.as_str() == Page::Overview.title())
-            .count(),
-        1,
-        "removal restores one fallback page"
-    );
+    shelf.refresh(&managed);
+    assert_eq!(roster.borrow().stage(&managed), Stage::Vacancy);
+    assert!(!shelf.open(&managed));
+    assert_eq!(view.entries(), ["Settings", "Extensions"]);
     assert!(withdrawals.get() > before, "removal withdraws provider panes");
-
-    record(&roster, "containers", true);
-    let legacy = roster
-        .borrow()
-        .entries()
-        .into_iter()
-        .find(|entry| entry.name.as_str() == "containers")
-        .expect("legacy reference extension");
-    shelf.mount(&legacy);
-    assert!(view.holds(Page::Overview.title()));
-    assert!(
-        view.holds(Page::Containers.title()),
-        "legacy containers cannot suppress views it does not replace"
-    );
 }
 
 /// A catalogue whose inspection answers with `answer`, with nothing installed.
@@ -922,14 +1099,63 @@ fn inspect_action(page: &Rc<Catalogue>) -> gtk::Button {
 }
 
 fn candidate() -> Candidate {
+    let mut manifest = manifest("sample");
+    manifest.interface = Some(hl_extension::Presentation {
+        tab_title: "Sample".to_owned(),
+        icon: None,
+    });
     Candidate {
         reference: "sample:1".to_owned(),
         digest: "sha256:bbbb".to_owned(),
-        manifest: manifest("sample"),
+        manifest,
     }
 }
 
-fn docker_hub_references_are_explained_and_validated_before_acquisition() {
+#[cfg(feature = "native-test-hooks")]
+fn extension_archive() -> Vec<u8> {
+    use hl_images::Digest;
+    fn append(builder: &mut tar::Builder<&mut Vec<u8>>, path: &str, bytes: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
+    }
+    let document = "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1.0.0\"\nprotocol = 1\ncapabilities = [\"interface\"]\ninterface = { tab_title = \"Sample\" }\n[[pane_providers]]\nid = \"dashboard\"\ntitle = \"Dashboard\"\n";
+    let mut layer = Vec::new();
+    {
+        let mut tar = tar::Builder::new(&mut layer);
+        append(&mut tar, "etc/husklet/extension.toml", document.as_bytes());
+        tar.finish().unwrap();
+    }
+    let config = serde_json::to_vec(&serde_json::json!({
+        "architecture":"amd64", "os":"linux", "config": {"Entrypoint":["/opt/husklet/extension"], "User":"65532:65532", "Labels":{"husklet.extension.manifest":"/etc/husklet/extension.toml"}},
+        "rootfs":{"type":"layers", "diff_ids":[Digest::sha256(&layer).to_string()]}
+    })).unwrap();
+    let manifest = serde_json::to_vec(
+        &serde_json::json!([{"Config":"config.json", "RepoTags":["scenario/sample:1"], "Layers":["layer.tar"]}]),
+    )
+    .unwrap();
+    let mut archive = Vec::new();
+    {
+        let mut tar = tar::Builder::new(&mut archive);
+        append(&mut tar, "config.json", &config);
+        append(&mut tar, "layer.tar", &layer);
+        append(&mut tar, "manifest.json", &manifest);
+        tar.finish().unwrap();
+    }
+    archive
+}
+
+fn capability_choice(page: &Catalogue, capability: Capability) -> gtk::CheckButton {
+    descendants(page.widget().upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::CheckButton>().ok())
+        .find(|choice| choice.label().as_deref() == Some(capability.as_str()))
+        .unwrap_or_else(|| panic!("missing {} capability choice", capability.as_str()))
+}
+
+fn registry_references_are_explained_and_validated_before_acquisition() {
     let fixture = Fixture::new(&[]);
     let attempts = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&attempts);
@@ -943,16 +1169,26 @@ fn docker_hub_references_are_explained_and_validated_before_acquisition() {
         .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
         .map(|label| label.text().to_string())
         .collect();
-    assert!(copy.iter().any(|line| line.contains("Docker Hub examples")));
+    assert!(copy.iter().any(|line| line.contains("private registry")));
 
     typed(&page, "not a reference with spaces");
     page.inspect();
     assert!(attempts.borrow().is_empty(), "invalid input never starts acquisition");
-    assert!(page.notice().contains("not a valid image reference"));
+    assert!(page.notice().contains("not a valid OCI image reference"));
 
     typed(&page, "alpine:3.20");
     page.inspect();
     assert_eq!(attempts.borrow().as_slice(), ["docker.io/library/alpine:3.20"]);
+
+    typed(&page, "registry.example.com/team/extension:1.2.3");
+    page.inspect();
+    assert_eq!(
+        attempts.borrow().as_slice(),
+        [
+            "docker.io/library/alpine:3.20",
+            "registry.example.com/team/extension:1.2.3"
+        ]
+    );
 }
 
 fn update_candidate(digest: &str, version: &str) -> Candidate {
@@ -1011,6 +1247,19 @@ fn an_image_is_read_before_anybody_is_asked() {
             "{label} is focusable without invoking consent"
         );
     }
+    let interface = capability_choice(&page, Capability::Interface);
+    assert!(interface.is_active());
+    assert!(
+        !interface.is_sensitive(),
+        "an authored interface requires interface authority"
+    );
+    let container_read = capability_choice(&page, Capability::ContainerRead);
+    assert!(!container_read.is_active(), "optional authority starts unselected");
+    container_read.set_active(true);
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Selected capabilities")
+            && node.value.as_deref() == Some("container-read, interface")
+    }));
 
     page.consent();
 
@@ -1021,8 +1270,12 @@ fn an_image_is_read_before_anybody_is_asked() {
     assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
     assert!(page.notice().contains("sample:1 at sha256:bbbb"));
     assert!(
-        fixture.view.holds("sample"),
-        "and it is on the sidebar without a restart"
+        page.notice().contains("Choose Enable to start it"),
+        "installation distinguishes sidebar presence from activation"
+    );
+    assert!(
+        fixture.shelf.content().child_by_name("sample").is_none(),
+        "a disabled install stays in the recoverable catalogue"
     );
     assert!(!fixture.view.entries().iter().any(|entry| entry.ends_with(" settings")));
     assert!(
@@ -1031,11 +1284,24 @@ fn an_image_is_read_before_anybody_is_asked() {
             .any(|widget| widget.has_css_class(settings::STANDING)),
         "the central catalogue gained the lifecycle card"
     );
+    let installed = fixture.view.semantic_snapshot();
+    let enable = installed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Enable"))
+        .expect("a disabled installation exposes its explicit activation action");
+    assert!(!enable.disabled);
+    assert_eq!(enable.role, "button");
 }
 
 fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     let fixture = Fixture::new(&[("sample", true)]);
-    let old_surface = fixture.view.page("sample").expect("installed surface");
+    let old_surface = fixture
+        .shelf
+        .content()
+        .child_by_name("sample")
+        .expect("installed surface");
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
     let before = fixture.view.semantic_snapshot();
     let update = before
@@ -1056,7 +1322,10 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     assert!(page.notice().contains("newer image reference for sample"));
     assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
         node.label.as_deref() == Some("Extension status")
-            && node.value.as_deref().is_some_and(|value| value.contains("review the digest"))
+            && node
+                .value
+                .as_deref()
+                .is_some_and(|value| value.contains("review the digest"))
     }));
     typed(&page, "sample:2");
     page.inspect();
@@ -1087,18 +1356,22 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     );
     let semantic = fixture.view.semantic_snapshot();
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Added capabilities")
-            && node.value.as_deref() == Some("container-control")
+        node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("container-control")
     }));
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Removed capabilities")
-            && node.value.as_deref() == Some("container-read")
+        node.label.as_deref() == Some("Removed capabilities") && node.value.as_deref() == Some("container-read")
     }));
     assert_eq!(
-        fixture.view.page("sample").as_ref(),
+        fixture.shelf.content().child_by_name("sample").as_ref(),
         Some(&old_surface),
         "inspection and prompt leave the old extension live"
     );
+    let container_control = capability_choice(&page, Capability::ContainerControl);
+    assert!(!container_control.is_active(), "new update authority starts unselected");
+    assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Selected additional capabilities") && node.value.as_deref() == Some("none")
+    }));
+    container_control.set_active(true);
 
     page.consent();
     let entry = fixture
@@ -1112,7 +1385,7 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     assert_eq!(entry.version, "2.0.0");
     assert!(entry.granted.holds(Capability::ContainerControl));
     assert!(!entry.granted.holds(Capability::ContainerRead));
-    assert!(fixture.view.holds("sample"));
+    assert!(fixture.shelf.content().child_by_name("sample").is_some());
     assert!(
         descendants(page.widget().upcast_ref()).iter().any(|widget| {
             widget
@@ -1123,13 +1396,21 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     );
 }
 
-fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
+fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     let fixture = Fixture::new(&[("sample", true)]);
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
-    let old_surface = fixture.view.page("sample").expect("old surface");
+    let proposed = fixture.view.semantic_snapshot();
+    let consent = proposed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("reviewed update exposes exact consent authority");
+    let old_surface = fixture.shelf.content().child_by_name("sample").expect("old surface");
+    capability_choice(&page, Capability::ContainerControl).set_active(true);
 
     let winner = update_candidate("sha256:dddd", "1.5.0");
     let prepared = fixture
@@ -1150,16 +1431,34 @@ fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
         page.notice()
     );
     assert_eq!(
-        fixture.view.page("sample").as_ref(),
+        fixture.shelf.content().child_by_name("sample").as_ref(),
         Some(&old_surface),
         "a refused replacement does not rebuild the running surface"
     );
     assert!(
-        descendants(page.widget().upcast_ref())
+        !descendants(page.widget().upcast_ref())
             .iter()
             .any(|widget| widget.has_css_class(directory::CONSENT)),
-        "the accepted proposal remains available for an explicit retry"
+        "the stale consent authority is withdrawn rather than offered as a retry"
     );
+    assert!(page.notice().contains("Read the manifest again"));
+    assert_eq!(inspect_action(&page).label().as_deref(), Some("Read manifest again"));
+    let refreshed = fixture.view.semantic_snapshot();
+    assert!(refreshed.root.children.iter().all(|node| node.label.as_deref() != Some("Accept update")));
+    assert!(refreshed.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Read manifest")
+            && node.value.as_deref() == Some("Retry acquisition")
+            && !node.disabled
+    }));
+    assert!(matches!(
+        fixture.view.semantic_action(&super::super::semantic::Action {
+            revision: proposed.revision,
+            node: consent.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        }),
+        Err(super::super::semantic::Refusal::Stale { .. })
+    ));
     assert_eq!(
         fixture
             .roster
@@ -1183,7 +1482,10 @@ fn a_declined_image_records_nothing() {
     page.decline();
 
     assert!(fixture.roster.borrow().entries().is_empty(), "nothing was recorded");
-    assert!(!fixture.view.holds("sample"), "and nothing reached the sidebar");
+    assert!(
+        fixture.shelf.content().child_by_name("sample").is_none(),
+        "and no surface was mounted"
+    );
     page.consent();
     assert!(
         fixture.roster.borrow().entries().is_empty(),
@@ -1404,6 +1706,16 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     assert!(action.is_sensitive());
     assert_eq!(action.label().as_deref(), Some("Retry"));
     assert!(page.notice().contains("temporarily unavailable"));
+    let notice = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::NOTICE))
+        .and_downcast::<gtk::Label>()
+        .expect("the registry failure remains visibly actionable");
+    assert_eq!(
+        notice.accessible_role(),
+        gtk::AccessibleRole::Status,
+        "registry failure and retry readiness must be announced without moving focus"
+    );
 
     page.inspect();
     assert!(!action.is_sensitive());
@@ -1411,7 +1723,7 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     assert_eq!(action.label().as_deref(), Some("Read another image"));
     page.consent();
     assert!(
-        fixture.view.holds("sample"),
+        fixture.shelf.content().child_by_name("sample").is_none(),
         "retry reaches the ordinary consent lifecycle"
     );
     assert_eq!(
@@ -1421,8 +1733,256 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     );
 }
 
+#[cfg(feature = "native-test-hooks")]
+fn registry_install_enables_a_real_image_selected_provider() {
+    use hl_container::{Config, Containers, Persistence};
+    use hl_images::format::docker::{Archive, Limits};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let containers = runtime.block_on(async {
+        Containers::builder(Config::new(root.path()).persistence(Persistence::Memory))
+            .build()
+            .await
+            .unwrap()
+    });
+    Archive::load(
+        &extension_archive()[..],
+        &containers.images().unwrap(),
+        Limits::default(),
+    )
+    .unwrap();
+    runtime.spawn(
+        hl_daemon::Daemon::new(containers)
+            .platform(hl_images::Platform::linux_amd64())
+            .server(&socket)
+            .serve_with_shutdown(async move {
+                let _ = stopped.await;
+            }),
+    );
+    assert!(until(|| socket.exists()));
+
+    let fixture = Fixture::new(&[]);
+    let acquisition_socket = socket.clone();
+    let inspection: Inspection = Rc::new(move |reference| {
+        let (sent, received) = std::sync::mpsc::channel();
+        hl::extension::Candidate::acquire_from_socket(&acquisition_socket, hl_ws::Arch::Amd64, reference, &sent);
+        PendingInspection::detached(received)
+    });
+    let page = Catalogue::new(&fixture.shelf, inspection);
+    typed(&page, "scenario/sample:1");
+    page.inspect();
+    assert!(
+        until_gui(|| {
+            page.poll();
+            page.notice().contains("asks for")
+        }),
+        "acquisition stopped at {}",
+        page.notice()
+    );
+    let acquired = page
+        .proposed_candidate()
+        .expect("digest-bound candidate remains pending consent");
+    let digest = descendants(page.widget().upcast_ref())
+        .iter()
+        .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+        .map(|label| label.text().to_string())
+        .find(|line| line.starts_with("Digest: "))
+        .unwrap();
+    page.consent();
+    let entry = fixture.roster.borrow().entries().into_iter().next().unwrap();
+    assert_eq!(entry.stage, Stage::Standby);
+    assert_eq!(format!("Digest: {}", entry.image_digest), digest);
+    assert_eq!(fixture.view.entries(), ["Settings", "Extensions"]);
+    assert!(
+        descendants(page.widget().upcast_ref())
+            .iter()
+            .any(|widget| widget.has_css_class(settings::STANDING)),
+        "disabled installation is visible in Extensions"
+    );
+
+    // The acquired identity is now the sole authority used to select the
+    // sidecar plan. Before explicit enable there is no host or provider.
+    let gallery = Gallery::new();
+    assert!(gallery.providers().is_empty());
+    fixture
+        .roster
+        .borrow_mut()
+        .enable_if_digest(&entry.name, &entry.image_digest)
+        .unwrap();
+    let manifest = acquired.manifest;
+    assert_eq!(
+        manifest.pane_providers.len(),
+        1,
+        "acquired manifest carries its provider"
+    );
+    let socket = root.path().join("reference.sock");
+    let plan = hl::extension::Plan {
+        record: Record {
+            enabled: true,
+            ..entry_record(&entry, &manifest)
+        },
+        manifest: manifest.clone(),
+        spec: hl::extension::SidecarSpec::new(
+            &manifest,
+            &entry.granted,
+            &hl::extension::Image {
+                reference: entry.image_digest.clone(),
+                digest: entry.image_digest.clone(),
+                entrypoint: vec!["/opt/husklet/extension".to_owned()],
+                user: "65532:65532".to_owned(),
+            },
+            &socket,
+        ),
+        workspace: "dev".to_owned(),
+    };
+    assert_eq!(
+        plan.spec.request().image,
+        entry.image_digest,
+        "the acquired digest selects the launch image"
+    );
+    let (post, deliveries) = super::super::extension::channel();
+    let shown = gallery.clone();
+    let generation = Rc::new(Cell::new(None));
+    let publishing = Rc::clone(&generation);
+    let ready = Rc::new(Cell::new(false));
+    let became_ready = Rc::clone(&ready);
+    let (widget, interface) = super::super::extension::Interface::with_lifecycle(
+        deliveries,
+        Rc::new(|_| {}),
+        Rc::new(|_| {}),
+        Rc::new(move || {
+            became_ready.set(true);
+            if let Some(generation) = publishing.get() {
+                shown.ready("sample", generation);
+            }
+        }),
+    );
+    let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    holder.append(&widget);
+    generation.set(Some(gallery.enrol(
+        "sample",
+        &widget,
+        &holder,
+        &manifest.pane_providers,
+        Rc::new(|_| {}),
+    )));
+    let interface = interface.install();
+    let weak = Rc::downgrade(&interface);
+    gallery.enrol_semantics(
+        "sample",
+        Rc::new(move |slot| {
+            weak.upgrade()
+                .ok_or_else(|| hl_extension::HostError::Absent("closed".into()))?
+                .borrow()
+                .semantics(slot)
+        }),
+        Rc::new(|_, _| Ok(())),
+    );
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    let host = hl::extension::Host::open(
+        ProcessSupply::new(plan),
+        Box::new(move |report| {
+            reported.lock().unwrap().push(format!("{report:?}"));
+            if let hl::extension::Report::Frame(frame) = report {
+                let _ = post.send(super::super::extension::Delivery::Frame(frame.frame));
+            }
+        }),
+    );
+    assert!(
+        until_gui(|| {
+            interface.borrow_mut().tick();
+            !gallery.providers().is_empty()
+        }),
+        "ready={} standing={:?} reports={:?}",
+        ready.get(),
+        host.standing(),
+        reports.lock().unwrap()
+    );
+    assert_eq!(gallery.providers()[0].title, "Dashboard");
+    host.close().unwrap();
+    let _ = stop.send(());
+}
+
+#[cfg(feature = "native-test-hooks")]
+fn entry_record(entry: &hl::extension::Entry, manifest: &Manifest) -> Record {
+    Record {
+        name: entry.name.clone(),
+        image_digest: entry.image_digest.clone(),
+        version: manifest.version.clone(),
+        granted: entry.granted.clone(),
+        enabled: false,
+        installed_at: 1,
+        pane_providers: manifest.pane_providers.clone(),
+        declaration: Some(manifest.clone()),
+    }
+}
+
 /// What the fake extension heard, in order.
-type Heard = Arc<Mutex<Vec<String>>>;
+type Heard = Arc<Mutex<Vec<serde_json::Value>>>;
+
+#[cfg(feature = "native-test-hooks")]
+struct ProcessSupply {
+    plan: hl::extension::Plan,
+    child: Mutex<Option<std::process::Child>>,
+}
+
+#[cfg(feature = "native-test-hooks")]
+impl ProcessSupply {
+    fn new(plan: hl::extension::Plan) -> Self {
+        Self {
+            plan,
+            child: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+impl hl::extension::Supply for ProcessSupply {
+    fn plan(&self) -> Result<Option<hl::extension::Plan>, String> {
+        Ok(Some(self.plan.clone()))
+    }
+    fn ensure(&self, plan: &hl::extension::Plan) -> Result<(), String> {
+        let child = std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+            .args([
+                "--exact",
+                "screens::workspace::extensions::test::image_selected_sidecar_process",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HUSKLET_TEST_IMAGE_SOCKET", plan.spec.socket())
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        *self.child.lock().unwrap() = Some(child);
+        Ok(())
+    }
+    fn attend(&self, _: &hl::extension::Plan, conversation: &mut hl::extension::Conversation) -> Result<(), String> {
+        conversation
+            .serve(&ports::services())
+            .map_err(|error| error.to_string())
+    }
+    fn halt(&self, _: &hl::extension::Plan) {
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[test]
+#[ignore = "subprocess entrypoint for the image-selected sidecar composition test"]
+fn image_selected_sidecar_process() {
+    let socket = std::path::PathBuf::from(std::env::var("HUSKLET_TEST_IMAGE_SOCKET").unwrap());
+    listen(
+        &socket,
+        &Arc::default(),
+        &AtomicBool::new(false),
+        &AtomicBool::new(false),
+    );
+}
 
 /// A supply with no container daemon: `ensure` starts a thread that connects to
 /// the host's own socket, speaks the handshake, and then listens.
@@ -1446,6 +2006,7 @@ impl hl::extension::Supply for Bench {
             enabled: true,
             installed_at: 1,
             pane_providers: manifest.pane_providers.clone(),
+            declaration: Some(manifest.clone()),
         };
         let image = hl::extension::Image {
             reference: "extension:1".to_owned(),
@@ -1516,8 +2077,15 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool
     {
         return;
     }
-    let described = hl_gui::Element::column()
-        .child(hl_gui::Element::button("Restart", hl_gui::EventId::new("restart")).key("restart"));
+    let described = hl_gui::Element::column().child(
+        hl_gui::Element::new(hl_gui::Tag::Button)
+            .label("Restart")
+            .on(
+                hl_gui::Trigger::Activate,
+                hl_gui::EventId::new("arbitrary/id:do-not-parse"),
+            )
+            .key("restart"),
+    );
     let frame = hl_gui::Reconciliation::new().reconcile(&described);
     if wire
         .send(
@@ -1533,10 +2101,10 @@ fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool, ended: &AtomicBool
         let Ok(said) = serde_json::from_slice::<serde_json::Value>(&frame.payload) else {
             continue;
         };
-        let Some(id) = said.get("id").and_then(serde_json::Value::as_str) else {
+        if said.get("id").and_then(serde_json::Value::as_str).is_none() {
             continue;
-        };
-        heard.lock().expect("heard").push(id.to_owned());
+        }
+        heard.lock().expect("heard").push(said);
     }
     ended.store(true, Ordering::Release);
 }
@@ -1650,6 +2218,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         Rc::new(|slot: &str| {
             Ok(hl_extension::PaneSemanticTree {
                 slot: slot.to_owned(),
+                generation: 0,
                 revision: 0,
                 root: hl_extension::SemanticNode {
                     id: 0,
@@ -1704,11 +2273,13 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     button.emit_clicked();
     page.tick();
 
-    assert!(
-        until(|| heard.lock().expect("heard").iter().any(|id| id == "restart")),
-        "the click reached the extension, it heard {:?}",
-        heard.lock().expect("heard")
-    );
+    assert!(until(|| !heard.lock().expect("heard").is_empty()), "the click reached the extension");
+    let heard = heard.lock().expect("heard");
+    let event = heard.last().expect("framed GTK interaction");
+    assert_eq!(event["interaction"], "invoke", "Activate uses the button interaction family");
+    assert_eq!(event["trigger"], "Activate", "the producer's actual bound trigger survives GTK and framing");
+    assert_eq!(event["id"], "arbitrary/id:do-not-parse", "the producer-owned identity is opaque");
+    assert_eq!(event["node"], 2, "the exact rendered button node is retained");
     drop(host);
 }
 
@@ -1874,10 +2445,19 @@ fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
         &view,
         &roster,
         surfaces,
-        Rc::new(|_| {}),
         Rc::new(move |name| withdrawn.withdraw(name.as_str())),
     );
     shelf.install();
+
+    assert_eq!(roster.borrow().stage(&named("sample")), Stage::Standby);
+    assert!(
+        !greeted.load(Ordering::Acquire),
+        "installing a disabled record opens no extension socket"
+    );
+    assert!(
+        gallery.providers().is_empty(),
+        "installing a disabled record advertises no provider"
+    );
 
     std::fs::remove_dir_all(&root).expect("remove durable root");
     std::fs::write(&root, b"jammed").expect("jam durable root");
@@ -2081,6 +2661,8 @@ mod ports {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
+                columns: 80,
+                rows: 24,
                 lines: Vec::new(),
                 cursor_column: 0,
                 cursor_row: 0,
@@ -2160,9 +2742,9 @@ mod ports {
 /// than about a presented window or a running workspace.
 mod panes {
     use std::cell::RefCell;
-    #[cfg(feature = "mcp-e2e")]
+    #[cfg(feature = "client-e2e")]
     use std::io::{Read as _, Write as _};
-    #[cfg(feature = "mcp-e2e")]
+    #[cfg(feature = "client-e2e")]
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::rc::Rc;
     use std::time::{Duration, Instant};
@@ -2173,8 +2755,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
-        WindowSession, ABSENCE,
+        Adjustment, PaneChooser, PaneChrome, PaneFocus, PaneLauncher, Panes, Reading, Slots, SplitAction, Surface, Tabs,
+        TermWin, Window, WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::{Gallery, Shelf, Surfaces};
@@ -2211,7 +2793,7 @@ mod panes {
         /// A registered terminal backed by a real raw PTY. The returned slave
         /// is the guest side: socket input arrives there, while its output is
         /// rendered by VTE and becomes readable through the same socket.
-        #[cfg(feature = "mcp-e2e")]
+        #[cfg(feature = "client-e2e")]
         #[allow(unsafe_code)]
         fn shell_with_pty(&self) -> (vte4::Terminal, String, OwnedFd) {
             let mut master = -1;
@@ -2235,10 +2817,7 @@ mod panes {
             let slave = unsafe { OwnedFd::from_raw_fd(slave) };
             let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
             // SAFETY: the live slave initializes attributes.
-            assert_eq!(
-                unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) },
-                0
-            );
+            assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), attributes.as_mut_ptr()) }, 0);
             // SAFETY: successful tcgetattr initialized attributes.
             let mut attributes = unsafe { attributes.assume_init() };
             // SAFETY: attributes is initialized and exclusively borrowed.
@@ -2280,6 +2859,33 @@ mod panes {
         }
     }
 
+    fn press_key(widget: &impl IsA<gtk::Widget>, key: gtk::gdk::Key) -> bool {
+        let controllers = widget.observe_controllers();
+        let key_controllers = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .filter(|controller| controller.name().as_deref() == Some("pane-chooser-keys"))
+            .collect::<Vec<_>>();
+        assert!(!key_controllers.is_empty(), "widget owns a key controller");
+        key_controllers.into_iter().any(|controller| {
+            controller.emit_by_name("key-pressed", &[&key, &0_u32, &gtk::gdk::ModifierType::empty()])
+        })
+    }
+
+    pub(super) fn pointer_hit_testing_captures_the_exact_pane_slot() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let (x, y) = Window::pointer_test_point(&bench.window, &slot).expect("allocated pane centre");
+
+        let (observed, generation, local_x, local_y) =
+            Window::pointer_test_target(&bench.window, x, y).expect("pane hit");
+
+        assert_eq!(observed, slot);
+        assert_eq!(generation, 0, "terminal occupant identity is stable generation zero");
+        assert!(local_x >= 0.0 && local_y >= 0.0, "coordinates are pane-local");
+    }
+
     pub(super) fn readable(gallery: &Gallery, extension: &str) {
         let owner = extension.to_owned();
         gallery.enrol_semantics(
@@ -2287,6 +2893,7 @@ mod panes {
             Rc::new(move |slot| {
                 Ok(hl_extension::PaneSemanticTree {
                     slot: slot.to_owned(),
+                    generation: 0,
                     revision: 1,
                     root: hl_extension::SemanticNode {
                         id: 0,
@@ -2347,6 +2954,25 @@ mod panes {
             gallery.semantics("sample", "pane-7").unwrap().root.label.as_deref(),
             Some("sample")
         );
+        let observed = gallery.semantics("sample", "pane-7").unwrap();
+        assert_eq!(observed.generation, generation);
+        let replacement = gallery.enrol("sample", &interface, &home, &[], Rc::new(|_| {}));
+        assert_ne!(replacement, observed.generation);
+        readable(&gallery, "sample");
+        let stale = gallery.semantic_action(
+            "sample",
+            "pane-7",
+            &hl_extension::PaneSemanticAction {
+                generation: observed.generation,
+                revision: observed.revision,
+                node: 0,
+                action: hl_extension::SemanticActionKind::Invoke,
+                value: None,
+            },
+        );
+        assert!(
+            matches!(stale, Err(hl_extension::HostError::Conflict(detail)) if detail.contains("stale pane generation"))
+        );
     }
 
     /// Runs the main loop until a condition holds, which is how text fed to a
@@ -2363,8 +2989,9 @@ mod panes {
         condition()
     }
 
-    #[cfg(feature = "mcp-e2e")]
-    pub(super) fn mcp_socket_changes_native_ui() {
+
+    #[cfg(feature = "client-e2e")]
+    pub(super) fn client_socket_changes_native_ui() {
         use hl_extension::port::{
             ContainerControl, ContainerInventory, Entry, ExtensionStore, ImageStore, NetworkStore, VolumeStore,
             WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
@@ -2434,8 +3061,8 @@ mod panes {
         let guest = std::thread::spawn(move || {
             let expected = b"agent-status\n";
             let mut received = vec![0_u8; expected.len()];
-            guest_side.read_exact(&mut received).expect("read MCP terminal input");
-            assert_eq!(received, expected, "MCP input reached the guest verbatim");
+            guest_side.read_exact(&mut received).expect("read client terminal input");
+            assert_eq!(received, expected, "client input reached the guest verbatim");
             let answer = b"agent-received:agent-status\r\n";
             guest_side.write_all(answer).expect("write guest response");
         });
@@ -2449,7 +3076,17 @@ mod panes {
         let reference = reference.install();
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.append(&widget);
-        gallery.enrol("containers", &widget, &holder, &[], Rc::new(|_| {}));
+        let provider_generation = gallery.enrol(
+            "containers",
+            &widget,
+            &holder,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("main").unwrap(),
+                title: "Containers".into(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
         let weak = Rc::downgrade(&reference);
         gallery.enrol_panes(
             "containers",
@@ -2470,9 +3107,20 @@ mod panes {
             }),
             Rc::new(|_, _| Err(HostError::Conflict("the reference proof is read-only".into()))),
         );
+        gallery.ready("containers", provider_generation);
         Window::exhibit(&bench.window, gallery.clone());
         let surface_slot = Console::surface(&bench.window, Some("containers"), &terminal_slot, Division::Beside)
             .expect("mount reference extension surface beside the terminal");
+        Console::switch_occupant(
+            &bench.window,
+            &surface_slot,
+            0,
+            &hl_extension::port::PaneOccupantTarget::Surface {
+                extension: "containers".into(),
+                provider: "main".into(),
+            },
+        )
+        .expect("fixture advertises its provider through typed pane inspection");
         let frame = extension::Extension::new()
             .observe(Vec::new())
             .into_iter()
@@ -2493,9 +3141,9 @@ mod panes {
         let socket = temporary.path().join("extension.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind real extension socket");
         let served = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("MCP session connects");
+            let (stream, _) = listener.accept().expect("client session connects");
             let authority = Authority::new(
-                ExtensionName::new("mcp-e2e").unwrap(),
+                ExtensionName::new("client-e2e").unwrap(),
                 Grant::new([
                     Capability::TerminalRead,
                     Capability::TerminalOutput,
@@ -2535,10 +3183,10 @@ mod panes {
             .ancestors()
             .nth(3)
             .expect("repository root");
-        let script = root.join("extensions/mcp/test/native-socket-e2e.mjs");
+        let script = root.join("extensions/client/test/native-socket-e2e.mjs");
         assert!(
-            root.join("extensions/node_modules/@modelcontextprotocol/sdk").exists(),
-            "run `npm ci` in extensions before the explicit mcp-e2e target"
+            root.join("extensions/client/src/index.js").exists(),
+            "framework-neutral client source must exist"
         );
         let mut child = Command::new("node")
             .arg(script)
@@ -2548,17 +3196,17 @@ mod panes {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .expect("spawn real MCP client/server");
+            .expect("spawn real framework-neutral client");
         let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline && child.try_wait().expect("poll MCP child").is_none() {
+        while Instant::now() < deadline && child.try_wait().expect("poll client child").is_none() {
             console.drain();
             gtk::glib::MainContext::default().iteration(false);
             std::thread::sleep(Duration::from_millis(5));
         }
-        let output = child.wait_with_output().expect("MCP child output");
+        let output = child.wait_with_output().expect("client child output");
         assert!(
             output.status.success(),
-            "MCP bridge failed: {}",
+            "client bridge failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Extensions</label>"));
@@ -2567,6 +3215,7 @@ mod panes {
         guest.join().expect("guest PTY responder");
         served.join().expect("conversation thread");
     }
+
 
     pub(super) fn native_workspace_semantics_cross_the_terminal_request_bridge() {
         use super::super::super::semantic::{ActionKind, Registry, Value};
@@ -2600,10 +3249,11 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert!(!inventory.truncated);
-        assert!(inventory
+        let native = inventory
             .panes
             .iter()
-            .any(|pane| { pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native }));
+            .find(|pane| pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native)
+            .expect("native workspace pane is observable");
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
@@ -2616,6 +3266,11 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert_eq!(tree.slot, "workspace");
+        assert_eq!(
+            (native.generation, native.revision),
+            (tree.generation, tree.revision),
+            "inventory and semantics must identify the same native occupant snapshot"
+        );
         let settings = tree
             .root
             .children
@@ -2626,6 +3281,7 @@ mod panes {
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
         let action = hl_extension::PaneSemanticAction {
+            generation: tree.generation,
             revision: tree.revision,
             node: settings.id,
             action: hl_extension::SemanticActionKind::Invoke,
@@ -2667,13 +3323,99 @@ mod panes {
             until(|| matches!(
                 Panes::read(&bench.window, &slot, 100),
                 Reading::Text(text) if (text.cursor_column, text.cursor_row) == (12, 3)
+                    && (text.columns, text.rows)
+                        == (u16::try_from(terminal.column_count()).unwrap(), u16::try_from(terminal.row_count()).unwrap())
             )),
-            "the typed pane projection carries the terminal's zero-based cursor"
+            "the typed pane projection carries cursor and grid from the rendered terminal"
         );
         assert_eq!(
             Panes::read(&bench.window, "no-such-pane", 100),
             Reading::Absent,
             "a slot naming no pane is refused rather than answered with nothing"
+        );
+
+        terminal.feed(b"\x1b[?1049h\x1b[2J\x1b[Halternate \xf0\x9f\xa7\xaa");
+        assert!(
+            until(|| {
+                let shown = lines(&bench, &slot, 100).join("\n");
+                shown.contains("alternate \u{1f9ea}") && !shown.contains("quick brown") && !shown.contains('\u{1b}')
+            }),
+            "alternate screen projection must replace primary scrollback: {:?}",
+            lines(&bench, &slot, 100)
+        );
+        terminal.feed(b"\x1b[?1049l");
+        assert!(until(|| lines(&bench, &slot, 100).iter().any(|line| line.contains("quick brown"))));
+    }
+
+    pub(super) fn stale_pane_identity_cannot_authorize_terminal_input() {
+        let bench = Bench::new();
+        let (_, slot) = bench.shell();
+        let refused = Console::write(&bench.window, &slot, 1, 0, b"must not reach a replacement");
+        assert!(
+            matches!(refused, Err(HostError::Conflict(ref detail)) if detail.contains("stale pane identity")),
+            "a stale observed generation must fail before bytes reach the pane: {refused:?}"
+        );
+    }
+
+    pub(super) fn retitling_a_live_pane_preserves_its_slot_process_and_layout() {
+        fn stable_layout(node: &LayoutNode) -> LayoutNode {
+            match node {
+                LayoutNode::Pane { pane, focused, .. } => LayoutNode::Pane {
+                    pane: pane.clone(),
+                    grid: None,
+                    focused: *focused,
+                },
+                LayoutNode::Split {
+                    division,
+                    ratio_per_mille,
+                    first,
+                    second,
+                } => LayoutNode::Split {
+                    division: *division,
+                    ratio_per_mille: *ratio_per_mille,
+                    first: Box::new(stable_layout(first)),
+                    second: Box::new(stable_layout(second)),
+                },
+            }
+        }
+
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        let before = Console::topology(&bench.window).expect("topology before retitle");
+        let (relay, errands) = hl::extension::Relay::open();
+        let console = Console::new(&bench.window, errands);
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::new(relay);
+        let control = std::sync::Arc::clone(&request);
+        let addressed = slot.clone();
+        std::thread::spawn(move || sent.send(control.retitle(&addressed, "Build 🧪")).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                answer.expect("retitle crossed the window relay");
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+        let inventory = Console::pane_inventory(&bench.window).expect("inventory after retitle");
+        let renamed = inventory
+            .panes
+            .iter()
+            .find(|pane| pane.slot == slot)
+            .expect("same pane remains");
+        assert_eq!(renamed.title.as_deref(), Some("Build 🧪"));
+        let after = Console::topology(&bench.window).expect("topology after retitle");
+        assert_eq!(before.active_tab, after.active_tab);
+        assert_eq!(
+            stable_layout(&before.tabs[0].root),
+            stable_layout(&after.tabs[0].root),
+            "retitle does not rebuild or move the layout"
+        );
+        assert_eq!(after.tabs[0].title, "Build 🧪");
+        assert_eq!(
+            Panes::at(&bench.window, &slot).map(|pane| pane.content),
+            Some(terminal.upcast::<gtk::Widget>()),
+            "the same live terminal process widget remains under the slot"
         );
     }
 
@@ -2820,7 +3562,7 @@ mod panes {
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
         let stale = slot.clone();
-        std::thread::spawn(move || sent.send(request.write(&stale, b"stale")).unwrap());
+        std::thread::spawn(move || sent.send(request.write(&stale, 0, 0, b"stale")).unwrap());
         loop {
             console.drain();
             if let Ok(answer) = received.try_recv() {
@@ -2866,6 +3608,7 @@ mod panes {
             sent.send(request.semantic_action(
                 &stale,
                 &hl_extension::PaneSemanticAction {
+                    generation: 0,
                     revision: 0,
                     node: 0,
                     action: hl_extension::SemanticActionKind::Invoke,
@@ -2901,7 +3644,7 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(move |provider| *selection.borrow_mut() = Some(provider)),
         );
@@ -2909,9 +3652,19 @@ mod panes {
         gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery.clone());
         let chrome = Panes::at(&bench.window, &slot).expect("pane chrome").widget;
+        let original_topology = Console::topology(&bench.window).expect("original topology");
 
         assert_eq!(gallery.providers()[0].title, "Postgres");
-        PaneChooser::provider(&bench.window, "postgres", "database");
+        Console::switch_occupant(
+            &bench.window,
+            &slot,
+            0,
+            &hl_extension::port::PaneOccupantTarget::Surface {
+                extension: "postgres".into(),
+                provider: "database".into(),
+            },
+        )
+        .expect("generation-safe provider switch");
         assert_eq!(
             Panes::at(&bench.window, &slot).expect("switched pane").occupant,
             Occupant::Surface
@@ -2940,12 +3693,23 @@ mod panes {
         let identity = pane.provider.as_ref().expect("surface provider identity");
         assert_eq!(identity.extension, "postgres");
         assert_eq!(identity.provider, "database");
+        assert!(
+            Console::switch_occupant(
+                &bench.window,
+                &slot,
+                0,
+                &hl_extension::port::PaneOccupantTarget::Terminal,
+            )
+            .is_err(),
+            "the displaced terminal cannot be restored with a stale generation"
+        );
 
         let chooser = super::descendants(&chrome)
             .into_iter()
             .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
             .expect("pane chooser");
         PaneChooser::populate(&bench.window, &chooser);
+        assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
             Some("Choose pane content; currently showing Postgres · postgres")
@@ -2970,8 +3734,13 @@ mod panes {
             }),
             "the popover has a compact minimum rather than forcing a wide pane"
         );
-
-        PaneChooser::terminal(&bench.window);
+        Console::switch_occupant(
+            &bench.window,
+            &slot,
+            generation,
+            &hl_extension::port::PaneOccupantTarget::Terminal,
+        )
+        .expect("restore retained terminal");
         let restored = Panes::at(&bench.window, &slot).expect("restored pane");
         assert_eq!(restored.occupant, Occupant::Terminal);
         assert_eq!(
@@ -2979,13 +3748,107 @@ mod panes {
             "the pane keeps one stable chrome across occupants"
         );
         assert_eq!(restored.content, terminal.upcast::<gtk::Widget>());
+        assert_eq!(
+            Console::topology(&bench.window).expect("restored topology"),
+            original_topology
+        );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+    }
+
+    pub(super) fn a_surface_pane_can_split_and_return_without_losing_its_identity() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        let generation = gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: Some("database-symbolic".to_owned()),
+            }],
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
+        Window::exhibit(&bench.window, gallery);
+        assert!(PaneChooser::provider_in(&bench.window, Some(&slot), "postgres", "database"));
+
+        SplitAction::focused(&bench.window, false);
+
+        let panes = Panes::all(&bench.window);
+        assert_eq!(panes.len(), 2, "the host split shortcut works while a surface owns focus");
+        let original = Panes::at(&bench.window, &slot).expect("original stable pane slot");
+        assert_eq!(original.occupant, Occupant::Surface, "splitting does not replace the provider");
+        let semantic = Window::gallery(&bench.window)
+            .expect("gallery")
+            .semantics("postgres", &slot)
+            .expect("surface semantic XML source remains live");
+        assert_eq!(semantic.root.label.as_deref(), Some("postgres"));
+        let new_shell = panes.iter().find(|pane| pane.slot != slot).expect("new split leaf");
+        assert_eq!(new_shell.occupant, Occupant::Terminal);
+
+        assert!(PaneChooser::terminal_in(&bench.window, Some(&slot)));
+        assert_eq!(Panes::at(&bench.window, &slot).expect("restored pane").occupant, Occupant::Terminal);
+        assert_eq!(Panes::all(&bench.window).len(), 2, "returning to terminal preserves the split layout");
+    }
+
+    pub(super) fn the_shipped_storybook_is_discoverable_as_a_pane_provider() {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join("extensions/storybook/extension.toml"),
+        )
+        .expect("shipped Storybook manifest");
+        let manifest = hl_extension::Manifest::parse(&document, hl_extension::PROTOCOL)
+            .expect("host accepts shipped Storybook manifest");
+        let provider = manifest
+            .pane_providers
+            .first()
+            .expect("Storybook pane provider")
+            .clone();
+
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let playground = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&playground);
+        let generation = gallery.enrol(
+            manifest.name.as_str(),
+            &playground,
+            &home,
+            std::slice::from_ref(&provider),
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, manifest.name.as_str());
+        gallery.ready(manifest.name.as_str(), generation);
+        Window::exhibit(&bench.window, gallery);
+
+        assert!(PaneChooser::provider_in(
+            &bench.window,
+            Some(&slot),
+            manifest.name.as_str(),
+            provider.id.as_str(),
+        ));
+        let pane = Panes::at(&bench.window, &slot).expect("selected Storybook pane");
+        assert_eq!(pane.occupant, Occupant::Surface);
+        assert!(
+            super::descendants(&pane.content)
+                .iter()
+                .any(|widget| widget == playground.upcast_ref::<gtk::Widget>()),
+            "the selected pane renders Storybook's playground interface"
+        );
     }
 
     pub(super) fn an_existing_pane_chooser_discovers_a_later_provider() {
         let bench = Bench::new();
         let chooser = PaneChooser::button(&bench.window);
-        assert_eq!(chooser.icon_name().as_deref(), Some("view-grid-symbolic"));
+        assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
         assert_eq!(
             chooser.tooltip_text().as_deref(),
             Some("Choose pane content; currently showing Terminal")
@@ -3022,7 +3885,7 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(|_| {}),
         );
@@ -3041,6 +3904,9 @@ mod panes {
         let bench = Bench::new();
         let (first, first_slot) = bench.shell();
         let (second, second_slot) = bench.beside(&first);
+        let host = bench.page.root().and_downcast::<gtk::Window>().expect("terminal window");
+        host.set_default_size(400, 600);
+        host.present();
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3052,13 +3918,14 @@ mod panes {
             &[hl_extension::PaneProvider {
                 id: ExtensionName::new("database").expect("provider id"),
                 title: "Postgres".to_owned(),
-                icon: None,
+                icon: Some("database-symbolic".to_owned()),
             }],
             Rc::new(|_| {}),
         );
         readable(&gallery, "postgres");
         gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
+        PaneFocus::wire(&bench.window, &first);
         assert!(Panes::focus(&bench.window, &first_slot));
         assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
 
@@ -3067,16 +3934,54 @@ mod panes {
             .into_iter()
             .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
             .expect("every split leaf owns a chooser");
+        assert!(until(|| chooser.is_mapped()), "split chooser is mapped in the real window");
         assert!(chooser.is_focusable(), "the chooser is keyboard reachable");
         PaneChooser::populate(&bench.window, &chooser);
-        let postgres = chooser
-            .popover()
+        assert!(chooser.grab_focus(), "the compact chooser accepts keyboard focus");
+        assert!(press_key(&chooser, gtk::gdk::Key::Down), "Down is consumed by the chooser controller");
+        assert!(
+            until(|| chooser.popover().is_some_and(|popover| popover.is_visible())),
+            "keyboard-opened chooser is visible before selection"
+        );
+        let provider_popover = chooser.popover().expect("keyboard-opened provider popover");
+        let popover_keys = provider_popover.observe_controllers();
+        (0..popover_keys.n_items())
+            .filter_map(|index| popover_keys.item(index))
+            .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .for_each(|controller| {
+                let _: bool = controller.emit_by_name(
+                    "key-pressed",
+                    &[&gtk::gdk::Key::Escape, &0_u32, &gtk::gdk::ModifierType::empty()],
+                );
+            });
+        assert!(until(|| !provider_popover.is_visible()), "Escape dismisses the keyboard-opened chooser");
+        assert!(
+            until(|| {
+                gtk::prelude::RootExt::focus(&host).is_some_and(|focus| {
+                    focus == chooser.clone().upcast::<gtk::Widget>()
+                        || super::descendants(chooser.upcast_ref()).contains(&focus)
+                })
+            }),
+            "Escape restores focus to the compact chooser"
+        );
+        assert!(
+            press_key(&chooser, gtk::gdk::Key::Down),
+            "Down reopens the chooser from restored focus"
+        );
+        assert!(
+            until(|| chooser.popover().is_some_and(|popover| popover.is_visible())),
+            "the chooser reopens after Escape"
+        );
+        let provider_popover = chooser.popover().expect("reopened provider popover");
+        let postgres = Some(provider_popover.clone())
             .into_iter()
             .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
             .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
             .find(|button| button.label().as_deref() == Some("Postgres"))
             .expect("provider choice");
         postgres.emit_clicked();
+        assert!(until(|| !provider_popover.is_visible()), "a successful provider selection dismisses the chooser");
+        assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
 
         assert_eq!(
             Panes::at(&bench.window, &first_slot)
@@ -3093,19 +3998,23 @@ mod panes {
             "the chooser replaces its own leaf"
         );
         assert!(
-            first.has_focus(),
+            until(|| first.has_focus()),
             "switching an adjacent pane preserves terminal keyboard focus"
         );
 
         PaneChooser::populate(&bench.window, &chooser);
-        let terminal = chooser
-            .popover()
+        let terminal_popover = chooser.popover().expect("terminal popover");
+        let terminal = Some(terminal_popover.clone())
             .into_iter()
             .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
             .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
             .find(|button| button.label().as_deref() == Some("Terminal"))
             .expect("terminal is always available");
+        terminal_popover.popup();
+        assert!(until(|| terminal_popover.is_visible()), "terminal choice is made from the open chooser");
         terminal.emit_clicked();
+        assert!(until(|| !terminal_popover.is_visible()), "returning to the terminal dismisses the chooser");
+        assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
         assert_eq!(
             Panes::at(&bench.window, &second_slot)
                 .expect("restored second pane")
@@ -3113,6 +4022,75 @@ mod panes {
             second.upcast::<gtk::Widget>(),
             "the displaced terminal identity is restored"
         );
+        host.close();
+    }
+
+    pub(super) fn a_stale_open_chooser_cannot_select_a_replaced_provider() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let pane = Panes::at(&bench.window, &slot).expect("terminal pane");
+        let chooser = super::descendants(&pane.widget)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("pane chooser");
+        let gallery = Gallery::new();
+        Window::exhibit(&bench.window, gallery.clone());
+        let provider = hl_extension::PaneProvider {
+            id: ExtensionName::new("database").expect("provider id"),
+            title: "Postgres".to_owned(),
+            icon: None,
+        };
+        let old_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let old = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        old_home.append(&old);
+        let old_generation = gallery.enrol(
+            "postgres",
+            &old,
+            &old_home,
+            std::slice::from_ref(&provider),
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", old_generation);
+        PaneChooser::populate(&bench.window, &chooser);
+        let stale = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("old-generation provider choice");
+
+        let selected = Rc::new(std::cell::Cell::new(0));
+        let counted = Rc::clone(&selected);
+        let new_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let new = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        new_home.append(&new);
+        let new_generation = gallery.enrol(
+            "postgres",
+            &new,
+            &new_home,
+            std::slice::from_ref(&provider),
+            Rc::new(move |_| counted.set(counted.get() + 1)),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", new_generation);
+
+        stale.emit_clicked();
+        assert_eq!(selected.get(), 0, "an old popover cannot command the replacement");
+        assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Terminal);
+
+        PaneChooser::populate(&bench.window, &chooser);
+        let current = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("replacement provider choice");
+        current.emit_clicked();
+        assert_eq!(selected.get(), 1);
+        assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Surface);
     }
 
     pub(super) fn pane_chooser_groups_and_filters_many_extension_views() {
@@ -3160,6 +4138,18 @@ mod panes {
             .collect();
         assert!(labels.contains(&"database-tools".to_owned()));
         assert!(labels.contains(&"workspace-tools".to_owned()));
+        for heading in ["Pane content", "database-tools", "workspace-tools"] {
+            let label = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .find(|label| label.text() == heading)
+                .unwrap_or_else(|| panic!("missing chooser heading {heading:?}"));
+            assert_eq!(
+                label.accessible_role(),
+                gtk::AccessibleRole::Heading,
+                "the visual chooser heading {heading:?} must support assistive navigation"
+            );
+        }
         let search = widgets
             .iter()
             .find_map(|widget| widget.downcast_ref::<gtk::SearchEntry>())
@@ -3233,7 +4223,7 @@ mod panes {
             withdrawn.withdraw(name.as_str());
         });
         let surfaces: Surfaces = Rc::new(|_| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
-        let shelf = Shelf::with_lifecycle(&fixture.view, &fixture.roster, surfaces, Rc::new(|_| {}), withdraw);
+        let shelf = Shelf::with_lifecycle(&fixture.view, &fixture.roster, surfaces, withdraw);
         let name = ExtensionName::new("postgres").expect("extension name");
         if remove {
             fixture.roster.borrow_mut().remove(&name).expect("removed");

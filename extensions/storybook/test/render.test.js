@@ -5,13 +5,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground, Preview, interactionDetail, interactionProps } from '../src/app.js';
-import { tags } from '../src/catalogue.js';
+import {
+  FLOW_STORIES,
+  Playground,
+  Preview,
+  SEARCH_RESULT_LIMIT,
+  interactionDetail,
+  interactionProps,
+  searchResults,
+} from '../src/app.js';
+import { grouped, tags } from '../src/catalogue.js';
 import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from '../src/form.js';
 import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
+import { QUERY_PLAN_MODES, QueryPlanStory, filterQueryPlan, queryPlan } from '../src/query-plan.js';
 
 import { host } from './host.js';
 
@@ -60,7 +69,7 @@ test('every component renders with its defaults as sane patches', () => {
   }
 });
 
-test('the playground renders one frame holding the three panes', () => {
+test('the playground renders flows and only one bounded component family', () => {
   const stage = host();
   const frame = stage.render(h(Playground));
   const built = created(frame.patches).map((entry) => entry.tag);
@@ -68,11 +77,90 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 20,
-    'every component and all end-user flows are listed',
+    FLOW_STORIES.length + grouped().find((family) => family.name === 'buttons').tags.length,
+    'flows and the active family are listed',
   );
+  assert.ok(built.filter((tag) => tag === 'ListItemButton').length < tags.length / 2);
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+test('global navigation finds an unknown-family component without materializing the catalogue', () => {
+  const families = grouped();
+  const broad = searchResults(families, 'a');
+  assert.equal(broad.length, SEARCH_RESULT_LIMIT, 'global results have no hard rendering bound');
+  assert.ok(searchResults(families, 'datatable').some((result) => result.name === 'DataTable'));
+
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const search = first.patches.find((patch) => patch.SetProp?.prop === 'Placeholder'
+    && patch.SetProp.value.Text === 'Search flows and components')?.SetProp.id;
+  assert.ok(search, 'global navigation is not discoverable before the long flow list');
+  const beforeSearch = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: search, id: `${search}:Change`, value: 'DataTable' }));
+  const matches = stage.since(beforeSearch);
+  const dataTable = node(matches, 'ListItemButton', 'DataTable');
+  assert.ok(dataTable, 'search still requires knowing the component family');
+  assert.ok(!node(matches, 'ListItemButton', FLOW_STORIES[0]), 'search retained the unrelated flow catalogue');
+
+  const beforeSelect = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: dataTable, id: `${dataTable}:Invoke` }));
+  assert.ok(node(stage.since(beforeSelect), 'Heading', 'Data Table'));
+});
+
+function labels(patches, tag) {
+  const ids = new Set(created(patches).filter((entry) => entry.tag === tag).map((entry) => entry.id));
+  return patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && ids.has(patch.SetProp.id))
+    .map((patch) => patch.SetProp.value.Text);
+}
+
+function setsText(patches, prop, text) {
+  return patches.some((patch) => patch.SetProp?.prop === prop && patch.SetProp.value.Text === text);
+}
+
+test('query plan filters retain matching operators and every ancestor, but no unrelated sibling', () => {
+  const hot = filterQueryPlan(queryPlan, 'hotspot');
+  assert.equal(hot.id, 'root');
+  assert.deepEqual(hot.children.map((child) => child.id), ['join']);
+  assert.deepEqual(hot.children[0].children.map((child) => child.id), ['orders-hash']);
+  assert.deepEqual(hot.children[0].children[0].children.map((child) => child.id), ['orders']);
+  const mismatch = filterQueryPlan(queryPlan, 'mismatch');
+  assert.equal(mismatch.id, 'root');
+  assert.deepEqual(mismatch.children.map((child) => child.id), ['preferences']);
+  assert.equal(filterQueryPlan(queryPlan, 'full').children.length, 2);
+});
+
+test('query plan callbacks switch among full, hotspot, and mismatch projections', () => {
+  const stage = host();
+  const first = stage.render(h(QueryPlanStory));
+  assert.equal(labels(first.patches, 'QueryPlanNode').length, 6);
+  const all = stage.frames.flatMap((frame) => frame.patches);
+  const hotspot = node(all, 'Button', QUERY_PLAN_MODES.hotspot);
+  const mismatch = node(all, 'Button', QUERY_PLAN_MODES.mismatch);
+  const full = node(all, 'Button', QUERY_PLAN_MODES.full);
+  assert.ok(hotspot && mismatch && full, 'the three projections are not independently selectable');
+
+  let before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: hotspot, id: `${hotspot}:Invoke`, value: null }));
+  let patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing hotspots with their ancestor paths.'));
+  assert.ok(setsText(patches, 'Label', '4 plan operators'));
+  assert.ok(patches.some((patch) => 'Remove' in patch), 'hotspot filtering retained unrelated siblings');
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: mismatch, id: `${mismatch}:Invoke`, value: null }));
+  patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing estimate mismatches with their ancestor paths.'));
+  assert.ok(setsText(patches, 'Label', '2 plan operators'));
+  assert.deepEqual(labels(patches, 'QueryPlanNode'), ['subquery_scan · Preference summary']);
+
+  before = stage.frames.length;
+  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: full, id: `${full}:Invoke`, value: null }));
+  patches = stage.since(before);
+  assert.ok(setsText(patches, 'Label', 'Showing the complete captured plan.'));
+  assert.ok(setsText(patches, 'Label', '6 plan operators'));
+  assert.equal(labels(patches, 'QueryPlanNode').length, 4, 'the four filtered operators were not restored');
 });
 
 test('keyboard accessibility story validates, confirms separately, and bounds focus history', () => {
@@ -129,12 +217,12 @@ test('the form story validates submit, recovers on change, and confirms success'
   let before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }));
   let patches = stage.since(before);
-  assert.ok(node(patches, 'ValidationSummary', 'Fix the highlighted field before saving.'));
+  assert.ok(node(patches, 'ValidationSummary', 'Fix workspace name.'));
   const review = node(patches, 'Button', 'Review workspace name');
   assert.ok(review, 'validation summary has no corrective action');
   const beforeReview = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke` });
-  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Workspace name is ready for correction.'));
+  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Ready to correct.'));
   assert.ok(
     patches.some((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Tone' && patch.SetProp.value.Tone === 'Danger'),
     'invalid submission does not mark the field or feedback as dangerous',
@@ -180,17 +268,26 @@ test('the validated form is selectable as a canonical end-user flow', () => {
   assert.ok(node(patches, 'Heading', 'Workspace defaults'), 'selecting the form flow does not render it');
 });
 
-test('the acquisition flow renders every semantic progress state and only its supported actions', () => {
+test('the acquisition flow selects every semantic progress state without materializing them together', () => {
   const stage = host();
   const first = stage.render(h(Playground));
   const item = node(first.patches, 'ListItemButton', ACQUISITION_STORY);
   assert.ok(item, 'the sidebar has no acquisition flow');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
-  const patches = stage.since(before);
-  for (const state of acquisitionStates) {
-    assert.ok(node(patches, 'CardHeader', state.title), `${state.key} is absent`);
-    assert.ok(node(patches, 'InlineMessage', state.status), `${state.key} has no semantic status`);
+  const initial = stage.since(before);
+  const select = created(initial).find((entry) => entry.tag === 'Select')?.id;
+  assert.ok(select, 'the lifecycle state selector is absent');
+  const patches = [...initial];
+  for (const [index, state] of acquisitionStates.entries()) {
+    const start = stage.frames.length;
+    if (index !== 0) {
+      assert.ok(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: state.key }));
+      patches.push(...stage.since(start));
+    }
+    const visible = index === 0 ? initial : stage.since(start);
+    assert.ok(node(visible, 'CardHeader', state.title), `${state.key} is absent`);
+    assert.ok(node(visible, 'InlineMessage', state.status), `${state.key} has no semantic status`);
   }
   for (const action of ['Cancel download', 'Retry', 'Install', 'Cancel']) {
     assert.ok(node(patches, 'Button', action), `${action} is not demonstrated`);
@@ -283,7 +380,9 @@ test('the interaction console preserves a bounded sequence and can be cleared', 
 test('selecting a component in the sidebar renders that component', () => {
   const stage = host();
   const first = stage.render(h(Playground));
-  const item = node(first.patches, 'ListItemButton', 'Chip');
+  const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'display' });
+  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Chip');
   assert.ok(item, 'the sidebar has no row for <Chip>');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
@@ -297,7 +396,9 @@ test('selecting a component in the sidebar renders that component', () => {
 test('the inspector follows the selected component contract and shows its interactions', () => {
   const stage = host();
   const first = stage.render(h(Playground));
-  const item = node(first.patches, 'ListItemButton', 'Switch');
+  const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'forms' });
+  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Switch');
   assert.ok(item, 'the sidebar has no row for <Switch>');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
@@ -305,6 +406,35 @@ test('the inspector follows the selected component contract and shows its intera
   assert.ok(node(patches, 'Text', 'checked'), '<Switch> does not expose its checked property');
   assert.ok(node(patches, 'Text', 'onToggle'), '<Switch> does not expose its Toggle interaction');
   assert.equal(node(patches, 'Text', 'label'), null, '<Switch> exposes Button-only label editing');
+});
+
+test('family navigation reaches every catalogue component without simultaneous materialization', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  const seen = new Set();
+  for (const family of grouped()) {
+    stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: family.name });
+    const labels = stage.frames.at(-1).patches.filter((patch) => patch.SetProp?.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text);
+    for (const tag of family.tags) assert.ok(labels.includes(tag.name), `${family.name} omits ${tag.name}`);
+    family.tags.forEach((tag) => seen.add(tag.name));
+  }
+  assert.deepEqual([...seen].sort(), tags.map((tag) => tag.name).sort());
+});
+
+test('global search input is bounded and keeps the selected story visible', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  const search = created(first.patches).find((entry) => entry.tag === 'Entry').id;
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: 'content' }));
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: search, id: `${search}:Change`, value: `Log${'x'.repeat(100)}` }));
+  const values = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    patch.SetProp?.id === search && patch.SetProp.prop === 'Value');
+  assert.equal(values.at(-1).SetProp.value.Text.length, 80);
+  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Heading', 'Button'), 'active preview disappears while browsing');
+  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Text', 'No flows or components match this search.'));
 });
 
 test('the inspector exposes only the genuine extended interactions', () => {

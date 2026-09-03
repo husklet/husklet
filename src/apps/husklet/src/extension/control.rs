@@ -38,7 +38,7 @@ impl ContainerLifecycle {
             endpoints_config: EndpointsConfig([(network.clone(), EndpointConfig::default())].into_iter().collect()),
         });
         CreateContainer {
-            image: spec.image.clone(), labels: spec.labels.iter().cloned().collect(),
+            image: spec.image.clone(), hostname: spec.hostname.clone(), labels: spec.labels.iter().cloned().collect(),
             entrypoint: spec.entrypoint.clone(), cmd: (!spec.command.is_empty()).then(|| spec.command.clone()),
             env: (!spec.environment.is_empty()).then(|| spec.environment.iter()
                 .map(|(name, value)| format!("{name}={value}")).collect()),
@@ -70,7 +70,7 @@ impl ContainerControl for ContainerLifecycle {
     /// for a name already taken, and a failure otherwise.
     fn create(&self, image: &str, name: &str) -> Result<String, HostError> {
         self.create_spec(&ContainerCreateSpec {
-            image: image.to_owned(), name: name.to_owned(), entrypoint: None, command: Vec::new(),
+            image: image.to_owned(), name: name.to_owned(), hostname: None, entrypoint: None, command: Vec::new(),
             environment: Vec::new(), working_directory: None, user: None, labels: Vec::new(),
             mounts: Vec::new(), network: None, ports: Vec::new(), memory_mb: None, cpus: None,
             pids_limit: None,
@@ -141,6 +141,13 @@ impl ContainerControl for ContainerLifecycle {
             .map_err(|error| failure(&error))
     }
 
+    fn rename(&self, id: &str, name: &str) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge
+            .wait(client.containers().rename(id, name))
+            .map_err(|error| failure(&error))
+    }
+
     fn kill(&self, id: &str, signal: &str) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
@@ -191,13 +198,13 @@ impl ContainerControl for ContainerLifecycle {
 
 #[cfg(test)]
 mod tests {
-    use hl_extension::port::{ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
+    use hl_extension::port::{ContainerControl as _, ContainerCreateSpec, ContainerPort, ContainerVolumeMount};
     use super::ContainerLifecycle;
 
     #[test]
     fn configured_creation_maps_only_supported_native_authority() {
         let request = ContainerLifecycle::creation(&ContainerCreateSpec {
-            image: "alpine:3.20".into(), name: "worker".into(), entrypoint: Some(vec!["/init".into()]),
+            image: "alpine:3.20".into(), name: "worker".into(), hostname: Some("worker.internal".into()), entrypoint: Some(vec!["/init".into()]),
             command: vec!["serve".into()], environment: vec![("MODE".into(), "agent".into())],
             working_directory: Some("/work".into()), user: Some("1000".into()),
             labels: vec![("owner".into(), "agent".into())],
@@ -207,6 +214,7 @@ mod tests {
             memory_mb: Some(512), cpus: Some(2), pids_limit: Some(128),
         });
         assert_eq!(request.image, "alpine:3.20");
+        assert_eq!(request.hostname.as_deref(), Some("worker.internal"));
         assert_eq!(request.entrypoint.as_deref(), Some(["/init".into()].as_slice()));
         assert_eq!(request.cmd.as_deref(), Some(["serve".into()].as_slice()));
         assert_eq!(request.env.as_deref(), Some(["MODE=agent".into()].as_slice()));
@@ -224,5 +232,33 @@ mod tests {
         assert_eq!((binding[0].host_ip.as_str(), binding[0].host_port.as_str()), ("127.0.0.1", "18080"));
         assert!(request.exposed_ports.0.contains_key("8080/tcp"));
         assert!(request.networking_config.expect("network").endpoints_config.0.contains_key("private"));
+    }
+
+    #[test]
+    fn rename_delegates_the_exact_immutable_identity_and_name_to_the_daemon() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::sync::Arc;
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let serving = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 { break; }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let lifecycle = ContainerLifecycle::new(Arc::new(super::super::Bridge::new(socket).unwrap()));
+        let id = "a".repeat(64);
+        lifecycle.rename(&id, "worker_2.prod").unwrap();
+        let request = serving.join().unwrap();
+        assert!(request.starts_with(&format!("POST /v1.43/containers/{id}/rename?name=worker%5F2%2Eprod HTTP/1.1\r\n")), "{request}");
     }
 }

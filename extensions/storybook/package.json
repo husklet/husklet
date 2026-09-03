@@ -1,6 +1,7 @@
 {
   "name": "@husklet/storybook",
   "version": "0.1.0",
+  "private": true,
   "description": "A component playground: browse the library, render it, edit its properties.",
   "license": "MIT",
   "type": "module",

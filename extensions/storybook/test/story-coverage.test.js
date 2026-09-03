@@ -25,6 +25,16 @@ import { DisassemblyInspectionStory, boundedInstructions, INSTRUCTION_LIMIT } fr
 import { TimelineInspectionStory, boundedEvents, TIMELINE_LIMIT } from '../src/timeline-inspection.js';
 import { TestReportStory, boundedCases, CASE_LIMIT, FAILURE_LIMIT } from '../src/test-report.js';
 import { CoverageInspectionStory, boundedCoverage, COVERAGE_LIMIT, SOURCE_LIMIT } from '../src/coverage-inspection.js';
+import { NetworkWaterfallStory, boundedRequests, REQUEST_LIMIT, PHASE_LIMIT } from '../src/network-waterfall.js';
+import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependency-graph.js';
+import { JsonTreeStory } from '../src/json-tree.js';
+import { ConfirmationStory } from '../src/confirmation.js';
+import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
+import { WorkspaceLayoutStory, boundedPanes, retainEvents, EVENT_LIMIT, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
+import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
+import { WorkspaceFileEditStory, boundedFiles, FILE_LIMIT, PATH_LIMIT, CONTENT_LIMIT } from '../src/workspace-file-edit.js';
+import { ImagePullStory, boundedPull, LAYER_LIMIT, REFERENCE_LIMIT, STATUS_LIMIT } from '../src/image-pull.js';
+import { ResourceStateStory } from '../src/resource-state.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -55,6 +65,14 @@ test('every catalogue contract has a meaningful selectable state and family cove
 
 test('every composed story has a readable root and a bounded initial wire frame', () => {
   const stories = [
+    ['safe destructive confirmation', h(ConfirmationStory)],
+    ['container operations', h(ContainerOperationsStory)],
+    ['workspace layout', h(WorkspaceLayoutStory)],
+    ['extension lifecycle', h(ExtensionLifecycleStory)],
+    ['workspace file edit', h(WorkspaceFileEditStory)],
+    ['image pull', h(ImagePullStory)],
+    ['container inventory states', h(ResourceStateStory)],
+    ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
     ['keyboard accessibility', h(KeyboardAccessibilityStory)],
@@ -76,6 +94,8 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['timeline view', h(TimelineInspectionStory)],
     ['test report', h(TestReportStory)],
     ['coverage inspection', h(CoverageInspectionStory)],
+    ['network waterfall', h(NetworkWaterfallStory)],
+    ['dependency graph', h(DependencyGraphStory)],
   ];
   for (const [name, story] of stories) {
     const frame = host().render(story);
@@ -85,6 +105,166 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('container inventory story traverses failure, retry, empty, and ready states', () => {
+  const stage = host();
+  const initial = stage.render(h(ResourceStateStory));
+  const error = node(initial.patches, 'Button', 'error');
+  assert(error);
+  let before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: error, id: `${error}:Invoke` }));
+  let changed = stage.since(before);
+  assert(node(changed, 'Button', 'Retry inventory'));
+
+  const retry = node(changed, 'Button', 'Retry inventory');
+  before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: retry, id: `${retry}:Invoke` }));
+  changed = stage.since(before);
+  assert(changed.some((patch) => patch.Create?.tag === 'Progress'));
+
+  const all = stage.frames.flatMap((frame) => frame.patches);
+  const ready = node(all, 'Button', 'ready');
+  before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: ready, id: `${ready}:Invoke` }));
+  changed = stage.since(before);
+  assert(node(changed, 'ListItemText', 'api · running'));
+  assert(changed.length <= 64);
+});
+
+test('container operations bounds and sanitizes every host-sized projection', () => {
+  const containers = Array.from({ length: CONTAINER_LIMIT + 3 }, (_, index) => ({
+    id: `immutable-${index}`, name: `container-${index}\nunsafe`, image: 'x'.repeat(140), state: 'invented',
+    logs: 'l'.repeat(LOG_LIMIT + 20),
+    processes: Array.from({ length: PROCESS_LIMIT + 4 }, (_, pid) => ({ pid, user: 'user', command: 'c'.repeat(200) })),
+  }));
+  const bounded = boundedContainers(containers);
+  assert.equal(bounded.length, CONTAINER_LIMIT);
+  assert.equal(bounded[0].processes.length, PROCESS_LIMIT);
+  assert.equal(bounded[0].logs.length, LOG_LIMIT);
+  assert.equal(bounded[0].state, 'unknown');
+  assert(!bounded[0].name.includes('\n'));
+  assert.equal(bounded[0].processes[0].command.length, 160);
+});
+
+test('workspace layout bounds slots and interactively splits by stable identity', () => {
+  const source = Array.from({ length: PANE_LIMIT + 4 }, (_, index) => ({
+    slot: `pane-${index}`, title: `title-${index}\n${'x'.repeat(TITLE_LIMIT)}`, occupant: 'invented',
+  }));
+  const bounded = boundedPanes(source);
+  assert.equal(bounded.length, PANE_LIMIT);
+  assert.equal(bounded[0].occupant, 'empty');
+  assert.equal(bounded[0].title.length, TITLE_LIMIT);
+  assert(!bounded[0].title.includes('\n'));
+  assert.equal(retainEvents(Array.from({ length: 9 }, (_, index) => String(index)), 'latest').length, EVENT_LIMIT);
+
+  const stage = host();
+  const first = stage.render(h(WorkspaceLayoutStory));
+  const split = node(first.patches, 'Button', 'Split below');
+  const chooser = node(first.patches, 'Button', 'Open pane chooser');
+  const focus = node(first.patches, 'Button', 'Focus selected pane');
+  assert(split);
+  assert(chooser && focus, 'chooser and keyboard focus controls are visible');
+  assert(first.patches.some((patch) => patch.SetProp?.value?.Text === 'nested horizontal split'));
+  assert(first.patches.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  let before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: chooser, id: `${chooser}:Invoke` }));
+  let changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: split, id: `${split}:Invoke` }));
+  changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.prop === 'Orientation'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Split pane-terminal-1 below into pane-new-4.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'pane-new-4 · terminal'));
+});
+
+test('extension lifecycle bounds authority and controls the selected immutable generation', () => {
+  const source = Array.from({ length: EXTENSION_LIMIT + 3 }, (_, index) => ({
+    name: `extension-${index}`, version: 'v'.repeat(FIELD_LIMIT + 10), digest: `sha256:generation-${index}`,
+    status: 'invented', grants: Array.from({ length: GRANT_LIMIT + 4 }, (_, grant) => `grant-${grant}`),
+  }));
+  const bounded = boundedExtensions(source);
+  assert.equal(bounded.length, EXTENSION_LIMIT);
+  assert.equal(bounded[0].grants.length, GRANT_LIMIT);
+  assert.equal(bounded[0].version.length, FIELD_LIMIT);
+  assert.equal(bounded[0].status, 'failed');
+
+  const stage = host();
+  const first = stage.render(h(ExtensionLifecycleStory));
+  const stop = node(first.patches, 'Button', 'Stop extension');
+  assert(stop);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: stop, id: `${stop}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Start extension'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped workspace-manager at sha256:manager-generation-14.'));
+});
+
+test('workspace file review independently bounds paths, content, and interactive writes', () => {
+  const source = Array.from({ length: FILE_LIMIT + 3 }, (_, index) => ({
+    path: index === 1 ? '../escape' : `src/${'p'.repeat(PATH_LIMIT)}-${index}.js`,
+    content: 'x'.repeat(CONTENT_LIMIT + 20),
+  }));
+  const bounded = boundedFiles(source);
+  assert.equal(bounded.length, FILE_LIMIT - 1);
+  assert.equal(bounded[0].path.length, PATH_LIMIT);
+  assert.equal(bounded[0].content.length, CONTENT_LIMIT);
+  assert(!bounded.some(({ path }) => path.includes('..')));
+
+  const stage = host();
+  const first = stage.render(h(WorkspaceFileEditStory));
+  const rename = node(first.patches, 'Button', 'Rename for review');
+  assert(rename);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: rename, id: `${rename}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Renamed src/server.js to src/server.review.js.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text?.startsWith('src/server.review.js · ')));
+});
+
+test('image pull independently bounds progress, target, digest, error, and cancellation', () => {
+  const pull = boundedPull({
+    job: '42', reference: 'r'.repeat(REFERENCE_LIMIT + 9), platform: 'linux/s390x', state: 'invented',
+    digest: 'sha256:short', error: `failure\n${'e'.repeat(STATUS_LIMIT + 9)}`,
+    layers: Array.from({ length: LAYER_LIMIT + 4 }, (_, index) => ({ id: `layer-${index}`, current: 20, total: 10 })),
+  });
+  assert.equal(pull.layers.length, LAYER_LIMIT);
+  assert.equal(pull.layers[0].current, 10);
+  assert.equal(pull.reference.length, REFERENCE_LIMIT);
+  assert.equal(pull.platform, 'linux/amd64');
+  assert.equal(pull.state, 'failed');
+  assert.equal(pull.digest, '');
+  assert.equal(pull.error.length, STATUS_LIMIT);
+  assert(!pull.error.includes('\n'));
+
+  const stage = host();
+  const first = stage.render(h(ImagePullStory));
+  const cancel = node(first.patches, 'Button', 'Cancel pull');
+  assert(cancel);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: cancel, id: `${cancel}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Retry pull'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Cancelled image-pull job 42; the existing local image is unchanged.'));
+  assert(!changed.some((patch) => patch.SetProp?.value?.Text?.startsWith('sha256:')));
+});
+test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
+
+test('network waterfall validates, caps, sanitizes, and exposes typed hierarchy', () => {
+  const phases = Array.from({length: PHASE_LIMIT}, (_, i) => ({kind:'wait',offsetUs:i*2,durationUs:2}));
+  const requests = Array.from({length: REQUEST_LIMIT + 3}, (_, i) => ({method:'GET',url:`https://example.test/${i}\nunsafe`,startUs:0,durationUs:20,status:200,bytes:1,detail:'ok\t',phases}));
+  requests.push({...requests[0], method:'TRACE'}); requests.push({...requests[0], phases:[{kind:'wait',offsetUs:4,durationUs:4},{kind:'dns',offsetUs:2,durationUs:3}]});
+  const bounded = boundedRequests(requests, 90); assert.equal(bounded.requests.length, REQUEST_LIMIT); assert.equal(bounded.total, 90);
+  const frame = host().render(h(NetworkWaterfallStory));
+  assert.equal(frame.patches.filter((p) => p.Create?.tag === 'NetworkRequest').length, 3);
+  assert(frame.patches.some((p) => p.Create?.tag === 'NetworkPhase'));
+  assert(!frame.patches.some((p) => p.SetProp?.value?.Text?.includes('\nunsafe')));
+  const stage = host(); const initial = stage.render(h(NetworkWaterfallStory));
+  const filter = node(initial.patches, 'Button', 'Show failures only'); assert(filter);
+  const before = stage.frames.length; assert(stage.surface.dispatch({ trigger:'Invoke', node:filter, id:`${filter}:Invoke` }));
+  const changed = stage.since(before); assert(changed.some((p) => p.SetProp?.prop === 'Label' && p.SetProp.value.Text === 'Show all requests'));
+  assert(changed.some((p) => p.Remove), 'filtering must remove successful requests');
 });
 
 test('coverage inspection bounds rows and source independently with visible truncation', () => {

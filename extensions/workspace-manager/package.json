@@ -1,6 +1,7 @@
 {
   "name": "@husklet/workspace-manager",
   "version": "0.1.0",
+  "private": true,
   "description": "First-party workspace resources and container operations for Husklet.",
   "license": "MIT",
   "type": "module",

@@ -25,8 +25,10 @@ pub(crate) struct Form {
     pub(crate) cursor_blink: gtk::Switch,
     pub(crate) features: WorkspaceFeatureFields,
     pub(crate) env_box: gtk::Box,
+    pub(crate) env_add: gtk::Button,
     pub(crate) env_rows: RefCell<Vec<(gtk::Entry, gtk::Entry)>>,
     pub(crate) mount_box: gtk::Box,
+    pub(crate) mount_add: gtk::Button,
     pub(crate) mount_rows: RefCell<Vec<(gtk::Entry, gtk::Entry, gtk::CheckButton)>>,
 }
 
@@ -53,6 +55,7 @@ impl Form {
             (CreatePage::Docker, form.docker()),
             (CreatePage::Network, form.network()),
         ]);
+        form.bind_creation_requirements(&view.create);
         window.set_default_widget(Some(&view.create));
 
         {
@@ -114,6 +117,26 @@ impl Form {
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "newws");
     }
+
+    /// Keeps the primary creation action truthful while required values are
+    /// being edited. Submission validates again because callbacks may still be
+    /// invoked programmatically and the rest of the form has richer rules.
+    fn bind_creation_requirements(&self, create: &gtk::Button) {
+        let update = {
+            let name = self.name.clone();
+            let image = self.image.clone();
+            let create = create.clone();
+            move || {
+                create.set_sensitive(!name.text().trim().is_empty() && !image.text().trim().is_empty());
+            }
+        };
+        update();
+        {
+            let update = update.clone();
+            self.name.connect_changed(move |_| update());
+        }
+        self.image.connect_changed(move |_| update());
+    }
 }
 
 fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> std::io::Result<()> {
@@ -155,11 +178,11 @@ impl Form {
         ];
         cursor_buttons[1].set_group(Some(&cursor_buttons[0]));
         cursor_buttons[2].set_group(Some(&cursor_buttons[0]));
-        for (button, shape) in cursor_buttons.iter().zip([
-            CursorShape::Block,
-            CursorShape::Beam,
-            CursorShape::Underline,
-        ]) {
+        for (button, shape) in
+            cursor_buttons
+                .iter()
+                .zip([CursorShape::Block, CursorShape::Beam, CursorShape::Underline])
+        {
             button.set_active(terminal.cursor_shape == shape);
             ToggleValue::cursor(button, cursor.clone(), shape);
         }
@@ -181,8 +204,10 @@ impl Form {
             cursor_blink,
             features: WorkspaceFeatureFields::new(),
             env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            env_add: gtk::Button::with_label("+ Add variable"),
             env_rows: RefCell::new(Vec::new()),
             mount_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            mount_add: gtk::Button::with_label("+ Add mount"),
             mount_rows: RefCell::new(Vec::new()),
         }
     }
@@ -345,12 +370,12 @@ impl Form {
         let form = self;
         let p = Panel::new("Environment").into_widget();
         p.append(&form.env_box);
-        let add = gtk::Button::with_label("+ Add variable");
+        let add = &form.env_add;
         add.add_css_class("addrow");
         add.set_halign(gtk::Align::Start);
         let form2 = form.clone();
         add.connect_clicked(move |_| form2.add_environment());
-        p.append(&add);
+        p.append(add);
         p
     }
 
@@ -358,12 +383,12 @@ impl Form {
         let form = self;
         let p = Panel::new("Mounts").into_widget();
         p.append(&form.mount_box);
-        let add = gtk::Button::with_label("+ Add mount");
+        let add = &form.mount_add;
         add.add_css_class("addrow");
         add.set_halign(gtk::Align::Start);
         let form2 = form.clone();
         add.connect_clicked(move |_| form2.add_mount());
-        p.append(&add);
+        p.append(add);
         p
     }
 }
@@ -521,5 +546,25 @@ mod create_tests {
         create_workspace(&mut store, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64)).unwrap();
 
         assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+    }
+
+    #[test]
+    fn creation_action_tracks_both_required_fields() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let form = Form::new();
+            let create = gtk::Button::with_label("Create workspace");
+            form.bind_creation_requirements(&create);
+
+            assert!(!create.is_sensitive());
+            form.name.set_text("demo");
+            assert!(!create.is_sensitive());
+            form.image.set_text("alpine:3.20");
+            assert!(create.is_sensitive());
+            form.name.set_text("   ");
+            assert!(!create.is_sensitive());
+        });
+        if !ran {
+            eprintln!("skipped: no display connection, so creation sensitivity cannot be rendered");
+        }
     }
 }

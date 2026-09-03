@@ -67,7 +67,7 @@ jobs:
           --ignored --exact native_shared_library_is_reproducible_across_out_directories
 
   react-package:
-    name: Publish @husklet/react and @husklet/mcp
+    name: Publish @husklet/client and @husklet/react
     needs: [smoke, native-linux-reproducibility]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -113,20 +113,26 @@ jobs:
       - name: Install an OIDC-capable npm CLI
         run: npm install --global npm@11.6.2
 
+      - name: Test client and React packages
+        run: npm test --workspace @husklet/client
+
       - name: Test React source and packed-package consumer
         run: npm test --workspace @husklet/react
-
-      - name: Test MCP source and packed strict consumer
-        run: npm test --workspace @husklet/mcp
 
       - name: Bind both packages independently to the release version
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
-          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/mcp
-          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --workspace @husklet/mcp
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix client/examples/starter
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix react/examples/starter
+          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix react/examples/starter
+          sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" react/examples/starter/Dockerfile
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" client/examples/starter/extension.toml
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" react/examples/starter/extension.toml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
@@ -135,32 +141,50 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
+          import client from './client/package.json' with { type: 'json' };
+          import clientStarter from './client/examples/starter/package.json' with { type: 'json' };
           import react from './react/package.json' with { type: 'json' };
-          import mcp from './mcp/package.json' with { type: 'json' };
+          import starter from './react/examples/starter/package.json' with { type: 'json' };
           const expected = process.env.RELEASE_VERSION;
           for (const [name, actual] of [
+            ['@husklet/client', client.version],
+            ['client starter dependency on @husklet/client', clientStarter.dependencies['@husklet/client']],
             ['@husklet/react', react.version],
-            ['@husklet/mcp', mcp.version],
-            ['@husklet/mcp dependency on @husklet/react', mcp.dependencies['@husklet/react']],
+            ['@husklet/react dependency on @husklet/client', react.dependencies['@husklet/client']],
+            ['starter dependency on @husklet/client', starter.dependencies['@husklet/client']],
+            ['starter dependency on @husklet/react', starter.dependencies['@husklet/react']],
           ]) {
             if (actual !== expected) throw new Error(`${name} is ${actual}, expected ${expected}`);
           }
           NODE
+          npm run pack:check --workspace @husklet/client
           npm run pack:check --workspace @husklet/react
-          npm test --workspace @husklet/mcp
+          npm pack --dry-run --ignore-scripts --workspace @husklet/client
           npm pack --dry-run --ignore-scripts --workspace @husklet/react
-          npm pack --dry-run --ignore-scripts --workspace @husklet/mcp
 
       - name: Install and import the exact release tarball pair
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm run prepublish:check
 
+      - name: Refuse mismatched duplicates and make partial publication retryable
+        id: publication
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: node tools/publication-plan.js
+
+      - name: Publish client with npm trusted publishing
+        if: steps.publication.outputs.client == 'true'
+        run: npm publish --workspace @husklet/client --access public --provenance
+
       - name: Publish React with npm trusted publishing
+        if: steps.publication.outputs.react == 'true'
         run: npm publish --workspace @husklet/react --access public --provenance
 
-      - name: Publish MCP with npm trusted publishing
-        run: npm publish --workspace @husklet/mcp --access public --provenance
+      - name: Install and import the published package pair from npm
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run postpublish:check
 
   react-extension-base:
     name: Publish React extension base / multi-architecture
@@ -220,14 +244,14 @@ jobs:
               --tag "$image" \
               --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
               --file extensions/react/Dockerfile \
-              extensions/react
+              extensions
             .github/scripts/smoke-extension-image.sh "$image" "$RELEASE_VERSION" base "$architecture"
           done
 
       - name: Build and publish one multi-architecture manifest
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: extensions/react
+          context: extensions
           file: extensions/react/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
@@ -237,6 +261,12 @@ jobs:
           build-args: HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max
           sbom: true
+
+      - name: Verify both images from the published registry manifest
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" base
 
   first-party-extensions:
     name: Publish ${{ matrix.extension }} / multi-architecture
@@ -325,6 +355,13 @@ jobs:
             HUSKLET_EXTENSION_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max
           sbom: true
+
+      - name: Verify both images from the published registry manifest
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          EXTENSION: ${{ matrix.extension }}
+          IMAGE: ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" "$EXTENSION"
 
   dmg:
     name: Signed and notarized DMG

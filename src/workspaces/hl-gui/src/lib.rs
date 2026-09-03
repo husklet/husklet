@@ -33,12 +33,15 @@ mod style;
 
 pub use builder::Surface;
 pub use component::{
-    CoverageLine, CoverageSource, CoverageView, FlameFrame, HexSource, HexView, Instruction, MemoryRegion, TestCase,
-    TestStatus, TimelineEvent,
+    CoverageLine, CoverageSource, CoverageView, DependencyCycle, DependencyEdge, DependencyNode, DependencyRelation,
+    DependencySource, DependencyState, FlameFrame, HexSource, HexView, HttpMethod, Instruction, MemoryRegion,
+    NetworkPhase, NetworkPhaseKind, NetworkRequest, NetworkSource, QueryMetric, QueryMetricKind, QueryNodeState,
+    QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 pub use data::{
-    Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
-    Version,
+    validate_columns, Cell, CollectionEdit, CollectionSort, Column, Lookup, RequestId, Row, RowCache, RowRange,
+    RowRequest, RowWindow, Sort, SourceId, SourceMutation, Version, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT,
+    TABLE_COLUMN_LIMIT,
 };
 pub use dialog::{Action, Dialog, Role};
 pub use element::{Element, Reconciliation};
@@ -46,7 +49,7 @@ pub use identity::{Identities, NodeId};
 pub use node::{
     Choice, EventId, Fault, Frame, Handler, Node, Orientation, Patch, Prop, PropValue, Tag, Tree, TreeError, Trigger,
 };
-pub use render::{Event, Events, PointerPhase, Renderer};
+pub use render::{CollectionSelection, Event, Events, PointerPhase, Renderer, SelectedRow};
 pub use size::ByteSize;
 pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};
 
@@ -79,3 +82,16 @@ pub const TEST_REPORT_CASE_LIMIT: usize = 256;
 pub const TEST_REPORT_FAILURE_CHARACTER_LIMIT: usize = 512;
 pub const COVERAGE_VIEW_LINE_LIMIT: usize = 512;
 pub const COVERAGE_VIEW_SOURCE_CHARACTER_LIMIT: usize = 512;
+pub const NETWORK_WATERFALL_REQUEST_LIMIT: usize = 32;
+pub const NETWORK_WATERFALL_PHASE_LIMIT: usize = 6;
+pub const NETWORK_WATERFALL_TEXT_LIMIT: usize = 160;
+pub const NETWORK_WATERFALL_TIME_LIMIT_US: u64 = 86_400_000_000;
+pub const NETWORK_WATERFALL_PHASE_TIME_LIMIT_US: u64 = 3_600_000_000;
+pub const NETWORK_WATERFALL_BYTE_LIMIT: u64 = 1 << 40;
+pub const DEPENDENCY_GRAPH_NODE_LIMIT: usize = 32;
+pub const DEPENDENCY_GRAPH_EDGE_LIMIT: usize = 128;
+pub const DEPENDENCY_GRAPH_CYCLE_LIMIT: usize = 8;
+pub const DEPENDENCY_GRAPH_CYCLE_MEMBER_LIMIT: usize = 6;
+pub const QUERY_PLAN_NODE_LIMIT: usize = 36;
+pub const QUERY_PLAN_METRIC_LIMIT: usize = 5;
+pub const QUERY_PLAN_DEPTH_LIMIT: usize = 12;
