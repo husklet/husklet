@@ -103,7 +103,9 @@ impl Overview<'_> {
         name.add_css_class("settings-workspace-name");
         name.set_xalign(0.0);
         name.set_hexpand(true);
+        name.set_selectable(true);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        name.set_tooltip_text(Some(&self.workspace.name));
         let image = gtk::Label::new(Some(&self.workspace.image));
         image.add_css_class("settings-image");
         image.set_selectable(true);
@@ -672,6 +674,15 @@ mod tests {
                 text.iter().any(|line| line == "design system"),
                 "workspace name is visible"
             );
+            let workspace_name = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .find(|label| label.has_css_class("settings-workspace-name"))
+                .expect("workspace identity name");
+            assert!(workspace_name.is_selectable(),
+                "keyboard users can select and copy an ellipsized workspace name");
+            assert_eq!(workspace_name.tooltip_text().as_deref(), Some("design system"),
+                "pointer users can inspect the exact name without changing compact layout");
             assert!(
                 text.iter().any(|line| line == "ghcr.io/acme/dev:2026.09"),
                 "image identity is visible"
