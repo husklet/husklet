@@ -5014,7 +5014,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario == 228) {
+    if (scenario == 228 || scenario == 229) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_mixed_fixture_test(scenario));
@@ -7443,6 +7443,8 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         0x90,                         // second fall-through instruction
         0x0f, 0x0b,                   // taken target and deterministic tail
     };
+    uint8_t smc_stitch[sizeof direct_stitch];
+    memcpy(smc_stitch, direct_stitch, sizeof smc_stitch);
     uint8_t overflow[96 * 5 + 2];
     uint8_t normal_cap[TL_MAX_INSNS + 2];
     for (unsigned i = 0; i < 96; i++) {
@@ -7456,11 +7458,12 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     normal_cap[TL_MAX_INSNS + 1] = 0x0b;
     const uint8_t *bytes = scenario == 81 ? overflow : scenario == 84 ? normal_cap
                                                       : scenario == 228 ? jcc_stitch
+                                                      : scenario == 229 ? smc_stitch
                                                       : scenario == 85 ? direct_stitch
                                                                        : alternating;
     size_t length = scenario == 81 ? sizeof overflow : scenario == 84 ? sizeof normal_cap
                                                            : scenario == 228 ? sizeof jcc_stitch
-                                                           : scenario == 85 ? sizeof direct_stitch
+                                                           : scenario == 85 || scenario == 229 ? sizeof direct_stitch
                                                                             : sizeof alternating;
     uint8_t *saved_cache = g_cache;
     uint8_t *saved_cp = g_cp;
@@ -7477,7 +7480,9 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)bytes;
     translit_fall_fixture_length = length;
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    hl_x86_hot_context *context = hl_x86_hot_context_create(
+        translit_fall_fixture_fetch, NULL,
+        scenario == 229 ? hl_guest_fetch_authority_source() : NULL);
     int result = 121;
     if (context == NULL) goto done;
 
@@ -7494,6 +7499,35 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     translit_test_decode_results = 0;
     translit_test_decode_successor_probes = 0;
     translit_test_decode_lookahead_consumed = 0;
+    if (scenario == 229) {
+        uint32_t owners_before = atomic_load_explicit(&set->count, memory_order_acquire);
+        g_cp = arena;
+        hl_x86_decode_test_transaction_invalidate_before_commit();
+        struct interp_block *rejected = translate_block(context, translit_fall_fixture_guest);
+        uint32_t owners_rejected = atomic_load_explicit(&set->count, memory_order_acquire);
+        int failure = rejected == NULL                                       ? 133
+                      : rejected->host_entry_off != 0 || rejected->host_len != 0 ? 134
+                      : map_body(translit_fall_fixture_guest) != rejected      ? 135
+                      : owners_rejected != owners_before                       ? 136
+                      : __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED) != stitches_before ? 137
+                      : translit_test_decode_successor_probes != 0             ? 138
+                      : translit_test_decode_lookahead_consumed != 0           ? 139
+                                                                               : 0;
+        map_clear();
+        smc_stitch[9] = 0xc3; /* RET replaces the decoded NOP before the fresh transaction. */
+        struct interp_block *retry = translate_block(context, translit_fall_fixture_guest);
+        result = failure != 0                                                   ? failure
+                 : retry == NULL                                                ? 140
+                 : retry->host_entry_off == 0 || retry->host_len == 0           ? 141
+                 : retry->profile_insns != 4                                    ? 147
+                 : map_body(translit_fall_fixture_guest) != retry               ? 142
+                 : atomic_load_explicit(&set->count, memory_order_acquire) <= owners_rejected ? 143
+                 : __atomic_load_n(&translit_stitch_admitted, __ATOMIC_RELAXED) != stitches_before + 1 ? 144
+                 : translit_test_decode_successor_probes != 1                   ? 145
+                 : translit_test_decode_lookahead_consumed != 1                 ? 146
+                                                                                 : 0;
+        goto done;
+    }
     void *body = translit_build(context, block, translit_fall_fixture_guest, NULL);
     jit_body_owner_entry *entries = atomic_load_explicit(&set->entry, memory_order_acquire);
 
