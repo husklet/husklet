@@ -163,10 +163,18 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm run prepublish:check
 
+      - name: Refuse mismatched duplicates and make partial publication retryable
+        id: publication
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: node tools/publication-plan.js
+
       - name: Publish client with npm trusted publishing
+        if: steps.publication.outputs.client == 'true'
         run: npm publish --workspace @husklet/client --access public --provenance
 
       - name: Publish React with npm trusted publishing
+        if: steps.publication.outputs.react == 'true'
         run: npm publish --workspace @husklet/react --access public --provenance
 
       - name: Install and import the published package pair from npm
