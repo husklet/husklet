@@ -3982,6 +3982,11 @@ mod panes {
         postgres.emit_clicked();
         assert!(until(|| !provider_popover.is_visible()), "a successful provider selection dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Postgres · postgres"),
+            "provider selection immediately updates the chooser's visible and accessible state"
+        );
 
         assert_eq!(
             Panes::at(&bench.window, &first_slot)
@@ -4015,6 +4020,11 @@ mod panes {
         terminal.emit_clicked();
         assert!(until(|| !terminal_popover.is_visible()), "returning to the terminal dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Terminal"),
+            "terminal restoration immediately clears stale provider accessibility copy"
+        );
         assert_eq!(
             Panes::at(&bench.window, &second_slot)
                 .expect("restored second pane")
