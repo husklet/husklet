@@ -754,6 +754,7 @@ static translit_sampling_record *translit_sampling_records;
 static uint32_t translit_sampling_record_count;
 static int translit_sampling_overflow;
 static void translit_sampling_flush(void);
+static uint64_t translit_jitdump_now(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic uint32_t translit_sampling_pause, translit_sampling_pause_ready, translit_sampling_pause_release;
 #endif
@@ -871,6 +872,7 @@ static void translit_profile_output_failed(const char *what) {
 
 static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, const char *name,
                                            size_t name_length) {
+    if (translit_profile_active.timestamp == 0) translit_profile_active.timestamp = translit_jitdump_now();
     if (translit_sampling_records == NULL)
         translit_sampling_records = calloc(TRANSLIT_SAMPLING_RECORD_CAP, sizeof *translit_sampling_records);
     if (translit_sampling_records == NULL || translit_sampling_record_count == TRANSLIT_SAMPLING_RECORD_CAP) {
@@ -894,11 +896,7 @@ static int translit_sampling_record_commit(uint64_t address, uint32_t host_len, 
 
 static void translit_perf_map_generation_bind(uint64_t generation, const uint8_t *rw, const uint8_t *rx,
                                                uint64_t size) {
-    struct timespec now;
-    uint64_t timestamp = clock_gettime(CLOCK_MONOTONIC, &now) == 0
-                             ? (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec
-                             : 0;
-    translit_profile_generation next = {getpid(), generation, timestamp, rw, rx, size};
+    translit_profile_generation next = {getpid(), generation, 0, rw, rx, size};
     if (translit_profile_active.pid == next.pid && translit_profile_active.generation == generation &&
         translit_profile_active.rw == rw && translit_profile_active.rx == rx && translit_profile_active.size == size)
         return;
@@ -958,8 +956,10 @@ static void translit_jitdump_open(const char *directory, pid_t pid) {
         translit_profile_output_failed("jitdump create-exclusive");
         return;
     }
-    descriptor = hl_host_process_fd_private_adopt(descriptor);
+    int opened = descriptor;
+    descriptor = hl_host_process_fd_private_adopt(opened);
     if (descriptor < 0) {
+        close(opened);
         translit_profile_output_failed("jitdump private descriptor");
         return;
     }
@@ -1035,8 +1035,10 @@ static void translit_perf_map_publish_named(const char *name, const uint8_t *sta
             translit_profile_output_failed("perf-map create-exclusive");
             return;
         }
-        descriptor = hl_host_process_fd_private_adopt(descriptor);
+        int opened = descriptor;
+        descriptor = hl_host_process_fd_private_adopt(opened);
         if (descriptor < 0) {
+            close(opened);
             translit_profile_output_failed("perf-map private descriptor");
             return;
         }
@@ -1195,6 +1197,15 @@ static int translit_jitdump_lifecycle_test(void) {
             translit_perf_map_generation_bind(generation, g_cache, J_RX(g_cache), CACHE_SZ);
             translit_perf_map_publish_named("hl_jitdump_lifecycle", code, 4);
             if (generation == 0 && access(path, F_OK) == 0) _exit(3);
+            /* Checkpoint quiescence flushes producer-owned buffers but does not
+               close host-private profiler streams.  Exercise two consecutive
+               capture boundaries before the third generation and require the
+               same process-lifetime jitdump to continue afterwards. */
+            translit_perf_map_flush();
+            if (translit_perf_map_file == NULL || translit_jitdump_file == NULL ||
+                !hl_host_process_fd_private_current(fileno(translit_perf_map_file)) ||
+                !hl_host_process_fd_private_current(fileno(translit_jitdump_file)))
+                _exit(generation < 2 ? 5 : 4);
         }
         translit_perf_map_flush();
         FILE *input = fopen(path, "rb");

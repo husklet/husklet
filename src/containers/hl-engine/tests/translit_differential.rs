@@ -1440,6 +1440,17 @@ fn run_with_perf_map(
     force_two_rotations: bool,
     force_fresh_rollover: bool,
 ) -> (Vec<u8>, i32, Backend) {
+    let (out, err, status) = run_with_perf_map_raw(executable, directory, force_two_rotations, force_fresh_rollover);
+    let report = backend(&err);
+    (out, status, report)
+}
+
+fn run_with_perf_map_raw(
+    executable: &Path,
+    directory: &Path,
+    force_two_rotations: bool,
+    force_fresh_rollover: bool,
+) -> (Vec<u8>, Vec<u8>, i32) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", "1", true).unwrap();
@@ -1469,8 +1480,8 @@ fn run_with_perf_map(
     let exit = engine.wait().unwrap();
     engine.destroy().unwrap();
     let out = captured.out.lock().unwrap().clone();
-    let report = backend(&captured.err.lock().unwrap());
-    (out, exit.guest_status, report)
+    let err = captured.err.lock().unwrap().clone();
+    (out, err, exit.guest_status)
 }
 
 fn run_with_sampling_symbols(
@@ -1768,7 +1779,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
     let executable = fixture(work.path(), "perf_map_fork_exec");
     let maps = work.path().join("maps-fork-exec");
     std::fs::create_dir(&maps).unwrap();
-    let (output, status, backend) = run_with_perf_map(&executable, &maps, false, true);
+    let (output, stderr, status) = run_with_perf_map_raw(&executable, &maps, false, true);
     assert_eq!(status, 0);
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("post-exec pid="), "{output}");
@@ -1791,7 +1802,7 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
     assert!(
         child_maps.len() >= 2,
         "child={child} maps={child_maps:?}\n{output}\n{}",
-        backend.line
+        String::from_utf8_lossy(&stderr)
     );
     let identities = child_maps
         .iter()
@@ -1833,9 +1844,37 @@ fn fork_exec_rebinds_perf_output_to_each_executable_arena() {
         })
         .collect::<std::collections::BTreeSet<_>>();
     assert!(
-        [1, 2].into_iter().all(|generation| generations.contains(&generation)),
-        "child did not publish both post-exec bus generations: {child_maps:?}"
+        generations.len() >= 3 && generations.iter().zip(generations.iter().skip(1)).all(|(a, b)| *b == *a + 1),
+        "child did not publish its pre-exec arena and both post-exec bus generations: {child_maps:?}"
     );
+    let dump = maps.join(format!("jit-{child}.dump"));
+    let bytes = std::fs::read(&dump).unwrap_or_else(|error| panic!("{}: {error}", dump.display()));
+    assert!(bytes.len() >= 40, "truncated jitdump: {} bytes", bytes.len());
+    assert_eq!(u32::from_ne_bytes(bytes[0..4].try_into().unwrap()), 0x4A695444);
+    assert_eq!(u32::from_ne_bytes(bytes[8..12].try_into().unwrap()), 40, "one process-lifetime header");
+    let (mut offset, mut previous_index, mut previous_timestamp) = (40usize, 0u64, 0u64);
+    let mut addresses = std::collections::BTreeSet::new();
+    while offset < bytes.len() {
+        assert!(offset + 56 <= bytes.len(), "truncated jitdump record at {offset}");
+        assert_eq!(u32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap()), 0);
+        let size = u32::from_ne_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let timestamp = u64::from_ne_bytes(bytes[offset + 8..offset + 16].try_into().unwrap());
+        let address = u64::from_ne_bytes(bytes[offset + 32..offset + 40].try_into().unwrap());
+        let index = u64::from_ne_bytes(bytes[offset + 48..offset + 56].try_into().unwrap());
+        assert!(size >= 58 && offset + size <= bytes.len(), "invalid jitdump record size {size} at {offset}");
+        assert!(timestamp != 0 && timestamp >= previous_timestamp, "timestamps {previous_timestamp} then {timestamp}");
+        assert_eq!(index, previous_index + 1, "non-contiguous code index at {offset}");
+        addresses.insert(address);
+        (previous_timestamp, previous_index, offset) = (timestamp, index, offset + size);
+    }
+    assert!(previous_index > 0, "jitdump carried no load records");
+    for map in &child_maps {
+        let text = std::fs::read_to_string(map).unwrap();
+        let address = text.lines().find_map(|line| line.split_whitespace().next())
+            .and_then(|value| u64::from_str_radix(value, 16).ok())
+            .unwrap_or_else(|| panic!("no address in {}", map.display()));
+        assert!(addresses.contains(&address), "jitdump lost {} address {address:x}", map.display());
+    }
     let all_names = std::fs::read_dir(&maps)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
