@@ -17,6 +17,7 @@ hl-gui = { path = "../hl-gui", features = ["wire"] }
 hl-rpc = { path = "../../packages/hl-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+syn = { version = "2", features = ["extra-traits", "full", "parsing"] }
 toml = { workspace = true }
 
 [lints]

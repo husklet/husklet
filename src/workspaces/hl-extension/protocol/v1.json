@@ -1,0 +1,5428 @@
+{
+  "bounds": {
+    "extension_job_bytes": 128,
+    "extension_reference_bytes": 512,
+    "pane_input_bytes": 65536,
+    "pane_inventory_items": 512,
+    "pane_text_bytes": 524288,
+    "semantic_action_value_bytes": 4096,
+    "semantic_depth": 32,
+    "semantic_nodes": 256,
+    "semantic_text_bytes": 256,
+    "terminal_command_argument_bytes": 4096,
+    "terminal_command_bytes": 32768
+  },
+  "capabilities": [
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "workspace-read"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "workspace-control"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "workspace-events"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "container-read"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "container-control"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "container-attach"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "image-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "image-write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "volume-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "volume-write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "network-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "network-write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "terminal-read"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "terminal-control"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "terminal-output"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "pane-observe"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "pane-semantic-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "pane-semantic-control"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "extension-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "extension-control"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "extension-install"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "filesystem-read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "filesystem-write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "interface"
+    }
+  ],
+  "definitions": {
+    "ContainerCreateSpec": {
+      "fields": [
+        {
+          "name": "image",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "hostname",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "entrypoint",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "command",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "environment",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "string"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        },
+        {
+          "name": "working_directory",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "user",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "labels",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "string"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        },
+        {
+          "name": "mounts",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerVolumeMount"
+            }
+          }
+        },
+        {
+          "name": "network",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "ports",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerPort"
+            }
+          }
+        },
+        {
+          "name": "memory_mb",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 32,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "cpus",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 16,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "pids_limit",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 32,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ContainerOutput": {
+      "fields": [
+        {
+          "name": "stdout",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "stderr",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "stdout_truncated",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "stderr_truncated",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "eof",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ContainerPort": {
+      "fields": [
+        {
+          "name": "container",
+          "optional": false,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "host",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 16,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "protocol",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ContainerSummary": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "created",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": true
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ContainerVolumeMount": {
+      "fields": [
+        {
+          "name": "volume",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "target",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "read_only",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Division": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case"
+      },
+      "variants": [
+        {
+          "name": "beside",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "below",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Entry": {
+      "fields": [
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "directory",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "size",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "identity",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExecutionList": {
+      "fields": [
+        {
+          "name": "executions",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionSummary"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExecutionSummary": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "container_id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "running",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "exit_code",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": true
+          }
+        },
+        {
+          "name": "pid",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": true
+          }
+        },
+        {
+          "name": "command",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "user",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionAcquisitionJob": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionAcquisitionProgress": {
+      "fields": [
+        {
+          "name": "status",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "id",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "current",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "total",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionAcquisitionStatus": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reference",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "progress",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionAcquisitionProgress"
+            }
+          }
+        },
+        {
+          "name": "candidate",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCandidate"
+            }
+          }
+        },
+        {
+          "name": "error",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionCandidate": {
+      "fields": [
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "ExtensionName"
+          }
+        },
+        {
+          "name": "version",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image_digest",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "requested",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Grant"
+          }
+        },
+        {
+          "name": "installed_image_digest",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionName": {
+      "kind": "ref",
+      "name": "PeerName"
+    },
+    "ExtensionSummary": {
+      "fields": [
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image_digest",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "status",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "version",
+          "optional": true,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "pane_providers",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "PaneProvider"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "FileRange": {
+      "fields": [
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "offset",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "total",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "contents",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "eof",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Frame": {
+      "kind": "external_ref",
+      "name": "Frame",
+      "package": "hl-gui"
+    },
+    "Grant": {
+      "kind": "ref",
+      "name": "Grant"
+    },
+    "GridSize": {
+      "fields": [
+        {
+          "name": "columns",
+          "optional": false,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "rows",
+          "optional": false,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImageDetails": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "references",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "created",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "size",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "os",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "architecture",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "entrypoint",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "command",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "working_directory",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "user",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImagePruneResult": {
+      "fields": [
+        {
+          "name": "deleted",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "space_reclaimed",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImagePullJob": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImagePullStatus": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reference",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "status",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "layer",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "current",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "total",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "image",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSummary"
+            }
+          }
+        },
+        {
+          "name": "error",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImageSummary": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reference",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "size",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "created",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": true
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "InspectablePane": {
+      "fields": [
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "kind",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "PaneKind"
+          }
+        },
+        {
+          "name": "provider",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "PaneProviderIdentity"
+            }
+          }
+        },
+        {
+          "name": "tab",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "title",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "focused",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "LayoutNode": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case",
+        "tag": "kind"
+      },
+      "variants": [
+        {
+          "name": "pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "pane",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneSummary"
+                }
+              },
+              {
+                "name": "grid",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "GridSize"
+                  }
+                }
+              },
+              {
+                "name": "focused",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "split",
+          "payload": {
+            "fields": [
+              {
+                "name": "division",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Division"
+                }
+              },
+              {
+                "name": "ratio_per_mille",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "first",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "LayoutNode"
+                }
+              },
+              {
+                "name": "second",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "LayoutNode"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
+    "NetworkSummary": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "driver",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "scope",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Occupant": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case"
+      },
+      "variants": [
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "surface",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "PaneInventory": {
+      "fields": [
+        {
+          "name": "panes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "InspectablePane"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case"
+      },
+      "variants": [
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "surface",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "native",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "PaneOccupantTarget": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case",
+        "tag": "kind"
+      },
+      "variants": [
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "surface",
+          "payload": {
+            "fields": [
+              {
+                "name": "extension",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "provider",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
+    "PaneProvider": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "ExtensionName"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "icon",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
+    "PaneProviderIdentity": {
+      "fields": [
+        {
+          "name": "extension",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "provider",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneSemanticAction": {
+      "fields": [
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "node",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "action",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "SemanticActionKind"
+          }
+        },
+        {
+          "name": "value",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneSemanticTree": {
+      "fields": [
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "root",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "SemanticNode"
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneSummary": {
+      "fields": [
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "working_directory",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "command",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "occupant",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Occupant"
+          }
+        },
+        {
+          "name": "provider",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "PaneProviderIdentity"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneText": {
+      "fields": [
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "columns",
+          "optional": true,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "rows",
+          "optional": true,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "lines",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "cursor_column",
+          "optional": true,
+          "schema": {
+            "bits": 32,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "cursor_row",
+          "optional": true,
+          "schema": {
+            "bits": 32,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PeerName": {
+      "kind": "string"
+    },
+    "ProcessList": {
+      "fields": [
+        {
+          "name": "container_id",
+          "optional": true,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "titles",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "processes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "observed_at_ms",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "scope",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ProcessScope"
+          }
+        },
+        {
+          "name": "pid_identity",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ProcessPidIdentity"
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ProcessPidIdentity": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "snapshot",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "ProcessScope": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "initial",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "namespace",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "RelativePath": {
+      "kind": "string"
+    },
+    "SemanticActionKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "invoke",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "change",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "submit",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "toggle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "expand",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "focus",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "SemanticNode": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "role",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "label",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "value",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "disabled",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "destructive",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "actions",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "SemanticActionKind"
+            }
+          }
+        },
+        {
+          "name": "children",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "SemanticNode"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "SourceMutation": {
+      "kind": "external_ref",
+      "name": "SourceMutation",
+      "package": "hl-gui"
+    },
+    "TabSummary": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "panes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "PaneSummary"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "TabTopology": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "root",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "LayoutNode"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "TerminalTopology": {
+      "fields": [
+        {
+          "name": "active_tab",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "tabs",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "TabTopology"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Topic": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "kebab-case"
+      },
+      "variants": [
+        {
+          "name": "containers",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "executions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "images",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "image-pulls",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "volumes",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "networks",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "pane-changes",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "extensions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "extension-acquisitions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace-lifecycle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace-events",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "VolumeSummary": {
+      "fields": [
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "driver",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceConfiguration": {
+      "fields": [
+        {
+          "name": "generation",
+          "optional": true,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "architecture",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "storage",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "shell",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "cpus",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 32,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "memory_mb",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 32,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "environment",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "string"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        },
+        {
+          "name": "mounts",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceMount"
+            }
+          }
+        },
+        {
+          "name": "docker_socket",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "scrollback",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "vpn",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "execution_lifetime",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "terminal",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "WorkspaceTerminal"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceInfo": {
+      "fields": [
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "architecture",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceMount": {
+      "fields": [
+        {
+          "name": "host",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "container",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "read_only",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceState": {
+      "fields": [
+        {
+          "name": "name",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "architecture",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "image",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "running",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceTerminal": {
+      "fields": [
+        {
+          "name": "font_family",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "font_size",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 16,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "foreground",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "background",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "cursor_shape",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "cursor_blink",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "boolean"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    }
+  },
+  "encoding": {
+    "call_channel": 2,
+    "control_channel": 0,
+    "extension_channels": "odd",
+    "flags": {
+      "coalesced": 4,
+      "end": 1,
+      "error": 2
+    },
+    "header": [
+      "payload_length:u32le",
+      "channel:u32le",
+      "kind:u8",
+      "flags:u8",
+      "reserved:u16le"
+    ],
+    "header_bytes": 12,
+    "host_channels": "even",
+    "kinds": [
+      {
+        "code": 1,
+        "name": "request"
+      },
+      {
+        "code": 2,
+        "name": "response"
+      },
+      {
+        "code": 3,
+        "name": "event"
+      },
+      {
+        "code": 4,
+        "name": "open"
+      },
+      {
+        "code": 5,
+        "name": "close"
+      },
+      {
+        "code": 6,
+        "name": "reset"
+      },
+      {
+        "code": 7,
+        "name": "credit"
+      },
+      {
+        "code": 8,
+        "name": "ping"
+      },
+      {
+        "code": 9,
+        "name": "pong"
+      }
+    ],
+    "payload": "json",
+    "payload_limit_bytes": 1048576
+  },
+  "protocol_version": 1,
+  "roots": {
+    "failure": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case",
+        "tag": "error"
+      },
+      "variants": [
+        {
+          "name": "denied",
+          "payload": {
+            "fields": [
+              {
+                "name": "capability",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "detail",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "absent",
+          "payload": {
+            "fields": [
+              {
+                "name": "detail",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "conflict",
+          "payload": {
+            "fields": [
+              {
+                "name": "detail",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "failed",
+          "payload": {
+            "fields": [
+              {
+                "name": "detail",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "unsupported",
+          "payload": {
+            "fields": [
+              {
+                "name": "call",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
+    "reply": {
+      "kind": "enum",
+      "serde": {
+        "content": "with",
+        "rename_all": "snake_case",
+        "tag": "reply"
+      },
+      "variants": [
+        {
+          "name": "workspace",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceInfo"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "workspace_configuration",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "workspaces",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "WorkspaceState"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "extensions",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "ExtensionSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "extension",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ExtensionSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "extension_acquisition_job",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ExtensionAcquisitionJob"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "extension_acquisition",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ExtensionAcquisitionStatus"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "containers",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "ContainerSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "container",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "processes",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ProcessList"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "logs",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerOutput"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "execution",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ExecutionSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "executions",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ExecutionList"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "images",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "ImageSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "image",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImageSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "image_pull_job",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImagePullJob"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "image_pull",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImagePullStatus"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "image_details",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImageDetails"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "image_prune",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImagePruneResult"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "volumes",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "VolumeSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "volume",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "VolumeSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "networks",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "NetworkSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "network",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NetworkSummary"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "tabs",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "TabSummary"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "topology",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "TerminalTopology"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "panes",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneInventory"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "text",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneText"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "semantics",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneSemanticTree"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "entries",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "Entry"
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "entry",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Entry"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "contents",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "file_range",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "FileRange"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "identity",
+          "payload": {
+            "fields": [
+              {
+                "name": "0",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "tuple"
+          }
+        },
+        {
+          "name": "done",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "request": {
+      "kind": "enum",
+      "serde": {
+        "content": "with",
+        "deny_unknown_fields": true,
+        "rename_all": "snake_case",
+        "tag": "call"
+      },
+      "variants": [
+        {
+          "name": "workspace_info",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_create",
+          "payload": {
+            "fields": [
+              {
+                "name": "configuration",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_adopt",
+          "payload": {
+            "fields": [
+              {
+                "name": "configuration",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_update",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "configuration",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_delete",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_start",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_stop",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_restart",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "extension_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_enable",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_disable",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_acquisition_start",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_acquisition_status",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_acquisition_cancel",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_install",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "granted",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Grant"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_update",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "granted",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Grant"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "container_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_processes",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_logs",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "stdout",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              },
+              {
+                "name": "stderr",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "execution_logs",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "stdout",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              },
+              {
+                "name": "stderr",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_wait",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "timeout_ms",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_kill",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "signal",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_create",
+          "payload": {
+            "fields": [
+              {
+                "name": "spec",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerCreateSpec"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_start",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_stop",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_pause",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_unpause",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_restart",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_rename",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_kill",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "signal",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_exec",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "user",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "working_directory",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_attach_terminal",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "image_pull",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_pull_start",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_pull_status",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_pull_cancel",
+          "payload": {
+            "fields": [
+              {
+                "name": "job",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "image_prune",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "volume_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "volume_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "volume_create",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "volume_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "network_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "network_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "network_create",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "network_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "network_connect",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "container",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "aliases",
+                "optional": true,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "network_disconnect",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "container",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_tabs",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminal_topology",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "pane_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminal_open_tab",
+          "payload": {
+            "fields": [
+              {
+                "name": "title",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_split",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "division",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Division"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_split_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "division",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Division"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_spawn",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_spawn_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_read_pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "lines",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 64,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "pane_semantic_read",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "pane_semantic_action",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "action",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneSemanticAction"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_write_pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_resize_grid",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "columns",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "rows",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_resize_grid_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "columns",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "rows",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_close_pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_close_pane_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_focus_pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_focus_pane_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_retitle_pane",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "title",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_retitle_pane_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "title",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_ratio",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "ratio",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_ratio_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "ratio",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_switch_occupant",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "target",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneOccupantTarget"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_switch_occupant_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "target",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PaneOccupantTarget"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_list",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_read",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_read_range",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "offset",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "observed",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_stat",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_write",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_create_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_mkdir",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_rename",
+          "payload": {
+            "fields": [
+              {
+                "name": "from",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "to",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_rename_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "from",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "to",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_remove_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "interface_open_tab",
+          "payload": {
+            "fields": [
+              {
+                "name": "title",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "interface_split",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "division",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Division"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "interface_withdraw",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "interface_render",
+          "payload": {
+            "fields": [
+              {
+                "name": "frame",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Frame"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "interface_render_at",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "frame",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Frame"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "source_resize",
+          "payload": {
+            "fields": [
+              {
+                "name": "mutation",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceMutation"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "source_resize_at",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "mutation",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceMutation"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "event_subscribe",
+          "payload": {
+            "fields": [
+              {
+                "name": "topic",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Topic"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "event_unsubscribe",
+          "payload": {
+            "fields": [
+              {
+                "name": "topic",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Topic"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    }
+  },
+  "specification_version": 1,
+  "topics": [
+    {
+      "capability": "container-read",
+      "wire": "containers"
+    },
+    {
+      "capability": "container-read",
+      "wire": "executions"
+    },
+    {
+      "capability": "image-read",
+      "wire": "images"
+    },
+    {
+      "capability": "image-write",
+      "wire": "image-pulls"
+    },
+    {
+      "capability": "volume-read",
+      "wire": "volumes"
+    },
+    {
+      "capability": "network-read",
+      "wire": "networks"
+    },
+    {
+      "capability": "terminal-read",
+      "wire": "terminal"
+    },
+    {
+      "capability": "pane-observe",
+      "wire": "pane-changes"
+    },
+    {
+      "capability": "extension-read",
+      "wire": "extensions"
+    },
+    {
+      "capability": "extension-install",
+      "wire": "extension-acquisitions"
+    },
+    {
+      "capability": "workspace-read",
+      "wire": "workspace-lifecycle"
+    },
+    {
+      "capability": "workspace-events",
+      "wire": "workspace-events"
+    }
+  ]
+}

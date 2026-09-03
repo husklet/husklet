@@ -23,13 +23,14 @@ mod manifest;
 pub mod port;
 mod request;
 mod session;
+pub mod specification;
 mod subscription;
 
 pub use capability::{Capability, Grant};
 pub use codec::Coding;
 pub use hl_rpc::{
     Authority, ChannelId, Channels, Compatibility, Denial, Emission, Flags, Frame, Hello, Kind, Limits, Malformed,
-    PROTOCOL, Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire,
+    Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
 };
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
