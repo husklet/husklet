@@ -1316,7 +1316,11 @@ static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest
     hl_translation_map_table *table = map_table_active();
     if (table->capacity < JIT_MAP_N &&
         ((uint64_t)g_live_map_count + g_map_tombstone_count + 1u) * 5u > (uint64_t)table->capacity * 2u) {
-        if (!map_table_grow()) map_clear();
+        /* Growth starts while the old table is still below 40% occupancy.  If
+           allocation fails, keep that authoritative table and publish into its
+           ample remaining space; clearing it here discarded every translation
+           which preceded a transient allocation failure. */
+        (void)map_table_grow();
         table = map_table_active();
     }
 #if HL_NATIVE_TEST_HOOKS
@@ -1653,6 +1657,58 @@ static uint64_t map_growth_guest(uint32_t ordinal, uint32_t capacity) {
 
 static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
     atomic_store_explicit(&g_active_map_table, &g_bootstrap_map_table, memory_order_release);
+    if (scenario == 66) {
+        /* Persistent-cache restore publishes records through map_put as well.
+           Exercise a restore-sized batch above the bootstrap threshold and
+           prove the rehashed records remain addressable. */
+        g_bootstrap_map_table.capacity = JIT_MAP_INITIAL_N;
+        g_bootstrap_map_table.mask = JIT_MAP_INITIAL_N - 1u;
+        map_clear();
+        const uint32_t restored = 4096;
+        for (uint32_t i = 0; i < restored; i++) {
+            uint64_t guest = UINT64_C(0x40000000) + ((uint64_t)i << G_GPC_HASH_SHIFT);
+            if (map_put(guest, guest, guest + 1u, (void *)(uintptr_t)(UINT64_C(0x50000000) + i),
+                        (void *)(uintptr_t)(UINT64_C(0x60000000) + i)) != MAP_PUT_OK)
+                return 18;
+        }
+        if (map_capacity() != JIT_MAP_INITIAL_N * 2u || g_live_map_count != restored) return 19;
+        for (uint32_t i = 0; i < restored; i += 257) {
+            uint64_t guest = UINT64_C(0x40000000) + ((uint64_t)i << G_GPC_HASH_SHIFT);
+            if ((uintptr_t)map_body(guest) != UINT64_C(0x60000000) + i) return 20;
+        }
+        *answer = g_live_map_count;
+        return 0;
+    }
+    if (scenario == 65) {
+        /* This is a product policy assertion, not a macro-relative growth test:
+           reverting the right-sized bootstrap must make it red. */
+        if (JIT_MAP_INITIAL_N != (1u << 13)) return 15;
+        g_bootstrap_map_table.capacity = JIT_MAP_INITIAL_N;
+        g_bootstrap_map_table.mask = JIT_MAP_INITIAL_N - 1u;
+        map_clear();
+        const uint32_t threshold = (JIT_MAP_INITIAL_N * 2u) / 5u;
+        for (uint32_t i = 0; i < threshold; i++) {
+            uint64_t guest = UINT64_C(0x30000000) + ((uint64_t)i << G_GPC_HASH_SHIFT);
+            map_put(guest, guest, guest + 1u, (void *)(uintptr_t)(UINT64_C(0x1000000) + i),
+                    (void *)(uintptr_t)(UINT64_C(0x2000000) + i));
+        }
+        g_map_growth_alloc_fail = 1;
+        uint64_t crossing = UINT64_C(0x30000000) + ((uint64_t)threshold << G_GPC_HASH_SHIFT);
+        if (map_put(crossing, crossing, crossing + 1u, (void *)(uintptr_t)UINT64_C(0x3000000),
+                    (void *)(uintptr_t)UINT64_C(0x4000000)) != MAP_PUT_OK ||
+            map_capacity() != JIT_MAP_INITIAL_N || g_live_map_count != threshold + 1u ||
+            (uintptr_t)map_body(UINT64_C(0x30000000)) != UINT64_C(0x2000000) ||
+            (uintptr_t)map_body(crossing) != UINT64_C(0x4000000))
+            return 16;
+        uint64_t next = crossing + (UINT64_C(1) << G_GPC_HASH_SHIFT);
+        if (map_put(next, next, next + 1u, (void *)(uintptr_t)UINT64_C(0x3000001),
+                    (void *)(uintptr_t)UINT64_C(0x4000001)) != MAP_PUT_OK ||
+            map_capacity() != JIT_MAP_INITIAL_N * 2u ||
+            (uintptr_t)map_body(UINT64_C(0x30000000)) != UINT64_C(0x2000000))
+            return 17;
+        *answer = map_capacity();
+        return 0;
+    }
     if (scenario == 64) {
         g_bootstrap_map_table.capacity = JIT_MAP_N;
         g_bootstrap_map_table.mask = JIT_MAP_N - 1u;
@@ -1758,7 +1814,8 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
         uint64_t seventh = map_growth_guest(6, 16);
         map_put(seventh, seventh, seventh + 1u, (void *)(uintptr_t)UINT64_C(0x1006),
                 (void *)(uintptr_t)UINT64_C(0x2006));
-        if (map_capacity() != 16 || g_live_map_count != 1 || map_body(map_growth_guest(0, 16)) != NULL ||
+        if (map_capacity() != 16 || g_live_map_count != 7 ||
+            (uintptr_t)map_body(map_growth_guest(0, 16)) != UINT64_C(0x2000) ||
             (uintptr_t)map_body(seventh) != UINT64_C(0x2006))
             return 9;
         *answer = g_live_map_count;
@@ -1789,7 +1846,7 @@ static int map_growth_test_child(uint32_t scenario, uint64_t *answer) {
 }
 
 static int map_growth_test(uint32_t scenario, uint64_t *answer) {
-    if (scenario < 55 || scenario > 64 || answer == NULL) return -EINVAL;
+    if (scenario < 55 || scenario > 66 || answer == NULL) return -EINVAL;
     pid_t child = fork();
     if (child == 0) {
         uint64_t child_answer = 0;
