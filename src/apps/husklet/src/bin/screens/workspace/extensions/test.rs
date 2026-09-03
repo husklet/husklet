@@ -62,6 +62,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         stale_provider_generations_cannot_authorize_replacements();
         failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::pointer_hit_testing_captures_the_exact_pane_slot();
         panes::retitling_a_live_pane_preserves_its_slot_process_and_layout();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
@@ -2672,6 +2673,20 @@ mod panes {
         fn slots(&self) -> Vec<String> {
             Panes::all(&self.window).into_iter().map(|pane| pane.slot).collect()
         }
+    }
+
+    pub(super) fn pointer_hit_testing_captures_the_exact_pane_slot() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let (x, y) = Window::pointer_test_point(&bench.window, &slot).expect("allocated pane centre");
+
+        let (observed, generation, local_x, local_y) =
+            Window::pointer_test_target(&bench.window, x, y).expect("pane hit");
+
+        assert_eq!(observed, slot);
+        assert_eq!(generation, 0, "terminal occupant identity is stable generation zero");
+        assert!(local_x >= 0.0 && local_y >= 0.0, "coordinates are pane-local");
     }
 
     pub(super) fn readable(gallery: &Gallery, extension: &str) {

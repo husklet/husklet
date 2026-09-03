@@ -77,9 +77,14 @@ pub enum WorkspaceEvent {
     },
     Pointer {
         phase: PointerPhase,
+        slot: String,
+        generation: u64,
         x: f64,
         y: f64,
         button: Option<u32>,
+        modifiers: Vec<String>,
+        delta_x: Option<f64>,
+        delta_y: Option<f64>,
     },
 }
 
@@ -89,6 +94,11 @@ pub enum PointerPhase {
     Move,
     Enter,
     Leave,
+    Press,
+    Release,
+    Click,
+    Context,
+    Scroll,
 }
 
 /// A bounded observation batch. `dropped` makes overload visible to consumers.

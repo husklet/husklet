@@ -338,8 +338,15 @@ export function tools(api) {
   if (typeof api.watchWorkspaceEvents === 'function') definitions.push(define(
     'husklet_workspace_event_wait',
     'Wait once for a bounded permission-gated workspace keyboard, focus, or pointer event batch.',
-    z.object({ kind: z.enum(['key', 'focus', 'pointer']).optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
-    ({ kind, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    z.object({
+      kind: z.enum(['key', 'focus', 'pointer']).optional(),
+      slot: z.string().min(1).max(128).optional(),
+      phase: z.enum(['move', 'enter', 'leave', 'press', 'release', 'click', 'context', 'scroll']).optional(),
+      timeout_ms: z.number().int().min(1).max(30_000).default(30_000),
+    }).strict().superRefine(({ kind, slot, phase }, context) => {
+      if ((slot != null || phase != null) && kind !== 'pointer') context.addIssue({ code: z.ZodIssueCode.custom, message: 'slot and phase filters require kind pointer' });
+    }),
+    ({ kind, slot, phase, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -347,7 +354,10 @@ export function tools(api) {
       };
       const timer = setTimeout(() => finish({ observed: false }), timeout);
       api.watchWorkspaceEvents((batch) => {
-        const event = batch?.events?.find((candidate) => kind == null || candidate?.event === kind);
+        const event = batch?.events?.find((candidate) =>
+          (kind == null || candidate?.event === kind)
+          && (slot == null || candidate?.slot === slot)
+          && (phase == null || candidate?.phase === phase));
         if (event) finish({ observed: true, event, dropped: batch.dropped ?? 0 });
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),

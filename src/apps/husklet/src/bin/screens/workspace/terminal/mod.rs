@@ -31,7 +31,26 @@ pub(crate) struct TermWin {
     /// The window is closing; child exits should not mutate the saved layout during teardown.
     closing: Cell<bool>,
     overview_page: Option<screens::workspace::Page>,
-    observers: RefCell<Vec<hl::extension::Events>>,
+    observers: RefCell<Vec<hl::extension::WeakEvents>>,
+    last_pointer: RefCell<Option<PointerTarget>>,
+}
+
+#[derive(Clone)]
+struct PointerTarget {
+    slot: String,
+    generation: u64,
+    x: f64,
+    y: f64,
+}
+
+const POINTER_NUMBER_LIMIT: f64 = 1_000_000.0;
+
+fn bounded_pointer_number(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-POINTER_NUMBER_LIMIT, POINTER_NUMBER_LIMIT)
+    } else {
+        0.0
+    }
 }
 
 pub(crate) struct PaneRegistration {
@@ -218,13 +237,54 @@ impl SplitAction {
 impl TermWin {
     pub(crate) fn observer(&self) -> hl::extension::Events {
         let events = hl::extension::Events::default();
-        self.observers.borrow_mut().push(events.clone());
+        self.observers.borrow_mut().push(events.downgrade());
         events
     }
 
     fn broadcast(&self, event: hl_extension::WorkspaceEvent) {
-        for observer in self.observers.borrow().iter() {
-            observer.observe(event.clone());
+        self.observers
+            .borrow_mut()
+            .retain(|observer| observer.observe(event.clone()));
+    }
+
+    fn pointer_target(window: &Rc<Self>, x: f64, y: f64) -> Option<PointerTarget> {
+        let mut widget = window.stack.pick(x, y, gtk::PickFlags::DEFAULT)?;
+        while !PaneChrome::is(&widget) {
+            widget = widget.parent()?;
+        }
+        let pane = Panes::all(window).into_iter().find(|pane| pane.widget == widget)?;
+        let point = window
+            .stack
+            .compute_point(&pane.widget, &gtk::graphene::Point::new(x as f32, y as f32))?;
+        let generation = Slots::new(window)
+            .surface(&pane.content)
+            .and_then(|(_, extension, _)| Window::gallery(window)?.generation(&extension))
+            .unwrap_or(0);
+        Some(PointerTarget {
+            slot: pane.slot,
+            generation,
+            x: bounded_pointer_number(f64::from(point.x())),
+            y: bounded_pointer_number(f64::from(point.y())),
+        })
+    }
+
+    fn pointer_event(
+        target: &PointerTarget,
+        phase: hl_extension::PointerPhase,
+        button: Option<u32>,
+        modifiers: gtk::gdk::ModifierType,
+        delta: Option<(f64, f64)>,
+    ) -> hl_extension::WorkspaceEvent {
+        hl_extension::WorkspaceEvent::Pointer {
+            phase,
+            slot: target.slot.clone(),
+            generation: target.generation,
+            x: target.x,
+            y: target.y,
+            button,
+            modifiers: modifier_names(modifiers),
+            delta_x: delta.map(|(x, _)| bounded_pointer_number(x)),
+            delta_y: delta.map(|(_, y)| bounded_pointer_number(y)),
         }
     }
 
@@ -277,6 +337,24 @@ impl Clipboard {
 }
 
 impl Window {
+    #[cfg(test)]
+    pub(crate) fn pointer_test_point(window: &Rc<TermWin>, slot: &str) -> Option<(f64, f64)> {
+        let pane = Panes::at(window, slot)?;
+        let point = pane.widget.compute_point(
+            &window.stack,
+            &gtk::graphene::Point::new(
+                pane.widget.width() as f32 / 2.0,
+                pane.widget.height() as f32 / 2.0,
+            ),
+        )?;
+        Some((f64::from(point.x()), f64::from(point.y())))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pointer_test_target(window: &Rc<TermWin>, x: f64, y: f64) -> Option<(String, u64, f64, f64)> {
+        TermWin::pointer_target(window, x, y).map(|target| (target.slot, target.generation, target.x, target.y))
+    }
+
     /// Every tab, as its name, its widget, and the pane slots inside it.
     ///
     /// The terminal window is the only thing that knows this, and an extension
@@ -382,6 +460,7 @@ impl Window {
             closing: Cell::new(false),
             overview_page: None,
             observers: RefCell::new(Vec::new()),
+            last_pointer: RefCell::new(None),
         })
     }
 
@@ -457,6 +536,7 @@ impl Window {
             closing: Cell::new(false),
             overview_page,
             observers: RefCell::new(Vec::new()),
+            last_pointer: RefCell::new(None),
         });
         Search::wire(&tw);
 
@@ -541,38 +621,130 @@ impl Window {
         let motion = gtk::EventControllerMotion::new();
         {
             let tw = tw.clone();
-            motion.connect_motion(move |_, x, y| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Move,
-                    x,
-                    y,
-                    button: None,
-                })
+            motion.connect_motion(move |controller, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let previous = tw.last_pointer.replace(Some(target.clone()));
+                if let Some(previous) = previous.filter(|previous| {
+                    previous.slot != target.slot || previous.generation != target.generation
+                }) {
+                    tw.broadcast(TermWin::pointer_event(
+                        &previous,
+                        hl_extension::PointerPhase::Leave,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Enter,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                }
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Move,
+                    None,
+                    controller.current_event_state(),
+                    None,
+                ));
             });
         }
         {
             let tw = tw.clone();
-            motion.connect_enter(move |_, x, y| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Enter,
-                    x,
-                    y,
-                    button: None,
-                });
+            motion.connect_enter(move |controller, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Enter,
+                    None,
+                    controller.current_event_state(),
+                    None,
+                ));
+                tw.last_pointer.replace(Some(target));
             });
         }
         {
             let tw = tw.clone();
-            motion.connect_leave(move |_| {
-                tw.broadcast(hl_extension::WorkspaceEvent::Pointer {
-                    phase: hl_extension::PointerPhase::Leave,
-                    x: 0.0,
-                    y: 0.0,
-                    button: None,
-                });
+            motion.connect_leave(move |controller| {
+                if let Some(target) = tw.last_pointer.borrow_mut().take() {
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Leave,
+                        None,
+                        controller.current_event_state(),
+                        None,
+                    ));
+                }
             });
         }
-        window.add_controller(motion);
+        tw.stack.add_controller(motion);
+
+        let clicks = gtk::GestureClick::new();
+        clicks.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let tw = tw.clone();
+            clicks.connect_pressed(move |gesture, _, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Press,
+                    Some(gesture.current_button()),
+                    gesture.current_event_state(),
+                    None,
+                ));
+                tw.last_pointer.replace(Some(target));
+            });
+        }
+        {
+            let tw = tw.clone();
+            clicks.connect_released(move |gesture, _, x, y| {
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let button = gesture.current_button();
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    hl_extension::PointerPhase::Release,
+                    Some(button),
+                    gesture.current_event_state(),
+                    None,
+                ));
+                tw.broadcast(TermWin::pointer_event(
+                    &target,
+                    if button == 3 {
+                        hl_extension::PointerPhase::Context
+                    } else {
+                        hl_extension::PointerPhase::Click
+                    },
+                    Some(button),
+                    gesture.current_event_state(),
+                    None,
+                ));
+            });
+        }
+        tw.stack.add_controller(clicks);
+
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+        {
+            let tw = tw.clone();
+            scroll.connect_scroll(move |controller, dx, dy| {
+                let target = controller
+                    .current_event()
+                    .and_then(|event| event.position())
+                    .and_then(|(x, y)| TermWin::pointer_target(&tw, x, y));
+                if let Some(target) = target {
+                    tw.broadcast(TermWin::pointer_event(
+                        &target,
+                        hl_extension::PointerPhase::Scroll,
+                        None,
+                        controller.current_event_state(),
+                        Some((dx, dy)),
+                    ));
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        tw.stack.add_controller(scroll);
         {
             let tw = tw.clone();
             window.connect_is_active_notify(move |window| {

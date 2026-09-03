@@ -50,7 +50,9 @@ methods.
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one
 unit of host credit, reports the host's dropped/coalesced count, and always
-unsubscribes on a match or timeout. It observes window-level input only; owned
+unsubscribes on a match or timeout. Optional `slot` and `phase` filters select
+an exact pane occupant generation reported by GTK hit-testing. It observes
+window-level input only; owned
 surface interactions remain addressed to their owning extension and are queued
 without blocking the native UI.
 

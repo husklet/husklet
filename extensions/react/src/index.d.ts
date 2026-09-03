@@ -5548,7 +5548,7 @@ export interface FileEntry { path: string; directory: boolean; size: number }
 export type WorkspaceEvent =
   | { event: 'key'; key: string; modifiers: string[]; pressed: boolean }
   | { event: 'focus'; active: boolean }
-  | { event: 'pointer'; phase: 'move' | 'enter' | 'leave'; x: number; y: number; button: null };
+  | { event: 'pointer'; phase: 'move' | 'enter' | 'leave' | 'press' | 'release' | 'click' | 'context' | 'scroll'; slot: string; generation: number; x: number; y: number; button: number | null; modifiers: string[]; delta_x: number | null; delta_y: number | null };
 export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
 export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {

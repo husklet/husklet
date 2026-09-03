@@ -258,10 +258,12 @@ test('workspace input watcher uses its separate grant topic, returns credit, and
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
   stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'workspace_events', of: {
-    events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 3,
+    events: [{ event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 12.5, y: 8, button: 1, modifiers: ['shift'], delta_x: null, delta_y: null }], dropped: 3,
   } } }));
   assert.equal((await next()).kind, KIND.credit);
   assert.equal(batches[0].dropped, 3);
+  assert.equal(batches[0].events[0].slot, 'pane-2');
+  assert.equal(batches[0].events[0].generation, 7);
   const stopping = stop();
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-events' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));

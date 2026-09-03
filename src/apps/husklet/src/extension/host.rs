@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -99,6 +99,12 @@ pub struct Events {
     inner: Arc<Mutex<EventQueue>>,
 }
 
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct WeakEvents {
+    inner: Weak<Mutex<EventQueue>>,
+}
+
 #[derive(Default)]
 struct EventQueue {
     pending: VecDeque<hl_extension::WorkspaceEvent>,
@@ -108,23 +114,36 @@ struct EventQueue {
 impl Events {
     pub const LIMIT: usize = 64;
 
+    /// A non-owning registration used by the GTK broadcaster.
+    pub fn downgrade(&self) -> WeakEvents {
+        WeakEvents {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     /// Records activity without ever waiting for the GTK main loop.
     pub fn observe(&self, event: hl_extension::WorkspaceEvent) {
         let Ok(mut queue) = self.inner.try_lock() else { return };
-        if matches!(
-            event,
-            hl_extension::WorkspaceEvent::Pointer {
-                phase: hl_extension::PointerPhase::Move,
-                ..
-            }
-        ) && matches!(
-            queue.pending.back(),
-            Some(hl_extension::WorkspaceEvent::Pointer {
-                phase: hl_extension::PointerPhase::Move,
-                ..
-            })
-        ) {
+        let replaces_motion = matches!(
+            (&event, queue.pending.back()),
+            (
+                hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Move,
+                    slot,
+                    generation,
+                    ..
+                },
+                Some(hl_extension::WorkspaceEvent::Pointer {
+                    phase: hl_extension::PointerPhase::Move,
+                    slot: former_slot,
+                    generation: former_generation,
+                    ..
+                })
+            ) if slot == former_slot && generation == former_generation
+        );
+        if replaces_motion {
             queue.pending.pop_back();
+            queue.dropped = queue.dropped.saturating_add(1);
         } else if queue.pending.len() == Self::LIMIT {
             queue.pending.pop_front();
             queue.dropped = queue.dropped.saturating_add(1);
@@ -146,6 +165,16 @@ impl Events {
     }
 }
 
+impl WeakEvents {
+    /// Observes while the subscribed Host still owns the queue.
+    /// Returns false once the observer is stale so callers can prune it.
+    pub fn observe(&self, event: hl_extension::WorkspaceEvent) -> bool {
+        let Some(events) = self.inner.upgrade() else { return false };
+        Events { inner: events }.observe(event);
+        true
+    }
+}
+
 #[cfg(test)]
 mod event_buffer_tests {
     use super::Events;
@@ -154,9 +183,14 @@ mod event_buffer_tests {
     fn motion(x: f64) -> WorkspaceEvent {
         WorkspaceEvent::Pointer {
             phase: PointerPhase::Move,
+            slot: "pane-1".into(),
+            generation: 4,
             x,
             y: 1.0,
             button: None,
+            modifiers: Vec::new(),
+            delta_x: None,
+            delta_y: None,
         }
     }
 
@@ -167,7 +201,27 @@ mod event_buffer_tests {
         events.observe(motion(2.0));
         let batch = events.drain().unwrap();
         assert_eq!(batch.events, vec![motion(2.0)]);
-        assert_eq!(batch.dropped, 0);
+        assert_eq!(batch.dropped, 1, "coalesced motion is visible as a dropped predecessor");
+    }
+
+    #[test]
+    fn motion_never_coalesces_across_identity_or_a_discrete_event() {
+        let events = Events::default();
+        events.observe(motion(1.0));
+        let mut other = motion(2.0);
+        if let WorkspaceEvent::Pointer { slot, .. } = &mut other {
+            *slot = "pane-2".into();
+        }
+        events.observe(other.clone());
+        let mut press = motion(3.0);
+        if let WorkspaceEvent::Pointer { phase, button, .. } = &mut press {
+            *phase = PointerPhase::Press;
+            *button = Some(1);
+        }
+        events.observe(press.clone());
+        events.observe(motion(4.0));
+
+        assert_eq!(events.drain().unwrap().events, vec![motion(1.0), other, press, motion(4.0)]);
     }
 
     #[test]
@@ -179,6 +233,14 @@ mod event_buffer_tests {
         let batch = events.drain().unwrap();
         assert_eq!(batch.events.len(), Events::LIMIT);
         assert_eq!(batch.dropped, 7);
+    }
+
+    #[test]
+    fn a_dropped_subscriber_is_prunable_without_observation_work() {
+        let events = Events::default();
+        let weak = events.downgrade();
+        drop(events);
+        assert!(!weak.observe(WorkspaceEvent::Focus { active: true }));
     }
 }
 

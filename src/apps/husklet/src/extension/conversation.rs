@@ -1215,6 +1215,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn pane_addressed_pointer_metadata_crosses_the_credited_unix_frame() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut wire = Wire::new(theirs);
+        let event_authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceEvents]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, event_authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceEvents);
+        let events = super::super::host::Events::default();
+        events.observe(hl_extension::WorkspaceEvent::Pointer {
+            phase: hl_extension::PointerPhase::Scroll,
+            slot: "pane-7".into(),
+            generation: 9,
+            x: 12.5,
+            y: 4.0,
+            button: None,
+            modifiers: vec!["shift".into()],
+            delta_x: Some(-1.0),
+            delta_y: Some(2.0),
+        });
+        conversation.with_events(events);
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+
+        conversation.observe(&services(&host)).expect("pointer observed");
+
+        let frame = wire.receive().expect("credited pointer event");
+        let snapshot: Snapshot = serde_json::from_slice(&frame.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::WorkspaceEvents(batch)
+            if matches!(&batch.events[0], hl_extension::WorkspaceEvent::Pointer {
+                phase: hl_extension::PointerPhase::Scroll,
+                slot,
+                generation: 9,
+                modifiers,
+                delta_x: Some(dx),
+                delta_y: Some(dy),
+                ..
+            } if slot == "pane-7" && modifiers == &["shift"] && *dx == -1.0 && *dy == 2.0)));
+    }
+
     /// Reads the welcome and answers it with a version.
     fn shake(wire: &mut Wire<UnixStream>, protocol: u32) {
         let frame = wire.receive().expect("welcome");

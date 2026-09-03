@@ -757,12 +757,14 @@ test('workspace event wait filters one bounded batch and always disposes', async
   const { api } = fake(); let listener; let disposed = 0;
   api.watchWorkspaceEvents = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_workspace_event_wait');
-  const pending = wait.run({ kind: 'key', timeout_ms: 1000 });
+  assert.equal(wait.inputSchema.safeParse({ kind: 'key', slot: 'pane-1', timeout_ms: 1 }).success, false);
+  const pending = wait.run({ kind: 'pointer', slot: 'pane-2', phase: 'press', timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
-  listener({ events: [{ event: 'pointer', phase: 'move', x: 1, y: 2, button: null }], dropped: 2 });
-  listener({ events: [{ event: 'key', key: 'Enter', modifiers: [], pressed: true }], dropped: 4 });
+  listener({ events: [{ event: 'pointer', phase: 'move', slot: 'pane-2', generation: 2, x: 1, y: 2, button: null, modifiers: [], delta_x: null, delta_y: null }], dropped: 2 });
+  listener({ events: [{ event: 'pointer', phase: 'press', slot: 'pane-1', generation: 2, x: 1, y: 2, button: 1, modifiers: [], delta_x: null, delta_y: null }], dropped: 3 });
+  listener({ events: [{ event: 'pointer', phase: 'press', slot: 'pane-2', generation: 7, x: 4, y: 5, button: 1, modifiers: ['shift'], delta_x: null, delta_y: null }], dropped: 4 });
   const answer = JSON.parse((await pending).content[0].text);
-  assert.equal(answer.observed, true); assert.equal(answer.event.event, 'key'); assert.equal(answer.dropped, 4);
+  assert.equal(answer.observed, true); assert.equal(answer.event.slot, 'pane-2'); assert.equal(answer.event.generation, 7); assert.equal(answer.dropped, 4);
   assert.equal(disposed, 1);
 });
 

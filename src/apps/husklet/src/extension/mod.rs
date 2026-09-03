@@ -43,7 +43,7 @@ use hl_extension::port::{
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
 pub use files::WorkspaceDirectory;
-pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, Supply, Workspace};
+pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, Supply, WeakEvents, Workspace};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
