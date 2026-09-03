@@ -142,6 +142,8 @@ export class ExecutionOperationError extends Error {
   readonly executionId: string;
   readonly phase: 'wait' | 'logs';
   readonly cause: unknown;
+  /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
+  readonly execution?: ExecutionSummary;
 }
 
 export interface ConnectOptions {

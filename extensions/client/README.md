@@ -107,8 +107,10 @@ const { execution, output } = await host.containers.execAndWait(container.id, {
 ```
 
 All options are validated before creation. A wait or log failure throws
-`ExecutionOperationError` with the retained `executionId` and failing `phase`;
-the client never removes that execution automatically.
+`ExecutionOperationError` with the retained `executionId` and failing `phase`.
+When waiting completed but log retrieval failed, `error.execution` also retains
+the authoritative completed summary so cleanup decisions do not require a
+racy second inspection. The client never removes that execution automatically.
 
 Signals can be coupled to an exact observed execution transition. The default
 waits for exit; use `state: 'changed'` when a non-terminating signal has a

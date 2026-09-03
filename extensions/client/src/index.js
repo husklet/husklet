@@ -11,12 +11,13 @@ import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from
 
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
-  constructor(executionId, phase, cause) {
+  constructor(executionId, phase, cause, execution = undefined) {
     super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = 'ExecutionOperationError';
     this.executionId = executionId;
     this.phase = phase;
     this.cause = cause;
+    this.execution = execution;
   }
 }
 
@@ -264,13 +265,14 @@ export function workspace(session, { signal } = {}) {
         const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
         const executionId = await api.containers.exec(containerId, { command: argv, user, workingDirectory });
         let phase = 'wait';
+        let execution;
         try {
-          const execution = await api.containers.waitExecution(executionId, { timeoutMs });
+          execution = await api.containers.waitExecution(executionId, { timeoutMs });
           phase = 'logs';
           const output = await api.containers.executionLogs(executionId, { stdout, stderr });
           return { execution, output };
         } catch (cause) {
-          throw new ExecutionOperationError(executionId, phase, cause);
+          throw new ExecutionOperationError(executionId, phase, cause, execution);
         }
       },
       attachTerminal: (id, command) => session.call('container_attach_terminal', {

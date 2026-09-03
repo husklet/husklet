@@ -1182,3 +1182,39 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
     await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('real Unix execAndWait preserves the completed execution when bounded log retrieval fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-log-failure-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'c'.repeat(64); const executionId = 'd'.repeat(32);
+  const execution = { id: executionId, container_id: containerId, running: false, exit_code: 7, pid: 42, command: ['false'], user: 'root' };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: execution } }));
+      } else if (frame.payload.call === 'execution_logs') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'logs unavailable' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-log-failure', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).containers.execAndWait(containerId, { command: ['false'] }), (error) => {
+      assert(error instanceof ExecutionOperationError); assert.equal(error.executionId, executionId);
+      assert.equal(error.phase, 'logs'); assert.deepEqual(error.execution, execution);
+      assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait', 'execution_logs']);
+    assert(!calls.includes('execution_remove'));
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
