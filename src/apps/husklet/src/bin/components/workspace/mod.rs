@@ -25,8 +25,10 @@ pub(crate) struct Form {
     pub(crate) cursor_blink: gtk::Switch,
     pub(crate) features: WorkspaceFeatureFields,
     pub(crate) env_box: gtk::Box,
+    pub(crate) env_add: gtk::Button,
     pub(crate) env_rows: RefCell<Vec<(gtk::Entry, gtk::Entry)>>,
     pub(crate) mount_box: gtk::Box,
+    pub(crate) mount_add: gtk::Button,
     pub(crate) mount_rows: RefCell<Vec<(gtk::Entry, gtk::Entry, gtk::CheckButton)>>,
 }
 
@@ -176,11 +178,11 @@ impl Form {
         ];
         cursor_buttons[1].set_group(Some(&cursor_buttons[0]));
         cursor_buttons[2].set_group(Some(&cursor_buttons[0]));
-        for (button, shape) in cursor_buttons.iter().zip([
-            CursorShape::Block,
-            CursorShape::Beam,
-            CursorShape::Underline,
-        ]) {
+        for (button, shape) in
+            cursor_buttons
+                .iter()
+                .zip([CursorShape::Block, CursorShape::Beam, CursorShape::Underline])
+        {
             button.set_active(terminal.cursor_shape == shape);
             ToggleValue::cursor(button, cursor.clone(), shape);
         }
@@ -202,8 +204,10 @@ impl Form {
             cursor_blink,
             features: WorkspaceFeatureFields::new(),
             env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            env_add: gtk::Button::with_label("+ Add variable"),
             env_rows: RefCell::new(Vec::new()),
             mount_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            mount_add: gtk::Button::with_label("+ Add mount"),
             mount_rows: RefCell::new(Vec::new()),
         }
     }
@@ -366,12 +370,12 @@ impl Form {
         let form = self;
         let p = Panel::new("Environment").into_widget();
         p.append(&form.env_box);
-        let add = gtk::Button::with_label("+ Add variable");
+        let add = &form.env_add;
         add.add_css_class("addrow");
         add.set_halign(gtk::Align::Start);
         let form2 = form.clone();
         add.connect_clicked(move |_| form2.add_environment());
-        p.append(&add);
+        p.append(add);
         p
     }
 
@@ -379,12 +383,12 @@ impl Form {
         let form = self;
         let p = Panel::new("Mounts").into_widget();
         p.append(&form.mount_box);
-        let add = gtk::Button::with_label("+ Add mount");
+        let add = &form.mount_add;
         add.add_css_class("addrow");
         add.set_halign(gtk::Align::Start);
         let form2 = form.clone();
         add.connect_clicked(move |_| form2.add_mount());
-        p.append(&add);
+        p.append(add);
         p
     }
 }

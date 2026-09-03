@@ -334,6 +334,8 @@ impl Overview<'_> {
         register_spin(semantics, "settings/font-size", "Font size", &form.font_size);
         register_switch(semantics, "settings/cursor-blink", "Cursor blink", &form.cursor_blink);
         register_switch(semantics, "settings/docker", "Docker socket", &form.features.docker);
+        register_button(semantics, "settings/environment/add", "Add variable", &form.env_add);
+        register_button(semantics, "settings/mount/add", "Add mount", &form.mount_add);
 
         semantics.register(
             "settings/workspace-name",
@@ -402,6 +404,26 @@ impl Overview<'_> {
         let registry = semantics.clone();
         save.connect_sensitive_notify(move |button| registry.set_disabled("settings/save", !button.is_sensitive()));
     }
+}
+
+fn register_button(semantics: &screens::workspace::semantic::Registry, path: &str, label: &str, button: &gtk::Button) {
+    use screens::workspace::semantic::ActionKind;
+    let invoked = button.clone();
+    let focused = button.clone();
+    semantics.register(
+        path,
+        "button",
+        Some(label),
+        None,
+        &[ActionKind::Invoke, ActionKind::Focus],
+        Rc::new(move |action, _| match action {
+            ActionKind::Invoke => invoked.emit_clicked(),
+            ActionKind::Focus => {
+                focused.grab_focus();
+            }
+            _ => {}
+        }),
+    );
 }
 
 fn register_cursor(semantics: &screens::workspace::semantic::Registry, form: &Form) {
@@ -731,9 +753,10 @@ mod tests {
             let status = descendants(page.upcast_ref())
                 .into_iter()
                 .find_map(|widget| {
-                    widget.downcast::<gtk::Label>().ok().filter(|label| {
-                        label.text().as_str() == "No unsaved changes."
-                    })
+                    widget
+                        .downcast::<gtk::Label>()
+                        .ok()
+                        .filter(|label| label.text().as_str() == "No unsaved changes.")
                 })
                 .expect("settings exposes visible save feedback");
             assert_eq!(
@@ -798,6 +821,8 @@ mod tests {
             assert!(labels.contains(&"Text color"));
             assert!(labels.contains(&"CPU cores"));
             assert!(labels.contains(&"Docker socket"));
+            assert!(labels.contains(&"Add variable"));
+            assert!(labels.contains(&"Add mount"));
             assert!(labels.contains(&"Save changes"));
             assert!(snapshot.root.children.iter().any(|node| {
                 node.label.as_deref() == Some("Settings status") && node.value.as_deref() == Some("No unsaved changes.")
@@ -839,6 +864,35 @@ mod tests {
                     );
                 }
             }
+            let entries_before = descendants(page.upcast_ref())
+                .iter()
+                .filter(|widget| widget.is::<gtk::Entry>())
+                .count();
+            let add_variable = snapshot
+                .root
+                .children
+                .iter()
+                .find(|node| node.label.as_deref() == Some("Add variable"))
+                .expect("visible environment row creation has semantics");
+            assert_eq!(add_variable.role, "button");
+            assert!(add_variable.actions.contains(&ActionKind::Invoke));
+            assert!(add_variable.actions.contains(&ActionKind::Focus));
+            registry
+                .act(&Action {
+                    revision: snapshot.revision,
+                    node: add_variable.id,
+                    action: ActionKind::Invoke,
+                    value: None,
+                })
+                .expect("semantic invocation reaches the live Add variable button");
+            assert_eq!(
+                descendants(page.upcast_ref())
+                    .iter()
+                    .filter(|widget| widget.is::<gtk::Entry>())
+                    .count(),
+                entries_before + 2,
+                "semantic row creation adds the same key/value inputs as a click"
+            );
             let pristine_save = snapshot
                 .root
                 .children
