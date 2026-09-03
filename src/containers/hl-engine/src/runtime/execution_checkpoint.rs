@@ -149,7 +149,7 @@ impl CheckpointControl {
         if failure == CaptureFailure::Failed
             && let Some(reason) = self.server.capture_failure_diagnostic(capture)
         {
-            hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint capture failed: {reason}");
+            report_capture_failure(&reason);
         }
         Self::capture_failure_with_exit(engine, failure)
     }
@@ -187,6 +187,48 @@ impl CheckpointControl {
             detail: native.detail,
             fault: None,
         })
+    }
+}
+
+#[cfg(unix)]
+fn report_capture_failure(reason: &str) {
+    // This is the last point at which the checkpoint server's dynamic cause is available. Product
+    // launches intentionally leave hl-log disabled by default, so a gated diagnostic here turns a
+    // specific capture failure into an anonymous `CaptureFailed` for the caller and operator.
+    eprintln!("checkpoint capture failed: {reason}");
+}
+
+#[cfg(all(test, unix))]
+mod diagnostic_tests {
+    const CHILD: &str = "runtime::execution::checkpoint::diagnostic_tests::capture_failure_reason_child";
+    const CHILD_ENV: &str = "HL_CAPTURE_FAILURE_REASON_CHILD";
+
+    #[test]
+    fn capture_failure_reason_child() {
+        if std::env::var_os(CHILD_ENV).is_some() {
+            super::report_capture_failure("every native checkpoint channel closed");
+        }
+    }
+
+    #[test]
+    fn capture_failure_reason_is_visible_with_logging_disabled() {
+        let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+            .args(["--exact", CHILD, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .env_remove(hl_log::LOG_TAGS)
+            .env_remove(hl_log::LOG_LEVEL)
+            .env_remove(hl_log::PROFILE_TAGS)
+            .output()
+            .expect("run capture-failure diagnostic child");
+
+        assert!(output.status.success(), "child failed: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("diagnostic stderr is UTF-8");
+        let diagnostic = "checkpoint capture failed: every native checkpoint channel closed";
+        assert_eq!(
+            stderr.matches(diagnostic).count(),
+            1,
+            "failure cause must be emitted exactly once with logging disabled: {stderr:?}",
+        );
     }
 }
 
