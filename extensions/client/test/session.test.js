@@ -975,6 +975,51 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
   }
 });
 
+test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns advanced screen', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-spawn-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-spawn'; let spawns = 0; let reads = 0;
+  const screen = (revision, lines) => ({ slot, generation: 5, revision, columns: 80, rows: 24, lines, cursor_column: 0, cursor_row: 1, truncated: false });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_read_pane') {
+        reads += 1; assert.deepEqual(frame.payload.with, { slot, lines: 40 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen(reads === 1 ? 9 : 10, reads === 1 ? ['$ '] : ['monitor']) } }));
+      } else if (frame.payload.call === 'terminal_spawn_observed') {
+        spawns += 1; assert.deepEqual(frame.payload.with, { slot, generation: 5, revision: 9, command: ['monitor', '--once'] });
+        if (spawns === 1) socket.write(encode({ channel: 120, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 5, revision: 10, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'spawn-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.spawnAndWait(slot, 5, 9, [], { lines: 40 }), /command/);
+    await assert.rejects(terminal.spawnAndWait(slot, 5, 9, ['monitor'], { lines: 40, timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid argv or timeout must not subscribe, read, or spawn');
+    const result = await terminal.spawnAndWait(slot, 5, 9, ['monitor', '--once'], { lines: 40 });
+    assert.equal(result.changed, true); assert.equal(result.before.revision, 9); assert.equal(result.after.revision, 10);
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_spawn_observed', 'terminal_read_pane', 'event_unsubscribe']);
+    calls.length = 0; reads = 0;
+    assert.deepEqual(await terminal.spawnAndWait(slot, 5, 9, ['monitor', '--once'], { lines: 40, timeoutMs: 5 }), {
+      changed: false, command: ['monitor', '--once'], before: screen(9, ['$ ']),
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_read_pane', 'terminal_spawn_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

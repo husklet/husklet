@@ -685,6 +685,45 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal spawn wait requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal spawn wait requires nonnegative safe integer generation and revision');
+    }
+    const argv = [...exactCommand(command)];
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('terminal spawn wait lines must be a nonnegative safe integer');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal spawn wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      const before = await api.terminal.read(slot, lines);
+      if (before.generation !== generation || before.revision !== revision) {
+        throw new Error('terminal screen cursor changed before spawn authority');
+      }
+      await api.terminal.spawnObserved(slot, generation, revision, argv);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, command: argv, before };
+      const after = await api.terminal.read(slot, lines);
+      if (after.generation === generation && after.revision === revision) {
+        throw new Error('pane change did not advance the terminal screen cursor after spawn');
+      }
+      return { changed: true, command: argv, before, after };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');
     exactSemanticAction(action);

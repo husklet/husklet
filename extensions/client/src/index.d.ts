@@ -337,6 +337,12 @@ export interface WorkspaceApi {
       >;
     spawn(slot: string, command: string[]): Promise<void>;
     spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
+    /** Arm and read before CAS spawn, then return a later bounded terminal screen revision. */
+    spawnAndWait(slot: string, generation: number, revision: number, command: string[],
+      options?: { lines?: number; timeoutMs?: number }): Promise<
+        | { changed: true; command: string[]; before: PaneText; after: PaneText }
+        | { changed: false; command: string[]; before: PaneText }
+      >;
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;
     /** Discover the pane kind and return terminal screen text or bounded semantic XML. */

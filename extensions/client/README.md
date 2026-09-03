@@ -153,6 +153,18 @@ const written = await host.terminal.writeAndWait(
 if (written.changed) console.log(written.after.lines.join('\n'));
 ```
 
+Spawning exact argv has the same observable form. Success means the bounded
+terminal projection advanced; it does not claim that a silent command emitted
+particular text or reached application-specific readiness:
+
+```js
+const spawned = await host.terminal.spawnAndWait(
+  pane.slot, screen.generation, screen.revision, ['htop'],
+  { lines: 200, timeoutMs: 10_000 },
+);
+if (spawned.changed) console.log(spawned.after.lines.join('\n'));
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 
