@@ -292,7 +292,10 @@ fn action(
         ],
         Rc::new(move |action, _| match action {
             super::super::semantic::ActionKind::Invoke => {
-                let _ = commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal);
+                let restore_focus = semantic_button.has_focus();
+                if commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal) && restore_focus {
+                    focus_replacement(&semantic_shelf, deed);
+                }
             }
             super::super::semantic::ActionKind::Focus => {
                 semantic_button.grab_focus();

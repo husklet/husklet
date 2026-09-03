@@ -867,6 +867,41 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         Some("Remove".into()),
         "cancelling returns keyboard focus to the restored Remove control"
     );
+
+    fixture.shelf.fault(&named("alpha"), 3);
+    let faulted = fixture.view.semantic_snapshot();
+    let retry = faulted
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Retry"))
+        .expect("faulted extension exposes Retry");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: faulted.revision,
+            node: retry.id,
+            action: ActionKind::Focus,
+            value: None,
+        })
+        .expect("screen-reader focus reaches Retry");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: faulted.revision,
+            node: retry.id,
+            action: ActionKind::Invoke,
+            value: None,
+        })
+        .expect("screen-reader activation retries the fault");
+    assert_eq!(fixture.stage("alpha"), Stage::Duty);
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Disable".into()),
+        "semantic Retry keeps keyboard focus on its truthful replacement"
+    );
     window.close();
 }
 
