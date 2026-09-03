@@ -604,6 +604,49 @@ test('container creation validates runtime identity and retains it until success
   assert.equal(fieldValue(stage, 'Run as user (optional)'), '');
 });
 
+test('container creation validates bounded labels and retains them until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('label persistence temporarily unavailable');
+      return 'labelled-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'labelled');
+  const placeholder = 'Labels JSON (optional)';
+  const error = 'Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.';
+  for (const invalid of [
+    '{"role":"worker"}',
+    '[["","worker"]]',
+    '[["role","worker"],["role","other"]]',
+    JSON.stringify([[`k${'é'.repeat(128)}`, 'value']]),
+    JSON.stringify([['key', 'é'.repeat(2049)]]),
+    JSON.stringify(Array.from({ length: 129 }, (_, index) => [`key-${index}`, 'value'])),
+  ]) {
+    change(stage, placeholder, invalid);
+    assert.ok(labelled(stage, error));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, placeholder, JSON.stringify(Array.from({ length: 128 }, (_, index) => [`key-${index}`, 'value'])));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 128-label boundary is accepted');
+  const requested = '[["role","worker"],["com.example/tier","backend"],["empty",""]]';
+  change(stage, placeholder, requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'label persistence temporarily unavailable'));
+  assert.equal(fieldValue(stage, placeholder), requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'labelled', labels: [['role', 'worker'], ['com.example/tier', 'backend'], ['empty', '']] };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'labelled-container'], ['reload']]);
+  assert.equal(fieldValue(stage, placeholder), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };

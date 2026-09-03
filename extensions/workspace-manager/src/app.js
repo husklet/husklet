@@ -135,6 +135,19 @@ function containerCreateOptions(draft) {
   if (user && (bytes(user) > 256 || user.includes('\0'))) {
     throw new Error('Run as user must be a nonempty, NUL-free value of at most 256 bytes.');
   }
+  const labelsText = draft.labels.trim();
+  let labels;
+  if (labelsText) {
+    try { labels = JSON.parse(labelsText); } catch { throw new Error('Labels must be valid JSON pairs, such as [["role","worker"]].'); }
+    if (!Array.isArray(labels) || labels.length > 128
+      || labels.some((pair) => !Array.isArray(pair) || pair.length !== 2
+        || pair.some((value) => typeof value !== 'string')
+        || pair[0].length === 0 || pair[0].includes('\0') || bytes(pair[0]) > 256
+        || pair[1].includes('\0') || bytes(pair[1]) > 4_096)
+      || new Set(labels.map(([name]) => name)).size !== labels.length) {
+      throw new Error('Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.');
+    }
+  }
   const commandText = draft.command.trim();
   let command;
   if (commandText) {
@@ -205,6 +218,7 @@ function containerCreateOptions(draft) {
     ...(environment ? { environment } : {}),
     ...(workingDirectory ? { working_directory: workingDirectory } : {}),
     ...(user ? { user } : {}),
+    ...(labels ? { labels } : {}),
     ...(memoryMb === null ? {} : { memory_mb: memoryMb }),
     ...(cpus === null ? {} : { cpus }),
     ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
@@ -233,7 +247,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({
-    image: '', name: '', hostname: '', user: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+    image: '', name: '', hostname: '', user: '', labels: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
   });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -286,7 +300,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
       setCreated(null); setDraft({
-        image: '', name: '', hostname: '', user: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
+        image: '', name: '', hostname: '', user: '', labels: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
       });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
@@ -317,6 +331,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }),
         h(Entry, { value: draft.hostname, placeholder: 'Hostname (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, hostname: String(event.value ?? '') })) }),
         h(Entry, { value: draft.user, placeholder: 'Run as user (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, user: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.labels, placeholder: 'Labels JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, labels: String(event.value ?? '') })) }),
         h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
         h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),
         h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }),
