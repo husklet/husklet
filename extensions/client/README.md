@@ -165,6 +165,14 @@ const spawned = await host.terminal.spawnAndWait(
 if (spawned.changed) console.log(spawned.after.lines.join('\n'));
 ```
 
+Opening the extension session's tab can be observed without matching its mutable
+title. The host-returned tab identity is verified against bounded pane inventory:
+
+```js
+const opened = await host.terminal.openTabAndWait('Agent tools', { timeoutMs: 10_000 });
+if (opened.changed) console.log(opened.tab, opened.pane.slot);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

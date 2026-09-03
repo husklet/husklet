@@ -32,6 +32,7 @@ groups.get('Terminal and panes').push(
   '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `pane-observe` and `terminal-control`.',
   '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.',
   '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.',
+  '- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; requires `pane-observe` and `terminal-control`.',
 );
 groups.get('Extensions').push(
   '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.',

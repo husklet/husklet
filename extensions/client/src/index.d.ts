@@ -327,6 +327,11 @@ export interface WorkspaceApi {
     tabs(): Promise<TabSummary[]>;
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
+    /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. */
+    openTabAndWait(title: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; tab: string; pane: InspectablePane }
+      | { changed: false; tab: string; title: string }
+    >;
     split(slot: string, division: Division): Promise<string>;
     splitObserved(slot: string, generation: number, revision: number, division: Division): Promise<string>;
     /** Arm pane changes before a CAS split, then verify the returned child slot in bounded inventory. */

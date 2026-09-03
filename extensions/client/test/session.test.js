@@ -1020,6 +1020,48 @@ test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns 
   }
 });
 
+test('real Unix openTabAndWait arms before creation and verifies returned tab identity', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-open-tab-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let opens = 0;
+  const pane = { slot: 'surface-1', generation: 1, revision: 1, kind: 'surface', provider: { extension: 'demo', provider: 'main' }, tab: 'tab-owned', title: 'Agent tools', focused: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_open_tab') {
+        opens += 1; assert.deepEqual(frame.payload.with, { title: 'Agent tools' });
+        if (opens === 1) socket.write(encode({ channel: 130, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'surface-1', kind: 'surface', generation: 1, revision: 1, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'tab-owned' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.openTabAndWait('\n', { timeoutMs: 10 }), /title/);
+    await assert.rejects(terminal.openTabAndWait('Agent tools', { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid title or timeout must not subscribe or open');
+    assert.deepEqual(await terminal.openTabAndWait('Agent tools'), { changed: true, tab: 'tab-owned', pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.openTabAndWait('Agent tools', { timeoutMs: 5 }), {
+      changed: false, tab: 'tab-owned', title: 'Agent tools',
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

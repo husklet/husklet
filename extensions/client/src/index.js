@@ -724,6 +724,33 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.openTabAndWait = async (title, { timeoutMs = 30_000 } = {}) => {
+    const wanted = exactPaneTitle(title);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal tab wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => changed(change));
+    let timer;
+    try {
+      const tab = await api.terminal.openTab(wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, tab, title: wanted };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.tab === tab);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'opened tab cannot be verified from a truncated pane inventory'
+        : 'opened tab has no observable pane');
+      return { changed: true, tab, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');
     exactSemanticAction(action);
