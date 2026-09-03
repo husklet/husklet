@@ -186,6 +186,16 @@ exported by name from the package root.
 
 `vocabulary` exports both lists, and `tags` exports every component name.
 
+### Terminal transcript
+
+`TerminalTranscript` is a native, selectable text projection for terminal
+inspection. It accepts string lines or `{id, number, text, timestamp, stream,
+tone}` records, an optional `{line, column}` cursor, line-number/timestamp
+toggles, and bounded explicit actions. The component keeps the newest 256
+lines, no more than 2,048 UTF-8 bytes per line or 65,536 bytes overall, and
+shows when content was truncated. `onSelect` receives the retained line rather
+than asking consumers to recover identity from rendered text.
+
 ## Tests
 
 `npm test` — plain `node --test`, no framework.

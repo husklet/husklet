@@ -4,7 +4,45 @@
 // and the handlers for the interactions it can report. A property no component
 // declares is a type error, which is the whole point of generating this.
 
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+
+export interface TerminalTranscriptLine {
+  id?: string | number;
+  number?: number;
+  text: string;
+  timestamp?: string;
+  stream?: 'stdout' | 'stderr' | 'system';
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+}
+
+export interface TerminalTranscriptAction {
+  id?: string;
+  label: string;
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+  variant?: 'solid' | 'outline' | 'ghost' | 'text';
+  destructive?: boolean;
+  enabled?: boolean;
+  onInvoke?: () => void;
+}
+
+export interface TerminalTranscriptProps extends NodeProps {
+  lines?: readonly (string | TerminalTranscriptLine)[];
+  cursor?: { line: number; column: number };
+  lineNumbers?: boolean;
+  timestamps?: boolean;
+  selected?: string | number;
+  truncated?: boolean;
+  droppedLines?: number;
+  actions?: readonly TerminalTranscriptAction[];
+  onSelect?: (line: TerminalTranscriptLine, sourceIndex: number) => void;
+  emptyLabel?: string;
+}
+
+export const TerminalTranscript: ComponentType<TerminalTranscriptProps>;
+export const TERMINAL_TRANSCRIPT_LINE_LIMIT: 256;
+export const TERMINAL_TRANSCRIPT_LINE_BYTE_LIMIT: 2048;
+export const TERMINAL_TRANSCRIPT_BYTE_LIMIT: 65536;
+export const TERMINAL_TRANSCRIPT_ACTION_LIMIT: 8;
 
 /** A spacing or sizing quantity: steps on the 4px scale unless named. */
 export type Length = number | 'fill' | 'content' | { chars: number } | { step: number };
@@ -5182,8 +5220,6 @@ export interface StackFrameProps extends NodeProps {
   tone?: "neutral" | "Neutral" | "accent" | "Accent" | "positive" | "Positive" | "warning" | "Warning" | "danger" | "Danger";
 }
 
-
-import type { ComponentType } from 'react';
 
 export const Column: ComponentType<ColumnProps>;
 export const Row: ComponentType<RowProps>;

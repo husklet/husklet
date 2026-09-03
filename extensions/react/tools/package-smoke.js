@@ -47,9 +47,9 @@ try {
     cwd: consumer, stdio: 'pipe',
   });
   const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
-    import { Button, acceptsChildren, connect, tags, workspace } from '@husklet/react';
+    import { Button, TerminalTranscript, acceptsChildren, connect, tags, workspace } from '@husklet/react';
     import catalogue from '@husklet/react/catalogue' with { type: 'json' };
-    if (typeof connect !== 'function' || typeof workspace !== 'function') process.exit(1);
+    if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function') process.exit(1);
     if (Button !== 'Button' || !acceptsChildren('Column')) process.exit(2);
     if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
   `], { cwd: consumer, encoding: 'utf8' });
@@ -73,7 +73,7 @@ try {
   assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { render, useHostEvents, usePaneSelection, workspace, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList } from '@husklet/react';
+    import { TerminalTranscript, render, useHostEvents, usePaneSelection, workspace, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
     const table: Promise<ProcessList> = api.containers.processes('container');
@@ -83,6 +83,8 @@ try {
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
     void api.containers.rename('a'.repeat(64), 'worker_2.prod');
     void api.terminal.retitle('pane-1', 'Build 🧪');
+    const transcriptProps: TerminalTranscriptProps = { lines: [{ text: 'ready', stream: 'stdout' }], cursor: { line: 1, column: 5 } };
+    void TerminalTranscript; void transcriptProps;
     void api.subscribe('terminal');
     void api.subscribe('volumes');
     void api.subscribe('extensions');
