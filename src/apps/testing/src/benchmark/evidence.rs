@@ -373,16 +373,16 @@ impl Measurement {
             .checked_add(timeout)
             .ok_or("measurement acquisition timeout overflowed")?;
         let intent = lock(intent_path, deadline)?;
-        drop(open_lock(box_path)?);
-        sustained_quiet(quiet, deadline, &mut probe)?;
         let box_lock = lock(box_path, deadline)?;
-        if !probe(true)? {
-            return Err("box became busy while acquiring the measurement lock".into());
-        }
+        sustained_quiet(quiet, deadline, true, &mut probe)?;
         Ok(Self {
             _intent: intent,
             _box_lock: box_lock,
         })
+    }
+
+    pub fn receipt(&self) -> &'static str {
+        "measurement-lock-v2 intent=held exclusive=held quiet=qualified-under-exclusive\n"
     }
 }
 
@@ -415,11 +415,12 @@ fn open_lock(path: &Path) -> Result<File, Error> {
 fn sustained_quiet(
     quiet: Duration,
     deadline: Instant,
+    lock_held: bool,
     probe: &mut impl FnMut(bool) -> Result<bool, Error>,
 ) -> Result<(), Error> {
     let mut quiet_since = None;
     while Instant::now() < deadline {
-        if !probe(false)? {
+        if !probe(lock_held)? {
             quiet_since = None;
         } else if quiet.is_zero() {
             return Ok(());
@@ -675,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_is_rechecked_while_the_box_lock_is_held() {
+    fn quiet_qualification_runs_only_while_the_exclusive_lock_is_held() {
         let directory = tempfile::tempdir().unwrap();
         let intent = directory.path().join("wanted");
         let box_lock = directory.path().join("box");
@@ -687,21 +688,15 @@ mod tests {
             Duration::from_secs(1),
             |lock_held| {
                 probes.set(probes.get() + 1);
-                if probes.get() == 1 {
-                    assert!(!lock_held);
-                    return Ok(true);
-                }
                 assert!(lock_held);
                 let competing = OpenOptions::new().read(true).write(true).open(&box_lock).unwrap();
                 assert!(fs2::FileExt::try_lock_shared(&competing).is_err());
-                Ok(false)
+                Ok(true)
             },
-        );
-        let Err(error) = result else {
-            panic!("measurement accepted a busy post-lock probe");
-        };
-        assert!(error.to_string().contains("became busy"));
-        assert_eq!(probes.get(), 2);
+        )
+        .unwrap();
+        assert_eq!(result.receipt(), "measurement-lock-v2 intent=held exclusive=held quiet=qualified-under-exclusive\n");
+        assert_eq!(probes.get(), 1);
     }
 
     #[cfg(target_os = "linux")]

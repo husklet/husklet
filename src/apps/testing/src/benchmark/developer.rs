@@ -135,7 +135,8 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         atomic_json(&options.results.join("identity.json"), &expected)?;
     }
     let completed = read_ledger(&ledger_path, options.samples)?;
-    let _measurement = Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load)?;
+    let measurement = Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load)?;
+    fs::write(options.results.join("lock.receipt"), measurement.receipt())?;
     for sample in 0..options.samples {
         for (position, mode) in ORDER.into_iter().enumerate() {
             if completed
