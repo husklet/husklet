@@ -118,7 +118,9 @@ test('the high-density operations story is selectable in the shipped playground'
   const stage = host();
   const source = new LargeRecordSource();
   const first = stage.render(h(Playground, { largeSource: source }));
-  const item = node(first.patches, 'ListItemButton', 'DataTable');
+  const selector = first.patches.find((patch) => patch.Create?.tag === 'Select').Create.id;
+  stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: 'tables' });
+  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'DataTable');
   assert.ok(item);
   const before = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke` });

@@ -7,7 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { PACKAGE } from './host.js';
-import { tags } from '../src/catalogue.js';
+import { FLOW_STORIES } from '../src/app.js';
+import { grouped, tags } from '../src/catalogue.js';
 
 const { KIND, Reader, encode } = await import(new URL('src/wire.js', `file://${PACKAGE}`));
 
@@ -84,11 +85,11 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.equal(rendered.with.frame.sequence, 1);
   assert.equal(length.with.slot, 'storybook-main');
   assert.deepEqual(length.with.mutation.Length, { source: 100, version: 1, rows: 100_000 });
-  assert.ok(rendered.with.frame.patches.length > 250, 'the live frame does not contain the full component browser');
+  assert.ok(rendered.with.frame.patches.length < 1_200, 'the live frame exceeded the host patch budget');
   assert.equal(
     rendered.with.frame.patches.filter((patch) => patch.Create?.tag === 'ListItemButton').length,
-    tags.length + 27,
-    'the live playground did not render the complete component catalogue and end-user flows',
+    FLOW_STORIES.length + grouped().find((family) => family.name === 'buttons').tags.length,
+    'the live playground did not render flows and the active component family',
   );
   assert.ok(
     rendered.with.frame.patches.some((patch) => patch.Create?.tag === 'Scroll'),

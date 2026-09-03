@@ -60,20 +60,26 @@ import { CONFIRMATION_STORY, ConfirmationStory } from './confirmation.js';
 const { createElement: h, useMemo, useRef, useState } = React;
 
 const INTERACTION_HISTORY = 5;
+export const FLOW_STORIES = Object.freeze([
+  CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
+  QUERY_PLAN_STORY, DEPENDENCY_GRAPH_STORY, NETWORK_WATERFALL_STORY, COVERAGE_STORY,
+  TEST_REPORT_STORY, TIMELINE_VIEW_STORY, DISASSEMBLY_STORY, MEMORY_STORY, PROFILE_STORY,
+  FILE_BROWSER_STORY, METRICS_STORY, BINARY_STORY, ACQUISITION_STORY, KEYBOARD_STORY,
+  STREAMING_LOG_STORY, EVENT_STREAM_STORY, KEY_VALUE_STORY, JSON_STORY, STACK_STORY,
+  MARKDOWN_STORY, FORM_STORY, DIFF_STORY, NAVIGATION_STORY,
+]);
 
 /** The whole playground. */
 export function Playground({ largeSource, timelineSource, keyValueSource, fileSource, initialStory = OPENING } = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
+  const [activeFamily, setActiveFamily] = useState(() =>
+    families.find((family) => family.tags.some((tag) => tag.name === initialStory))?.name
+      ?? families.find((family) => family.tags.some((tag) => tag.name === OPENING))?.name
+      ?? families[0]?.name);
   const [edited, setEdited] = useState(() => new Map());
 
-  const flow = selected === ACQUISITION_STORY || selected === FORM_STORY || selected === KEYBOARD_STORY
-    || selected === NAVIGATION_STORY || selected === STREAMING_LOG_STORY || selected === EVENT_STREAM_STORY
-    || selected === KEY_VALUE_STORY || selected === DIFF_STORY || selected === MARKDOWN_STORY
-    || selected === JSON_STORY || selected === STACK_STORY || selected === BINARY_STORY
-    || selected === METRICS_STORY || selected === FILE_BROWSER_STORY || selected === PROFILE_STORY
-    || selected === MEMORY_STORY || selected === DISASSEMBLY_STORY || selected === TIMELINE_VIEW_STORY
-    || selected === TEST_REPORT_STORY || selected === COVERAGE_STORY || selected === NETWORK_WATERFALL_STORY || selected === DEPENDENCY_GRAPH_STORY || selected === QUERY_PLAN_STORY || selected === TERMINAL_TRANSCRIPT_STORY || selected === COMMAND_PALETTE_STORY || selected === JSON_TREE_STORY || selected === CONFIRMATION_STORY;
+  const flow = FLOW_STORIES.includes(selected);
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
@@ -86,7 +92,7 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
   return h(
     Row,
     { gap: 0, grow: true, wrap: true },
-    h(Sidebar, { key: 'sidebar', families, selected, onSelect: setSelected }),
+    h(Sidebar, { key: 'sidebar', families, selected, activeFamily, onFamily: setActiveFamily, onSelect: setSelected }),
     h(Separator, { key: 'first', orientation: 'vertical' }),
     h(Preview, { key: `preview-${selected}`, name: selected, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers: contract?.triggers ?? [] }),
     h(Separator, { key: 'second', orientation: 'vertical' }),
@@ -102,7 +108,11 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
 }
 
 /** Every component, under the family it belongs to. */
-export function Sidebar({ families, selected, onSelect }) {
+export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }) {
+  const [search, setSearch] = useState('');
+  const family = families.find((candidate) => candidate.name === activeFamily) ?? families[0];
+  const query = search.trim().toLocaleLowerCase();
+  const visible = family.tags.filter((tag) => query.length === 0 || tag.name.toLocaleLowerCase().includes(query));
   return h(
     Scroll,
     { width: 'fill', height: 'fill' },
@@ -110,114 +120,19 @@ export function Sidebar({ families, selected, onSelect }) {
       List,
       { pad: 1 },
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
-      h(ListItemButton, { key: CONFIRMATION_STORY, label: CONFIRMATION_STORY, selected: selected === CONFIRMATION_STORY, onInvoke: () => onSelect(CONFIRMATION_STORY) }),
-      h(ListItemButton, { key: COMMAND_PALETTE_STORY, label: COMMAND_PALETTE_STORY, selected: selected === COMMAND_PALETTE_STORY, onInvoke: () => onSelect(COMMAND_PALETTE_STORY) }),
-      h(ListItemButton, { key: JSON_TREE_STORY, label: JSON_TREE_STORY, selected: selected === JSON_TREE_STORY, onInvoke: () => onSelect(JSON_TREE_STORY) }),
-      h(ListItemButton, { key: TERMINAL_TRANSCRIPT_STORY, label: TERMINAL_TRANSCRIPT_STORY, selected: selected === TERMINAL_TRANSCRIPT_STORY, onInvoke: () => onSelect(TERMINAL_TRANSCRIPT_STORY) }),
-      h(ListItemButton, { key: QUERY_PLAN_STORY, label: QUERY_PLAN_STORY, selected: selected === QUERY_PLAN_STORY, onInvoke: () => onSelect(QUERY_PLAN_STORY) }),
-      h(ListItemButton, { key: DEPENDENCY_GRAPH_STORY, label: DEPENDENCY_GRAPH_STORY, selected: selected === DEPENDENCY_GRAPH_STORY, onInvoke: () => onSelect(DEPENDENCY_GRAPH_STORY) }),
-      h(ListItemButton, { key: NETWORK_WATERFALL_STORY, label: NETWORK_WATERFALL_STORY, selected: selected === NETWORK_WATERFALL_STORY, onInvoke: () => onSelect(NETWORK_WATERFALL_STORY) }),
-      h(ListItemButton, { key: COVERAGE_STORY, label: COVERAGE_STORY, selected: selected === COVERAGE_STORY, onInvoke: () => onSelect(COVERAGE_STORY) }),
-      h(ListItemButton, { key: TEST_REPORT_STORY, label: TEST_REPORT_STORY, selected: selected === TEST_REPORT_STORY, onInvoke: () => onSelect(TEST_REPORT_STORY) }),
-      h(ListItemButton, { key: TIMELINE_VIEW_STORY, label: TIMELINE_VIEW_STORY, selected: selected === TIMELINE_VIEW_STORY, onInvoke: () => onSelect(TIMELINE_VIEW_STORY) }),
-      h(ListItemButton, { key: DISASSEMBLY_STORY, label: DISASSEMBLY_STORY, selected: selected === DISASSEMBLY_STORY, onInvoke: () => onSelect(DISASSEMBLY_STORY) }),
-      h(ListItemButton, { key: MEMORY_STORY, label: MEMORY_STORY, selected: selected === MEMORY_STORY, onInvoke: () => onSelect(MEMORY_STORY) }),
-      h(ListItemButton, { key: PROFILE_STORY, label: PROFILE_STORY, selected: selected === PROFILE_STORY, onInvoke: () => onSelect(PROFILE_STORY) }),
-      h(ListItemButton, {
-        key: FILE_BROWSER_STORY,
-        label: FILE_BROWSER_STORY,
-        selected: selected === FILE_BROWSER_STORY,
-        onInvoke: () => onSelect(FILE_BROWSER_STORY),
+      ...FLOW_STORIES.map((story) => h(ListItemButton, { key: story, label: story, selected: selected === story, onInvoke: () => onSelect(story) })),
+      h(ListSubheader, { key: 'components', label: 'Components', tooltip: 'choose one bounded catalogue family' }),
+      h(Select, {
+        key: 'family', value: family.name,
+        choices: families.map((candidate) => ({ value: candidate.name, label: candidate.label })),
+        onChange: (event) => { setSearch(''); onFamily(String(event.value)); },
       }),
-      h(ListItemButton, {
-        key: METRICS_STORY,
-        label: METRICS_STORY,
-        selected: selected === METRICS_STORY,
-        onInvoke: () => onSelect(METRICS_STORY),
-      }),
-      h(ListItemButton, {
-        key: BINARY_STORY,
-        label: BINARY_STORY,
-        selected: selected === BINARY_STORY,
-        onInvoke: () => onSelect(BINARY_STORY),
-      }),
-      h(ListItemButton, {
-        key: ACQUISITION_STORY,
-        label: ACQUISITION_STORY,
-        selected: selected === ACQUISITION_STORY,
-        onInvoke: () => onSelect(ACQUISITION_STORY),
-      }),
-      h(ListItemButton, {
-        key: KEYBOARD_STORY,
-        label: KEYBOARD_STORY,
-        selected: selected === KEYBOARD_STORY,
-        onInvoke: () => onSelect(KEYBOARD_STORY),
-      }),
-      h(ListItemButton, {
-        key: STREAMING_LOG_STORY,
-        label: STREAMING_LOG_STORY,
-        selected: selected === STREAMING_LOG_STORY,
-        onInvoke: () => onSelect(STREAMING_LOG_STORY),
-      }),
-      h(ListItemButton, {
-        key: EVENT_STREAM_STORY,
-        label: EVENT_STREAM_STORY,
-        selected: selected === EVENT_STREAM_STORY,
-        onInvoke: () => onSelect(EVENT_STREAM_STORY),
-      }),
-      h(ListItemButton, {
-        key: KEY_VALUE_STORY,
-        label: KEY_VALUE_STORY,
-        selected: selected === KEY_VALUE_STORY,
-        onInvoke: () => onSelect(KEY_VALUE_STORY),
-      }),
-      h(ListItemButton, {
-        key: JSON_STORY,
-        label: JSON_STORY,
-        selected: selected === JSON_STORY,
-        onInvoke: () => onSelect(JSON_STORY),
-      }),
-      h(ListItemButton, {
-        key: STACK_STORY,
-        label: STACK_STORY,
-        selected: selected === STACK_STORY,
-        onInvoke: () => onSelect(STACK_STORY),
-      }),
-      h(ListItemButton, {
-        key: MARKDOWN_STORY,
-        label: MARKDOWN_STORY,
-        selected: selected === MARKDOWN_STORY,
-        onInvoke: () => onSelect(MARKDOWN_STORY),
-      }),
-      h(ListItemButton, {
-        key: FORM_STORY,
-        label: FORM_STORY,
-        selected: selected === FORM_STORY,
-        onInvoke: () => onSelect(FORM_STORY),
-      }),
-      h(ListItemButton, {
-        key: DIFF_STORY,
-        label: DIFF_STORY,
-        selected: selected === DIFF_STORY,
-        onInvoke: () => onSelect(DIFF_STORY),
-      }),
-      h(ListItemButton, {
-        key: NAVIGATION_STORY,
-        label: NAVIGATION_STORY,
-        selected: selected === NAVIGATION_STORY,
-        onInvoke: () => onSelect(NAVIGATION_STORY),
-      }),
-      ...families.flatMap((family) => [
-        h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
-        ...family.tags.map((tag) =>
-          h(ListItemButton, {
-            key: tag.name,
-            label: tag.name,
-            selected: tag.name === selected,
-            onInvoke: () => onSelect(tag.name),
-          }),
-        ),
-      ]),
+      h(Entry, { key: 'search', value: search, placeholder: 'Search active family', onChange: (event) => setSearch(String(event.value ?? '').slice(0, 80)) }),
+      h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
+      ...visible.map((tag) => h(ListItemButton, {
+        key: tag.name, label: tag.name, selected: tag.name === selected, onInvoke: () => onSelect(tag.name),
+      })),
+      ...(visible.length === 0 ? [h(Text, { key: 'none', label: 'No components match this family search.', color: 'text-dim', wrap: true })] : []),
     ),
   );
 }

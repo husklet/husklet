@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground, Preview, interactionDetail, interactionProps } from '../src/app.js';
-import { tags } from '../src/catalogue.js';
+import { FLOW_STORIES, Playground, Preview, interactionDetail, interactionProps } from '../src/app.js';
+import { grouped, tags } from '../src/catalogue.js';
 import { defaults } from '../src/defaults.js';
 import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
@@ -61,7 +61,7 @@ test('every component renders with its defaults as sane patches', () => {
   }
 });
 
-test('the playground renders one frame holding the three panes', () => {
+test('the playground renders flows and only one bounded component family', () => {
   const stage = host();
   const frame = stage.render(h(Playground));
   const built = created(frame.patches).map((entry) => entry.tag);
@@ -69,9 +69,10 @@ test('the playground renders one frame holding the three panes', () => {
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    tags.length + 27,
-    'every component and all end-user flows are listed',
+    FLOW_STORIES.length + grouped().find((family) => family.name === 'buttons').tags.length,
+    'flows and the active family are listed',
   );
+  assert.ok(built.filter((tag) => tag === 'ListItemButton').length < tags.length / 2);
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
 });
@@ -348,7 +349,9 @@ test('the interaction console preserves a bounded sequence and can be cleared', 
 test('selecting a component in the sidebar renders that component', () => {
   const stage = host();
   const first = stage.render(h(Playground));
-  const item = node(first.patches, 'ListItemButton', 'Chip');
+  const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'display' });
+  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Chip');
   assert.ok(item, 'the sidebar has no row for <Chip>');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
@@ -362,7 +365,9 @@ test('selecting a component in the sidebar renders that component', () => {
 test('the inspector follows the selected component contract and shows its interactions', () => {
   const stage = host();
   const first = stage.render(h(Playground));
-  const item = node(first.patches, 'ListItemButton', 'Switch');
+  const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'forms' });
+  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Switch');
   assert.ok(item, 'the sidebar has no row for <Switch>');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
@@ -370,6 +375,35 @@ test('the inspector follows the selected component contract and shows its intera
   assert.ok(node(patches, 'Text', 'checked'), '<Switch> does not expose its checked property');
   assert.ok(node(patches, 'Text', 'onToggle'), '<Switch> does not expose its Toggle interaction');
   assert.equal(node(patches, 'Text', 'label'), null, '<Switch> exposes Button-only label editing');
+});
+
+test('family navigation reaches every catalogue component without simultaneous materialization', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  const seen = new Set();
+  for (const family of grouped()) {
+    stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: family.name });
+    const labels = stage.frames.at(-1).patches.filter((patch) => patch.SetProp?.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text);
+    for (const tag of family.tags) assert.ok(labels.includes(tag.name), `${family.name} omits ${tag.name}`);
+    family.tags.forEach((tag) => seen.add(tag.name));
+  }
+  assert.deepEqual([...seen].sort(), tags.map((tag) => tag.name).sort());
+});
+
+test('active-family search is native, bounded, and keeps the selected story visible', () => {
+  const stage = host();
+  const first = stage.render(h(Playground));
+  const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
+  const search = created(first.patches).find((entry) => entry.tag === 'Entry').id;
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: 'content' }));
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: search, id: `${search}:Change`, value: `Log${'x'.repeat(100)}` }));
+  const values = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    patch.SetProp?.id === search && patch.SetProp.prop === 'Value');
+  assert.equal(values.at(-1).SetProp.value.Text.length, 80);
+  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Heading', 'Button'), 'active preview disappears while browsing');
+  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Text', 'No components match this family search.'));
 });
 
 test('the inspector exposes only the genuine extended interactions', () => {
