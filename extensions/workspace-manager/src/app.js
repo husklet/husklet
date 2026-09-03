@@ -599,6 +599,8 @@ export function Volumes({ api, resource, volumeDetails }) {
   const [name, setName] = useState('');
   const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, detail: null, error: null });
   const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const create = async () => {
     const requested = name.trim();
     if (!requested || creation.state === 'loading') return;
@@ -623,13 +625,22 @@ export function Volumes({ api, resource, volumeDetails }) {
     await resource.reload();
   };
   const inspect = async (volume) => {
+    const revision = ++inspectionRevision.current;
     setInspection({ name: volume.name, state: 'loading', count: 0, detail: null, error: null });
     try {
       const detail = await api.volumes.inspect(volume.name);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(detail);
+      if (revision !== inspectionRevision.current) return;
       setInspection({ name: volume.name, state: 'ready', count, detail, error: null });
-    } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
+    } catch (error) { if (revision === inspectionRevision.current) setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
+  }, [resource.data]);
   const view = bounded(resource.data);
   const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
