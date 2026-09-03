@@ -109,6 +109,24 @@ test('large process inventories stay below the client pending-call window', asyn
   assert.ok(labelled(stage, 'No running processes'));
 });
 
+test('a late process snapshot cannot replace a newer container inventory', async () => {
+  const pending = new Map();
+  const processApi = { containers: { processes: (id) => new Promise((resolve) => pending.set(id, resolve)) } };
+  const stage = host();
+  const resource = (id, name) => ({ data: [{ id, name }], loading: false, error: null, reload: async () => {} });
+  stage.render(h(Processes, { api: processApi, resource: resource('old', 'former') }));
+  await settled();
+  stage.render(h(Processes, { api: processApi, resource: resource('new', 'current') }));
+  await settled();
+  pending.get('new')({ titles: ['PID', 'COMMAND'], processes: [['22', '/usr/bin/current']], observed_at_ms: 2, scope: 'namespace', pid_identity: 'snapshot', truncated: false });
+  await settled(); await settled();
+  assert.ok(labelled(stage, '/usr/bin/current'));
+  pending.get('old')({ titles: ['PID', 'COMMAND'], processes: [['11', '/usr/bin/stale']], observed_at_ms: 1, scope: 'namespace', pid_identity: 'snapshot', truncated: false });
+  await settled(); await settled();
+  assert.ok(labelled(stage, '/usr/bin/current'));
+  assert.equal(labelled(stage, '/usr/bin/stale'), undefined, 'superseded process authority never reaches the tree');
+});
+
 test('execution observation is scoped to its page and replaces inventory without polling', async () => {
   const calls = [];
   let publish;

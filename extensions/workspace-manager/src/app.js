@@ -548,7 +548,9 @@ export function Processes({ api, resource }) {
   const [failures, setFailures] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const loadRevision = useRef(0);
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
     setLoading(true);
     try {
       const containers = resource.data ?? [];
@@ -563,14 +565,18 @@ export function Processes({ api, resource }) {
         }
       };
       await Promise.all(Array.from({ length: Math.min(PROCESS_SAMPLING_CONCURRENCY, containers.length) }, worker));
+      if (revision !== loadRevision.current) return;
       const available = groups.filter(({ rows }) => rows !== null);
       const unavailable = groups.filter(({ error: cause }) => cause !== null);
       setSnapshots(available);
       setFailures(unavailable);
       setError(available.length === 0 && unavailable.length > 0 ? unavailable[0].error : null);
-    } finally { setLoading(false); }
+    } finally { if (revision === loadRevision.current) setLoading(false); }
   }, [api, resource.data]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { loadRevision.current += 1; };
+  }, [load]);
   const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
   const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
   const completeNamespace = snapshots.length > 0 && snapshots.every(({ rows }) => rows.scope === 'namespace');
