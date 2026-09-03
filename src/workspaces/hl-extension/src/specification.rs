@@ -7,17 +7,29 @@ use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
 use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
-const SOURCES: &[&str] = &[
-    include_str!("request.rs"),
-    include_str!("port.rs"),
-    include_str!("manifest.rs"),
-    include_str!("subscription.rs"),
-    include_str!("capability.rs"),
-    include_str!("../../hl-gui/src/identity.rs"),
-    include_str!("../../hl-gui/src/node/patch.rs"),
-    include_str!("../../hl-gui/src/node/prop.rs"),
-    include_str!("../../hl-gui/src/data/mod.rs"),
-    include_str!("../../hl-gui/src/style.rs"),
+const SOURCES: &[(&str, &str)] = &[
+    ("src/request.rs", include_str!("request.rs")),
+    ("src/port.rs", include_str!("port.rs")),
+    ("src/manifest.rs", include_str!("manifest.rs")),
+    ("src/subscription.rs", include_str!("subscription.rs")),
+    ("src/capability.rs", include_str!("capability.rs")),
+    (
+        "../hl-gui/src/identity.rs",
+        include_str!("../../hl-gui/src/identity.rs"),
+    ),
+    (
+        "../hl-gui/src/node/patch.rs",
+        include_str!("../../hl-gui/src/node/patch.rs"),
+    ),
+    (
+        "../hl-gui/src/node/prop.rs",
+        include_str!("../../hl-gui/src/node/prop.rs"),
+    ),
+    (
+        "../hl-gui/src/data/mod.rs",
+        include_str!("../../hl-gui/src/data/mod.rs"),
+    ),
+    ("../hl-gui/src/style.rs", include_str!("../../hl-gui/src/style.rs")),
 ];
 
 enum Declaration {
@@ -89,6 +101,7 @@ pub fn document() -> String {
     );
     let value = json!({
         "specification_version":1, "protocol_version":PROTOCOL,
+        "source_fingerprint":format!("fnv1a64:{:016x}",source_fingerprint()),
         "encoding":{"payload":"json","header_bytes":Frame::HEADER,"payload_limit_bytes":Frame::PAYLOAD_LIMIT,
             "header":["payload_length:u32le","channel:u32le","kind:u8","flags:u8","reserved:u16le"],
             "control_channel":0,"call_channel":crate::codec::CALLS.raw(),"host_channels":"even","extension_channels":"odd",
@@ -135,7 +148,7 @@ fn enum_wire_names(item: &Declaration) -> Vec<String> {
 
 fn declarations() -> BTreeMap<String, Declaration> {
     let mut result = BTreeMap::new();
-    for source in SOURCES {
+    for (_, source) in SOURCES {
         let file = syn::parse_file(source).expect("authoritative Rust source parses");
         for item in file.items {
             match item {
@@ -153,6 +166,29 @@ fn declarations() -> BTreeMap<String, Declaration> {
         }
     }
     result
+}
+
+/// Fingerprint of every authoritative Rust source consumed by the generator.
+#[must_use]
+pub fn source_fingerprint() -> u64 {
+    fingerprint(
+        SOURCES
+            .iter()
+            .flat_map(|(path, source)| [path.as_bytes(), source.as_bytes()]),
+    )
+}
+
+/// Stable, allocation-free FNV-1a over length-delimited byte strings.
+#[must_use]
+pub fn fingerprint<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for part in parts {
+        for byte in (part.len() as u64).to_le_bytes().iter().chain(part) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
 }
 
 fn schema(item: &Declaration, owner: &str, references: &mut BTreeSet<String>) -> Value {

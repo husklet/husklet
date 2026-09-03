@@ -26,6 +26,11 @@ mod session;
 pub mod specification;
 mod subscription;
 
+#[cfg(test)]
+#[path = "../build_support.rs"]
+#[allow(dead_code)]
+mod build_support;
+
 pub use capability::{Capability, Grant};
 pub use codec::Coding;
 pub use hl_rpc::{
