@@ -34,6 +34,11 @@ pub const SOCKET_TARGET: &str = "/run/husklet/extension.sock";
 /// containers are recognizable without consulting a label.
 pub const NAME_PREFIX: &str = "extension-";
 
+// Bump whenever a host-side confinement invariant changes. Otherwise a sidecar
+// created under an older, weaker request would retain the same signature and be
+// reused instead of replaced.
+const SANDBOX_REVISION: &str = "readonly-root-v1";
+
 /// Label carrying the specification signature.
 pub const SIGNATURE_LABEL: &str = "husklet.extension.signature";
 pub const GENERATION_LABEL: &str = "husklet.extension.generation";
@@ -186,6 +191,7 @@ impl SidecarSpec {
         }
         Self::field(&mut value, &self.socket.to_string_lossy());
         Self::field(&mut value, &self.generation.to_string());
+        Self::field(&mut value, SANDBOX_REVISION);
         value
     }
 
@@ -237,6 +243,11 @@ impl SidecarSpec {
             memory: i64::from(self.resources.memory_mb) * 1024 * 1024,
             nano_cpus: i64::from(self.resources.cpus) * 1_000_000_000,
             pids_limit: Some(i64::from(self.resources.process_count)),
+            // Extension images are immutable programs. Their sole host-facing
+            // state is the explicitly mounted socket; keeping the image root
+            // read-only prevents a compromised extension from persisting a
+            // replacement executable or modifying its installed SDK.
+            readonly_rootfs: true,
             // An extension reaches the world through its socket, where every
             // request is checked against its grant. A network interface would
             // be a way around that check.
@@ -959,6 +970,8 @@ mod tests {
         assert_eq!(host.mounts[0].target, SOCKET_TARGET);
         assert!(host.binds.is_empty());
         assert_eq!(host.network_mode, "none");
+        assert!(host.readonly_rootfs, "the image root must not be writable");
+        assert!(host.tmpfs.is_empty(), "no unbounded writable filesystem is granted");
     }
 
     #[test]
