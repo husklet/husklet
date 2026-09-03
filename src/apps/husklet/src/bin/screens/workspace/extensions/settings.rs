@@ -150,7 +150,9 @@ fn standing(stage: Stage) -> gtk::Label {
         Stage::Vacancy => "not installed".to_owned(),
         Stage::Standby => "disabled".to_owned(),
         Stage::Duty => "enabled".to_owned(),
-        Stage::Fault { restarts } => format!("faulted after {restarts} restarts"),
+        Stage::Fault { restarts } => {
+            format!("enabled, but stopped after {restarts} failed starts; retry or disable it")
+        }
     };
     line(&said, STANDING)
 }
@@ -194,7 +196,7 @@ fn actions(
             -1,
         );
     }
-    if entry.stage == Stage::Duty {
+    if entry.stage == Stage::Duty || entry.stage.is_fault() {
         row.insert(
             &action(shelf, entry, refusal, "Disable", DISABLE, Deed::Disable, semantics),
             -1,

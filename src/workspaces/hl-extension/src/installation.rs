@@ -396,6 +396,10 @@ impl Installation {
             .get_mut(name)
             .ok_or_else(|| Objection::Absence(name.clone()))?;
         entry.record.enabled = false;
+        // A deliberate disable is also an explicit answer to a crash loop.
+        // Retaining the terminal marker would present a stopped extension as
+        // faulted forever and make a later enable indistinguishable from retry.
+        entry.restarts = Restarts::default();
         Ok(&entry.record)
     }
 
@@ -447,8 +451,8 @@ impl Installation {
 
     /// Clears a fault at a person's request and puts the sidecar back on duty.
     ///
-    /// This is the only exit from [`Stage::Fault`], so a crash loop cannot
-    /// resolve itself into a state nobody was told about.
+    /// Alongside an explicit disable, this is an exit from [`Stage::Fault`],
+    /// so a crash loop cannot resolve itself into a state nobody was told about.
     ///
     /// # Errors
     /// Returns `Objection::Absence` when nothing is recorded under `name`.
@@ -599,6 +603,22 @@ mod tests {
 
         installation.retry(&manifest.name).expect("retried");
         assert_eq!(installation.stage(&manifest.name), Stage::Duty);
+    }
+
+    #[test]
+    fn disabling_a_fault_is_an_explicit_standby_decision() {
+        let mut installation = Installation::new();
+        let manifest = manifest(&[Capability::Interface]);
+        installation
+            .install(&manifest, "sha256:a", &manifest.capabilities, 10)
+            .expect("installed");
+        installation.enable(&manifest.name).expect("enabled");
+        installation.fault(&manifest.name, 7).expect("fault recorded");
+
+        installation.disable(&manifest.name).expect("disabled");
+
+        assert_eq!(installation.stage(&manifest.name), Stage::Standby);
+        assert!(!installation.record(&manifest.name).expect("record").enabled);
     }
 
     #[test]

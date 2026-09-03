@@ -38,6 +38,8 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         selecting_an_extension_shows_the_surface_it_draws();
         the_settings_page_says_where_an_extension_stands();
         a_live_host_fault_reaches_central_settings_and_can_retry();
+        a_fault_can_be_deliberately_disabled();
+        a_fault_withdraws_ready_provider_until_a_fresh_retry_frame();
         fault_removal_actions_wrap_at_narrow_and_wide_sizes();
         the_settings_actions_drive_the_installation();
         lifecycle_actions_share_keyboard_and_semantic_focus();
@@ -421,8 +423,16 @@ fn a_live_host_fault_reaches_central_settings_and_can_retry() {
         .extension_tagged("alpha", settings::STANDING)
         .and_downcast::<gtk::Label>()
         .expect("central settings standing");
-    assert_eq!(standing.text(), "faulted after 5 restarts");
+    assert_eq!(
+        standing.text(),
+        "enabled, but stopped after 5 failed starts; retry or disable it"
+    );
     assert!(fixture.extension_tagged("alpha", settings::RETRY).is_some());
+    assert!(fixture.extension_tagged("alpha", settings::DISABLE).is_some());
+    assert!(
+        fixture.extension_tagged("alpha", settings::ENABLE).is_none(),
+        "a fault cannot advertise an enable action that leaves it faulted"
+    );
 
     fixture.act("alpha", settings::RETRY);
 
@@ -432,6 +442,88 @@ fn a_live_host_fault_reaches_central_settings_and_can_retry() {
         fixture.extension_tagged("alpha", settings::REMOVE).is_some(),
         "retry did not remove it"
     );
+}
+
+fn a_fault_can_be_deliberately_disabled() {
+    let fixture = Fixture::new(&[("alpha", true)]);
+    fixture.shelf.fault(&named("alpha"), 5);
+
+    fixture.act("alpha", settings::DISABLE);
+
+    assert_eq!(fixture.stage("alpha"), Stage::Standby);
+    assert!(fixture.extension_tagged("alpha", settings::RETRY).is_none());
+    assert!(fixture.extension_tagged("alpha", settings::ENABLE).is_some());
+}
+
+fn a_fault_withdraws_ready_provider_until_a_fresh_retry_frame() {
+    let storage = tempfile::tempdir().expect("storage");
+    let roster = Rc::new(RefCell::new(
+        Roster::open(Directory::open(storage.path()).expect("directory")).expect("roster"),
+    ));
+    let mut described = manifest("sample");
+    described.pane_providers.push(hl_extension::PaneProvider {
+        id: named("dashboard"),
+        title: "Dashboard".to_owned(),
+        icon: None,
+    });
+    roster
+        .borrow_mut()
+        .register(&described, "sha256:aaaa", &described.capabilities, 1)
+        .expect("registered");
+    roster.borrow_mut().enable(&described.name).expect("enabled");
+    let view = Rc::new(View::new([
+        (Page::Overview, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+        (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
+    ]));
+    let gallery = Gallery::new();
+    let generations = Rc::new(RefCell::new(Vec::new()));
+    let shown = gallery.clone();
+    let recorded = Rc::clone(&generations);
+    let surfaces: Surfaces = Rc::new(move |entry| {
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        let generation = shown.enrol(
+            entry.name.as_str(),
+            &interface,
+            &home,
+            &entry.pane_providers,
+            Rc::new(|_| {}),
+        );
+        shown.enrol_semantics(
+            entry.name.as_str(),
+            Rc::new(|_| Err(hl_extension::HostError::Absent("test projection".into()))),
+            Rc::new(|_, _| Ok(())),
+        );
+        recorded.borrow_mut().push(generation);
+        home.upcast()
+    });
+    let withdrawn = gallery.clone();
+    let shelf = Shelf::with_lifecycle(
+        &view,
+        &roster,
+        surfaces,
+        Rc::new(|_| {}),
+        Rc::new(move |name| withdrawn.withdraw(name.as_str())),
+    );
+    shelf.install();
+    let first = generations.borrow()[0];
+    gallery.ready("sample", first);
+    assert_eq!(gallery.providers().len(), 1, "the accepted generation is advertised");
+
+    shelf.fault(&named("sample"), 5);
+
+    let fault_generation = *generations.borrow().last().expect("fault surface generation");
+    assert_ne!(fault_generation, first);
+    assert!(gallery.providers().is_empty(), "fault synchronously withdraws provider authority");
+
+    roster.borrow_mut().retry(&named("sample")).expect("retry");
+    shelf.refresh(&named("sample"));
+    let retry_generation = *generations.borrow().last().expect("retry generation");
+    assert_ne!(retry_generation, fault_generation);
+    assert!(gallery.providers().is_empty(), "retry remains private before its accepted frame");
+    gallery.ready("sample", retry_generation);
+    assert_eq!(gallery.providers().len(), 1, "only the accepted retry generation is advertised");
 }
 
 fn fault_removal_actions_wrap_at_narrow_and_wide_sizes() {

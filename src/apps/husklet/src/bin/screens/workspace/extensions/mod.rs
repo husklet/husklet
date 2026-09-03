@@ -241,11 +241,18 @@ impl Shelf {
 
     /// Records a crash loop reported by the live host, then redraws central
     /// Settings. This runs on the GTK tick, never on the host thread.
-    pub fn fault(&self, name: &ExtensionName, restarts: u32) {
+    pub fn fault(self: &Rc<Self>, name: &ExtensionName, restarts: u32) {
         if let Err(refusal) = self.roster.borrow_mut().fault(name, restarts) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "recording extension fault for {name}: {refusal}");
+            // Even when storage is unavailable, do not leave a dead sidecar's
+            // provider or semantic callbacks advertised as live authority.
+            self.unmount(name);
+            return;
         }
-        self.redraw();
+        // Replacing the mounted Duty surface withdraws its provider generation
+        // synchronously. Retry will mount a fresh generation whose providers
+        // remain private until its first accepted frame.
+        self.refresh(name);
     }
 
     /// The shell these pages sit on, while it is still open.
