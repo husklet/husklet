@@ -492,6 +492,18 @@ mod tests {
     }
 
     #[test]
+    fn translation_cache_observability_does_not_disable_the_cache_with_general_diagnostics() {
+        let mut launch = launch();
+        launch.translation_cache = Some("/translation-cache".into());
+        launch.translation_cache_observability = true;
+
+        let spec = Spec::try_from(&launch).unwrap();
+
+        assert_eq!(spec.plan.options.get("HL_PCACHE_OBSERVE"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
+    }
+
+    #[test]
     fn snapshot_executable_digest_reaches_only_internal_typed_policy() {
         let root = tempfile::tempdir().unwrap();
         let snapshots = hl_images::snapshot::Snapshots::open(root.path().join("snapshots")).unwrap();

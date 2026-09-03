@@ -484,6 +484,12 @@ fn rootfs_plan(
     rootfs: &std::path::Path,
     launch: &LaunchArguments,
 ) -> Result<hl_engine::launcher::plan::RuntimePlan, Failure> {
+    if launch.diagnostics && launch.translation_cache.is_some() {
+        return Err(Failure::Request(
+            "--diagnostics cannot be combined with --translation-cache: general diagnostics embeds launch-private counter addresses and disables persistent caching; use --translation-cache-observe"
+                .to_owned(),
+        ));
+    }
     let entry = &launch.executable;
     if entry.is_absolute()
         || entry
@@ -1189,6 +1195,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(observed.options.get("HL_PCACHE_OBSERVE"), Some("1"));
+        let refused = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translation-cache",
+                cache.to_str().unwrap(),
+                "--diagnostics",
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap_err();
+        assert!(refused.to_string().contains("use --translation-cache-observe"));
         assert_eq!(
             rootfs_plan(
                 root.path(),

@@ -29,7 +29,7 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::flag(
             &mut options,
             "HL_C_DIAGNOSTICS",
-            launch.execution.diagnostics() || launch.translation_cache_observability,
+            launch.execution.diagnostics(),
         )?;
         Self::flag(
             &mut options,
