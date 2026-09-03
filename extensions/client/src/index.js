@@ -1,4 +1,5 @@
 export { ExtensionError, Session, SOCKET, PROTOCOL } from './session.js';
+export { semanticXml } from './semantic.js';
 import { Session } from './session.js';
 
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */

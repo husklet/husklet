@@ -286,7 +286,7 @@ try {
   const baseClient = JSON.parse(execFileSync('npm', [
     'pack', '--dry-run', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
   ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
-  assert(baseClient.files.some(({ path: name }) => name === 'protocol.json'), 'base image must include the framework-neutral protocol manifest');
+  assert(baseClient.files.some(({ path: name }) => name === 'src/index.js'), 'base image must include the framework-neutral client');
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

@@ -301,3 +301,4 @@ export const protocolCoverage: Readonly<{
   available: Readonly<Record<string, readonly string[]>>;
   unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
+export function semanticXml(tree: PaneSemanticTree): string;
