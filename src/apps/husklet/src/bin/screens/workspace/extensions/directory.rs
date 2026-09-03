@@ -33,6 +33,7 @@ pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 pub const PROPOSAL: &str = "hl-extension-proposal";
 pub const PROPOSAL_CAPABILITIES: &str = "hl-extension-proposal-capabilities";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
+pub const UPDATE_CAPABILITIES: &str = "hl-extension-update-capabilities";
 pub const CAPABILITY_CHOICE: &str = "hl-extension-capability-choice";
 
 type Selection = Rc<RefCell<BTreeSet<Capability>>>;
@@ -535,12 +536,17 @@ impl Catalogue {
             self.proposal.append(&text("capabilities unchanged", UPDATE_DELTA));
         }
         let selected = self.selection(&candidate.manifest, update.additional.iter().copied());
+        let added = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        added.add_css_class(UPDATE_CAPABILITIES);
+        added.set_accessible_role(gtk::AccessibleRole::List);
         for capability in &update.additional {
-            self.proposal
-                .append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
-            self.proposal
-                .append(&self.capability_choice(&candidate.manifest, *capability, &selected));
+            let item = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            item.set_accessible_role(gtk::AccessibleRole::ListItem);
+            item.append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
+            item.append(&self.capability_choice(&candidate.manifest, *capability, &selected));
+            added.append(&item);
         }
+        self.proposal.append(&added);
         self.selected_semantics("Selected additional capabilities", &selected);
         for capability in &update.removed {
             self.proposal

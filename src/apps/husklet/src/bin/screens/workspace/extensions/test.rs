@@ -1414,6 +1414,16 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         labels.iter().any(|line| line == "− container-read"),
         "authority the candidate dropped is called out explicitly: {labels:?}"
     );
+    let added = proposal
+        .iter()
+        .find(|widget| widget.has_css_class(directory::UPDATE_CAPABILITIES))
+        .expect("added update authority is one native list");
+    assert_eq!(added.accessible_role(), gtk::AccessibleRole::List);
+    let items = added.observe_children();
+    assert_eq!(items.n_items(), 1);
+    let item = items.item(0).and_downcast::<gtk::Widget>().expect("added capability item");
+    assert_eq!(item.accessible_role(), gtk::AccessibleRole::ListItem);
+    assert!(descendants(&item).iter().any(|child| child.is::<gtk::CheckButton>()));
     let semantic = fixture.view.semantic_snapshot();
     assert!(semantic.root.children.iter().any(|node| {
         node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("container-control")
