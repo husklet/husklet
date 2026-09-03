@@ -447,7 +447,9 @@ mod tests {
         assert_eq!(phases.len(), 11);
         assert!(phases.iter().all(|(_, elapsed)| *elapsed == 10));
         let mut reordered = marks;
-        reordered.swap(3, 4);
+        let left = reordered[3].0.clone();
+        reordered[3].0 = reordered[4].0.clone();
+        reordered[4].0 = left;
         assert!(validate_phases(&reordered, 110).is_err());
     }
 
