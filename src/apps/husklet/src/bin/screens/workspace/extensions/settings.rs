@@ -52,6 +52,10 @@ impl Settings {
     ) -> gtk::Box {
         let main = gtk::Box::new(gtk::Orientation::Vertical, 12);
         main.add_css_class("dmain");
+        // Lifecycle controls are product settings, so use the same bounded
+        // card surface as workspace settings instead of reading as loose
+        // extension-owned content.
+        main.add_css_class("settings-card");
         main.add_css_class(CARD);
         main.append(&heading(&entry.name));
         main.append(&line(

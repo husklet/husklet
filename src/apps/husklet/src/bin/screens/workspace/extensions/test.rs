@@ -730,6 +730,15 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
                 .filter(|label| label.has_css_class("dhead") && label.text() == "alpha")
         })
         .expect("installed extension card heading");
+    let lifecycle_card = installed_heading
+        .ancestor(gtk::Box::static_type())
+        .and_downcast::<gtk::Box>()
+        .expect("heading belongs to its lifecycle card");
+    assert!(lifecycle_card.has_css_class("settings-card"),
+        "installed lifecycle information uses the shared settings-card hierarchy");
+    assert!(lifecycle_card.width() <= fixture._catalogue.viewport().width(),
+        "card remains bounded at compact width: card={} viewport={}",
+        lifecycle_card.width(), fixture._catalogue.viewport().width());
     assert_eq!(
         installed_heading.accessible_role(),
         gtk::AccessibleRole::Heading,
