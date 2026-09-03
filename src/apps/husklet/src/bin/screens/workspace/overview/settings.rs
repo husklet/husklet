@@ -224,6 +224,8 @@ impl Overview<'_> {
         status.add_css_class("fhint");
         status.set_xalign(0.0);
         status.set_hexpand(true);
+        status.set_wrap(true);
+        status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
 
         let save = gtk::Button::with_label("Save changes");
         save.add_css_class("btn");
@@ -719,7 +721,7 @@ mod tests {
             let registry = Registry::new("workspace");
             let page = Overview::new(&workspace, None).settings(&registry);
             let window = gtk::Window::builder()
-                .default_width(1000)
+                .default_width(300)
                 .default_height(760)
                 .child(&page)
                 .build();
@@ -1056,6 +1058,17 @@ mod tests {
                             .is_some_and(|value| value != "Unsaved changes." && !value.is_empty())
                 }),
                 "validation failure replaces generic dirty status with an actionable explanation"
+            );
+            assert!(
+                status.layout().line_count() > 1,
+                "the validation explanation must wrap rather than clip beside Save at narrow widths"
+            );
+            let horizontal = page.hadjustment();
+            assert!(
+                horizontal.upper() <= horizontal.page_size() + 1.0,
+                "invalid Settings must remain horizontally bounded: upper={} page_size={}",
+                horizontal.upper(),
+                horizontal.page_size()
             );
             window.close();
         }) {
