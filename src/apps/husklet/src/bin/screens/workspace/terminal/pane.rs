@@ -58,13 +58,18 @@ impl PaneChooser {
         button.add_css_class("flat");
         button.set_halign(gtk::Align::End);
         button.set_valign(gtk::Align::Start);
+        let weak = Rc::downgrade(window);
         let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed(|controller, key, _, _| {
+        keys.set_name(Some("pane-chooser-keys"));
+        keys.connect_key_pressed(move |controller, key, _, _| {
             if matches!(
                 key,
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::space | gtk::gdk::Key::Down
             ) {
                 if let Some(button) = controller.widget().and_downcast::<gtk::MenuButton>() {
+                    if let Some(window) = weak.upgrade() {
+                        Self::populate(&window, &button);
+                    }
                     button.popup();
                     return gtk::glib::Propagation::Stop;
                 }
@@ -74,10 +79,7 @@ impl PaneChooser {
         button.add_controller(keys);
         Self::populate(window, &button);
         let weak = Rc::downgrade(window);
-        button.connect_notify_local(Some("active"), move |button, _| {
-            if !button.is_active() {
-                return;
-            }
+        button.connect_activate(move |button| {
             let Some(window) = weak.upgrade() else { return };
             Self::populate(&window, button);
         });

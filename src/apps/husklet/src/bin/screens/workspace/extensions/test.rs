@@ -2859,6 +2859,19 @@ mod panes {
         }
     }
 
+    fn press_key(widget: &impl IsA<gtk::Widget>, key: gtk::gdk::Key) -> bool {
+        let controllers = widget.observe_controllers();
+        let key_controllers = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .filter(|controller| controller.name().as_deref() == Some("pane-chooser-keys"))
+            .collect::<Vec<_>>();
+        assert!(!key_controllers.is_empty(), "widget owns a key controller");
+        key_controllers.into_iter().any(|controller| {
+            controller.emit_by_name("key-pressed", &[&key, &0_u32, &gtk::gdk::ModifierType::empty()])
+        })
+    }
+
     pub(super) fn pointer_hit_testing_captures_the_exact_pane_slot() {
         let bench = Bench::new();
         let (_terminal, slot) = bench.shell();
@@ -3892,7 +3905,7 @@ mod panes {
         let (first, first_slot) = bench.shell();
         let (second, second_slot) = bench.beside(&first);
         let host = bench.page.root().and_downcast::<gtk::Window>().expect("terminal window");
-        host.set_default_size(900, 600);
+        host.set_default_size(400, 600);
         host.present();
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3924,15 +3937,48 @@ mod panes {
         assert!(until(|| chooser.is_mapped()), "split chooser is mapped in the real window");
         assert!(chooser.is_focusable(), "the chooser is keyboard reachable");
         PaneChooser::populate(&bench.window, &chooser);
-        let provider_popover = chooser.popover().expect("provider popover");
+        assert!(chooser.grab_focus(), "the compact chooser accepts keyboard focus");
+        assert!(press_key(&chooser, gtk::gdk::Key::Down), "Down is consumed by the chooser controller");
+        assert!(
+            until(|| chooser.popover().is_some_and(|popover| popover.is_visible())),
+            "keyboard-opened chooser is visible before selection"
+        );
+        let provider_popover = chooser.popover().expect("keyboard-opened provider popover");
+        let popover_keys = provider_popover.observe_controllers();
+        (0..popover_keys.n_items())
+            .filter_map(|index| popover_keys.item(index))
+            .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .for_each(|controller| {
+                let _: bool = controller.emit_by_name(
+                    "key-pressed",
+                    &[&gtk::gdk::Key::Escape, &0_u32, &gtk::gdk::ModifierType::empty()],
+                );
+            });
+        assert!(until(|| !provider_popover.is_visible()), "Escape dismisses the keyboard-opened chooser");
+        assert!(
+            until(|| {
+                gtk::prelude::RootExt::focus(&host).is_some_and(|focus| {
+                    focus == chooser.clone().upcast::<gtk::Widget>()
+                        || super::descendants(chooser.upcast_ref()).contains(&focus)
+                })
+            }),
+            "Escape restores focus to the compact chooser"
+        );
+        assert!(
+            press_key(&chooser, gtk::gdk::Key::Down),
+            "Down reopens the chooser from restored focus"
+        );
+        assert!(
+            until(|| chooser.popover().is_some_and(|popover| popover.is_visible())),
+            "the chooser reopens after Escape"
+        );
+        let provider_popover = chooser.popover().expect("reopened provider popover");
         let postgres = Some(provider_popover.clone())
             .into_iter()
             .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
             .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
             .find(|button| button.label().as_deref() == Some("Postgres"))
             .expect("provider choice");
-        provider_popover.popup();
-        assert!(until(|| provider_popover.is_visible()), "keyboard-opened chooser is visible before selection");
         postgres.emit_clicked();
         assert!(until(|| !provider_popover.is_visible()), "a successful provider selection dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
