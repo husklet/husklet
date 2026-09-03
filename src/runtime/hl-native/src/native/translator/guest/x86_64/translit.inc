@@ -8978,8 +8978,8 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         live.rip = source;
         for (unsigned reg = 0; reg < 16; reg++) live.r[reg] = UINT64_C(0x8192a3b4c5d6e700) + reg;
         live.r[4] = stack;
-        live.nzcv = UINT64_C(0x8d5);
-        live.df = 1;
+        translit_flags_out(&live, UINT64_C(0xad7));
+        uint64_t expected_flags = translit_flags_in(&live);
         live.ibtc_base = (uint64_t)g_ibtc;
         run_block(context, &live, source_block);
         uint64_t below_after = 0, above_after = 0, return_after = 0;
@@ -8989,7 +8989,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         int registers_exact = live.r[0] == 42 && live.r[4] == stack;
         for (unsigned reg = 1; reg < 16; reg++)
             if (reg != 4 && live.r[reg] != UINT64_C(0x8192a3b4c5d6e700) + reg) registers_exact = 0;
-        result = registers_exact && live.nzcv == UINT64_C(0x8d5) && live.df == 1 &&
+        result = registers_exact && translit_flags_in(&live) == expected_flags && live.df == 1 &&
                          live.rip == continuation + 5 && below_after == below && above_after == above &&
                          return_after == continuation && live.jcc_ibtc_miss == 0 &&
                          translit_test_jcc_ibtc_site.restore_end != NULL &&
