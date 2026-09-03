@@ -257,6 +257,158 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "Capability": {
+    "kind": "enum",
+    "serde": {
+      "rename_all": "kebab-case"
+    },
+    "variants": [
+      {
+        "name": "workspace-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "workspace-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "workspace-events",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "container-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "container-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "container-attach",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "image-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "image-write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "volume-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "volume-write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "network-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "network-write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminal-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminal-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminal-output",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "pane-observe",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "pane-semantic-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "pane-semantic-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "extension-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "extension-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "extension-install",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "filesystem-read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "filesystem-write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "interface",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
+  },
   "Cell": {
     "kind": "enum",
     "serde": {},
@@ -1286,8 +1438,12 @@ const definitions = {
     "serde": {}
   },
   "Grant": {
-    "kind": "ref",
-    "name": "Grant"
+    "kind": "array",
+    "of": {
+      "kind": "ref",
+      "name": "Capability"
+    },
+    "unique": true
   },
   "GridSize": {
     "fields": [

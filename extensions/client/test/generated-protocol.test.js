@@ -7,8 +7,11 @@ import {
 
 test('generated validators follow authoritative request/reply/failure/snapshot roots', () => {
   assert.deepEqual(encodeRequest('workspace_info'), { call: 'workspace_info' });
-  assert.deepEqual(validateRequest({ call: 'terminal_write_pane', with: { slot: 'p1', contents: [0, 255] } }),
-    { call: 'terminal_write_pane', with: { slot: 'p1', contents: [0, 255] } });
+  assert.deepEqual(validateRequest({ call: 'terminal_write_pane', with: {
+    slot: 'p1', generation: 2, revision: 3, contents: [0, 255],
+  } }), { call: 'terminal_write_pane', with: {
+    slot: 'p1', generation: 2, revision: 3, contents: [0, 255],
+  } });
   assert.deepEqual(validateReply({ reply: 'done' }), { reply: 'done' });
   assert.deepEqual(validateFailure({ error: 'denied', capability: 'terminal-control', detail: 'not granted' }),
     { error: 'denied', capability: 'terminal-control', detail: 'not granted' });
