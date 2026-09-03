@@ -161,6 +161,15 @@ try {
     void attachmentGrant;
     void table;
     void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
+    void api.containers.executions();
+    void api.containers.executionLogs('a'.repeat(32), { stderr: false });
+    void api.containers.waitExecution('a'.repeat(32), { timeoutMs: 50 });
+    void api.containers.removeExecution('a'.repeat(32));
+    void api.containers.attachTerminal('a'.repeat(64), ['sh']);
+    void api.images.startPull('alpine:3.20');
+    void api.images.pullStatus('pull-1');
+    void api.images.cancelPull('pull-1');
+    void api.files.stat('project/package.json');
     void api.containers.rename('a'.repeat(64), 'worker_2.prod');
     void api.terminal.retitle('pane-1', 'Build 🧪');
     const transcriptProps: TerminalTranscriptProps = { lines: [{ text: 'ready', stream: 'stdout' }], cursor: { line: 1, column: 5 } };
@@ -174,6 +183,11 @@ try {
     void api.subscribe('extensions');
     void api.watchExtensions((extensions) => { void extensions[0]?.name; });
     void api.watchExtensionAcquisitions((change) => { void change.revision; });
+    void api.watchContainers((containers) => { void containers[0]?.id; });
+    void api.watchExecutions((executions) => { void executions.truncated; });
+    void api.watchImagePulls((change) => { void change.job; });
+    void api.watchWorkspaceLifecycle((change) => { void change.action; });
+    void api.watchWorkspaceEvents((batch) => { void batch.dropped; });
     const surface = render(null, session, { split: { slot: 'pane-1', division: 'beside' } });
     const mutation: InterfaceSourceMutation = { Length: { source: 1, version: 2, rows: 100_000 } };
     void surface.ready;
