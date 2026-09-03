@@ -100,11 +100,14 @@ the complete immutable container ID, preventing name or prefix re-resolution.
 Volume removal requires the canonical name, its complete 32-hex observed
 generation, and confirmation. The host atomically rejects a generation that no
 longer names the current same-name volume.
-Container process inspection is a timestamped, bounded snapshot of the initial
-process only, bound to the complete immutable container ID actually sampled. Its
-PID is explicitly snapshot-local and may be reused; the host
-does not expose argv or environment values, and does not claim child-process,
-CPU, or memory coverage that its current daemon sampler cannot provide.
+Container process inspection is timestamped and bounded, and is bound to the
+complete immutable container ID actually sampled. Read its `scope`: `initial`
+means only the initial process, while `namespace` means the complete container
+PID namespace at that observation. PIDs are explicitly snapshot-local and may
+be reused. Today's host reports `initial`; it does not expose argv or environment
+values, and does not claim child-process, CPU, or memory coverage that its current
+daemon sampler cannot provide. A future namespace sampler can report
+`namespace` without changing the MCP tool or result shape.
 
 Container creation accepts bounded entrypoint/argv, environment, working directory,
 user, labels, named-volume mounts, one workspace-local network, TCP/UDP exposure,
