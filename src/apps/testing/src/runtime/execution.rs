@@ -685,6 +685,61 @@ fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
     if text.contains("SLEEP-RETURN") || text.contains("IDENTITY-ERROR") {
         return Err("daily-development checkpoint process identity was not preserved".into());
     }
+    validate_ret_dense_protocol(text)?;
+    Ok(())
+}
+
+fn ret_dense_digest(chunks: u64) -> Result<u64, Error> {
+    const DEPTH: u64 = 32;
+    const CALLS: u64 = 4096;
+    const STEP: u64 = 0x9e37_79b9_7f4a_7c15;
+    const MIX: u64 = 0xd1b5_4a32_d192_ed03;
+    if chunks > 10_000 {
+        return Err("daily-development RET-DENSE chunk count exceeds the bounded validator".into());
+    }
+    let returned = STEP.wrapping_mul(DEPTH).wrapping_add(DEPTH * (DEPTH + 1) / 2);
+    let mut digest = 0_u64;
+    for chunk in 1..=chunks {
+        for call in 0..CALLS {
+            let value = (chunk << 32 | call).wrapping_add(returned);
+            digest = (digest ^ value).rotate_left(7).wrapping_add(MIX);
+        }
+    }
+    Ok(digest)
+}
+
+fn validate_ret_dense_protocol(text: &str) -> Result<(), Error> {
+    let mut previous_chunks = 0;
+    for phase in 0..=2 {
+        let prefix = format!("RET-DENSE phase={phase} ");
+        let rows = text
+            .lines()
+            .filter(|line| line.starts_with(&prefix))
+            .collect::<Vec<_>>();
+        if rows.len() != 1 {
+            return Err(format!("daily-development {prefix:?}was not emitted exactly once").into());
+        }
+        let fields = rows[0]
+            .split_ascii_whitespace()
+            .skip(2)
+            .filter_map(|field| field.split_once('='))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if fields.keys().copied().collect::<Vec<_>>() != ["chunks", "digest"] {
+            return Err(format!("daily-development RET-DENSE schema mismatch: {}", rows[0]).into());
+        }
+        let chunks = fields["chunks"]
+            .parse::<u64>()
+            .map_err(|_| format!("daily-development RET-DENSE chunks are not decimal: {}", rows[0]))?;
+        let digest = u64::from_str_radix(fields["digest"], 16)
+            .map_err(|_| format!("daily-development RET-DENSE digest is not hexadecimal: {}", rows[0]))?;
+        if chunks <= previous_chunks {
+            return Err("daily-development RET-DENSE progress did not survive checkpoint restore".into());
+        }
+        if digest != ret_dense_digest(chunks)? {
+            return Err(format!("daily-development RET-DENSE digest mismatch at phase {phase}").into());
+        }
+        previous_chunks = chunks;
+    }
     Ok(())
 }
 
@@ -692,17 +747,42 @@ fn validate_daily_dev_protocol(text: &str) -> Result<(), Error> {
 mod checkpoint_protocol_tests {
     use super::{checkpoint_failure_diagnostic, checkpoint_generation_logs, validate_daily_dev_protocol};
 
-    const COMPLETE: &str = "READY leader=1\nSLEEP-READY pid=2\nCYCLE 1 progress=5\nCYCLE 2 progress=10\n\
-        DONE progress=11\nJCC-LINK phase=0 value=42\nJCC-LINK phase=1 value=43\n\
-        JCC-LINK phase=2 value=44\nMIXED-SSE phase=0 value=42\nMIXED-SSE phase=1 value=43\n\
-        MIXED-SSE phase=2 value=44\n";
+    fn complete() -> String {
+        let rows = (0..=2)
+            .map(|phase| {
+                let chunks = phase + 1;
+                format!(
+                    "RET-DENSE phase={phase} chunks={chunks} digest={:016x}\n",
+                    super::ret_dense_digest(chunks).unwrap()
+                )
+            })
+            .collect::<String>();
+        format!(
+            "READY leader=1\nSLEEP-READY pid=2\nCYCLE 1 progress=5\nCYCLE 2 progress=10\n\
+             DONE progress=11\nJCC-LINK phase=0 value=42\nJCC-LINK phase=1 value=43\n\
+             JCC-LINK phase=2 value=44\nMIXED-SSE phase=0 value=42\nMIXED-SSE phase=1 value=43\n\
+             MIXED-SSE phase=2 value=44\n{rows}"
+        )
+    }
 
     #[test]
     fn daily_development_protocol_requires_each_generation_exactly_once() {
-        validate_daily_dev_protocol(COMPLETE).unwrap();
-        assert!(validate_daily_dev_protocol(&format!("{COMPLETE}CYCLE 1 progress=6\n")).is_err());
-        assert!(validate_daily_dev_protocol(&COMPLETE.replace("DONE progress=11\n", "")).is_err());
-        assert!(validate_daily_dev_protocol(&format!("{COMPLETE}IDENTITY-ERROR\n")).is_err());
+        let complete = complete();
+        validate_daily_dev_protocol(&complete).unwrap();
+        assert!(validate_daily_dev_protocol(&format!("{complete}CYCLE 1 progress=6\n")).is_err());
+        assert!(validate_daily_dev_protocol(&complete.replace("DONE progress=11\n", "")).is_err());
+        assert!(validate_daily_dev_protocol(&format!("{complete}IDENTITY-ERROR\n")).is_err());
+    }
+
+    #[test]
+    fn daily_development_protocol_rejects_reset_or_corrupt_return_digest() {
+        let complete = complete();
+        assert!(validate_daily_dev_protocol(&complete.replacen("chunks=2", "chunks=1", 1)).is_err());
+        let digest = complete.find("digest=").unwrap() + "digest=".len();
+        let mut corrupt = complete.clone();
+        let replacement = if &corrupt[digest..digest + 1] == "0" { "1" } else { "0" };
+        corrupt.replace_range(digest..digest + 1, replacement);
+        assert!(validate_daily_dev_protocol(&corrupt).is_err());
     }
 
     #[test]

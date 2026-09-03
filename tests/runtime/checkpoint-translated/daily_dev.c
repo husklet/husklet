@@ -38,13 +38,45 @@ static int durable_progress(const char *directory, uint64_t value) {
     return 0;
 }
 
+enum { RET_DENSE_DEPTH = 32, RET_DENSE_CALLS = 4096 };
+
+struct progress_record {
+    uint64_t progress;
+    uint64_t ret_chunks;
+    uint64_t ret_digest;
+};
+
+/* The volatile post-call dependency prevents tail-call elimination without
+ * using ISA-specific assembly.  uint64_t arithmetic makes the digest equally
+ * defined on amd64 and arm64. */
+__attribute__((noinline)) static uint64_t ret_dense(uint64_t value, unsigned depth) {
+    if (depth == 0) return value;
+    volatile uint64_t returned = ret_dense(value, depth - 1);
+    return returned + UINT64_C(0x9e3779b97f4a7c15) + depth;
+}
+
+static uint64_t rotate_left(uint64_t value, unsigned shift) {
+    return (value << shift) | (value >> (64 - shift));
+}
+
+static uint64_t ret_dense_chunk(uint64_t chunk, uint64_t digest) {
+    for (unsigned call = 0; call < RET_DENSE_CALLS; ++call) {
+        uint64_t value = ret_dense((chunk << 32) | call, RET_DENSE_DEPTH);
+        digest = rotate_left(digest ^ value, 7) + UINT64_C(0xd1b54a32d192ed03);
+    }
+    return digest;
+}
+
 static int workload(const char *directory, int transport) {
-    uint64_t progress = 0;
+    struct progress_record record = {0};
     struct timespec pause = {.tv_nsec = 2000000};
     for (;;) {
         if (exists(directory, "stop") == 1) return 0;
-        if (durable_progress(directory, ++progress) != 0) return 20;
-        if (write(transport, &progress, sizeof progress) != (ssize_t)sizeof progress) return 21;
+        ++record.progress;
+        ++record.ret_chunks;
+        record.ret_digest = ret_dense_chunk(record.ret_chunks, record.ret_digest);
+        if (durable_progress(directory, record.progress) != 0) return 20;
+        if (write(transport, &record, sizeof record) != (ssize_t)sizeof record) return 21;
         if (nanosleep(&pause, NULL) != 0 && errno != EINTR) return 22;
     }
 }
@@ -285,6 +317,10 @@ int main(int argc, char **argv) {
         return status;
     }
     close(transport[1]);
+    struct progress_record observed = {0};
+    if (read(transport[0], &observed, sizeof observed) != (ssize_t)sizeof observed || observed.progress == 0 ||
+        observed.ret_chunks == 0)
+        return 8;
     long initial_link = checkpoint_link_check(0);
     long initial_mixed = checkpoint_mixed_check(0);
     long initial_capacity = checkpoint_capacity_check(0);
@@ -302,10 +338,12 @@ int main(int argc, char **argv) {
     dprintf(STDOUT_FILENO, "ADDR32-CALL phase=0 value=%ld\n", initial_addr32_call);
     dprintf(STDOUT_FILENO, "CALL-MEM phase=0 value=%ld\n", initial_call_mem);
     dprintf(STDOUT_FILENO, "PAND-MEMORY phase=0 value=%ld\n", initial_pand_memory);
+    dprintf(STDOUT_FILENO, "RET-DENSE phase=0 chunks=%llu digest=%016llx\n",
+            (unsigned long long)observed.ret_chunks, (unsigned long long)observed.ret_digest);
     dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
             (long)sleeper, (long)worker, (long)group, (long)session, (long)foreground);
 
-    uint64_t progress = 0, previous = 0;
+    uint64_t previous = 0, previous_ret_chunks = observed.ret_chunks;
     if (foreground <= 0) return 14;
     int next_cycle = 1;
     while (next_cycle <= 2) {
@@ -313,14 +351,16 @@ int main(int argc, char **argv) {
         int ready = poll(&descriptor, 1, 100);
         if (ready < 0 && errno != EINTR) return 7;
         if (ready > 0 && (descriptor.revents & POLLIN)) {
-            uint64_t observed;
-            ssize_t count = read(transport[0], &observed, sizeof observed);
-            if (count != (ssize_t)sizeof observed || observed <= progress) return 8;
-            progress = observed;
+            struct progress_record next;
+            ssize_t count = read(transport[0], &next, sizeof next);
+            if (count != (ssize_t)sizeof next || next.progress <= observed.progress ||
+                next.ret_chunks <= observed.ret_chunks)
+                return 8;
+            observed = next;
         }
         char marker[32];
         snprintf(marker, sizeof marker, "cycle%d", next_cycle);
-        if (progress < previous + 5 || exists(directory, marker) != 1) continue;
+        if (observed.progress < previous + 5 || exists(directory, marker) != 1) continue;
 
         long restored_link = checkpoint_link_check(next_cycle);
         long restored_mixed = checkpoint_mixed_check(next_cycle);
@@ -341,6 +381,9 @@ int main(int argc, char **argv) {
         dprintf(STDOUT_FILENO, "ADDR32-CALL phase=%d value=%ld\n", next_cycle, restored_addr32_call);
         dprintf(STDOUT_FILENO, "CALL-MEM phase=%d value=%ld\n", next_cycle, restored_call_mem);
         dprintf(STDOUT_FILENO, "PAND-MEMORY phase=%d value=%ld\n", next_cycle, restored_pand_memory);
+        if (observed.ret_chunks <= previous_ret_chunks) return 19;
+        dprintf(STDOUT_FILENO, "RET-DENSE phase=%d chunks=%llu digest=%016llx\n", next_cycle,
+                (unsigned long long)observed.ret_chunks, (unsigned long long)observed.ret_digest);
 
         pid_t child = fork();
         if (child < 0) return 9;
@@ -364,9 +407,10 @@ int main(int argc, char **argv) {
         }
         dprintf(STDOUT_FILENO,
                 "CYCLE %d progress=%llu leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld helper=%ld\n",
-                next_cycle, (unsigned long long)progress, (long)leader, (long)sleeper, (long)worker, (long)group,
+                next_cycle, (unsigned long long)observed.progress, (long)leader, (long)sleeper, (long)worker, (long)group,
                 (long)session, (long)foreground, (long)child);
-        previous = progress;
+        previous = observed.progress;
+        previous_ret_chunks = observed.ret_chunks;
         ++next_cycle;
     }
 
@@ -377,6 +421,6 @@ int main(int argc, char **argv) {
         !WIFEXITED(worker_status) || WEXITSTATUS(worker_status) != 0)
         return 13;
     close(transport[0]);
-    dprintf(STDOUT_FILENO, "DONE progress=%llu\n", (unsigned long long)progress);
+    dprintf(STDOUT_FILENO, "DONE progress=%llu\n", (unsigned long long)observed.progress);
     return 0;
 }
