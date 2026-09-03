@@ -4,7 +4,7 @@ import {
   EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, Progress, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, bytes, containerNameError, logText, processRows, resourceReference, shortId } from './model.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, IMAGE_DETAIL_SOURCE, ImageDetailsSource, NETWORK_DETAIL_SOURCE, NetworkDetailsSource, VOLUME_DETAIL_SOURCE, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { createElement: h, useCallback, useEffect, useMemo, useRef, useState } = React;
 const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
@@ -570,8 +570,13 @@ export function Networks({ api, resource, networkDetails }) {
   const detailsSource = networkDetails ?? localDetails;
   const [name, setName] = useState('');
   const [container, setContainer] = useState('');
+  const [aliases, setAliases] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
   const [error, setError] = useState(null);
+  const [operation, setOperation] = useState({ state: 'idle', request: null, error: null });
+  const [disconnectRequest, setDisconnectRequest] = useState(null);
+  const endpointInput = useRef({ container: '', aliases: '' });
+  endpointInput.current = { container: container.trim(), aliases };
   const currentNetworks = useRef(new Set());
   currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
   const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
@@ -585,23 +590,58 @@ export function Networks({ api, resource, networkDetails }) {
       setInspection({ id, state: 'ready', count, error: null });
     } catch (error) { setInspection({ id, state: 'error', count: 0, error }); }
   };
-  const attach = async (network, verb) => { const id = resourceReference(network); if (!current(id)) return; await api.networks[verb](id, container.trim()); await resource.reload(); };
+  const request = (network, verb) => {
+    const containerId = container.trim();
+    if (!immutableContainerId(containerId)) throw new TypeError('Enter the complete 64-character lowercase hexadecimal container ID.');
+    return { verb, network: resourceReference(network), container: containerId, aliases: verb === 'connect' ? endpointAliases(aliases) : [] };
+  };
+  const attach = async (next) => {
+    if (next.container !== endpointInput.current.container
+      || (next.verb === 'connect' && next.aliases.join(',') !== endpointAliases(endpointInput.current.aliases).join(','))) {
+      throw new Error('Endpoint input changed; review and confirm the operation again.');
+    }
+    if (!current(next.network)) throw new Error(`Network ${next.network} changed or disappeared; inspect and confirm again.`);
+    setOperation({ state: 'loading', request: next, error: null });
+    try {
+      if (next.verb === 'connect') await api.networks.connect(next.network, next.container, { aliases: next.aliases });
+      else await api.networks.disconnect(next.network, next.container);
+      await resource.reload();
+      setOperation({ state: 'success', request: next, error: null });
+      setDisconnectRequest(null);
+    } catch (cause) {
+      setOperation({ state: 'error', request: next, error: cause });
+      throw cause;
+    }
+  };
+  const begin = (network, verb) => {
+    setError(null);
+    try {
+      const next = request(network, verb);
+      if (verb === 'disconnect') setDisconnectRequest(next);
+      else void attach(next).catch(() => {});
+    } catch (cause) { setOperation({ state: 'error', request: null, error: cause }); }
+  };
   const view = bounded(resource.data);
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
-    h(Entry, { value: container, placeholder: 'Container ID for connect/disconnect', onChange: (event) => setContainer(String(event.value ?? '')) }),
+    h(Entry, { value: container, placeholder: 'Complete container ID', enabled: operation.state !== 'loading', onChange: (event) => { setContainer(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); setDisconnectRequest(null); } }),
+    h(Entry, { value: aliases, placeholder: 'Endpoint aliases (comma-separated, optional)', enabled: operation.state !== 'loading', onChange: (event) => { setAliases(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); } }),
+    operation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `${title(operation.request.verb)}ing immutable endpoint…` })) : null,
+    operation.state === 'error' ? h(Row, { gap: 1, wrap: true }, h(Text, { label: boundedMessage(operation.error), color: 'danger', wrap: true }), operation.request ? h(Button, { label: `Retry ${operation.request.verb}`, onInvoke: () => { void attach(operation.request).catch(() => {}); } }) : null) : null,
+    operation.state === 'success' ? h(Text, { label: `${operation.request.verb === 'connect' ? 'Connected' : 'Disconnected'} container ${operation.request.container} ${operation.request.verb === 'connect' ? 'to' : 'from'} network ${operation.request.network}${operation.request.aliases.length ? ` with ${operation.request.aliases.length} endpoint alias${operation.request.aliases.length === 1 ? '' : 'es'}` : ''}.`, color: 'positive', wrap: true }) : null,
     h(ErrorText, { error: error ?? resource.error }),
     h(InventoryEmpty, { resource, records: view.records, label: 'No networks', detail: 'Create a network above to connect workspace containers.' }),
     ...view.records.map((network) => h(Card, { key: resourceReference(network), variant: inspection.id === resourceReference(network) ? 'filled' : 'outline' },
       h(CardHeader, { label: network.name, detail: `${network.driver} · ${network.scope}` }),
-      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: container.trim().length > 0, onInvoke: () => attach(network, 'connect') }), h(ConfirmAction, {
-        label: 'Disconnect', confirmLabel: 'Confirm disconnect',
-        question: `Disconnect immutable container ${container.trim() || 'container'} from network ${resourceReference(network)}?`,
-        enabled: container.trim().length > 0, onConfirm: () => attach(network, 'disconnect'),
+      h(CardActions, { gap: 1 }, h(Button, { label: inspection.id === resourceReference(network) && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(network) }), h(Button, { label: 'Connect', enabled: operation.state !== 'loading' && container.trim().length > 0, onInvoke: () => begin(network, 'connect') }), h(Button, {
+        label: 'Disconnect', enabled: operation.state !== 'loading' && container.trim().length > 0, tone: 'danger', onInvoke: () => begin(network, 'disconnect'),
       }), h(ConfirmAction, {
         label: 'Remove', confirmLabel: 'Confirm remove', question: `Remove immutable network ${resourceReference(network)} (${network.name})?`,
         onConfirm: () => remove(network),
       })),
+      disconnectRequest?.network === resourceReference(network) ? h(CardContent, {},
+        h(Text, { label: `Disconnect immutable container ${disconnectRequest.container} from network ${disconnectRequest.network}?`, color: 'warning', wrap: true }),
+        h(Row, { gap: 1 }, h(Button, { label: 'Confirm disconnect', enabled: operation.state !== 'loading', tone: 'danger', destructive: true, onInvoke: () => { void attach(disconnectRequest).catch(() => {}); } }), h(Button, { label: 'Cancel', enabled: operation.state !== 'loading', onInvoke: () => setDisconnectRequest(null) }))) : null,
       inspection.id === resourceReference(network) ? h(CardContent, {},
         inspection.state === 'loading'
           ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading network details…' }))
@@ -615,7 +655,7 @@ export function Networks({ api, resource, networkDetails }) {
 
 function Page({ title: label, subtitle, children }) { return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 2 }, h(Heading, { label, scale: 'title' }), h(Text, { label: subtitle, color: 'text-dim', wrap: true }), children)); }
 function Toolbar({ loading, onRefresh }) { return h(Row, { gap: 1, align: 'center' }, loading ? h(Spinner) : null, h(Button, { label: 'Refresh', enabled: !loading, onInvoke: onRefresh })); }
-function ErrorText({ error }) { return error ? h(Text, { label: error.message ?? String(error), color: 'danger', wrap: true }) : null; }
+function ErrorText({ error }) { return error ? h(Text, { label: boundedMessage(error), color: 'danger', wrap: true }) : null; }
 function InventoryEmpty({ resource, records, label, detail }) {
   return !resource.loading && !resource.error && records.length === 0
     ? h(EmptyState, { label, detail })

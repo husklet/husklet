@@ -598,7 +598,7 @@ test('volume and network mutations expose danger only on final confirm and cance
   const networks = host();
   const initialNetworks = resource([{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }]);
   networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
-  change(networks, 'Container ID for connect/disconnect', containerId);
+  change(networks, 'Complete container ID', containerId);
   invoke(networks, 'Disconnect');
   assert.equal(isDestructive(networks, 'Confirm disconnect'), true);
   assert.ok(labelled(networks, `Disconnect immutable container ${containerId} from network ${networkId}?`));
@@ -616,6 +616,70 @@ test('volume and network mutations expose danger only on final confirm and cance
   await settled();
   assert.equal(calls.some(([name]) => name === 'network.remove'), false);
   assert.ok(labelled(networks, `Network ${networkId} changed or disappeared; inspect and confirm again.`));
+});
+
+test('network connect validates aliases, exposes progress, success, bounded failure and retained retry', async () => {
+  const calls = [];
+  let release;
+  let attempt = 0;
+  const controlled = { networks: {
+    ...api.networks,
+    connect: async (...args) => {
+      calls.push(args); attempt += 1;
+      if (attempt === 1) await new Promise((resolve) => { release = resolve; });
+      if (attempt === 2) throw new Error(`temporary ${'x'.repeat(600)}`);
+    },
+  } };
+  const resource = { data: [{ id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local' }], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Networks, { api: controlled, resource }));
+
+  change(stage, 'Complete container ID', 'friendly');
+  change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
+  invoke(stage, 'Connect'); await settled();
+  assert.deepEqual(calls, [], 'invalid immutable identity and aliases never reach control authority');
+  assert.ok(labelled(stage, 'Enter the complete 64-character lowercase hexadecimal container ID.'));
+
+  change(stage, 'Complete container ID', 'b'.repeat(64));
+  invoke(stage, 'Connect'); await settled();
+  assert.deepEqual(calls, [], 'duplicate aliases never reach control authority');
+  assert.ok(labelled(stage, 'Network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names.'));
+
+  change(stage, 'Endpoint aliases (comma-separated, optional)', 'database.internal, database_2');
+  invoke(stage, 'Connect'); await settled();
+  assert.ok(labelled(stage, 'Connecting immutable endpoint…'));
+  assert.deepEqual(calls[0], ['a'.repeat(32), 'b'.repeat(64), { aliases: ['database.internal', 'database_2'] }]);
+  release(); await settled(); await settled();
+  assert.ok(labelled(stage, `Connected container ${'b'.repeat(64)} to network ${'a'.repeat(32)} with 2 endpoint aliases.`));
+
+  invoke(stage, 'Connect'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Retry connect'));
+  const errors = stage.frames.flatMap((frame) => frame.patches).filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text?.startsWith('temporary '));
+  assert.equal(errors.at(-1).SetProp.value.Text.length, 513, 'host failures have a bounded semantic label');
+  invoke(stage, 'Retry connect'); await settled(); await settled();
+  assert.equal(calls.filter((call) => call[0] === 'a'.repeat(32)).length, 3);
+});
+
+test('disconnect consent snapshots immutable identities and can be cancelled without authority', async () => {
+  const calls = [];
+  const network = 'a'.repeat(32);
+  const first = 'b'.repeat(64);
+  const second = 'c'.repeat(64);
+  const controlled = { networks: { ...api.networks, disconnect: async (...args) => calls.push(args) } };
+  const resource = { data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local' }], loading: false, error: null, reload: async () => {} };
+  const stage = host(); stage.render(h(Networks, { api: controlled, resource }));
+  change(stage, 'Complete container ID', first); invoke(stage, 'Disconnect');
+  assert.ok(labelled(stage, `Disconnect immutable container ${first} from network ${network}?`));
+  const staleConfirm = labelled(stage, 'Confirm disconnect').SetProp.id;
+  change(stage, 'Complete container ID', second);
+  stage.surface.dispatch({ trigger: 'Invoke', node: staleConfirm, id: `${staleConfirm}:Invoke`, value: null });
+  await settled();
+  assert.deepEqual(calls, [], 'editing identity invalidates prior consent even if a stale event is delivered');
+  invoke(stage, 'Disconnect'); invoke(stage, 'Cancel'); await settled();
+  assert.deepEqual(calls, []);
+  invoke(stage, 'Disconnect'); invoke(stage, 'Confirm disconnect'); await settled(); await settled();
+  assert.deepEqual(calls, [[network, second]]);
+  assert.ok(labelled(stage, `Disconnected container ${second} from network ${network}.`));
 });
 
 test('a failed final confirmation stays visible and retryable', async () => {

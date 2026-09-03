@@ -6,7 +6,7 @@ import {
   IMAGE_DETAIL_SOURCE, IMAGE_DETAIL_WINDOW_LIMIT, ImageDetailsSource,
   NETWORK_DETAIL_SOURCE, NETWORK_DETAIL_WINDOW_LIMIT, NetworkDetailsSource,
   VOLUME_DETAIL_SOURCE, VOLUME_DETAIL_WINDOW_LIMIT, VolumeDetailsSource,
-  bounded, bytes, containerNameError, logText, processRows, resourceReference, shortId,
+  bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId,
 } from '../src/model.js';
 
 test('container rename validation matches the native byte grammar exactly', () => {
@@ -14,6 +14,19 @@ test('container rename validation matches the native byte grammar exactly', () =
   for (const invalid of ['', '.worker', '-worker', '_worker', 'bad name', 'naïve', `a${'-'.repeat(128)}`]) {
     assert.match(containerNameError(invalid), /1–128 ASCII/);
   }
+});
+
+test('endpoint aliases and immutable container identity mirror native boundaries', () => {
+  assert.deepEqual(endpointAliases('database.internal, database_2'), ['database.internal', 'database_2']);
+  assert.deepEqual(endpointAliases('  '), []);
+  for (const invalid of ['same,same', '-leading', 'é', `${'x'.repeat(254)}`, 'one,,two']) {
+    assert.throws(() => endpointAliases(invalid), /at most 64 unique/);
+  }
+  assert.equal(endpointAliases(Array.from({ length: 64 }, (_, index) => `alias-${index}`).join(',')).length, 64);
+  assert.equal(immutableContainerId('a'.repeat(64)), true);
+  assert.equal(immutableContainerId('A'.repeat(64)), false);
+  assert.equal(immutableContainerId('a'.repeat(63)), false);
+  assert.equal(boundedMessage(new Error('x'.repeat(600))).length, 513);
 });
 
 test('records are bounded and omissions stay visible', () => {

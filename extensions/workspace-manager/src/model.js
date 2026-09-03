@@ -17,6 +17,27 @@ export function bounded(records, limit = RECORD_LIMIT) {
   return { records: all.slice(0, limit), omitted: Math.max(0, all.length - limit) };
 }
 
+export function endpointAliases(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
+  const aliases = value.split(',').map((alias) => alias.trim());
+  const valid = aliases.length <= 64
+    && new Set(aliases).size === aliases.length
+    && aliases.every((alias) => alias.length >= 1 && alias.length <= 253
+      && [...alias].every((character, index) => /[A-Za-z0-9]/.test(character)
+        || (index > 0 && '_.-'.includes(character))));
+  if (!valid) throw new TypeError('Network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names.');
+  return aliases;
+}
+
+export function immutableContainerId(value) {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
+export function boundedMessage(value, limit = 512) {
+  const message = value?.message ?? String(value ?? '');
+  return message.length <= limit ? message : `${message.slice(0, limit)}…`;
+}
+
 export function shortId(value) {
   const id = String(value ?? '—');
   return id.length > 12 ? id.slice(0, 12) : id;
