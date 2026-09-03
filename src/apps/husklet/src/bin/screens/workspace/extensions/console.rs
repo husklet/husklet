@@ -147,11 +147,11 @@ impl Console {
         for tab in topology.tabs {
             Self::inventory_node(window, &tab.root, &tab.id, &tab.title, &mut panes);
         }
-        if Window::gallery(window).is_some_and(|gallery| gallery.native_semantics("workspace").is_ok()) {
+        if let Some(semantics) = Window::gallery(window).and_then(|gallery| gallery.native_semantics("workspace").ok()) {
             panes.push(InspectablePane {
                 slot: "workspace".into(),
-                generation: 0,
-                revision: 0,
+                generation: semantics.generation,
+                revision: semantics.revision,
                 kind: PaneKind::Native,
                 provider: None,
                 tab: None,

@@ -3155,10 +3155,11 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert!(!inventory.truncated);
-        assert!(inventory
+        let native = inventory
             .panes
             .iter()
-            .any(|pane| { pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native }));
+            .find(|pane| pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native)
+            .expect("native workspace pane is observable");
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
@@ -3171,6 +3172,11 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert_eq!(tree.slot, "workspace");
+        assert_eq!(
+            (native.generation, native.revision),
+            (tree.generation, tree.revision),
+            "inventory and semantics must identify the same native occupant snapshot"
+        );
         let settings = tree
             .root
             .children
