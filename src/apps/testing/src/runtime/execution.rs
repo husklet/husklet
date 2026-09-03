@@ -579,10 +579,19 @@ fn checkpoint_failure_diagnostic(error: &str, logs: Option<&hl_container::Logs>)
         |logs| {
             format!(
                 "container checkpoint failed: {error}; stderr={}; stdout={}",
-                logs.stderr.preview(),
-                logs.stdout.preview()
+                checkpoint_log_excerpt(&logs.stderr),
+                checkpoint_log_excerpt(&logs.stdout)
             )
         },
+    )
+}
+
+fn checkpoint_log_excerpt(bytes: &[u8]) -> String {
+    const TAIL_BYTES: usize = 320;
+    format!(
+        "head={}; tail={}",
+        bytes.preview(),
+        bytes.escaped_from(bytes.len().saturating_sub(TAIL_BYTES))
     )
 }
 
@@ -721,15 +730,27 @@ mod checkpoint_protocol_tests {
     #[test]
     fn checkpoint_failure_preserves_cause_and_bounded_current_logs() {
         let logs = hl_container::Logs {
-            stdout: [b"stdout-marker:".as_slice(), &vec![b'o'; 8_192]].concat(),
-            stderr: [b"stderr-marker:".as_slice(), &vec![b'e'; 8_192]].concat(),
+            stdout: [
+                b"stdout-early-marker:".as_slice(),
+                &vec![b'o'; 8_192],
+                b":stdout-late-checkpoint-cause",
+            ]
+            .concat(),
+            stderr: [
+                b"stderr-early-marker:".as_slice(),
+                &vec![b'e'; 8_192],
+                b":stderr-late-checkpoint-phase",
+            ]
+            .concat(),
         };
         let diagnostic = checkpoint_failure_diagnostic("engine refused capture", Some(&logs));
         assert!(diagnostic.contains("engine refused capture"), "{diagnostic}");
-        assert!(diagnostic.contains("stdout-marker"), "{diagnostic}");
-        assert!(diagnostic.contains("stderr-marker"), "{diagnostic}");
+        assert!(diagnostic.contains("stdout-early-marker"), "{diagnostic}");
+        assert!(diagnostic.contains("stderr-early-marker"), "{diagnostic}");
+        assert!(diagnostic.contains("stdout-late-checkpoint-cause"), "{diagnostic}");
+        assert!(diagnostic.contains("stderr-late-checkpoint-phase"), "{diagnostic}");
         assert!(diagnostic.contains("bytes]"), "{diagnostic}");
-        assert!(diagnostic.len() < 1_024, "diagnostic was {} bytes", diagnostic.len());
+        assert!(diagnostic.len() < 2_048, "diagnostic was {} bytes", diagnostic.len());
     }
 }
 
