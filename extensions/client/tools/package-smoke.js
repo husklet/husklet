@@ -1,12 +1,70 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-client-pack-'));
+
+async function runPackedStarter(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host.sock');
+  let peer;
+  let observed = false;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2 || frame.kind !== wire.KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'workspace_info' });
+        observed = true;
+        stream.write(wire.encode({
+          channel: 2,
+          kind: wire.KIND.response,
+          payload: { reply: 'workspace', with: { name: 'project', architecture: 'x86_64', image: 'alpine:3.20' } },
+        }));
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+    }));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    for (let attempt = 0; attempt < 400 && !stdout.endsWith('\n'); attempt += 1) {
+      if (child.exitCode !== null) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert(observed, `packed client starter did not call the real socket; stderr=${stderr}`);
+    assert(stdout.endsWith('\n'), `packed client starter did not report workspace information; stderr=${stderr}`);
+    child.kill('SIGTERM');
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not stop')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 0, signal: null });
+    assert.equal(stdout, '{"name":"project","architecture":"x86_64","image":"alpine:3.20"}\n');
+    assert.equal(stderr, '');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
 
 try {
   const packed = JSON.parse(execFileSync('npm', [
@@ -16,7 +74,8 @@ try {
   for (const required of [
     'package.json', 'README.md', 'LICENSE', 'src/index.js', 'src/index.d.ts',
     'src/generated-protocol.js', 'src/generated-protocol.d.ts', 'src/semantic.js',
-    'src/session.js', 'src/wire.js',
+    'src/session.js', 'src/wire.js', 'examples/starter/Dockerfile',
+    'examples/starter/extension.toml', 'examples/starter/main.js', 'examples/starter/package.json',
   ]) assert(names.has(required), `npm package omits ${required}`);
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')),
     'developer-only files leaked into package');
@@ -24,13 +83,30 @@ try {
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
+  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
     cwd: consumer, stdio: 'pipe',
   });
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/client/package.json')));
   assert.equal(manifest.dependencies, undefined, 'framework-neutral client gained an undeclared runtime dependency');
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
   assert.equal(manifest.exports['./protocol'].types, './src/generated-protocol.d.ts');
+
+  const installedClient = path.join(consumer, 'node_modules/@husklet/client');
+  const starter = path.join(scratch, 'starter');
+  fs.cpSync(path.join(installedClient, 'examples/starter'), starter, { recursive: true });
+  const starterManifest = JSON.parse(fs.readFileSync(path.join(starter, 'package.json')));
+  assert.equal(starterManifest.dependencies['@husklet/client'], manifest.version);
+  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
+    cwd: starter, stdio: 'pipe',
+  });
+  execFileSync('npm', ['test'], { cwd: starter, stdio: 'pipe' });
+  const dockerfile = fs.readFileSync(path.join(starter, 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
+  assert.match(dockerfile, /COPY --chown=node:node package\*\.json/);
+  assert.match(dockerfile, /npm ci --ignore-scripts --omit=dev/);
+  assert.match(dockerfile, /^USER node$/m);
+  assert.match(dockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
+  await runPackedStarter(starter, path.join(starter, 'node_modules/@husklet/client'));
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, semanticXml, workspace } from '@husklet/client';
@@ -42,7 +118,7 @@ try {
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
     import {
-      semanticXml, workspace, type ContainerCreateSpec, type PaneSemanticAction,
+      semanticXml, workspace, type ConnectOptions, type ContainerCreateSpec, type PaneSemanticAction,
       type PaneSemanticTree, type ProcessList, type Session, type TerminalTopology,
       type WorkspaceConfiguration,
     } from '@husklet/client';
@@ -62,8 +138,9 @@ try {
     const xml: string = semanticXml(tree);
     const request: WireRequest = { call: 'workspace_info' };
     const protocol: 1 = PROTOCOL_VERSION;
+    const lifecycle: ConnectOptions = { connectTimeout: 5_000, onClose: (error) => { void error.message; } };
     void configuration; void container; void processes; void topology; void text; void input;
-    void acted; void xml; void request; void protocol;
+    void acted; void xml; void request; void protocol; void lifecycle;
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',

@@ -151,10 +151,12 @@ export interface ConnectOptions {
   path?: string;
   pendingLimit?: number;
   timeout?: number;
+  connectTimeout?: number;
   onRows?: (request: unknown, channel: number) => void;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: HostEvent, channel: number) => void;
   onEventError?: (error: unknown) => void;
+  onClose?: (error: Error) => void;
 }
 
 export class Session {

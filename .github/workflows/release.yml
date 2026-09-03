@@ -126,10 +126,12 @@ jobs:
           set -euo pipefail
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix client/examples/starter
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix react/examples/starter
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix react/examples/starter
           sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" react/examples/starter/Dockerfile
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" client/examples/starter/extension.toml
           sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" react/examples/starter/extension.toml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
@@ -140,11 +142,13 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'NODE'
           import client from './client/package.json' with { type: 'json' };
+          import clientStarter from './client/examples/starter/package.json' with { type: 'json' };
           import react from './react/package.json' with { type: 'json' };
           import starter from './react/examples/starter/package.json' with { type: 'json' };
           const expected = process.env.RELEASE_VERSION;
           for (const [name, actual] of [
             ['@husklet/client', client.version],
+            ['client starter dependency on @husklet/client', clientStarter.dependencies['@husklet/client']],
             ['@husklet/react', react.version],
             ['@husklet/react dependency on @husklet/client', react.dependencies['@husklet/client']],
             ['starter dependency on @husklet/client', starter.dependencies['@husklet/client']],

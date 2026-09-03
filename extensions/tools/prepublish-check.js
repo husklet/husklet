@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (name) => JSON.parse(fs.readFileSync(path.join(root, name, 'package.json')));
 const client = read('client');
+const clientStarter = JSON.parse(fs.readFileSync(path.join(root, 'client/examples/starter/package.json')));
 const react = read('react');
 const starter = JSON.parse(fs.readFileSync(path.join(root, 'react/examples/starter/package.json')));
 const expected = process.env.RELEASE_VERSION ?? client.version;
@@ -16,6 +17,7 @@ for (const manifest of [client, react]) {
   assert.deepEqual(manifest.publishConfig, { access: 'public', provenance: true });
 }
 assert.equal(react.dependencies['@husklet/client'], expected);
+assert.equal(clientStarter.dependencies['@husklet/client'], expected);
 assert.equal(starter.dependencies['@husklet/client'], expected);
 assert.equal(starter.dependencies['@husklet/react'], expected);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-pack-'));
