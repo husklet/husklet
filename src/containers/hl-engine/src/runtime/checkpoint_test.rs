@@ -3292,7 +3292,7 @@ fn a_socket_endpoint_no_member_reciprocates_leaves_no_generation() {
 }
 
 #[test]
-fn one_socket_object_owned_by_two_members_leaves_no_generation() {
+fn one_socket_object_aliased_by_two_members_publishes_one_generation() {
     let store = Arc::new(TransactionStore::default());
     store.seed_committed("MANIFEST", b"prior");
     let mut first = socketpair_record(10, 0x11, 0x22);
@@ -3303,6 +3303,27 @@ fn one_socket_object_owned_by_two_members_leaves_no_generation() {
             43,
             &[("proc.1", first), ("proc.2", socketpair_record(4, 0x11, 0x22))],
         ),
+        Ok(())
+    );
+    let (committed, staging, aborts) = store.snapshot();
+    assert_eq!(
+        committed.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+        ["proc.1/fds", "proc.2/fds"]
+    );
+    assert!(staging.is_empty());
+    assert_eq!(aborts, 0);
+}
+
+#[test]
+fn conflicting_socket_aliases_leave_no_generation() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    let mut first = socketpair_record(10, 0x11, 0x22);
+    first.extend(socketpair_record(11, 0x22, 0x11));
+    let mut conflicting = socketpair_record(4, 0x11, 0x33);
+    conflicting.extend(socketpair_record(5, 0x33, 0x11));
+    assert_eq!(
+        capture_with_socket_inventories(&store, 44, &[("proc.1", first), ("proc.2", conflicting)]),
         Err(CaptureFailure::Failed)
     );
     assert_eq!(store.snapshot().0, [("MANIFEST".into(), b"prior".to_vec())]);
