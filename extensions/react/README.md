@@ -21,11 +21,14 @@ Start from the complete context shipped in this package:
 ```sh
 cp -R node_modules/@husklet/react/examples/starter my-extension
 cd my-extension
+npm install
 docker build -t my-extension .
 ```
 
-[`examples/starter`](examples/starter) contains `main.js`, `extension.toml`,
-and its Dockerfile. The manifest label names the file inside the image—the host
+[`examples/starter`](examples/starter) is a standalone Node project containing
+`package.json`, `main.js`, `extension.toml`, and its Dockerfile. Its SDK dependency
+is bound to the same version as the package that supplied the starter. The manifest
+label names the file inside the image—the host
 does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
 base image's non-root runtime. Pin `HUSKLET_REACT_IMAGE` to the release version
 you tested before publishing an extension; `latest` is only the starter default.

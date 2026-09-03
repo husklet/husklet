@@ -127,6 +127,7 @@ jobs:
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/mcp
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --workspace @husklet/mcp
+          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix react/examples/starter
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
@@ -137,11 +138,13 @@ jobs:
           node --input-type=module <<'NODE'
           import react from './react/package.json' with { type: 'json' };
           import mcp from './mcp/package.json' with { type: 'json' };
+          import starter from './react/examples/starter/package.json' with { type: 'json' };
           const expected = process.env.RELEASE_VERSION;
           for (const [name, actual] of [
             ['@husklet/react', react.version],
             ['@husklet/mcp', mcp.version],
             ['@husklet/mcp dependency on @husklet/react', mcp.dependencies['@husklet/react']],
+            ['starter dependency on @husklet/react', starter.dependencies['@husklet/react']],
           ]) {
             if (actual !== expected) throw new Error(`${name} is ${actual}, expected ${expected}`);
           }

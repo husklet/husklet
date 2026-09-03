@@ -9,9 +9,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, installedStarter) {
-  const starter = path.join(consumer, 'starter');
-  fs.cpSync(installedStarter, starter, { recursive: true });
+async function runPackedStarter(consumer, starter) {
   const socket = path.join(consumer, 'starter.sock');
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
@@ -93,6 +91,7 @@ try {
   for (const required of [
     'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts',
     'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
+    'examples/starter/package.json',
   ]) {
     assert(names.has(required), `npm package omits ${required}`);
   }
@@ -120,15 +119,29 @@ try {
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
+  const starterPackage = JSON.parse(fs.readFileSync(path.join(installedStarter, 'package.json'), 'utf8'));
   const starterDockerfile = fs.readFileSync(path.join(installedStarter, 'Dockerfile'), 'utf8');
   const starterManifest = fs.readFileSync(path.join(installedStarter, 'extension.toml'), 'utf8');
   execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
   assert.match(starterDockerfile, /^ARG HUSKLET_REACT_IMAGE=ghcr\.io\/husklet\/husklet\/extension-react-base:latest$/m);
+  assert.equal(starterPackage.private, true);
+  assert.equal(starterPackage.type, 'module');
+  assert.equal(starterPackage.scripts.start, 'node main.js');
+  assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
+  assert.equal(starterPackage.dependencies.react, '18.3.1');
   assert.match(starterDockerfile, /^FROM \$\{HUSKLET_REACT_IMAGE\}$/m);
   assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
   assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);
   assert.match(starterDockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
-  await runPackedStarter(consumer, installedStarter);
+  const standaloneStarter = path.join(scratch, 'standalone-starter');
+  fs.cpSync(installedStarter, standaloneStarter, { recursive: true });
+  execFileSync('npm', [
+    'install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, filename), 'react@18.3.1',
+  ], { cwd: standaloneStarter, stdio: 'pipe' });
+  const starterLock = JSON.parse(fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'));
+  assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
+  assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
+  await runPackedStarter(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);

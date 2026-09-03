@@ -41,7 +41,7 @@ if [[ "$kind" == base ]]; then
       if (manifest.version !== process.env.EXPECTED_VERSION) throw new Error(`SDK ${manifest.version}`);
       if (typeof connect !== "function" || typeof render !== "function") throw new Error("SDK runtime unavailable");
       const starter = "/app/node_modules/@husklet/react/examples/starter";
-      for (const file of ["Dockerfile", "extension.toml", "main.js"]) {
+      for (const file of ["Dockerfile", "extension.toml", "main.js", "package.json"]) {
         if (!fs.statSync(`${starter}/${file}`).isFile()) throw new Error(`starter omits ${file}`);
       }
     '

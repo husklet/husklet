@@ -1,0 +1,13 @@
+{
+  "name": "husklet-react-starter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "@husklet/react": "0.1.0",
+    "react": "18.3.1"
+  }
+}
