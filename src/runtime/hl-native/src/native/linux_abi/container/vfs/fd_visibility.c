@@ -1458,6 +1458,12 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static int fdvis_index_has_tombstone_test(const struct fdvis_index_slot *index) {
+    for (unsigned slot = 0; slot < FDVIS_INDEX_N; ++slot)
+        if (index[slot].key == FDVIS_INDEX_TOMBSTONE) return 1;
+    return 0;
+}
+
 static int fdvis_after_fork_rollback_test(void) {
     struct fdvis_slot *identities = calloc(FDVIS_N, sizeof *identities);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
@@ -1592,6 +1598,9 @@ static int fdvis_after_fork_rollback_test(void) {
        index. Reinstating the unconditional dirty/rebuild pair clears the tombstone and reddens this arm. */
     struct fdvis_index_slot *fork_index = calloc(FDVIS_INDEX_N, sizeof *fork_index);
     int read_only_preserved_index = 0;
+    int changed_batch_rebuilt_index = 0;
+    int upgrade_rebuilt_index = 0;
+    int rollback_rebuilt_index = 0;
     if (fork_index) {
         memset(identities, 0, sizeof *identities * FDVIS_N);
         memset(paths, 0, sizeof *paths * FDPATH_N);
@@ -1616,6 +1625,50 @@ static int fdvis_after_fork_rollback_test(void) {
         read_only_preserved_index = published && tombstone < FDVIS_INDEX_N && read_only_status == 0 &&
                                     fork_index[tombstone].key == FDVIS_INDEX_TOMBSTONE &&
                                     atomic_load_explicit(&control->index_dirty, memory_order_relaxed) == 0;
+
+        memset(identities, 0, sizeof *identities * FDVIS_N);
+        memset(paths, 0, sizeof *paths * FDPATH_N);
+        memset(control, 0, sizeof *control);
+        memset(fork_index, 0, sizeof *fork_index * FDVIS_INDEX_N);
+        identities[0].key = UINT64_MAX;
+        fork_index[FDVIS_INDEX_N - 1].key = FDVIS_INDEX_TOMBSTONE;
+        int changed_status = proc_fdvis_after_fork(&first_only, child, 0);
+        changed_batch_rebuilt_index = changed_status == 0 && !fdvis_index_has_tombstone_test(fork_index) &&
+                                      fdvis_find(first_key, child_start, 0) == &identities[0] &&
+                                      atomic_load_explicit(&control->index_dirty, memory_order_relaxed) == 0;
+
+        memset(identities, 0, sizeof *identities * FDVIS_N);
+        memset(paths, 0, sizeof *paths * FDPATH_N);
+        memset(control, 0, sizeof *control);
+        memset(fork_index, 0, sizeof *fork_index * FDVIS_INDEX_N);
+        identities[0] = (struct fdvis_slot){.key = first_key,
+                                            .owner_start_ns = 0,
+                                            .generation = 14,
+                                            .kind = entries[0].kind,
+                                            .device = entries[0].device,
+                                            .object = entries[0].object};
+        provisional = fdpath_find(first_key, 0, 1);
+        if (provisional) {
+            provisional->path_is_guest = entries[0].path_is_guest;
+            snprintf(provisional->path, sizeof provisional->path, "%s", entries[0].path);
+        }
+        fork_index[FDVIS_INDEX_N - 1].key = FDVIS_INDEX_TOMBSTONE;
+        int indexed_upgrade_status = proc_fdvis_after_fork(&first_only, child, 0);
+        upgrade_rebuilt_index = indexed_upgrade_status == 0 && !fdvis_index_has_tombstone_test(fork_index) &&
+                                fdvis_find(first_key, child_start, 0) == &identities[0] &&
+                                fdpath_find(first_key, 0, 0) == NULL;
+
+        memset(identities, 0, sizeof *identities * FDVIS_N);
+        memset(paths, 0, sizeof *paths * FDPATH_N);
+        memset(control, 0, sizeof *control);
+        memset(fork_index, 0, sizeof *fork_index * FDVIS_INDEX_N);
+        identities[0].key = UINT64_MAX;
+        identities[1].key = UINT64_C(0x9876);
+        fork_index[FDVIS_INDEX_N - 1].key = FDVIS_INDEX_TOMBSTONE;
+        int indexed_rollback_status = proc_fdvis_after_fork(&plan, child, 0);
+        rollback_rebuilt_index = indexed_rollback_status == -EAGAIN && !fdvis_index_has_tombstone_test(fork_index) &&
+                                 identities[0].key == 0 && identities[1].key == UINT64_C(0x9876) &&
+                                 fdvis_find(first_key, child_start, 0) == NULL;
     }
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
@@ -1626,7 +1679,8 @@ static int fdvis_after_fork_rollback_test(void) {
     free(paths);
     free(control);
     return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly &&
-           commit_survived_timeout && read_only_preserved_index;
+           commit_survived_timeout && read_only_preserved_index && changed_batch_rebuilt_index &&
+           upgrade_rebuilt_index && rollback_rebuilt_index;
 }
 
 #if !defined(_WIN32)
