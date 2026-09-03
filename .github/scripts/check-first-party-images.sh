@@ -49,6 +49,14 @@ node -e '
 ' "$root"
 
 workflow="$root/.github/workflows/release.yml"
+node -e '
+  const fs = require("node:fs");
+  const workflow = fs.readFileSync(process.argv[1], "utf8");
+  const job = workflow.match(/^  react-extension-base:\n(?<body>[\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n)/m)?.groups.body;
+  if (!job) throw new Error("release lacks react-extension-base job");
+  const needs = job.match(/^    needs: \[(?<jobs>[^\]]+)\]$/m)?.groups.jobs.split(",").map((item) => item.trim()) ?? [];
+  if (!needs.includes("react-package")) throw new Error("React base publication must wait for the exact published npm package pair");
+' "$workflow"
 [[ "$(grep -Fc 'platforms: linux/amd64,linux/arm64' "$workflow")" == 2 ]] \
   || fail "release must publish exactly two multi-architecture image manifests"
 [[ "$(grep -Fc 'for architecture in amd64 arm64; do' "$workflow")" == 2 ]] \
