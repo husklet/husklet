@@ -841,6 +841,48 @@ test('real Unix retitleAndWait arms before CAS and verifies exact title and revi
   }
 });
 
+test('real Unix focusAndWait arms before CAS and verifies exact focused pane identity', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-focus-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const slot = 'pane-focus'; let focuses = 0;
+  const pane = { slot, generation: 3, revision: 6, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_focus_pane_observed') {
+        focuses += 1; assert.deepEqual(frame.payload.with, { slot, generation: 3, revision: 5 });
+        if (focuses === 1) socket.write(encode({ channel: 90, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot, kind: 'terminal', generation: 3, revision: 6, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'focus-wait', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.focusAndWait(slot, 3, 5, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid timeout must not subscribe or focus');
+    assert.deepEqual(await terminal.focusAndWait(slot, 3, 5), { changed: true, pane });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_focus_pane_observed', 'pane_list', 'event_unsubscribe']);
+    calls.length = 0;
+    assert.deepEqual(await terminal.focusAndWait(slot, 3, 5, { timeoutMs: 5 }), {
+      changed: false, slot, after: { generation: 3, revision: 5 },
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_focus_pane_observed', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();

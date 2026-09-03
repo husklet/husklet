@@ -776,6 +776,41 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.focusAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal focus requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal focus requires nonnegative safe integer generation and revision');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal focus wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot
+        && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.focusObserved(slot, generation, revision);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, slot, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated
+        ? 'focused pane cannot be verified from a truncated inventory'
+        : 'focused pane disappeared');
+      if (pane.generation !== generation) throw new Error('focused pane slot was replaced before verification');
+      if (pane.revision === revision || !pane.focused) throw new Error('pane changed without receiving focus');
+      return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
     if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {

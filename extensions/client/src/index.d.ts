@@ -358,6 +358,12 @@ export interface WorkspaceApi {
       >;
     focus(slot: string): Promise<void>;
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
+    /** Arm pane changes before CAS focus and verify the same pane is focused at an advanced revision. */
+    focusAndWait(slot: string, generation: number, revision: number,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; slot: string; after: { generation: number; revision: number } }
+      >;
     retitle(slot: string, title: string): Promise<void>;
     retitleObserved(slot: string, generation: number, revision: number, title: string): Promise<void>;
     /** Arm pane changes before CAS retitle and verify the exact title and advanced revision. */

@@ -120,6 +120,16 @@ const retitled = await host.terminal.retitleAndWait(
 if (retitled.changed) console.log(retitled.pane.title);
 ```
 
+Focus also has an observable form that verifies the same pane generation is
+reported focused at a newer revision:
+
+```js
+const focused = await host.terminal.focusAndWait(
+  pane.slot, pane.generation, pane.revision, { timeoutMs: 10_000 },
+);
+if (focused.changed) console.log(focused.pane.focused); // true
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 
