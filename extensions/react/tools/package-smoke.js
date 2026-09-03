@@ -224,10 +224,13 @@ try {
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
+  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.join(root, 'image-runtime/package.json'), 'utf8'));
   for (const field of ['cpu', 'os', 'libc']) {
     assert.equal(manifest[field], undefined, `React SDK gained an architecture restriction in ${field}`);
   }
   assert.equal(manifest.dependencies['@husklet/client'], manifest.version, 'React SDK must depend on the same public client version');
+  assert.equal(manifest.dependencies['react-reconciler'], imageRuntimeManifest.dependencies['react-reconciler'],
+    'published SDK reconciler must exactly match the multi-architecture base runtime');
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
