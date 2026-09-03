@@ -34,22 +34,19 @@ base image's non-root runtime. The starter defaults to the immutable base-image
 tag released with this SDK; override `HUSKLET_REACT_IMAGE` deliberately when
 testing against another runtime.
 
-```jsx
+```js
 import React, { useState } from 'react';
-import { connect, render, Column, Button, Text } from '@husklet/react';
+import { Button, Column, Text, connect, render } from '@husklet/react';
 
 function App() {
   const [count, setCount] = useState(0);
-  return (
-    <Column gap={2} pad={4}>
-      <Text scale="title">Clicked {count} times</Text>
-      <Button label="Go" tone="accent" onInvoke={() => setCount(count + 1)} />
-    </Column>
-  );
+  return React.createElement(Column, { gap: 2, pad: 4 },
+    React.createElement(Text, { label: `Clicked ${count} times`, scale: 'title' }),
+    React.createElement(Button, { label: 'Go', tone: 'accent', onInvoke: () => setCount(count + 1) }));
 }
 
 const session = await connect();          // reads HUSKLET_EXTENSION_SOCKET
-render(<App />, session, { title: 'My Extension' });
+render(React.createElement(App), session, { title: 'My Extension' });
 ```
 
 ## Pane providers
@@ -70,7 +67,7 @@ Choosing that entry sends a typed `PaneSelection` carrying both the provider ID
 and the stable workspace slot that selected it. Use that event to select the
 view rendered by the extension's existing root:
 
-```jsx
+```js
 import React from 'react';
 import { connect, render, LogView, Text, usePaneSelection } from '@husklet/react';
 
@@ -79,11 +76,11 @@ const session = await connect();
 function App() {
   const selection = usePaneSelection(session, 'logs');
   return selection
-    ? <LogView value={`Logs selected in ${selection.slot}`} />
-    : <Text value="Choose Service logs from a pane menu" />;
+    ? React.createElement(LogView, { value: `Logs selected in ${selection.slot}` })
+    : React.createElement(Text, { label: 'Choose Service logs from a pane menu' });
 }
 
-render(<App />, session, { title: 'My Extension' });
+render(React.createElement(App), session, { title: 'My Extension' });
 ```
 
 The host sends only providers declared by this extension. The `slot` lets state
@@ -109,8 +106,9 @@ import { connect, workspace } from '@husklet/react';
 const session = await connect({ timeout: 10_000, pendingLimit: 32 });
 const host = workspace(session);
 const configuration = await host.inspect('backend');
+if (!configuration.generation) throw new Error('inspection omitted workspace generation');
 await host.stop('backend');
-await host.update('backend', { ...configuration, memory_mb: 4096 });
+await host.update('backend', configuration.generation, { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
 await host.containers.stop(containers[0].id);

@@ -232,7 +232,9 @@ try {
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
   assert.match(readme, /examples\/starter/);
-  assert.match(readme, /import React, \{ useState \} from 'react';/);
+  assert.match(readme, /render\(React\.createElement\(App\), session/);
+  assert(!readme.includes('```jsx'), 'Node-only starter documentation must not require a JSX transform');
+  assert.match(readme, /host\.update\('backend', configuration\.generation,/);
   assert(!readme.includes('husklet.extension.manifest="{...}"'), 'README must not suggest an inline manifest');
 
   // Reproduce the first Docker stage without an OCI builder or a registry. Its
