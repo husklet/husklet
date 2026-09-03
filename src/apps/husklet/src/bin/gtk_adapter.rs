@@ -417,19 +417,20 @@ mod font_picker_tests {
 
     #[test]
     fn unavailable_font_families_remain_visible_and_are_not_discarded() {
-        if gtk::init().is_err() {
-            eprintln!("skipped: no display connection");
-            return;
-        }
-        let picker = FontPicker::new("Definitely Missing Husklet Font");
-        assert_eq!(picker.value(), "Definitely Missing Husklet Font");
-        assert_eq!(
-            picker.widget().label().as_deref(),
-            Some("Definitely Missing Husklet Font")
-        );
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let picker = FontPicker::new("Definitely Missing Husklet Font");
+            assert_eq!(picker.value(), "Definitely Missing Husklet Font");
+            assert_eq!(
+                picker.widget().label().as_deref(),
+                Some("Definitely Missing Husklet Font")
+            );
 
-        picker.set_value("Another Missing Font");
-        assert_eq!(picker.value(), "Another Missing Font");
-        assert_eq!(picker.widget().label().as_deref(), Some("Another Missing Font"));
+            picker.set_value("Another Missing Font");
+            assert_eq!(picker.value(), "Another Missing Font");
+            assert_eq!(picker.widget().label().as_deref(), Some("Another Missing Font"));
+        });
+        if !ran {
+            eprintln!("skipped: no display connection");
+        }
     }
 }
