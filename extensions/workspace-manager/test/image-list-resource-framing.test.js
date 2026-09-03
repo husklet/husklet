@@ -17,7 +17,7 @@ test('image inventory removes stale destructive controls across real framed refr
   let attempts = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.request, payload: {
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
       protocol: 1, extension: 'image-list-resource-test', granted: ['image-read', 'image-write'],
     } }));
     socket.on('data', (chunk) => {
@@ -56,17 +56,30 @@ test('image inventory removes stale destructive controls across real framed refr
     await until(() => labelled(stage, 'stale/image:1'));
     assert.ok(labelled(stage, 'Remove'));
     assert.ok(labelled(stage, 'Prune unused images'));
+    invoke(stage, 'Overview');
+    await until(() => labelled(stage, 'Available locally') && labelled(stage, '1'));
+    invoke(stage, 'Images');
 
     const refreshStart = stage.frames.length;
     invoke(stage, 'Refresh');
     await until(() => attempts === 2 && labelled(stage, 'Reading images…'));
+    invoke(stage, 'Overview');
+    await until(() => labelled(stage, 'Reading inventory…'));
+    const overviewLoading = stage.frames.slice(refreshStart).flatMap((frame) => frame.patches);
+    assert.equal(
+      overviewLoading.some((patch) => patch.SetProp?.value?.Text === '1'),
+      false,
+      'overview loading does not recreate the stale image count',
+    );
     const refreshPatches = stage.frames.slice(refreshStart).flatMap((frame) => frame.patches);
     assert.ok(refreshPatches.some((patch) => 'Remove' in patch), 'loading unmounts stale image cards and prune authority');
     await until(() => labelled(stage, 'image inventory unavailable'));
     for (const stale of ['Remove', 'Prune unused images']) {
       assert.equal(refreshPatches.some((patch) => patch.SetProp?.value?.Text === stale), false, `${stale} is not recreated during failure`);
     }
+    await until(() => labelled(stage, 'Unavailable') && labelled(stage, 'Refresh failed'));
 
+    invoke(stage, 'Images');
     invoke(stage, 'Retry images');
     await until(() => labelled(stage, 'No images'));
     assert.equal(attempts, 3);

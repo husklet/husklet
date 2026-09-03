@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Executions, Images, Networks, Processes, Volumes, WorkspaceManager } from '../src/app.js';
+import { Containers, Executions, Images, Networks, Overview, Processes, Volumes, WorkspaceManager } from '../src/app.js';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../src/model.js';
 import { host } from './host.js';
 
@@ -17,6 +17,24 @@ test('the test host receives overview and every resource navigation choice', () 
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
   for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks']) assert.ok(labels.includes(label), label);
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
+});
+
+test('overview never presents stale inventory counts as current during loading or failure', () => {
+  const stale = [{ id: 'old', state: 'running' }];
+  const stage = host();
+  stage.render(h(Overview, {
+    containers: { data: stale, loading: true, error: null },
+    images: { data: stale, loading: false, error: new Error('image refresh failed') },
+    volumes: { data: [], loading: false, error: null },
+    networks: { data: [], loading: false, error: null },
+    onOpen: () => {},
+  }));
+  assert.ok(labelled(stage, '…'));
+  assert.ok(labelled(stage, 'Reading inventory…'));
+  assert.ok(labelled(stage, 'Unavailable'));
+  assert.ok(labelled(stage, 'Refresh failed'));
+  assert.equal(labelled(stage, '1 running'), undefined, 'loading cannot retain stale running claims');
+  assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
 });
 
 test('every empty operational page explains what is absent and how to proceed', async () => {

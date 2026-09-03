@@ -96,17 +96,27 @@ function Navigation({ section, onSelect }) {
     }))));
 }
 
-function Overview({ containers, images, volumes, networks, onOpen }) {
-  const running = (containers.data ?? []).filter((item) => item.state === 'running').length;
+export function Overview({ containers, images, volumes, networks, onOpen }) {
+  const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
+  const imagesSummary = resourceSummary(images, () => 'Available locally');
+  const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
+  const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
   return h(Scroll, { grow: true, height: 'fill' }, h(Column, { pad: 4, gap: 3 },
     h(Heading, { label: 'Workspace overview', scale: 'title' }),
     h(Text, { label: 'Inspect and operate the resources in this workspace.', color: 'text-dim' }),
     h(Row, { gap: 2, wrap: true },
-      h(Summary, { title: 'Containers', value: containers.loading ? '…' : String((containers.data ?? []).length), detail: `${running} running`, onOpen: () => onOpen('containers') }),
-      h(Summary, { title: 'Images', value: images.loading ? '…' : String((images.data ?? []).length), detail: 'Available locally', onOpen: () => onOpen('images') }),
-      h(Summary, { title: 'Volumes', value: volumes.loading ? '…' : String((volumes.data ?? []).length), detail: 'Durable local storage', onOpen: () => onOpen('volumes') }),
-      h(Summary, { title: 'Networks', value: networks.loading ? '…' : String((networks.data ?? []).length), detail: 'Workspace-local connectivity', onOpen: () => onOpen('networks') })),
+      h(Summary, { title: 'Containers', ...containersSummary, onOpen: () => onOpen('containers') }),
+      h(Summary, { title: 'Images', ...imagesSummary, onOpen: () => onOpen('images') }),
+      h(Summary, { title: 'Volumes', ...volumesSummary, onOpen: () => onOpen('volumes') }),
+      h(Summary, { title: 'Networks', ...networksSummary, onOpen: () => onOpen('networks') })),
     h(ErrorText, { error: containers.error ?? images.error ?? volumes.error ?? networks.error })));
+}
+
+function resourceSummary(resource, readyDetail) {
+  if (resource.loading) return { value: '…', detail: 'Reading inventory…' };
+  if (resource.error) return { value: 'Unavailable', detail: 'Refresh failed' };
+  const records = resource.data ?? [];
+  return { value: String(records.length), detail: readyDetail(records) };
 }
 
 function Summary({ title: label, value, detail, onOpen }) {
