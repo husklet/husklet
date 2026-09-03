@@ -31,6 +31,7 @@ import { JsonTreeStory } from '../src/json-tree.js';
 import { ConfirmationStory } from '../src/confirmation.js';
 import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
 import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
+import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -64,6 +65,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['safe destructive confirmation', h(ConfirmationStory)],
     ['container operations', h(ContainerOperationsStory)],
     ['workspace layout', h(WorkspaceLayoutStory)],
+    ['extension lifecycle', h(ExtensionLifecycleStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -134,6 +136,28 @@ test('workspace layout bounds slots and interactively splits by stable identity'
   assert(changed.some((patch) => patch.SetProp?.prop === 'Orientation'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Split pane-terminal-1 below into pane-new-4.'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'pane-new-4 · terminal'));
+});
+
+test('extension lifecycle bounds authority and controls the selected immutable generation', () => {
+  const source = Array.from({ length: EXTENSION_LIMIT + 3 }, (_, index) => ({
+    name: `extension-${index}`, version: 'v'.repeat(FIELD_LIMIT + 10), digest: `sha256:generation-${index}`,
+    status: 'invented', grants: Array.from({ length: GRANT_LIMIT + 4 }, (_, grant) => `grant-${grant}`),
+  }));
+  const bounded = boundedExtensions(source);
+  assert.equal(bounded.length, EXTENSION_LIMIT);
+  assert.equal(bounded[0].grants.length, GRANT_LIMIT);
+  assert.equal(bounded[0].version.length, FIELD_LIMIT);
+  assert.equal(bounded[0].status, 'failed');
+
+  const stage = host();
+  const first = stage.render(h(ExtensionLifecycleStory));
+  const stop = node(first.patches, 'Button', 'Stop extension');
+  assert(stop);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: stop, id: `${stop}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Start extension'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped workspace-manager at sha256:manager-generation-14.'));
 });
 test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 
