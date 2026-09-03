@@ -6,6 +6,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
+    ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{BufRead as _, BufReader, Read as _, Write as _},
     path::{Path, PathBuf},
@@ -94,10 +95,20 @@ struct Row {
     position: usize,
     mode: Mode,
     wall_ns: u128,
+    counters: Counters,
     phase_ns: Vec<(String, u128)>,
     stdout_sha256: String,
     semantic_sha256: String,
     backend_receipt: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct Counters {
+    duration_ns: u64,
+    task_clock_ms: f64,
+    instructions: u64,
+    cycles: u64,
+    page_faults: u64,
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {
@@ -225,31 +236,44 @@ printf 'HL_DONE\n' >&2
 }
 
 fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: usize) -> Result<Row, Error> {
-    let mut command = match mode {
+    let mut measured = Vec::<OsString>::new();
+    match mode {
         Mode::Native => {
-            let mut c = Command::new("chroot");
-            c.arg(root).args(["/bin/sh", "/work/session.sh"]);
-            c
+            measured.push("chroot".into());
+            measured.push(root.as_os_str().to_owned());
+            measured.extend(["/bin/sh".into(), "/work/session.sh".into()]);
         }
         Mode::Supervised | Mode::Translated => {
-            let mut c = Command::new(&options.engine);
-            c.args(["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"])
-                .arg(&options.native_library)
-                .arg("--rootfs")
-                .arg(root);
+            measured.push(options.engine.as_os_str().to_owned());
+            measured.extend(
+                ["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"]
+                    .into_iter()
+                    .map(OsString::from),
+            );
+            measured.push(options.native_library.as_os_str().to_owned());
+            measured.push("--rootfs".into());
+            measured.push(root.as_os_str().to_owned());
             match mode {
                 Mode::Supervised => {
-                    c.arg("--native-supervised");
+                    measured.push("--native-supervised".into());
                 }
                 Mode::Translated => {
-                    c.args(["--native-supervised=off", "--translit"]);
+                    measured.extend(["--native-supervised=off".into(), "--translit".into()]);
                 }
                 Mode::Native => unreachable!(),
             }
-            c.args(["bin/sh", "/work/session.sh"]);
-            c
+            measured.extend(["bin/sh".into(), "/work/session.sh".into()]);
         }
-    };
+    }
+    let perf_path = options
+        .results
+        .join(format!(".perf-{}-{sample}-{position}", std::process::id()));
+    let mut command = Command::new("perf");
+    command
+        .args(["stat", "-x", "\t", "-o"])
+        .arg(&perf_path)
+        .args(["-e", "duration_time,task-clock,instructions,cycles,page-faults", "--"])
+        .args(&measured);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let start = Instant::now();
     let mut child = command.spawn()?;
@@ -282,6 +306,8 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
     if !status.success() {
         return Err(format!("developer session failed in {mode:?}: {status}").into());
     }
+    let counters = parse_perf(&fs::read_to_string(&perf_path)?)?;
+    fs::remove_file(perf_path)?;
     let elapsed = start.elapsed().as_nanos();
     let marks = Arc::try_unwrap(marks)
         .map_err(|_| "phase reader remained shared")?
@@ -303,11 +329,44 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         position,
         mode,
         wall_ns: elapsed,
+        counters,
         phase_ns,
         stdout_sha256,
         semantic_sha256: hex(Sha256::digest(semantic)),
         backend_receipt: receipt,
     })
+}
+
+fn parse_perf(text: &str) -> Result<Counters, Error> {
+    let value = |event: &str| -> Result<&str, Error> {
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .find_map(|line| {
+                let fields = line.split('\t').collect::<Vec<_>>();
+                fields
+                    .iter()
+                    .any(|field| field.trim() == event)
+                    .then(|| fields[0].trim())
+            })
+            .ok_or_else(|| format!("perf output omitted {event}").into())
+    };
+    let counters = Counters {
+        duration_ns: value("duration_time")?.parse()?,
+        task_clock_ms: value("task-clock")?.parse()?,
+        instructions: value("instructions")?.parse()?,
+        cycles: value("cycles")?.parse()?,
+        page_faults: value("page-faults")?.parse()?,
+    };
+    if counters.duration_ns == 0
+        || !counters.task_clock_ms.is_finite()
+        || counters.task_clock_ms <= 0.0
+        || counters.instructions == 0
+        || counters.cycles == 0
+        || counters.page_faults == 0
+    {
+        return Err("perf output contains an absent or zero counter".into());
+    }
+    Ok(counters)
 }
 
 fn validate_phases(marks: &[(String, u128)], end: u128) -> Result<Vec<(String, u128)>, Error> {
@@ -405,12 +464,24 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
 }
 
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
-    let mut text = String::from("sample\tposition\tmode\twall_ns\tphase\tphase_ns\n");
+    let mut text = String::from(
+        "sample\tposition\tmode\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tphase\tphase_ns\n",
+    );
     for row in rows {
         for (phase, elapsed) in &row.phase_ns {
             text.push_str(&format!(
-                "{}\t{}\t{:?}\t{}\t{}\t{}\n",
-                row.sample, row.position, row.mode, row.wall_ns, phase, elapsed
+                "{}\t{}\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                row.sample,
+                row.position,
+                row.mode,
+                row.wall_ns,
+                row.counters.duration_ns,
+                row.counters.task_clock_ms,
+                row.counters.instructions,
+                row.counters.cycles,
+                row.counters.page_faults,
+                phase,
+                elapsed
             ));
         }
     }
@@ -483,6 +554,13 @@ mod tests {
             position: 0,
             mode,
             wall_ns: 1,
+            counters: Counters {
+                duration_ns: 1,
+                task_clock_ms: 1.0,
+                instructions: 1,
+                cycles: 1,
+                page_faults: 1,
+            },
             phase_ns: Vec::new(),
             stdout_sha256: output.into(),
             semantic_sha256: output.into(),
@@ -490,5 +568,15 @@ mod tests {
         };
         assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Translated, "same")]).is_ok());
         assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Supervised, "different")]).is_err());
+    }
+
+    #[test]
+    fn perf_counters_are_complete_numeric_and_nonzero() {
+        let text = "11\t\tduration_time\n2.5\tmsec\ttask-clock\n31\t\tinstructions\n41\t\tcycles\n5\t\tpage-faults\n";
+        let parsed = parse_perf(text).unwrap();
+        assert_eq!(parsed.instructions, 31);
+        assert_eq!(parsed.page_faults, 5);
+        assert!(parse_perf(&text.replace("31\t\tinstructions", "0\t\tinstructions")).is_err());
+        assert!(parse_perf(&text.replace("41\t\tcycles\n", "")).is_err());
     }
 }
