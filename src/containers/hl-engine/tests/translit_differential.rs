@@ -1050,12 +1050,12 @@ fn memory_pand_matches_native_across_a_page_boundary_and_translates() {
     assert_eq!((selected_status, &selected), (interpreted_status, &interpreted));
     assert_eq!(native.status.code(), Some(selected_status));
     assert_eq!(native.stdout, selected);
-    assert!(selected_backend.sse2_instructions_admitted >= 256, "{}", selected_backend.line);
     assert!(
         !selected_backend.shape_line.contains("key=43100670427"),
         "memory PAND fell back instead of entering the SSE2 run: {}",
         selected_backend.shape_line
     );
+    assert!(selected_backend.sse2_instructions_admitted >= 256, "{}", selected_backend.line);
 }
 
 #[test]
