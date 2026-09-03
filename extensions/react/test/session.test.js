@@ -352,27 +352,31 @@ test('volume and network facades preserve safe request shapes', async () => {
   const containerId = 'b'.repeat(64);
   assert.throws(() => api.networks.remove('private'), /complete immutable ID/);
   assert.throws(() => api.networks.connect(networkId, 'friendly'), /complete immutable ID/);
+  assert.throws(() => api.networks.connect(networkId, containerId, { aliases: ['ok', 'ok'] }), /unique/);
+  const aliasOptions = { aliases: ['database.internal', 'database_2'] };
   const operations = [
     api.volumes.list(), api.volumes.inspect('cache'), api.volumes.create('cache'), api.volumes.remove('cache', 'a'.repeat(32)),
     api.networks.list(), api.networks.inspect('private'), api.networks.create('private'),
-    api.networks.remove(networkId), api.networks.connect(networkId, containerId), api.networks.disconnect(networkId, containerId),
+    api.networks.remove(networkId), api.networks.connect(networkId, containerId), api.networks.connect(networkId, containerId, aliasOptions), api.networks.disconnect(networkId, containerId),
     api.subscribe('volumes'), api.subscribe('networks'), api.subscribe('workspace-events'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls.map(({ call }) => call), [
     'volume_list', 'volume_inspect', 'volume_create', 'volume_remove', 'network_list', 'network_inspect',
-    'network_create', 'network_remove', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
+    'network_create', 'network_remove', 'network_connect', 'network_connect', 'network_disconnect', 'event_subscribe', 'event_subscribe',
     'event_subscribe',
   ]);
   assert.deepEqual(calls[3].with, { name: 'cache', generation: 'a'.repeat(32) });
   assert.deepEqual(calls[8].with, { reference: networkId, container: containerId });
-  assert.deepEqual(calls[9].with, { reference: networkId, container: containerId });
+  assert.deepEqual(calls[9].with, { reference: networkId, container: containerId, aliases: ['database.internal', 'database_2'] });
+  assert.deepEqual(aliasOptions, { aliases: ['database.internal', 'database_2'] });
+  assert.deepEqual(calls[10].with, { reference: networkId, container: containerId });
   const replies = [
     { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local' } },
     { reply: 'volume', with: { name: 'cache', driver: 'local' } }, { reply: 'done' },
     { reply: 'networks', with: [] }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
-    { reply: 'identity', with: 'n1' }, ...Array(6).fill({ reply: 'done' }),
+    { reply: 'identity', with: 'n1' }, ...Array(7).fill({ reply: 'done' }),
   ];
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   await Promise.all(operations);

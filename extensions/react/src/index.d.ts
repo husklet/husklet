@@ -5475,7 +5475,7 @@ export interface WorkspaceApi {
     inspect(reference: string): Promise<NetworkSummary>;
     create(name: string): Promise<string>;
     remove(reference: string): Promise<void>;
-    connect(reference: string, container: string): Promise<void>;
+    connect(reference: string, container: string, options?: { aliases?: readonly string[] }): Promise<void>;
     disconnect(reference: string, container: string): Promise<void>;
   };
   terminal: {

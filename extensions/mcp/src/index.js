@@ -11,6 +11,15 @@ const containerIdentity = z.string().regex(/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/, 'c
 const executionIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable execution ID is required');
 const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/, 'complete immutable image sha256 digest is required');
 const networkIdentity = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable network ID is required');
+const endpointAlias = z.string().min(1).max(253).regex(
+  /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+  'endpoint alias must start with an ASCII alphanumeric and contain only ASCII alphanumerics, underscores, periods, or hyphens',
+);
+const endpointAliases = z.array(endpointAlias).max(64).default([]).superRefine((aliases, context) => {
+  if (new Set(aliases).size !== aliases.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'endpoint aliases must be unique' });
+  }
+});
 const volumeGeneration = z.string().regex(/^[0-9a-f]{32}$/, 'complete immutable volume generation is required');
 const extensionName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const extensionStatus = z.string().min(1).max(64).regex(/^(?:vacancy|standby|duty|fault:[0-9]+)$/);
@@ -255,7 +264,7 @@ export function tools(api) {
     define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
     define('husklet_network_create', 'Create one named local network.', z.object({ name: resourceName }).strict(), ({ name }) => api.networks.create(name)),
     define('husklet_network_remove', 'Remove one immutable network ID after explicit confirmation; names and prefixes are refused.', z.object({ reference: networkIdentity, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
-    define('husklet_network_connect', 'Connect one immutable container ID to one immutable network ID.', z.object({ reference: networkIdentity, container: containerIdentity }).strict(), async ({ reference, container }) => { await api.networks.connect(reference, container); return { done: true }; }),
+    define('husklet_network_connect', 'Connect one immutable container ID to one immutable network ID with optional bounded DNS aliases.', z.object({ reference: networkIdentity, container: containerIdentity, aliases: endpointAliases }).strict(), async ({ reference, container, aliases }) => { await api.networks.connect(reference, container, { aliases }); return { done: true }; }),
     define('husklet_network_disconnect', 'Disconnect one immutable container ID from one immutable network ID after explicit confirmation.', z.object({ reference: networkIdentity, container: containerIdentity, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),
     define('husklet_image_list', 'List bounded local image summaries.', empty, () => api.images.list()),
     define('husklet_image_inspect', 'Inspect one local image.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference)),

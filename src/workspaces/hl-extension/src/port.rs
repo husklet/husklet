@@ -844,6 +844,9 @@ pub trait NetworkStore {
     fn connect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("network connection is unavailable".into()))
     }
+    fn connect_with_aliases(&self, reference: &str, container: &str, aliases: &[String]) -> Result<(), HostError> {
+        if aliases.is_empty() { self.connect(reference, container) } else { Err(HostError::Unsupported("network endpoint aliases are unavailable".into())) }
+    }
     fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("network disconnection is unavailable".into()))
     }
@@ -1033,7 +1036,7 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        Division, LayoutNode, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText, bounded_pane_text,
+        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText, bounded_pane_text,
         pane_lines,
     };
 
@@ -1113,5 +1116,16 @@ mod tests {
         assert_eq!(value["kind"], "split");
         assert_eq!(value["division"], "beside");
         assert_eq!(value["first"]["kind"], "pane");
+    }
+
+    #[test]
+    fn legacy_network_ports_never_silently_drop_aliases() {
+        struct Legacy;
+        impl super::NetworkStore for Legacy {
+            fn connect(&self, _reference: &str, _container: &str) -> Result<(), super::HostError> { Ok(()) }
+        }
+        let aliases = vec!["database".to_owned()];
+        assert!(Legacy.connect_with_aliases("network", "container", &[]).is_ok());
+        assert!(matches!(Legacy.connect_with_aliases("network", "container", &aliases), Err(super::HostError::Unsupported(_))));
     }
 }

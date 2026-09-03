@@ -31,7 +31,7 @@ async function fakeHost(context, { greet = true } = {}) {
     if (!greet) return;
     const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: {
-      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'container-attach', 'extension-install', 'terminal-control'],
+      protocol: 1, extension: 'observer', peer: 'observer', granted: ['workspace-read', 'container-attach', 'extension-install', 'network-write', 'terminal-control'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -45,6 +45,8 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: 'sha256:abc', status: 'standby' } }
             : frame.payload.call === 'terminal_open_tab'
               ? { reply: 'identity', with: 'terminal-default' }
+            : frame.payload.call === 'network_connect'
+              ? { reply: 'done' }
             : null;
         if (!payload) throw new Error(`unexpected host call ${frame.payload.call}`);
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
@@ -101,6 +103,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert(listed.tools.some(({ name }) => name === 'husklet_container_attach_terminal'));
   assert(listed.tools.some(({ name }) => name === 'husklet_extension_install'));
   assert(listed.tools.some(({ name }) => name === 'husklet_terminal_open'));
+  assert(listed.tools.some(({ name }) => name === 'husklet_network_connect'));
   const answer = await client.callTool({ name: 'husklet_workspace_info', arguments: {} });
   assert.equal(JSON.parse(answer.content[0].text).name, 'dev');
   const id = 'a'.repeat(64);
@@ -117,11 +120,15 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert.equal(JSON.parse(installed.content[0].text).name, 'terminal-agent');
   const opened = await client.callTool({ name: 'husklet_terminal_open', arguments: {} });
   assert.equal(JSON.parse(opened.content[0].text), 'terminal-default');
+  const network = 'c'.repeat(32);
+  const aliases = Array.from({ length: 64 }, (_, index) => index === 0 ? 'x'.repeat(253) : `alias-${index}`);
+  await client.callTool({ name: 'husklet_network_connect', arguments: { reference: network, container: id, aliases } });
   assert.deepEqual(calls, [
     { call: 'workspace_info' }, { call: 'workspace_info' },
     { call: 'container_attach_terminal', with: { id, command: ['printf', 'é'] } },
     { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
     { call: 'terminal_open_tab', with: { title: 'Terminal' } },
+    { call: 'network_connect', with: { reference: network, container: id, aliases } },
   ]);
   assert.equal(diagnostics, '');
   await client.close();

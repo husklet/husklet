@@ -26,6 +26,24 @@ function exactContainerName(name) {
   throw new TypeError('container name must contain 1..128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit');
 }
 
+function endpointAliases(options) {
+  if (options === undefined) return [];
+  if (options === null || typeof options !== 'object' || Array.isArray(options)
+      || Object.keys(options).some((key) => key !== 'aliases')) {
+    throw new TypeError('network connect options may contain only aliases');
+  }
+  if (options.aliases !== undefined && !Array.isArray(options.aliases)) {
+    throw new TypeError('network endpoint aliases must be an array');
+  }
+  const aliases = options.aliases === undefined ? [] : [...options.aliases];
+  if (aliases.length > 64 || new Set(aliases).size !== aliases.length
+      || aliases.some((alias) => typeof alias !== 'string' || alias.length < 1 || alias.length > 253
+        || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(alias))) {
+    throw new TypeError('network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names');
+  }
+  return aliases;
+}
+
 function exactCommand(command) {
   if (!Array.isArray(command) || command.length < 1 || command.length > 64
     || command[0] === '' || command.some((argument) => typeof argument !== 'string'
@@ -216,7 +234,12 @@ export function workspace(session) {
       inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
       remove: (reference) => done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
-      connect: (reference, container) => done('network_connect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
+      connect: (reference, container, options) => {
+        const aliases = endpointAliases(options);
+        const withValue = { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') };
+        if (aliases.length > 0) withValue.aliases = aliases;
+        return done('network_connect', withValue);
+      },
       disconnect: (reference, container) => done('network_disconnect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
     },
     terminal: {

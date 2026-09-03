@@ -62,14 +62,20 @@ fn connected_pair() -> (Stream, Stream) {
 /// rather than a container runtime.
 struct Host {
     tabs: RefCell<Vec<String>>,
+    network_aliases: RefCell<Vec<String>>,
 }
 impl hl_extension::port::VolumeStore for Host {}
-impl hl_extension::port::NetworkStore for Host {}
+impl hl_extension::port::NetworkStore for Host {
+    fn connect_with_aliases(&self, _reference: &str, _container: &str, aliases: &[String]) -> Result<(), HostError> {
+        *self.network_aliases.borrow_mut() = aliases.to_vec(); Ok(())
+    }
+}
 
 impl Host {
     fn new() -> Self {
         Self {
             tabs: RefCell::new(Vec::new()),
+            network_aliases: RefCell::new(Vec::new()),
         }
     }
 }
@@ -817,6 +823,26 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
         session.dispatch(&decoded, &services(&host)),
         Err(Failure::Unsupported { call }) if call == "configured container creation is unavailable"
     ));
+}
+
+#[test]
+fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(ExtensionName::new("networks").unwrap(), Grant::new([Capability::NetworkWrite]), Vec::new()));
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    let legacy: Request = serde_json::from_str(&format!("{{\"call\":\"network_connect\",\"with\":{{\"reference\":\"{}\",\"container\":\"{}\"}}}}", "a".repeat(32), "b".repeat(64))).unwrap();
+    assert!(matches!(&legacy, Request::NetworkConnect { aliases, .. } if aliases.is_empty()));
+    for request in [legacy, {
+        let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>(); aliases[0] = "x".repeat(253);
+        Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases }
+    }] {
+        sender.send(&codec::request(&request).unwrap()).unwrap();
+        let decoded = codec::read_request(&receiver.receive().unwrap()).unwrap();
+        session.dispatch(&decoded, &services(&host)).unwrap();
+        if let Request::NetworkConnect { aliases, .. } = request { assert_eq!(*host.network_aliases.borrow(), aliases); }
+    }
 }
 
 #[test]

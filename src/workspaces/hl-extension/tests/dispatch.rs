@@ -101,6 +101,10 @@ impl hl_extension::port::NetworkStore for Host {
         self.ledger.note("networks.connect");
         Ok(())
     }
+    fn connect_with_aliases(&self, _reference: &str, _container: &str, _aliases: &[String]) -> Result<(), HostError> {
+        self.ledger.note("networks.connect");
+        Ok(())
+    }
     fn disconnect(&self, _reference: &str, _container: &str) -> Result<(), HostError> {
         self.ledger.note("networks.disconnect");
         Ok(())
@@ -1469,16 +1473,31 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
     let mut session = session(&[Capability::NetworkWrite], &[]);
     for request in [
         Request::NetworkRemove { reference: "private".into() },
-        Request::NetworkConnect { reference: "a".repeat(12), container: "b".repeat(64) },
+        Request::NetworkConnect { reference: "a".repeat(12), container: "b".repeat(64), aliases: Vec::new() },
         Request::NetworkDisconnect { reference: "a".repeat(32), container: "friendly".into() },
     ] {
         assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
     }
     assert!(host.ledger.reached().is_empty());
     session.dispatch(&Request::NetworkRemove { reference: "a".repeat(32) }, &services(&host)).unwrap();
-    session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
+    session.dispatch(&Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases: Vec::new() }, &services(&host)).unwrap();
     session.dispatch(&Request::NetworkDisconnect { reference: "a".repeat(32), container: "b".repeat(64) }, &services(&host)).unwrap();
     assert_eq!(host.ledger.reached(), ["networks.remove", "networks.connect", "networks.disconnect"]);
+}
+
+#[test]
+fn network_endpoint_alias_boundaries_are_enforced_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::NetworkWrite], &[]);
+    let request = |aliases| Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases };
+    for aliases in [vec!["same".into(), "same".into()], vec!["-leading".into()], vec!["é".into()], vec!["x".repeat(254)], (0..65).map(|index| format!("alias-{index}")).collect()] {
+        assert!(matches!(session.dispatch(&request(aliases), &services(&host)), Err(Failure::Conflict { .. })));
+    }
+    assert!(host.ledger.reached().is_empty());
+    let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>();
+    aliases[0] = "x".repeat(253);
+    session.dispatch(&request(aliases), &services(&host)).unwrap();
+    assert_eq!(host.ledger.reached(), ["networks.connect"]);
 }
 
 #[test]
@@ -1729,7 +1748,8 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
         write.dispatch(
             &Request::NetworkConnect {
                 reference: "a".repeat(32),
-                container: "b".repeat(64)
+                container: "b".repeat(64),
+                aliases: Vec::new(),
             },
             &services(&host)
         ),

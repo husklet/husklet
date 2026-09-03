@@ -411,13 +411,16 @@ impl Session {
                 immutable_identity(reference, &[32], "network")?;
                 port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::NetworkConnect { reference, container } => port
-                .connect(
+            Request::NetworkConnect { reference, container, aliases } => {
+                validate_endpoint_aliases(aliases)?;
+                port.connect_with_aliases(
                     immutable_reference(reference, &[32], "network")?,
                     immutable_reference(container, &[32, 64], "container")?,
+                    aliases,
                 )
                 .map(|()| Reply::Done)
-                .map_err(Failure::from),
+                .map_err(Failure::from)
+            }
             Request::NetworkDisconnect { reference, container } => port
                 .disconnect(
                     immutable_reference(reference, &[32], "network")?,
@@ -765,6 +768,13 @@ fn bounded_signal(signal: &str) -> Result<(), Failure> {
     Err(Failure::Conflict {
         detail: "signal must contain 1..=32 bytes".into(),
     })
+}
+
+fn validate_endpoint_aliases(aliases: &[String]) -> Result<(), Failure> {
+    let valid = aliases.len() <= 64
+        && aliases.iter().all(|value| !value.is_empty() && value.len() <= 253 && value.bytes().enumerate().all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte))))
+        && aliases.iter().collect::<std::collections::BTreeSet<_>>().len() == aliases.len();
+    if valid { Ok(()) } else { Err(Failure::Conflict { detail: "network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names".into() }) }
 }
 
 fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Failure> {

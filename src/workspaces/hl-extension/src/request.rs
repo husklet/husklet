@@ -204,6 +204,8 @@ pub enum Request {
     NetworkConnect {
         reference: String,
         container: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
     },
     NetworkDisconnect {
         reference: String,
