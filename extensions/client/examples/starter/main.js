@@ -20,10 +20,10 @@ try {
     },
   });
   connected = true;
-  const information = await workspace(session).info();
-  process.stdout.write(`${JSON.stringify(information)}\n`);
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  const information = await workspace(session).info();
+  process.stdout.write(`${JSON.stringify(information)}\n`);
 } catch (error) {
   if (!stopping) {
     stopping = true;

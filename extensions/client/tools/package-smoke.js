@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-client-pack-'));
 
-async function runPackedStarter(starter, installedClient) {
+async function runPackedStarter(starter, installedClient, architecture) {
   const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
-  const socket = path.join(starter, 'host.sock');
+  const socket = path.join(starter, `host-${architecture}.sock`);
   let peer;
   let observed = false;
   const server = net.createServer((stream) => {
@@ -25,7 +25,7 @@ async function runPackedStarter(starter, installedClient) {
         stream.write(wire.encode({
           channel: 2,
           kind: wire.KIND.response,
-          payload: { reply: 'workspace', with: { name: 'project', architecture: 'x86_64', image: 'alpine:3.20' } },
+          payload: { reply: 'workspace', with: { name: 'project', architecture, image: 'alpine:3.20' } },
         }));
       }
     });
@@ -57,7 +57,7 @@ async function runPackedStarter(starter, installedClient) {
       new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not stop')), 2_000)),
     ]);
     assert.deepEqual(exit, { code: 0, signal: null });
-    assert.equal(stdout, '{"name":"project","architecture":"x86_64","image":"alpine:3.20"}\n');
+    assert.equal(stdout, `${JSON.stringify({ name: 'project', architecture, image: 'alpine:3.20' })}\n`);
     assert.equal(stderr, '');
   } finally {
     peer?.destroy();
@@ -120,7 +120,9 @@ try {
   assert.doesNotMatch(dockerfile, /^RUN npm (?:ci|install)/m, 'image build must not resolve the npm registry');
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
-  await runPackedStarter(starter, path.join(starter, 'node_modules/@husklet/client'));
+  const starterClient = path.join(starter, 'node_modules/@husklet/client');
+  await runPackedStarter(starter, starterClient, 'x86_64');
+  await runPackedStarter(starter, starterClient, 'aarch64');
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
