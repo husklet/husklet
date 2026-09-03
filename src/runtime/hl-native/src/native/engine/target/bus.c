@@ -17,6 +17,10 @@ void hl_target_bus_arm_latched(hl_target_bus *bus) {
     hl_guest_bus_arm_latched(&bus->guest);
 }
 
+void hl_target_bus_reset_after_rewind(hl_target_bus *bus, uint64_t generation, int active) {
+    hl_guest_bus_reset_after_rewind(&bus->guest, generation, active);
+}
+
 int hl_target_bus_active(const hl_target_bus *bus) {
     return hl_guest_bus_active(&bus->guest);
 }

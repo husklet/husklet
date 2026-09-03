@@ -81,6 +81,7 @@
 #define jit_cache_diag HL_TARGET_LOCAL(jit_cache_diag)
 #define jit_guest_bus_active HL_TARGET_LOCAL(jit_guest_bus_active)
 #define jit_guest_bus_arm_latched HL_TARGET_LOCAL(jit_guest_bus_arm_latched)
+#define jit_guest_bus_reset_after_rewind HL_TARGET_LOCAL(jit_guest_bus_reset_after_rewind)
 #define jit_guest_bus_bind HL_TARGET_LOCAL(jit_guest_bus_bind)
 #define jit_guest_bus_changed HL_TARGET_LOCAL(jit_guest_bus_changed)
 #define jit_guest_bus_fault HL_TARGET_LOCAL(jit_guest_bus_fault)

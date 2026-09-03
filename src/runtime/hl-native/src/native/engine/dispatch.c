@@ -89,6 +89,11 @@ void jit_guest_bus_arm_latched(void) {
     hl_target_bus_arm_latched(&g_target_bus);
 }
 
+void jit_guest_bus_reset_after_rewind(uint64_t generation, int active) {
+    if (g_target_bus.guest.ops == NULL) hl_target_bus_init(&g_target_bus, &bus_ops, NULL);
+    hl_target_bus_reset_after_rewind(&g_target_bus, generation, active);
+}
+
 int jit_guest_bus_active(void) {
     return hl_target_bus_active(&g_target_bus);
 }

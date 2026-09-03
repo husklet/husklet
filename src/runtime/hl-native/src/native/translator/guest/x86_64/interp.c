@@ -49,6 +49,7 @@ static uint64_t x64_pcache_codegen_modes(void);
 static void x64_pc_thread_start_abandon(void);
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi);
 static int g_x64_pc_control_loaded_empty;
+static int g_x64_pc_launch_only_reset_bus;
 
 static void s1_calibrate(void) {
     // Nothing to measure; clock syscalls take the R_SYSCALL exit, as after a failure.
@@ -3684,7 +3685,33 @@ static void x64_pc_after_fork(void) {
     g_x64_pc_lib_next = X64_PC_LIB_BASE;
 }
 
+static void pcache_launch_only_disable(void) {
+    if (hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL) {
+        /* Disable before load_elf chooses addresses.  Waiting until pcache_exec_reload leaves the
+           nested image at persistence's fixed bases; same-ISA direct execution then declines it and
+           a compiler runs through the slow interpreter despite caching itself being disabled. */
+        g_pcache_loaded = 0;
+        x64_pc_restored_detach();
+        free(g_x64_pc_deferred);
+        free(g_x64_pc_chains);
+        g_x64_pc_deferred = NULL;
+        g_x64_pc_chains = NULL;
+        g_x64_pc_deferred_count = 0;
+        g_x64_pc_chain_count = 0;
+        g_x64_pc_restored_live = 0;
+        g_x64_pc_activated_maps = 0;
+        g_x64_pc_lib_count = 0;
+        g_x64_pc_library_unsupported = 0;
+        if (g_coldprof)
+            fprintf(stderr, "[pcache-v1] nested_exec=disabled rwx_guest=%d alias=%d\n",
+                    g_rwx_guest, jit86_store_alias_observation_active());
+        g_pcache = 0;
+        g_x64_pc_launch_only_reset_bus = 1;
+    }
+}
+
 static void pcache_exec_force_main(void) {
+    if (g_pcache) pcache_launch_only_disable();
     if (g_pcache) g_force_base = PC_IMG_BASE;
 }
 
@@ -3696,16 +3723,11 @@ static void pcache_exec_force_interp(void) {
  * That ordering is what makes clearing the fork refusal safe: the new identity cannot describe parent code. */
 static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
                                uint64_t jump) {
-    if (!g_pcache) return;
-    /* The launch boundary authenticates one image.  Guest-initiated exec is not another launch:
-       even when it names the same shell, restoring cache-mode code makes short-lived children pay
-       the per-block persistence census again (measured 1.67x instructions across a developer
-       session).  The daemon gives each user-requested exec its own authenticated worker; nested
-       guest execs therefore use ordinary translation until persistence bookkeeping is cheaper. */
-    if (hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL) {
-        g_pcache = 0;
-        return;
+    if (g_x64_pc_launch_only_reset_bus) {
+        g_x64_pc_launch_only_reset_bus = 0;
+        jit_guest_bus_reset_after_rewind(hl_linux_bus_generation(), hl_linux_bus_active());
     }
+    if (!g_pcache) return;
     g_x64_pc_observe_library_ns = 0;
     g_x64_pc_observe_library_bytes = 0;
     g_x64_pc_observe_library_files = 0;

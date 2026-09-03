@@ -106,6 +106,14 @@ void hl_guest_bus_arm_latched(hl_guest_bus *b) {
     hl_guest_bus_changed(b, BUS_GENERATION(atomic_load_explicit(&b->state, memory_order_acquire)), 1);
 }
 
+/* A persistence latch may be released only after its guarded arena has been wholly
+   rewound.  At that boundary no unguarded block survives, so publishing the live
+   ledger state directly cannot miss the 0 -> 1 invalidation edge. */
+void hl_guest_bus_reset_after_rewind(hl_guest_bus *b, uint64_t generation, int active) {
+    atomic_store_explicit(&b->state, BUS_STATE(generation, active), memory_order_release);
+    atomic_store_explicit(&b->latched, 0, memory_order_release);
+}
+
 void hl_guest_bus_bind(hl_guest_bus *b, hl_guest_bus_query q, int a, uint64_t g) {
     b->query = q;
     hl_guest_bus_changed(b, g, a);

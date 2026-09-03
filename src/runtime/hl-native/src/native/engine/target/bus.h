@@ -12,6 +12,7 @@ void hl_target_bus_init(hl_target_bus *, const hl_guest_bus_ops *, void *);
 void hl_target_bus_bind(hl_target_bus *, hl_guest_bus_query, int, uint64_t);
 void hl_target_bus_changed(hl_target_bus *, uint64_t, int);
 void hl_target_bus_arm_latched(hl_target_bus *);
+void hl_target_bus_reset_after_rewind(hl_target_bus *, uint64_t, int);
 int hl_target_bus_active(const hl_target_bus *);
 uint64_t hl_target_bus_fault(const hl_target_bus *, uint64_t, uint64_t);
 void hl_target_bus_begin(hl_target_bus *);
