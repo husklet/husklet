@@ -9,6 +9,17 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
+function hostWelcome(extension, granted) {
+  return {
+    protocol: 1,
+    host: 'husklet-package-smoke',
+    workspace: 'packed-react-starter',
+    extension,
+    granted,
+    limits: { payload_limit: 1 << 20, channel_limit: 64, credit: 32 },
+  };
+}
+
 async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false, oversizedRender = false, partialRender = false) {
   const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}${partialRender ? '-partial' : ''}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
@@ -51,7 +62,7 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'react-starter', granted: ['interface'] },
+      payload: hostWelcome('react-starter', ['interface']),
     }));
   });
   await new Promise((resolve, reject) => {
@@ -125,7 +136,7 @@ async function runPackedStarterDenied(consumer, starter) {
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'react-starter', granted: [] },
+      payload: hostWelcome('react-starter', []),
     }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
@@ -168,6 +179,9 @@ function packageStageFiles(dockerfile, destination) {
 }
 
 try {
+  const greetingFields = Object.keys(hostWelcome('react-starter', [])).sort();
+  assert.deepEqual(greetingFields, ['extension', 'granted', 'host', 'limits', 'protocol', 'workspace']);
+  assert(!greetingFields.includes('architecture'), 'architecture is workspace data, not part of authoritative Welcome');
   const dryRun = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, encoding: 'utf8',
   }));
