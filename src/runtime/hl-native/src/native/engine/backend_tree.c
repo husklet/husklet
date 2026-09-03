@@ -165,6 +165,123 @@ struct hl_backend_jcc_invalid_site {
     _Atomic uint64_t count;
 };
 
+static void hl_backend_jcc_fill_record(_Atomic uint64_t *empty, _Atomic uint64_t *collision,
+                                       _Atomic uint64_t *irq, _Atomic uint64_t *same_key,
+                                       uint64_t target, uint64_t previous_target,
+                                       int interrupt_consumed) {
+    if (interrupt_consumed)
+        atomic_fetch_add_explicit(irq, 1, memory_order_relaxed);
+    else if (previous_target == 0)
+        atomic_fetch_add_explicit(empty, 1, memory_order_relaxed);
+    else if (previous_target != target)
+        atomic_fetch_add_explicit(collision, 1, memory_order_relaxed);
+    else
+        atomic_fetch_add_explicit(same_key, 1, memory_order_relaxed);
+}
+
+#define HL_BACKEND_JCC_LATE_SITES 524288u
+struct hl_backend_jcc_late_site {
+    _Atomic int owner; /* 0 empty, negative host pid reserving, 1 published */
+    _Atomic uint64_t owner_birth_ns;
+    int process;
+    uint64_t process_birth_ns;
+    uint64_t cache_generation;
+    uint64_t source;
+    uint64_t target;
+    uintptr_t body;
+    uint64_t target_generation;
+    _Atomic uint64_t appearances;
+};
+
+static void hl_backend_jcc_late_record(
+    struct hl_backend_jcc_late_site *sites, uint32_t site_count, _Atomic uint64_t *first,
+    _Atomic uint64_t *repeated, _Atomic uint64_t *stable, _Atomic uint64_t *changed,
+    _Atomic uint64_t *current, _Atomic uint64_t *retired, _Atomic uint64_t *unique,
+    _Atomic uint64_t *overflow, _Atomic uint64_t *abandoned, _Atomic uint64_t *maximum,
+    int process, uint64_t process_birth_ns, uint64_t cache_generation, uint64_t source,
+    uint64_t target, uintptr_t body, uint64_t target_generation, int generation_current,
+    _Atomic uint32_t *pause_ready, _Atomic uint32_t *pause_release,
+    _Atomic uint32_t *reserved_seen) {
+    if (process <= 0 || process_birth_ns == 0) {
+        atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+        return;
+    }
+    uint64_t hash = hl_backend_executed_form_mix(source ^ process_birth_ns ^ cache_generation);
+    for (uint32_t probe = 0; probe < site_count; ++probe) {
+        struct hl_backend_jcc_late_site *site = &sites[(uint32_t)(hash + probe) & (site_count - 1)];
+    retry:
+        int owner = atomic_load_explicit(&site->owner, memory_order_acquire);
+        if (owner < 0) {
+            if (reserved_seen != NULL) {
+                atomic_store_explicit(reserved_seen, 1, memory_order_release);
+                while (pause_release != NULL && !atomic_load_explicit(pause_release, memory_order_acquire))
+                    sched_yield();
+            }
+            int reserved_by = -owner;
+            uint64_t reserved_birth = atomic_load_explicit(&site->owner_birth_ns, memory_order_acquire);
+            uint64_t live_birth = 0;
+            int live = hl_host_process_start_time_ns(reserved_by, &live_birth) &&
+                       (reserved_birth == 0 || live_birth == reserved_birth);
+            if (!live) {
+                int expected = owner;
+                if (atomic_compare_exchange_strong_explicit(&site->owner, &expected, 0,
+                                                            memory_order_acq_rel, memory_order_acquire)) {
+                    atomic_fetch_add_explicit(abandoned, 1, memory_order_relaxed);
+                    goto retry;
+                }
+            }
+            for (unsigned wait = 0; wait < 4096 && owner < 0; ++wait) {
+                sched_yield();
+                owner = atomic_load_explicit(&site->owner, memory_order_acquire);
+            }
+            if (owner < 0) {
+                atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+                return;
+            }
+            goto retry;
+        }
+        uint64_t appearances;
+        if (owner == 1 && site->process == process && site->process_birth_ns == process_birth_ns &&
+            site->cache_generation == cache_generation && site->source == source) {
+            appearances = atomic_fetch_add_explicit(&site->appearances, 1, memory_order_relaxed) + 1;
+            atomic_fetch_add_explicit(repeated, 1, memory_order_relaxed);
+            if (site->target == target && site->body == body && site->target_generation == target_generation)
+                atomic_fetch_add_explicit(stable, 1, memory_order_relaxed);
+            else
+                atomic_fetch_add_explicit(changed, 1, memory_order_relaxed);
+        } else {
+            if (owner != 0) continue;
+            int expected = 0;
+            if (!atomic_compare_exchange_strong_explicit(&site->owner, &expected, -process,
+                                                         memory_order_acq_rel, memory_order_acquire)) goto retry;
+            atomic_store_explicit(&site->owner_birth_ns, process_birth_ns, memory_order_release);
+            if (pause_ready != NULL && pause_release != NULL) {
+                atomic_store_explicit(pause_ready, 1, memory_order_release);
+                while (!atomic_load_explicit(pause_release, memory_order_acquire)) sched_yield();
+            }
+            site->process = process;
+            site->process_birth_ns = process_birth_ns;
+            site->cache_generation = cache_generation;
+            site->source = source;
+            site->target = target;
+            site->body = body;
+            site->target_generation = target_generation;
+            atomic_store_explicit(&site->appearances, 1, memory_order_relaxed);
+            atomic_store_explicit(&site->owner, 1, memory_order_release);
+            atomic_fetch_add_explicit(first, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(unique, 1, memory_order_relaxed);
+            appearances = 1;
+        }
+        atomic_fetch_add_explicit(generation_current ? current : retired, 1, memory_order_relaxed);
+        uint64_t held = atomic_load_explicit(maximum, memory_order_relaxed);
+        while (held < appearances &&
+               !atomic_compare_exchange_weak_explicit(maximum, &held, appearances, memory_order_relaxed,
+                                                      memory_order_relaxed)) {}
+        return;
+    }
+    atomic_fetch_add_explicit(overflow, 1, memory_order_relaxed);
+}
+
 enum hl_backend_translit_failure_reason {
     HL_BACKEND_TRANSLIT_FAILURE_NONE,
     HL_BACKEND_TRANSLIT_FAILURE_IMAGE,
@@ -2180,6 +2297,149 @@ HL_API int HL_BACKEND_TREE_TEST_NAME(uint32_t scenario) {
 #endif
 }
 
+static _Atomic uint64_t hl_backend_jcc_fill_test_empty;
+static _Atomic uint64_t hl_backend_jcc_fill_test_collision;
+static _Atomic uint64_t hl_backend_jcc_fill_test_irq;
+static _Atomic uint64_t hl_backend_jcc_fill_test_same_key;
+static int hl_backend_jcc_fill_test_enabled;
+
+static void hl_backend_tree_jcc_ibtc_fill_cause(uint64_t source, uint64_t target,
+                                                uint64_t previous_target, int interrupt_consumed) {
+    (void)source;
+    if (!hl_backend_jcc_fill_test_enabled) return;
+    hl_backend_jcc_fill_record(&hl_backend_jcc_fill_test_empty, &hl_backend_jcc_fill_test_collision,
+                               &hl_backend_jcc_fill_test_irq, &hl_backend_jcc_fill_test_same_key,
+                               target, previous_target, interrupt_consumed);
+}
+
+static void hl_backend_tree_jcc_ibtc_fill_cause_test_begin(void) {
+    atomic_store_explicit(&hl_backend_jcc_fill_test_empty, 0, memory_order_relaxed);
+    atomic_store_explicit(&hl_backend_jcc_fill_test_collision, 0, memory_order_relaxed);
+    atomic_store_explicit(&hl_backend_jcc_fill_test_irq, 0, memory_order_relaxed);
+    atomic_store_explicit(&hl_backend_jcc_fill_test_same_key, 0, memory_order_relaxed);
+    hl_backend_jcc_fill_test_enabled = 1;
+}
+
+static int hl_backend_tree_jcc_ibtc_fill_cause_test_end(void) {
+    hl_backend_jcc_fill_test_enabled = 0;
+    return atomic_load_explicit(&hl_backend_jcc_fill_test_empty, memory_order_relaxed) == 1 &&
+           atomic_load_explicit(&hl_backend_jcc_fill_test_collision, memory_order_relaxed) == 1 &&
+           atomic_load_explicit(&hl_backend_jcc_fill_test_irq, memory_order_relaxed) == 1 &&
+           atomic_load_explicit(&hl_backend_jcc_fill_test_same_key, memory_order_relaxed) == 1;
+}
+
+static void hl_backend_tree_jcc_late_eligible(uint64_t cache_generation, uint64_t source,
+                                              uint64_t target, uintptr_t body,
+                                              uint64_t generation, int generation_current) {
+    (void)cache_generation; (void)source; (void)target; (void)body; (void)generation;
+    (void)generation_current;
+}
+
+struct hl_backend_jcc_late_test_shared {
+    struct hl_backend_jcc_late_site sites[2];
+    _Atomic uint64_t first, repeated, stable, changed, current, retired, unique, overflow, abandoned, maximum;
+    _Atomic uint32_t pause_ready, pause_release, reserved_seen;
+};
+
+struct hl_backend_jcc_late_test_call {
+    struct hl_backend_jcc_late_test_shared *shared;
+    uint32_t site_count;
+    int process;
+    uint64_t birth;
+    _Atomic uint32_t *pause_ready;
+    _Atomic uint32_t *pause_release;
+    _Atomic uint32_t *reserved_seen;
+};
+
+static void *hl_backend_jcc_late_test_worker(void *opaque) {
+    struct hl_backend_jcc_late_test_call *call = opaque;
+    struct hl_backend_jcc_late_test_shared *s = call->shared;
+    hl_backend_jcc_late_record(s->sites, call->site_count, &s->first, &s->repeated, &s->stable, &s->changed,
+                               &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                               &s->maximum, call->process, call->birth, 7, UINT64_C(0x1000),
+                               UINT64_C(0x2000), UINT64_C(0x3000), 7, 1, call->pause_ready,
+                               call->pause_release, call->reserved_seen);
+    return NULL;
+}
+
+static int hl_backend_tree_jcc_late_eligible_test(void) {
+    struct hl_backend_jcc_late_test_shared *s = mmap(NULL, sizeof *s, PROT_READ | PROT_WRITE,
+                                                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (s == MAP_FAILED) return 0;
+    memset(s, 0, sizeof *s);
+    int self = (int)getpid();
+    uint64_t birth = 0;
+    if (!hl_host_process_start_time_ns(self, &birth)) { munmap(s, sizeof *s); return 0; }
+    struct hl_backend_jcc_late_test_call first = {s, 2, self, birth, &s->pause_ready, &s->pause_release, NULL};
+    struct hl_backend_jcc_late_test_call second = {s, 2, self, birth, NULL, &s->pause_release, &s->reserved_seen};
+    pthread_t a, b;
+    if (pthread_create(&a, NULL, hl_backend_jcc_late_test_worker, &first) != 0) goto fail;
+    while (!atomic_load_explicit(&s->pause_ready, memory_order_acquire)) sched_yield();
+    if (pthread_create(&b, NULL, hl_backend_jcc_late_test_worker, &second) != 0) goto release_a;
+    while (!atomic_load_explicit(&s->reserved_seen, memory_order_acquire)) sched_yield();
+    atomic_store_explicit(&s->pause_release, 1, memory_order_release);
+    (void)pthread_join(a, NULL); (void)pthread_join(b, NULL);
+    hl_backend_jcc_late_record(s->sites, 2, &s->first, &s->repeated, &s->stable, &s->changed,
+                               &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                               &s->maximum, self, birth, 7, UINT64_C(0x1000), UINT64_C(0x2000),
+                               UINT64_C(0x4000), 8, 1, NULL, NULL, NULL);
+    int exact = atomic_load_explicit(&s->first, memory_order_relaxed) == 1 &&
+                atomic_load_explicit(&s->repeated, memory_order_relaxed) == 2 &&
+                atomic_load_explicit(&s->stable, memory_order_relaxed) == 1 &&
+                atomic_load_explicit(&s->changed, memory_order_relaxed) == 1 &&
+                atomic_load_explicit(&s->current, memory_order_relaxed) == 3 &&
+                atomic_load_explicit(&s->unique, memory_order_relaxed) == 1 &&
+                atomic_load_explicit(&s->overflow, memory_order_relaxed) == 0 &&
+                atomic_load_explicit(&s->maximum, memory_order_relaxed) == 3;
+    if (!exact) goto fail;
+
+    memset(s, 0, sizeof *s);
+    pid_t child = fork();
+    if (child < 0) goto fail;
+    if (child == 0) {
+        struct hl_backend_jcc_late_test_call dead = {s, 1, (int)getpid(), 0,
+                                                     &s->pause_ready, &s->pause_release, NULL};
+        if (!hl_host_process_start_time_ns(dead.process, &dead.birth)) _exit(2);
+        (void)hl_backend_jcc_late_test_worker(&dead);
+        _exit(3);
+    }
+    while (!atomic_load_explicit(&s->pause_ready, memory_order_acquire)) sched_yield();
+    (void)kill(child, SIGKILL);
+    (void)waitpid(child, NULL, 0);
+    struct hl_backend_jcc_late_test_call reclaim = {s, 1, self, birth, NULL, NULL, NULL};
+    (void)hl_backend_jcc_late_test_worker(&reclaim);
+    exact = atomic_load_explicit(&s->first, memory_order_relaxed) == 1 &&
+            atomic_load_explicit(&s->abandoned, memory_order_relaxed) == 1 &&
+            atomic_load_explicit(&s->overflow, memory_order_relaxed) == 0;
+    if (!exact) goto fail;
+
+    memset(s, 0, sizeof *s);
+    /* A fork can enter diagnostics before claiming its compact process slot.
+       The global eligible count already includes that event, so an unbound
+       identity must reconcile as overflow rather than disappearing. */
+    hl_backend_jcc_late_record(s->sites, 2, &s->first, &s->repeated, &s->stable, &s->changed,
+                               &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                               &s->maximum, 0, 0, 7, UINT64_C(0x7000), UINT64_C(0x8000),
+                               UINT64_C(0x9000), 7, 1, NULL, NULL, NULL);
+    for (uint64_t source = 1; source <= 3; ++source)
+        hl_backend_jcc_late_record(s->sites, 2, &s->first, &s->repeated, &s->stable, &s->changed,
+                                   &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                                   &s->maximum, self, birth, 7, source, source + 10, source + 20, 7, 1,
+                                   NULL, NULL, NULL);
+    exact = atomic_load_explicit(&s->first, memory_order_relaxed) == 2 &&
+            atomic_load_explicit(&s->unique, memory_order_relaxed) == 2 &&
+            atomic_load_explicit(&s->overflow, memory_order_relaxed) == 2 &&
+            atomic_load_explicit(&s->first, memory_order_relaxed) +
+                atomic_load_explicit(&s->repeated, memory_order_relaxed) +
+                atomic_load_explicit(&s->overflow, memory_order_relaxed) == 4;
+    munmap(s, sizeof *s);
+    return exact;
+release_a:
+    atomic_store_explicit(&s->pause_release, 1, memory_order_release); (void)pthread_join(a, NULL);
+fail:
+    munmap(s, sizeof *s); return 0;
+}
+
 #else
 
 /* Hook-disabled translit_shape_exit calls compile to no-ops, but retaining the symbolic kinds keeps the
@@ -2313,7 +2573,22 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t jcc_ibtc_fills;
     _Atomic uint64_t jcc_ibtc_suppressed;
     _Atomic uint64_t jcc_ibtc_invalid_refusals;
+    _Atomic uint64_t jcc_ibtc_fill_empty;
+    _Atomic uint64_t jcc_ibtc_fill_collision;
+    _Atomic uint64_t jcc_ibtc_fill_irq;
+    _Atomic uint64_t jcc_ibtc_fill_same_key;
     _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
+    _Atomic uint64_t jcc_late_site_first;
+    _Atomic uint64_t jcc_late_site_repeated;
+    _Atomic uint64_t jcc_late_site_stable;
+    _Atomic uint64_t jcc_late_site_changed;
+    _Atomic uint64_t jcc_late_site_current;
+    _Atomic uint64_t jcc_late_site_retired;
+    _Atomic uint64_t jcc_late_site_unique;
+    _Atomic uint64_t jcc_late_site_overflow;
+    _Atomic uint64_t jcc_late_site_abandoned;
+    _Atomic uint64_t jcc_late_site_max;
+    struct hl_backend_jcc_late_site jcc_late_sites[HL_BACKEND_JCC_LATE_SITES];
     _Atomic uint64_t indirect_ibtc_misses;
     _Atomic uint64_t jcc_invalid_reason[HL_BACKEND_JCC_INVALID_REASON_COUNT];
     _Atomic uint64_t jcc_invalid_site_unique;
@@ -2361,6 +2636,10 @@ struct hl_backend_mixed_sse_shared {
 
 _Static_assert(sizeof(struct hl_backend_tree_slot) == 32,
                "production mixed-SSE lifecycle slots must remain compact");
+_Static_assert((HL_BACKEND_JCC_LATE_SITES & (HL_BACKEND_JCC_LATE_SITES - 1u)) == 0,
+               "late-JCC census table must remain a power of two");
+_Static_assert(sizeof(struct hl_backend_mixed_sse_shared) <= 64u * 1024u * 1024u,
+               "diagnostics mapping must remain bounded");
 
 static struct hl_backend_mixed_sse_shared *g_backend_mixed_sse;
 static struct hl_backend_tree_slot *g_backend_mixed_sse_self;
@@ -2625,10 +2904,17 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              "jcc_ibtc_enabled=%d jcc_ibtc_emitted=%llu jcc_ibtc_hits=%llu "
                              "jcc_ibtc_misses=%llu jcc_ibtc_irq=%llu jcc_ibtc_fills=%llu "
                              "jcc_ibtc_suppressed=%llu jcc_ibtc_invalid_refusals=%llu "
+                             "jcc_ibtc_fill_empty=%llu jcc_ibtc_fill_collision=%llu jcc_ibtc_fill_irq_cause=%llu "
+                             "jcc_ibtc_fill_same_key=%llu "
                              "jcc_taken_ibtc_misses=%llu indirect_ibtc_misses=%llu "
                              "jcc_late_candidate=%llu jcc_late_eligible=%llu jcc_late_invalid=%llu "
                              "jcc_late_target_absent=%llu jcc_late_page_generation=%llu "
                              "jcc_late_displacement=%llu jcc_late_other=%llu "
+                             "jcc_late_site_first=%llu jcc_late_site_repeated=%llu "
+                             "jcc_late_site_stable=%llu jcc_late_site_changed=%llu "
+                             "jcc_late_site_current=%llu jcc_late_site_retired=%llu "
+                             "jcc_late_site_unique=%llu jcc_late_site_overflow=%llu "
+                             "jcc_late_site_abandoned=%llu jcc_late_site_max=%llu "
                              "jcc_invalid_null=%llu jcc_invalid_magic=%llu jcc_invalid_gpc=%llu "
                              "jcc_invalid_block_generation=%llu jcc_invalid_entry_zero=%llu "
                              "jcc_invalid_length_zero=%llu jcc_invalid_resolve=%llu "
@@ -2693,6 +2979,14 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_invalid_refusals,
                                                                      memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_fill_empty,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_fill_collision,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_fill_irq,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_fill_same_key,
+                                                                     memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->jcc_ibtc_misses,
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->indirect_ibtc_misses,
@@ -2710,6 +3004,26 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                  &census->jcc_late[HL_BACKEND_JCC_LATE_DISPLACEMENT], memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(
                                  &census->jcc_late[HL_BACKEND_JCC_LATE_OTHER], memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_first,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_repeated,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_stable,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_changed,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_current,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_retired,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_unique,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_overflow,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_abandoned,
+                                                                     memory_order_relaxed),
+                             (unsigned long long)atomic_load_explicit(&census->jcc_late_site_max,
+                                                                     memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(
                                  &census->jcc_invalid_reason[HL_BACKEND_JCC_INVALID_NULL], memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(
@@ -3149,6 +3463,36 @@ static uintptr_t hl_backend_tree_jcc_ibtc_dynamic_counter_address(enum hl_backen
 static void hl_backend_tree_jcc_ibtc_add(enum hl_backend_jcc_ibtc_counter kind, uint64_t count) {
     _Atomic uint64_t *counter = hl_backend_tree_jcc_ibtc_counter(kind);
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
+}
+
+/* Diagnostic shadow only. No emitted branch reads this table and none of its
+ * counters selects policy, so the census cannot change the misses it counts. */
+static void hl_backend_tree_jcc_ibtc_fill_cause(uint64_t source, uint64_t target,
+                                                uint64_t previous_target, int interrupt_consumed) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL) return;
+    (void)source;
+    hl_backend_jcc_fill_record(&census->jcc_ibtc_fill_empty, &census->jcc_ibtc_fill_collision,
+                               &census->jcc_ibtc_fill_irq, &census->jcc_ibtc_fill_same_key,
+                               target, previous_target, interrupt_consumed);
+}
+
+static void hl_backend_tree_jcc_late_eligible(uint64_t cache_generation, uint64_t source,
+                                              uint64_t target, uintptr_t body,
+                                              uint64_t target_generation, int generation_current) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    struct hl_backend_tree_slot *process_slot = g_backend_mixed_sse_self;
+    if (census == NULL) return;
+    int process = process_slot == NULL ? 0 : atomic_load_explicit(&process_slot->pid, memory_order_acquire);
+    uint64_t birth = process_slot == NULL ? 0 : atomic_load_explicit(&process_slot->birth_ns, memory_order_acquire);
+    hl_backend_jcc_late_record(census->jcc_late_sites, HL_BACKEND_JCC_LATE_SITES,
+                               &census->jcc_late_site_first, &census->jcc_late_site_repeated,
+                               &census->jcc_late_site_stable, &census->jcc_late_site_changed,
+                               &census->jcc_late_site_current, &census->jcc_late_site_retired,
+                               &census->jcc_late_site_unique, &census->jcc_late_site_overflow,
+                               &census->jcc_late_site_abandoned, &census->jcc_late_site_max,
+                               process, birth, cache_generation, source, target, body, target_generation,
+                               generation_current, NULL, NULL, NULL);
 }
 
 static uintptr_t hl_backend_tree_indirect_ibtc_miss_counter_address(void) {

@@ -1340,6 +1340,10 @@ static int translit_profile_private_failure_test(void) {
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 230;
 }
+
+static int translit_jcc_late_eligible_census_test(void) {
+    return hl_backend_tree_jcc_late_eligible_test() ? 0 : 232;
+}
 #endif
 static uint64_t translit_displaced_lea_lowered;
 static uint64_t translit_natural_abs32_lowered;
@@ -2874,9 +2878,15 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     }
     cpu->jcc_ibtc_miss = 0;
     if (miss_kind == TL_JCC_IBTC_MISS && g_prof) {
-        hl_backend_tree_jcc_late(
-            translit_jcc_late_reason(translit_jcc_late_would_link(
-                (struct interp_block *)(uintptr_t)cpu->ic_miss, cpu->dbg_ibsrc, cpu->rip)));
+        uint8_t late_disposition = translit_jcc_late_would_link(
+            (struct interp_block *)(uintptr_t)cpu->ic_miss, cpu->dbg_ibsrc, cpu->rip);
+        hl_backend_tree_jcc_late(translit_jcc_late_reason(late_disposition));
+        if (late_disposition == HL_BACKEND_WOULD_LINK_ELIGIBLE) {
+            struct interp_block *target = map_body(cpu->rip);
+            hl_backend_tree_jcc_late_eligible(g_cache_gen, cpu->dbg_ibsrc, cpu->rip, (uintptr_t)target,
+                                              target != NULL ? target->generation : 0,
+                                              target != NULL && target->generation == g_cache_gen);
+        }
         int invalid_reason = translit_jcc_invalid_component(cpu, code);
 #if !defined(HL_NATIVE_TEST_HOOKS)
         if (invalid_reason >= 0)
@@ -2943,8 +2953,13 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
 #endif
     if (!actual_miss) return;
     ibtc_ent *entry = &g_ibtc[ibtc_index(cpu->rip)];
+    ibtc_ent previous = {0};
+    if (miss_kind == TL_JCC_IBTC_MISS && g_prof) {
+        previous = ibtc_snapshot(entry);
+        hl_backend_tree_jcc_ibtc_fill_cause(cpu->dbg_ibsrc, cpu->rip, previous.target, interrupt_consumed);
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
-    ibtc_ent previous = ibtc_snapshot(entry);
+    if (previous.target == 0) previous = ibtc_snapshot(entry);
     if (!fallthrough && !indirect && previous.target != 0 && previous.target != cpu->rip)
         (void)__atomic_fetch_add(direct_jmp ? &translit_direct_jmp_ibtc_collision
                                            : direct_call ? &translit_direct_call_ibtc_collision
@@ -3680,6 +3695,14 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 218) return translit_jcc_live_forward_shape_test() ? 0 : 218;
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     if (scenario == 230) return translit_profile_private_failure_test();
+    if (scenario == 231) {
+        pid_t child = fork();
+        if (child < 0) return 231;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(233));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 231;
+    }
+    if (scenario == 232) return translit_jcc_late_eligible_census_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
         struct insn jump = {.len = 2, .op = 0xff, .has_modrm = 1, .reg = 4, .is_mem = 1,
@@ -9081,6 +9104,33 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         __atomic_load_n(&translit_jcc_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1)
         goto done_ibtc;
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
+
+    if (requested_scenario == 233) {
+        ibtc_ent *cell = &g_ibtc[ibtc_index(target)];
+        g_prof = 1;
+        hl_backend_tree_jcc_ibtc_fill_cause_test_begin();
+
+        memset(cell, 0, sizeof *cell);
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+
+        ibtc_publish(cell, target + ((uint64_t)IBTC_N << 2), (void *)(uintptr_t)UINT64_C(0x1234));
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 1);
+
+        ibtc_publish(cell, target, (void *)(uintptr_t)UINT64_C(0x5678));
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        result = hl_backend_tree_jcc_ibtc_fill_cause_test_end() ? 0 : 231;
+        goto done_ibtc;
+    }
 
     if (scenario == 97) {
         target_block->generation--;

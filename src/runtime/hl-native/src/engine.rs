@@ -736,6 +736,28 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn jcc_fill_census_separates_empty_collision_irq_and_same_key() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 231 owns a private synthetic census and restores the process binding before return.
+        assert_eq!(unsafe { hook(231) }, 0, "JCC fill-cause census scenario 231");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn jcc_late_census_reconciles_concurrent_first_and_repeated_sites() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 232 owns a MAP_SHARED synthetic census and joins both fixture threads.
+        assert_eq!(unsafe { hook(232) }, 0, "JCC late-eligible census scenario 232");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn jcc_shared_guard_preserves_cache_lifecycle_and_signal_contracts() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()
