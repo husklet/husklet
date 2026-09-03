@@ -207,6 +207,11 @@ const opened = await host.terminal.openTabAndWait('Agent tools', { timeoutMs: 10
 if (opened.changed) console.log(opened.tab, opened.pane.slot);
 ```
 
+If the tab is created but its bounded inventory verification fails,
+`openTabAndWait` throws `TerminalOperationError`; `error.result` retains the exact
+host-returned `{ tab, title }` so the caller can recover without matching a
+mutable title. Failures before creation remain the original host error.
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

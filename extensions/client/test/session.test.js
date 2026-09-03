@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, ExecutionOperationError, Session, workspace } from '../src/index.js';
+import { connect, ExecutionOperationError, Session, TerminalOperationError, workspace } from '../src/index.js';
 import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
@@ -1055,6 +1055,42 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
       changed: false, tab: 'tab-owned', title: 'Agent tools',
     });
     assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix openTabAndWait retains the created tab when inventory verification fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-open-tab-recovery-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_open_tab') {
+        socket.write(encode({ channel: 130, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'new-pane', kind: 'terminal', generation: 1, revision: 1, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'tab-created' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'inventory unavailable' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-recovery', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).terminal.openTabAndWait('Recovery'), (error) => {
+      assert(error instanceof TerminalOperationError); assert.equal(error.operation, 'open-tab');
+      assert.deepEqual(error.result, { tab: 'tab-created', title: 'Recovery' });
+      assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'pane_list', 'event_unsubscribe']);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

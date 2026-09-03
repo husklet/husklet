@@ -100,7 +100,7 @@ wrong caller.
 - `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `pane-observe` and `terminal-control`.
 - `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.
 - `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `pane-observe`, `terminal-output`, and `terminal-control`.
-- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; requires `pane-observe` and `terminal-control`.
+- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `pane-observe` and `terminal-control`.
 
 ## Files
 

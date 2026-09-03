@@ -21,6 +21,17 @@ export class ExecutionOperationError extends Error {
   }
 }
 
+/** A terminal authority succeeded, but its bounded observation could not be completed. */
+export class TerminalOperationError extends Error {
+  constructor(operation, result, cause) {
+    super(`terminal ${operation} observation failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'TerminalOperationError';
+    this.operation = operation;
+    this.result = Object.freeze({ ...result });
+    this.cause = cause;
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze(['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
@@ -735,8 +746,9 @@ export function workspace(session, { signal } = {}) {
     const observed = new Promise((resolve) => { changed = resolve; });
     const stop = await api.watchPaneChanges((change) => changed(change));
     let timer;
+    let tab;
     try {
-      const tab = await api.terminal.openTab(wanted);
+      tab = await api.terminal.openTab(wanted);
       const change = await Promise.race([
         observed,
         new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
@@ -748,6 +760,9 @@ export function workspace(session, { signal } = {}) {
         ? 'opened tab cannot be verified from a truncated pane inventory'
         : 'opened tab has no observable pane');
       return { changed: true, tab, pane };
+    } catch (cause) {
+      if (tab === undefined) throw cause;
+      throw new TerminalOperationError('open-tab', { tab, title: wanted }, cause);
     } finally {
       clearTimeout(timer);
       await stop();
