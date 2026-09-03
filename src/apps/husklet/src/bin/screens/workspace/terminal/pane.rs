@@ -218,11 +218,12 @@ impl PaneChooser {
                 let window = window.clone();
                 let target = target.clone();
                 let extension = provider.extension;
+                let generation = provider.generation;
                 let id = provider.id;
                 let icon = provider.icon.unwrap_or_else(|| Self::PROVIDER_ICON.to_owned());
                 let chooser = button.clone();
                 choice.connect_clicked(move |_| {
-                    if Self::provider_in(&window, target.as_deref(), &extension, &id) {
+                    if Self::provider_generation_in(&window, target.as_deref(), &extension, generation, &id) {
                         chooser.set_icon_name(&icon);
                     }
                 });
@@ -269,8 +270,26 @@ impl PaneChooser {
     }
 
     pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) -> bool {
-        let Some(gallery) = Window::gallery(window) else { return false };
-        if !gallery.offers(extension, provider) {
+        let Some(gallery) = Window::gallery(window) else {
+            return false;
+        };
+        let Some(generation) = gallery.generation(extension) else {
+            return false;
+        };
+        Self::provider_generation_in(window, slot, extension, generation, provider)
+    }
+
+    fn provider_generation_in(
+        window: &Rc<TermWin>,
+        slot: Option<&str>,
+        extension: &str,
+        generation: u64,
+        provider: &str,
+    ) -> bool {
+        let Some(gallery) = Window::gallery(window) else {
+            return false;
+        };
+        if !gallery.offers_at(extension, generation, provider) {
             return false;
         }
         let Some(current) = slot
@@ -301,7 +320,7 @@ impl PaneChooser {
             if let Some(terminal) = displaced {
                 window.displaced.borrow_mut().insert(current.slot.clone(), terminal);
             }
-            gallery.select(extension, provider, &current.slot);
+            gallery.select_at(extension, generation, provider, &current.slot);
             return true;
         }
         // The parent changed between preflight and replacement. Undo every

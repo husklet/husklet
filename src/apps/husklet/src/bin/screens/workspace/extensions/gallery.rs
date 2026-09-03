@@ -40,6 +40,8 @@ struct Exhibit {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Provider {
     pub extension: String,
+    /// The exact live enrolment that published this choice.
+    pub generation: u64,
     pub id: String,
     pub title: String,
     pub icon: Option<String>,
@@ -276,8 +278,19 @@ impl Gallery {
 
     /// Reports a provider choice to the extension that owns it.
     pub fn select(&self, extension: &str, provider: &str, slot: &str) {
+        let Some(generation) = self.generation(extension) else {
+            return;
+        };
+        self.select_at(extension, generation, provider, slot);
+    }
+
+    /// Reports a choice only while the exact generation that advertised it is
+    /// still authoritative. A popover may outlive an extension replacement.
+    pub fn select_at(&self, extension: &str, generation: u64, provider: &str, slot: &str) {
         let held = self.0.borrow();
-        let Some(exhibit) = held.get(extension) else { return };
+        let Some(exhibit) = held.get(extension).filter(|entry| entry.generation == generation) else {
+            return;
+        };
         let Some(provider) = exhibit
             .providers
             .iter()
@@ -294,8 +307,17 @@ impl Gallery {
     /// Whether this live extension declared this provider.
     #[must_use]
     pub fn offers(&self, extension: &str, provider: &str) -> bool {
+        self.generation(extension)
+            .is_some_and(|generation| self.offers_at(extension, generation, provider))
+    }
+
+    /// Whether the exact live generation that created a chooser action still
+    /// offers its provider.
+    #[must_use]
+    pub fn offers_at(&self, extension: &str, generation: u64, provider: &str) -> bool {
         self.0.borrow().get(extension).is_some_and(|exhibit| {
-            exhibit.interface.upgrade().is_some()
+            exhibit.generation == generation
+                && exhibit.interface.upgrade().is_some()
                 && exhibit.ready
                 && exhibit.semantics.is_some()
                 && exhibit
@@ -322,6 +344,7 @@ impl Gallery {
             .flat_map(|(extension, exhibit)| {
                 exhibit.providers.iter().map(move |provider| Provider {
                     extension: extension.clone(),
+                    generation: exhibit.generation,
                     id: provider.id.to_string(),
                     title: provider.title.clone(),
                     icon: provider.icon.clone(),

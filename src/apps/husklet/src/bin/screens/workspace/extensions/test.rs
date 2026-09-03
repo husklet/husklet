@@ -76,6 +76,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::the_shipped_storybook_is_discoverable_as_a_pane_provider();
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
+        panes::a_stale_open_chooser_cannot_select_a_replaced_provider();
         panes::pane_chooser_groups_and_filters_many_extension_views();
         panes::disabling_an_extension_restores_its_surface_pane_terminal();
         panes::removing_an_extension_restores_its_surface_pane_terminal();
@@ -3789,6 +3790,74 @@ mod panes {
             second.upcast::<gtk::Widget>(),
             "the displaced terminal identity is restored"
         );
+    }
+
+    pub(super) fn a_stale_open_chooser_cannot_select_a_replaced_provider() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let pane = Panes::at(&bench.window, &slot).expect("terminal pane");
+        let chooser = super::descendants(&pane.widget)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("pane chooser");
+        let gallery = Gallery::new();
+        Window::exhibit(&bench.window, gallery.clone());
+        let provider = hl_extension::PaneProvider {
+            id: ExtensionName::new("database").expect("provider id"),
+            title: "Postgres".to_owned(),
+            icon: None,
+        };
+        let old_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let old = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        old_home.append(&old);
+        let old_generation = gallery.enrol(
+            "postgres",
+            &old,
+            &old_home,
+            std::slice::from_ref(&provider),
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", old_generation);
+        PaneChooser::populate(&bench.window, &chooser);
+        let stale = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("old-generation provider choice");
+
+        let selected = Rc::new(std::cell::Cell::new(0));
+        let counted = Rc::clone(&selected);
+        let new_home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let new = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        new_home.append(&new);
+        let new_generation = gallery.enrol(
+            "postgres",
+            &new,
+            &new_home,
+            std::slice::from_ref(&provider),
+            Rc::new(move |_| counted.set(counted.get() + 1)),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", new_generation);
+
+        stale.emit_clicked();
+        assert_eq!(selected.get(), 0, "an old popover cannot command the replacement");
+        assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Terminal);
+
+        PaneChooser::populate(&bench.window, &chooser);
+        let current = chooser
+            .popover()
+            .into_iter()
+            .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Postgres"))
+            .expect("replacement provider choice");
+        current.emit_clicked();
+        assert_eq!(selected.get(), 1);
+        assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Surface);
     }
 
     pub(super) fn pane_chooser_groups_and_filters_many_extension_views() {
