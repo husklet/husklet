@@ -692,9 +692,17 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.rename");
         Ok(())
     }
+    fn rename_observed(&self, _from: &RelativePath, _to: &RelativePath, _observed: &str) -> Result<String, HostError> {
+        self.ledger.note("files.rename_observed");
+        Ok("v1:1:2:3:4:5:6:8".into())
+    }
 
     fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
         self.ledger.note("files.remove");
+        Ok(())
+    }
+    fn remove_observed(&self, _path: &RelativePath, _observed: &str) -> Result<(), HostError> {
+        self.ledger.note("files.remove_observed");
         Ok(())
     }
 }
@@ -1186,10 +1194,12 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::FilesystemWrite,
         ),
+        (Request::FilesystemRenameObserved { from: path("logs/a"), to: path("logs/b"), observed: "v1:1:2:3:4:5:6:7".into() }, Capability::FilesystemWrite),
         (
             Request::FilesystemRemove { path: path("logs/old") },
             Capability::FilesystemWrite,
         ),
+        (Request::FilesystemRemoveObserved { path: path("logs/old"), observed: "v1:1:2:3:4:5:6:7".into() }, Capability::FilesystemWrite),
         (
             Request::InterfaceOpenTab {
                 title: "Postgres".into(),

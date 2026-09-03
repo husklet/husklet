@@ -378,8 +378,8 @@ export function tools(api) {
     define('husklet_file_write', 'Write at most 65536 UTF-8 bytes to a workspace-relative file.', z.object({ path, contents: fileContents }).strict(), async ({ path: value, contents }) => { await api.files.write(value, new TextEncoder().encode(contents)); return { done: true }; }),
     define('husklet_file_create_observed', 'Atomically create only if the workspace-relative path is still absent; never overwrite an existing entry.', z.object({ path, contents: fileContents }).strict(), async ({ path: value, contents }) => ({ identity: await api.files.createObserved(value, new TextEncoder().encode(contents)) })),
     define('husklet_file_mkdir', 'Create one workspace-relative directory.', z.object({ path }).strict(), async ({ path: value }) => { await api.files.mkdir(value); return { done: true }; }),
-    define('husklet_file_rename', 'Rename one workspace-relative entry without overwriting.', z.object({ from: path, to: path }).strict(), async ({ from, to }) => { await api.files.rename(from, to); return { done: true }; }),
-    define('husklet_file_remove', 'Remove one file or empty directory after explicit confirmation.', z.object({ path, confirm: z.literal(true) }).strict(), async ({ path: value }) => { await api.files.remove(value); return { done: true, path: value }; }),
+    define('husklet_file_rename', 'Atomically rename the exact observed workspace entry without overwriting the destination.', z.object({ from: path, to: path, observed: fileIdentity }).strict(), async ({ from, to, observed }) => ({ done: true, from, to, identity: await api.files.renameObserved(from, to, observed) })),
+    define('husklet_file_remove', 'Atomically remove the exact observed file or empty directory after explicit confirmation.', z.object({ path, observed: fileIdentity, confirm: z.literal(true) }).strict(), async ({ path: value, observed }) => { await api.files.removeObserved(value, observed); return { done: true, path: value, observed }; }),
   ];
   if (typeof api.terminal?.panes === 'function') definitions.push(define(
     'husklet_pane_list',

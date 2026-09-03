@@ -10,7 +10,7 @@ import { CONTROL, KIND, Reader, encode } from '../../react/src/wire.js';
 
 test('packaged CLI uses host-observed identities for stable ranges and create-if-absent', async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-mcp-file-'));
-  const socketPath = path.join(directory, 'host.sock'); const file = Array.from({ length: 12_050 }, (_, index) => index % 256); const reads = [];
+  const socketPath = path.join(directory, 'host.sock'); const file = Array.from({ length: 12_050 }, (_, index) => index % 256); const reads = []; const mutations = [];
   const host = net.createServer((socket) => { const reader = new Reader();
     socket.write(encode({ channel: CONTROL, kind: KIND.request, payload: { protocol: 1, extension: 'file-agent', granted: ['workspace-read', 'filesystem-read', 'filesystem-write'] } }));
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
@@ -20,6 +20,8 @@ test('packaged CLI uses host-observed identities for stable ranges and create-if
       else if (frame.payload.call === 'filesystem_read') { reads.push(frame.payload.with.path); payload = { reply: 'contents', with: frame.payload.with.path === 'small.bin' ? file.slice(0, 257) : file }; }
       else if (frame.payload.call === 'filesystem_read_range') { reads.push(frame.payload); const { offset, limit } = frame.payload.with; const eof = offset + limit >= file.length; payload = { reply: 'file_range', with: { path: frame.payload.with.path, identity: 'v1:1:2:2f12:3:4:5:6', offset, total: file.length, contents: file.slice(offset, offset + limit), eof, truncated: !eof } }; }
       else if (frame.payload.call === 'filesystem_create_observed') payload = { reply: 'identity', with: 'v1:1:3:3:4:5:6:7' };
+      else if (frame.payload.call === 'filesystem_rename_observed') { mutations.push(frame.payload); payload = { reply: 'identity', with: 'v1:1:3:3:4:5:6:8' }; }
+      else if (frame.payload.call === 'filesystem_remove_observed') { mutations.push(frame.payload); payload = { reply: 'done' }; }
       else throw new Error(`unexpected host call ${frame.payload.call}`);
       socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
     } });
@@ -42,6 +44,13 @@ test('packaged CLI uses host-observed identities for stable ranges and create-if
   assert.deepEqual({ offset: last.offset, contents: last.contents, eof: last.eof, truncated: last.truncated }, { offset: 12_000, contents: file.slice(12_000), eof: true, truncated: false });
   const written = JSON.parse((await client.callTool({ name: 'husklet_file_create_observed', arguments: { path: 'new.bin', contents: 'new' } })).content[0].text);
   assert.equal(written.identity, 'v1:1:3:3:4:5:6:7');
+  const renamed = JSON.parse((await client.callTool({ name: 'husklet_file_rename', arguments: { from: 'new.bin', to: 'final.bin', observed: written.identity } })).content[0].text);
+  assert.equal(renamed.identity, 'v1:1:3:3:4:5:6:8');
+  await client.callTool({ name: 'husklet_file_remove', arguments: { path: 'final.bin', observed: renamed.identity, confirm: true } });
+  assert.deepEqual(mutations.map(({ call, with: value }) => [call, value]), [
+    ['filesystem_rename_observed', { from: 'new.bin', to: 'final.bin', observed: 'v1:1:3:3:4:5:6:7' }],
+    ['filesystem_remove_observed', { path: 'final.bin', observed: 'v1:1:3:3:4:5:6:8' }],
+  ]);
   assert.deepEqual(reads.slice(0, 2), ['small.bin', 'large.bin']);
   assert.equal(reads[2].with.observed, null);
   assert.equal(reads[3].with.observed, first.identity);

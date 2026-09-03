@@ -705,6 +705,15 @@ test('observed filesystem ranges and creation preserve exact identities on the w
   assert.deepEqual((await next()).payload, { call: 'filesystem_create_observed', with: { path: 'logs/new.log', contents: [110, 101, 119] } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:7' } }));
   assert.equal(await write, 'v1:1:8:3:4:5:6:7');
+
+  const rename = files.renameObserved('logs/new.log', 'logs/final.log', 'v1:1:8:3:4:5:6:7');
+  assert.deepEqual((await next()).payload, { call: 'filesystem_rename_observed', with: { from: 'logs/new.log', to: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:7' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:8' } }));
+  assert.equal(await rename, 'v1:1:8:3:4:5:6:8');
+  const remove = files.removeObserved('logs/final.log', 'v1:1:8:3:4:5:6:8');
+  assert.deepEqual((await next()).payload, { call: 'filesystem_remove_observed', with: { path: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:8' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await remove;
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

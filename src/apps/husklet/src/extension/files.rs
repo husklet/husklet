@@ -6,6 +6,7 @@ use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hl_extension::RelativePath;
@@ -22,6 +23,7 @@ pub struct WorkspaceDirectory {
     root: PathBuf,
     root_device: u64,
     root_inode: u64,
+    mutations: Mutex<()>,
 }
 
 const PATH_DEPTH_LIMIT: usize = 128;
@@ -47,6 +49,7 @@ impl WorkspaceDirectory {
             root,
             root_device: metadata.dev(),
             root_inode: metadata.ino(),
+            mutations: Mutex::new(()),
         })
     }
 
@@ -76,8 +79,30 @@ impl WorkspaceDirectory {
     }
 
     fn pinned(&self, path: &RelativePath) -> Result<PinnedEntry, HostError> {
-        let target = self.entry(path)?;
-        pin_entry_with(&target, || Ok(())).map_err(|error| absence(path, &error))
+        let parts = path.parts();
+        if parts.len() > PATH_DEPTH_LIMIT {
+            return Err(HostError::Conflict(format!(
+                "{path} exceeds the {PATH_DEPTH_LIMIT}-component limit"
+            )));
+        }
+        let Some((name, parents)) = parts.split_last() else {
+            return Err(HostError::Conflict("the workspace root cannot be mutated".to_owned()));
+        };
+        let mut directory = self.root_directory().map_err(|error| absence(path, &error))?;
+        for part in parents {
+            directory = open_at(
+                &directory,
+                part,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+            )
+            .map_err(|error| absence(path, &error))?;
+        }
+        let metadata = directory.metadata().map_err(|error| absence(path, &error))?;
+        Ok(PinnedEntry {
+            directory,
+            metadata,
+            name: c_name(Path::new(name)).map_err(|error| absence(path, &error))?,
+        })
     }
 
     fn root_directory(&self) -> io::Result<File> {
@@ -265,6 +290,10 @@ impl WorkspaceFiles for WorkspaceDirectory {
     }
 
     fn rename(&self, from: &RelativePath, to: &RelativePath) -> Result<(), HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
         let source = self.pinned(from)?;
         let destination = self.pinned(to)?;
         rename_noreplace(&source, &destination).map_err(|error| {
@@ -281,11 +310,104 @@ impl WorkspaceFiles for WorkspaceDirectory {
         Ok(())
     }
 
+    fn rename_observed(&self, from: &RelativePath, to: &RelativePath, observed: &str) -> Result<String, HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
+        let source = self.pinned(from)?;
+        let opened = open_entry_identity(from, &source, observed)?;
+        let destination = self.pinned(to)?;
+        rename_noreplace(&source, &destination).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                HostError::Conflict(format!("{to} already exists"))
+            } else {
+                absence(from, &error)
+            }
+        })?;
+        let status = rustix::fs::statat(
+            &destination.directory,
+            &destination.name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)
+        .map_err(|error| absence(to, &error))?;
+        if (status.st_dev, status.st_ino) != (opened.dev(), opened.ino()) {
+            rename_noreplace(&destination, &source).map_err(|error| absence(from, &error))?;
+            return Err(HostError::Conflict(format!(
+                "{from} no longer matches the observed identity"
+            )));
+        }
+        source.directory.sync_all().map_err(|error| absence(from, &error))?;
+        if (source.metadata.dev(), source.metadata.ino()) != (destination.metadata.dev(), destination.metadata.ino()) {
+            destination.directory.sync_all().map_err(|error| absence(to, &error))?;
+        }
+        let status = rustix::fs::statat(
+            &destination.directory,
+            &destination.name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)
+        .map_err(|error| absence(to, &error))?;
+        Ok(status_identity(&status))
+    }
+
     fn remove(&self, path: &RelativePath) -> Result<(), HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
         let entry = self.pinned(path)?;
         remove_entry(&entry)
             .and_then(|()| entry.directory.sync_all())
             .map_err(|error| absence(path, &error))
+    }
+
+    fn remove_observed(&self, path: &RelativePath, observed: &str) -> Result<(), HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
+        let entry = self.pinned(path)?;
+        let opened = open_entry_identity(path, &entry, observed)?;
+        for _ in 0..128 {
+            let quarantine = CString::new(format!(
+                ".husklet-remove-{}-{}",
+                std::process::id(),
+                TEMPORARY.fetch_add(1, Ordering::Relaxed)
+            ))
+            .expect("fixed prefix has no NUL");
+            let captured = PinnedEntry {
+                directory: entry.directory.try_clone().map_err(|error| absence(path, &error))?,
+                metadata: entry.directory.metadata().map_err(|error| absence(path, &error))?,
+                name: quarantine,
+            };
+            match rename_noreplace(&entry, &captured) {
+                Ok(()) => {
+                    let status = rustix::fs::statat(
+                        &captured.directory,
+                        &captured.name,
+                        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                    )
+                    .map_err(io::Error::from)
+                    .map_err(|error| absence(path, &error))?;
+                    if (status.st_dev, status.st_ino) != (opened.dev(), opened.ino()) {
+                        rename_noreplace(&captured, &entry).map_err(|error| absence(path, &error))?;
+                        return Err(HostError::Conflict(format!(
+                            "{path} no longer matches the observed identity"
+                        )));
+                    }
+                    return remove_entry(&captured)
+                        .and_then(|()| entry.directory.sync_all())
+                        .map_err(|error| absence(path, &error));
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(absence(path, &error)),
+            }
+        }
+        Err(HostError::Failed(
+            "could not reserve a unique removal quarantine".into(),
+        ))
     }
 }
 
@@ -295,6 +417,7 @@ struct PinnedEntry {
     name: CString,
 }
 
+#[cfg(test)]
 fn pin_entry_with(target: &Path, before_open: impl FnOnce() -> io::Result<()>) -> io::Result<PinnedEntry> {
     let parent = target
         .parent()
@@ -332,6 +455,43 @@ fn remove_entry(entry: &PinnedEntry) -> io::Result<()> {
         rustix::fs::AtFlags::empty()
     };
     rustix::fs::unlinkat(&entry.directory, &entry.name, flags).map_err(Into::into)
+}
+
+fn status_identity(status: &rustix::fs::Stat) -> String {
+    format!(
+        "v1:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+        status.st_dev,
+        status.st_ino,
+        status.st_size,
+        status.st_mtime,
+        status.st_mtime_nsec,
+        status.st_ctime,
+        status.st_ctime_nsec
+    )
+}
+
+fn open_entry_identity(
+    path: &RelativePath,
+    entry: &PinnedEntry,
+    observed: &str,
+) -> Result<std::fs::Metadata, HostError> {
+    let descriptor = rustix::fs::openat(
+        &entry.directory,
+        &entry.name,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(io::Error::from)
+    .map_err(|error| absence(path, &error))?;
+    let metadata = File::from(descriptor)
+        .metadata()
+        .map_err(|error| absence(path, &error))?;
+    if file_identity(&metadata) != observed {
+        return Err(HostError::Conflict(format!(
+            "{path} no longer matches the observed identity"
+        )));
+    }
+    Ok(metadata)
 }
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -710,6 +870,62 @@ mod tests {
             files.create_observed(&target, b"second create"),
             Err(HostError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn observed_rename_and_remove_capture_then_validate_without_touching_replacements() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let source = path("source");
+        files.create_observed(&source, b"original").expect("original");
+        let observed = files.stat(&source).expect("stat").identity.expect("identity");
+
+        files.write(&source, b"replacement").expect("replacement");
+        assert!(matches!(
+            files.rename_observed(&source, &path("destination"), &observed),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(
+            std::fs::read(root.join("source")).expect("restored replacement"),
+            b"replacement"
+        );
+        assert!(
+            !root.join("destination").exists(),
+            "stale rename rolls its captured entry back"
+        );
+        assert!(matches!(
+            files.remove_observed(&source, &observed),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(
+            std::fs::read(root.join("source")).expect("preserved replacement"),
+            b"replacement"
+        );
+        assert!(std::fs::read_dir(&root).expect("listing").all(|entry| {
+            !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-remove-")
+        }));
+
+        let current = files.stat(&source).expect("current stat").identity.expect("identity");
+        let renamed = files
+            .rename_observed(&source, &path("destination"), &current)
+            .expect("observed rename");
+        assert_eq!(
+            renamed,
+            files
+                .stat(&path("destination"))
+                .expect("destination stat")
+                .identity
+                .expect("identity")
+        );
+        files
+            .remove_observed(&path("destination"), &renamed)
+            .expect("observed remove");
+        assert!(!root.join("destination").exists());
     }
 
     #[test]

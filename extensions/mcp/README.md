@@ -285,8 +285,12 @@ never reported as empty text or silently substituted with a screenshot. The olde
 consumers that need their specific typed result.
 
 Workspace filesystem controls create one directory, rename without overwriting,
-or remove one file or empty directory. All paths remain relative to declared
-roots; removal requires `confirm: true`, and recursive deletion is unavailable.
+or remove one file or empty directory. Before rename or removal, read the entry
+with `husklet_file_stat` and pass its opaque `identity` as `observed`. The host
+captures the named entry with a dirfd-relative kernel rename, validates the
+captured object, and rolls a stale capture back instead of mutating it. All paths
+remain relative to declared roots; removal also requires `confirm: true`, and
+recursive deletion is unavailable.
 `husklet_file_read` returns its legacy byte array only when the complete file
 fits the 12,000-byte MCP whole-read limit, and otherwise fails closed.
 `husklet_file_read_range` returns `path`, opaque `identity`, `offset`, `total`,

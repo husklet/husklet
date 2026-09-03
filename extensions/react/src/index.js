@@ -380,7 +380,12 @@ export function workspace(session) {
       ),
       mkdir: (path) => done('filesystem_mkdir', { path }),
       rename: (from, to) => done('filesystem_rename', { from, to }),
+      renameObserved: async (from, to, observed) => expect(
+        await session.call('filesystem_rename_observed', { from, to, observed }),
+        'identity',
+      ),
       remove: (path) => done('filesystem_remove', { path }),
+      removeObserved: (path, observed) => done('filesystem_remove_observed', { path, observed }),
     },
     subscribe,
     unsubscribe,

@@ -19,7 +19,7 @@ function fake() {
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
     terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), splitObserved: record('terminal.splitObserved'), spawn: record('terminal.spawn'), spawnObserved: record('terminal.spawnObserved'), focus: record('terminal.focus'), focusObserved: record('terminal.focusObserved'), retitle: record('terminal.retitle'), retitleObserved: record('terminal.retitleObserved'), resizeGrid: record('terminal.resizeGrid'), resizeGridObserved: record('terminal.resizeGridObserved'), ratio: record('terminal.ratio'), ratioObserved: record('terminal.ratioObserved'), close: record('terminal.close'), closeObserved: record('terminal.closeObserved'), switchOccupant: record('terminal.switchOccupant'), switchOccupantObserved: record('terminal.switchOccupantObserved') },
-    files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
+    files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), renameObserved: record('files.renameObserved', 'v1:1:2:3:4:5:6:7'), remove: record('files.remove'), removeObserved: record('files.removeObserved') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
 }
@@ -451,6 +451,8 @@ test('filesystem controls are strict and removal requires explicit confirmation'
   const listed = tools(api);
   const byName = (name) => listed.find((tool) => tool.name === name);
   assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt' }).success, false);
+  assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt', observed: 'v1:1:2:3:4:5:6:7', confirm: true }).success, true);
+  assert.equal(byName('husklet_file_remove').inputSchema.safeParse({ path: 'old.txt', observed: 'v1:1:2:3:4:5:6:8', confirm: false }).success, false);
   assert.equal(byName('husklet_file_rename').inputSchema.safeParse({ from: 'a', to: 'b', extra: true }).success, false);
   assert.equal(byName('husklet_file_write').inputSchema.safeParse({ path: 'full.txt', contents: 'é'.repeat(32_768) }).success, true);
   assert.equal(byName('husklet_file_write').inputSchema.safeParse({ path: 'large.txt', contents: '😀'.repeat(16_385) }).success, false);
@@ -458,9 +460,9 @@ test('filesystem controls are strict and removal requires explicit confirmation'
   assert.equal(byName('husklet_file_read').inputSchema.safeParse({ path: '😀'.repeat(1025) }).success, false);
   await byName('husklet_file_stat').run({ path: 'logs/app.log' });
   await byName('husklet_file_mkdir').run({ path: 'logs/new' });
-  await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b' });
-  await byName('husklet_file_remove').run({ path: 'logs/b', confirm: true });
-  assert.deepEqual(calls, [['files.stat', 'logs/app.log'], ['files.mkdir', 'logs/new'], ['files.rename', 'logs/a', 'logs/b'], ['files.remove', 'logs/b']]);
+  await byName('husklet_file_rename').run({ from: 'logs/a', to: 'logs/b', observed: 'v1:1:2:3:4:5:6:7' });
+  await byName('husklet_file_remove').run({ path: 'logs/b', observed: 'v1:1:2:3:4:5:6:8', confirm: true });
+  assert.deepEqual(calls, [['files.stat', 'logs/app.log'], ['files.mkdir', 'logs/new'], ['files.renameObserved', 'logs/a', 'logs/b', 'v1:1:2:3:4:5:6:7'], ['files.removeObserved', 'logs/b', 'v1:1:2:3:4:5:6:8']]);
 });
 
 test('container execution inspection is a strict bounded read through the typed API', async () => {

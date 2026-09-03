@@ -536,7 +536,9 @@ export interface WorkspaceApi {
     createObserved(path: string, contents: Iterable<number>): Promise<string>;
     mkdir(path: string): Promise<void>;
     rename(from: string, to: string): Promise<void>;
+    renameObserved(from: string, to: string, observed: string): Promise<string>;
     remove(path: string): Promise<void>;
+    removeObserved(path: string, observed: string): Promise<void>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

@@ -1095,9 +1095,15 @@ pub trait WorkspaceFiles {
     fn rename(&self, _from: &RelativePath, _to: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("filesystem rename is unavailable".into()))
     }
+    fn rename_observed(&self, _from: &RelativePath, _to: &RelativePath, _observed: &str) -> Result<String, HostError> {
+        Err(HostError::Unsupported("observed filesystem rename is unavailable".into()))
+    }
 
     fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("filesystem removal is unavailable".into()))
+    }
+    fn remove_observed(&self, _path: &RelativePath, _observed: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("observed filesystem removal is unavailable".into()))
     }
 }
 

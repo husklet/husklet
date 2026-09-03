@@ -35,6 +35,11 @@ export async function runAgentAdmin(client, {
   let fileCreated = false;
   const cleanupErrors = [];
   const lifecycle = [];
+  const removeObserved = async (path) => {
+    const entry = await json(client, 'husklet_file_stat', { path });
+    if (typeof entry?.identity !== 'string') throw new Error(`filesystem entry ${JSON.stringify(path)} has no observed identity`);
+    return call(client, 'husklet_file_remove', { path, observed: entry.identity, confirm: true });
+  };
   const mutate = async (input) => {
     const observed = await json(client, 'husklet_workspace_mutate_wait', { ...input, timeout_ms: waitMs });
     lifecycle.push({ changed: true, change: observed.change });
@@ -61,10 +66,10 @@ export async function runAgentAdmin(client, {
     return { hosting, created, read, event: event.observation, lifecycle };
   } finally {
     if (fileCreated) {
-      try { await call(client, 'husklet_file_remove', { path: file, confirm: true }); } catch (error) { cleanupErrors.push(error); }
+      try { await removeObserved(file); } catch (error) { cleanupErrors.push(error); }
     }
     if (directoryCreated) {
-      try { await call(client, 'husklet_file_remove', { path: directory, confirm: true }); } catch (error) { cleanupErrors.push(error); }
+      try { await removeObserved(directory); } catch (error) { cleanupErrors.push(error); }
     }
     if (workspaceStarted) {
       try { await mutate({ operation: 'stop', name: workspaceConfiguration.name }); }

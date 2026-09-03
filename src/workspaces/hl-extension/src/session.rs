@@ -113,7 +113,7 @@ impl Session {
     pub fn dispatch(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let capability = request.capability();
         match request {
-            Request::FilesystemRename { from, to } => {
+            Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
                 self.peer.authority().permit_path(capability, from)?;
                 self.peer.authority().permit_path(capability, to)?;
             }
@@ -254,7 +254,9 @@ impl Session {
             | Request::FilesystemCreateObserved { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
-            | Request::FilesystemRemove { .. } => self.files(request, services),
+            | Request::FilesystemRenameObserved { .. }
+            | Request::FilesystemRemove { .. }
+            | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -737,12 +739,22 @@ impl Session {
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.rename(from, to).map(|()| Reply::Done).map_err(Failure::from)
             }
+            Request::FilesystemRenameObserved { from, to, observed } => {
+                if observed.is_empty() || observed.len() > 256 { return Err(Failure::Failed { detail: "filesystem observation exceeds protocol bounds".into() }); }
+                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
+                Ok(Reply::Identity(port.rename_observed(from, to, observed)?))
+            }
             Request::FilesystemRemove { path } => {
                 let port = self
                     .peer
                     .authority()
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.remove(path).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemRemoveObserved { path, observed } => {
+                if observed.is_empty() || observed.len() > 256 { return Err(Failure::Failed { detail: "filesystem observation exceeds protocol bounds".into() }); }
+                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
+                port.remove_observed(path, observed).map(|()| Reply::Done).map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "filesystem".into(),

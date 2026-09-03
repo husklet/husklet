@@ -339,9 +339,11 @@ pub enum Request {
         from: RelativePath,
         to: RelativePath,
     },
+    FilesystemRenameObserved { from: RelativePath, to: RelativePath, observed: String },
     FilesystemRemove {
         path: RelativePath,
     },
+    FilesystemRemoveObserved { path: RelativePath, observed: String },
     InterfaceOpenTab {
         title: String,
     },
@@ -465,7 +467,9 @@ impl Request {
             | Self::FilesystemCreateObserved { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
-            | Self::FilesystemRemove { .. } => Capability::FilesystemWrite,
+            | Self::FilesystemRenameObserved { .. }
+            | Self::FilesystemRemove { .. }
+            | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -489,8 +493,9 @@ impl Request {
             | Self::FilesystemWrite { path, .. }
             | Self::FilesystemCreateObserved { path, .. }
             | Self::FilesystemMkdir { path }
-            | Self::FilesystemRemove { path } => Some(path),
-            Self::FilesystemRename { from, .. } => Some(from),
+            | Self::FilesystemRemove { path }
+            | Self::FilesystemRemoveObserved { path, .. } => Some(path),
+            Self::FilesystemRename { from, .. } | Self::FilesystemRenameObserved { from, .. } => Some(from),
             _ => None,
         }
     }

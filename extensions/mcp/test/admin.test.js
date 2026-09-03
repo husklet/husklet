@@ -63,7 +63,8 @@ test('admin workflow confines files to socket workspace and cleans success and f
             error: 'failed', call, detail: 'fixture start failure',
           } }));
         }
-        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn_observed', 'terminal_write_pane'].includes(call)) {
+        else if (call === 'filesystem_stat') answer(frame, 'entry', { path: argument.path, directory: argument.path === 'scratch', size: 0, identity: argument.path.endsWith('.txt') ? 'v1:1:2:3:4:5:6:7' : 'v1:1:3:3:4:5:6:7' });
+        else if (['workspace_start', 'workspace_stop', 'workspace_delete', 'execution_kill', 'filesystem_mkdir', 'filesystem_write', 'filesystem_remove_observed', 'event_subscribe', 'event_unsubscribe', 'terminal_spawn_observed', 'terminal_write_pane'].includes(call)) {
           answer(frame, 'done');
           if (call === 'workspace_start' && !suppressLifecycle) lifecycle(argument.name, 'start');
           if (call === 'workspace_stop') lifecycle(argument.name, 'stop');
@@ -136,7 +137,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   assert.deepEqual(calls.slice(failureStart).map(({ call }) => call), [
     'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
     'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir', 'filesystem_write',
-    'filesystem_read', 'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop',
+    'filesystem_read', 'filesystem_stat', 'filesystem_remove_observed', 'filesystem_stat', 'filesystem_remove_observed', 'event_subscribe', 'workspace_stop',
     'event_unsubscribe', 'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);
 
@@ -422,13 +423,13 @@ test('admin workflow confines files to socket workspace and cleans success and f
     'workspace_info', 'workspace_info', 'event_subscribe', 'workspace_create', 'event_unsubscribe',
     'event_subscribe', 'workspace_start', 'event_unsubscribe', 'filesystem_mkdir',
     'filesystem_write', 'filesystem_read', 'pane_list', 'event_subscribe', 'terminal_write_pane', 'event_unsubscribe',
-    'filesystem_remove', 'filesystem_remove', 'event_subscribe', 'workspace_stop', 'event_unsubscribe',
+    'filesystem_stat', 'filesystem_remove_observed', 'filesystem_stat', 'filesystem_remove_observed', 'event_subscribe', 'workspace_stop', 'event_unsubscribe',
     'event_subscribe', 'workspace_delete', 'event_unsubscribe',
   ]);
   assert.deepEqual(calls.find(({ call }) => call === 'filesystem_write').with, {
     path: 'agent-admin/note.txt', contents: [...new TextEncoder().encode('hello admin')],
   });
-  assert.deepEqual(calls.filter(({ call }) => call === 'filesystem_remove').slice(0, 2).map(({ with: value }) => value), [
-    { path: 'agent-admin/note.txt' }, { path: 'agent-admin' },
+  assert.deepEqual(calls.filter(({ call }) => call === 'filesystem_remove_observed').slice(0, 2).map(({ with: value }) => value), [
+    { path: 'agent-admin/note.txt', observed: 'v1:1:2:3:4:5:6:7' }, { path: 'agent-admin', observed: 'v1:1:3:3:4:5:6:7' },
   ]);
 });
