@@ -93,8 +93,6 @@ gui = [
 ]
 # Narrow hooks used only by hermetic native composition tests.
 native-test-hooks = []
-# Explicit cross-language integration proof. CI installs the locked MCP package
-# graph before enabling it; ordinary Rust gates never acquire npm dependencies.
 
 [lints]
 workspace = true

@@ -1788,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn a_native_store_mutation_reaches_the_same_subscriber_as_an_mcp_mutation() {
+    fn native_and_socket_mutations_reach_the_same_subscriber() {
         let host = Host {
             ledger: Arc::new(Ledger::default()),
         };
