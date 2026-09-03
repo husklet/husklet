@@ -44,7 +44,7 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   execution_lifetime: 'persisted' | 'live' | 'ephemeral';
   terminal: WorkspaceTerminal;
 }
-export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number; generation?: number }
 export interface ContainerInventory { containers: ContainerSummary[]; complete: boolean }
 export interface ContainerVolumeMount { volume: string; target: string; read_only?: boolean }
 export interface ContainerPort { container: number; host?: number | null; protocol: 'tcp' | 'udp' }
@@ -279,6 +279,11 @@ export interface WorkspaceApi {
     pause(id: string): Promise<void>;
     unpause(id: string): Promise<void>;
     restart(id: string): Promise<void>;
+    /** Restart only after observing a generation; resolves on the same ID running at a newer generation. */
+    restartAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; generation: number }
+    >;
     rename(id: string, name: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;

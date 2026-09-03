@@ -842,6 +842,17 @@
             "minimum": -9007199254740991,
             "signed": true
           }
+        },
+        {
+          "name": "generation",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
         }
       ],
       "kind": "struct",
@@ -10620,7 +10631,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:a78b71b0d83ff02b",
+  "source_fingerprint": "fnv1a64:d7a4de0551067f62",
   "specification_version": 1,
   "topics": [
     {

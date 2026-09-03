@@ -213,6 +213,7 @@ fn summary(container: &Container) -> ContainerSummary {
         image: container.details.metadata.image.clone(),
         state: container.state.clone(),
         created: container.created,
+        generation: container.generation,
     }
 }
 
@@ -228,6 +229,7 @@ fn inspection(container: &InspectContainer) -> ContainerSummary {
         image: container.details.metadata.image.clone(),
         state: container.state.status.clone(),
         created: epoch_seconds(&container.created).unwrap_or_default(),
+        generation: container.generation,
     }
 }
 

@@ -41,6 +41,8 @@ pub struct ContainerSummary {
     pub image: String,
     pub state: String,
     pub created: i64,
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// The process table reported by a running container.

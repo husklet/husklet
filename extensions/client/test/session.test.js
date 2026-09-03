@@ -675,3 +675,33 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
     await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('real Unix restart wait requires the same container at a newer running generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-restart-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); const id = 'd'.repeat(64);
+  const summary = (state, generation) => ({ id, name: 'agent', image: 'alpine', state, created: 1, generation });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'container_restart') {
+        socket.write(encode({ channel: 45, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running', 7)] } }));
+        socket.write(encode({ channel: 46, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('exited', 8)] } }));
+        socket.write(encode({ channel: 47, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running', 8)] } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'restart-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).containers.restartAndWait(id, 7);
+    assert.equal(result.changed, true); assert.equal(result.container.generation, 8); assert.equal(result.container.state, 'running');
+    assert.deepEqual(calls, ['event_subscribe', 'container_restart', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});

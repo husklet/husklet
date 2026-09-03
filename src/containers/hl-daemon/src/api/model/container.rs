@@ -60,6 +60,8 @@ pub struct ContainerMetadata {
     pub id: String,
     pub image: String,
     pub mounts: Vec<MountPoint>,
+    /// Monotonic durable lifecycle generation for this immutable container.
+    pub generation: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -140,6 +142,7 @@ impl From<hl_container::Container> for Container {
                     id: value.id.to_string(),
                     image,
                     mounts: Vec::new(),
+                    generation: value.generation,
                 },
                 size_rw: None,
                 size_root_fs: None,

@@ -61,6 +61,7 @@ const installed = await host.extensions.installAndWait(status.job, status.revisi
 const running = await host.containers.startAndWait(containerId);
 const exited = await host.containers.stopAndWait(containerId);
 const removed = await host.containers.removeAndWait(containerId); // absence requires complete inventory
+const restarted = await host.containers.restartAndWait(container.id, container.generation);
 if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 

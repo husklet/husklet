@@ -529,6 +529,27 @@ export function workspace(session, { signal } = {}) {
       await stopWatching();
     }
   };
+  api.containers.restartAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('container restart wait requires an observed nonnegative safe generation');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container restart wait timeout must be between 1 and 30000ms');
+    let observed; let timer;
+    const restarted = new Promise((resolve) => {
+      observed = (containers) => {
+        const current = containers.find((container) => container.id === identity);
+        if (current?.state === 'running' && current.generation > generation) resolve(current);
+      };
+    });
+    const stopWatching = await api.watchContainers(observed);
+    try {
+      await api.containers.restart(identity);
+      const container = await Promise.race([restarted, new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); })]);
+      return container === null ? { changed: false, id: identity, generation } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
   api.watchImages = (listener) => watch('images', 'images', listener, 'image');
   api.watchVolumes = (listener) => watch('volumes', 'volumes', listener, 'volume');
   api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');

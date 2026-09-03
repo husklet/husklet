@@ -1123,6 +1123,17 @@ const definitions = {
           "minimum": -9007199254740991,
           "signed": true
         }
+      },
+      {
+        "name": "generation",
+        "optional": true,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
       }
     ],
     "kind": "struct",
