@@ -104,6 +104,12 @@ try {
   const clientTarball = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
     cwd: path.join(root, '..', 'client'), encoding: 'utf8',
   }))[0].filename;
+  const isolatedCache = path.join(scratch, 'npm-cache');
+  const imageRuntime = path.join(scratch, 'image-runtime');
+  fs.cpSync(path.join(root, 'image-runtime'), imageRuntime, { recursive: true });
+  execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--cache', isolatedCache], {
+    cwd: imageRuntime, stdio: 'pipe',
+  });
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
@@ -143,7 +149,8 @@ try {
   const standaloneStarter = path.join(scratch, 'standalone-starter');
   fs.cpSync(installedStarter, standaloneStarter, { recursive: true });
   execFileSync('npm', [
-    'install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1',
+    'install', '--ignore-scripts', '--no-audit', '--no-fund',
+    path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1',
   ], { cwd: standaloneStarter, stdio: 'pipe' });
   const starterLock = JSON.parse(fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'));
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
@@ -252,7 +259,8 @@ try {
   assert.match(dockerfile, /npm pack --ignore-scripts/);
   assert.match(dockerfile, /COPY react\/image-runtime\/package\.json react\/image-runtime\/package-lock\.json \.\//);
   assert.match(dockerfile, /npm ci --ignore-scripts --omit=dev/);
-  assert.match(dockerfile, /npm install --ignore-scripts --no-save --package-lock=false --offline/);
+  assert.match(dockerfile, /tar -xzf \/opt\/husklet-sdk\/husklet-client-\*\.tgz --strip-components=1/);
+  assert.match(dockerfile, /tar -xzf \/opt\/husklet-sdk\/husklet-react-\*\.tgz --strip-components=1/);
   assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /test "\$\(node --version\)" = "v\$\{NODE_VERSION\}"/);
@@ -302,16 +310,12 @@ try {
   ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
   assert.equal(repeatedReact.integrity, basePack[0].integrity, 'React SDK tarball assembly is not reproducible');
   assert.equal(repeatedClient.integrity, baseClient.integrity, 'client SDK tarball assembly is not reproducible');
-  const imageRuntime = path.join(scratch, 'image-runtime');
-  fs.cpSync(path.join(root, 'image-runtime'), imageRuntime, { recursive: true });
   const locked = fs.readFileSync(path.join(imageRuntime, 'package-lock.json'));
-  execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--offline', '--no-audit', '--no-fund'], {
-    cwd: imageRuntime, stdio: 'pipe',
-  });
-  execFileSync('npm', [
-    'install', '--ignore-scripts', '--no-save', '--package-lock=false', '--offline', '--no-audit', '--no-fund',
-    path.join(baseOutput, baseClient.filename), path.join(baseOutput, basePack[0].filename),
-  ], { cwd: imageRuntime, stdio: 'pipe' });
+  for (const [scope, archive] of [['client', baseClient.filename], ['react', basePack[0].filename]]) {
+    const destination = path.join(imageRuntime, 'node_modules/@husklet', scope);
+    fs.mkdirSync(destination, { recursive: true });
+    execFileSync('tar', ['-xzf', path.join(baseOutput, archive), '--strip-components=1', '-C', destination], { stdio: 'pipe' });
+  }
   assert.deepEqual(fs.readFileSync(path.join(imageRuntime, 'package-lock.json')), locked, 'offline SDK install changed the committed third-party lock');
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { Session as ClientSession } from '@husklet/client';

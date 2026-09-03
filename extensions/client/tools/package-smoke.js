@@ -83,7 +83,7 @@ try {
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
+  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--offline', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
     cwd: consumer, stdio: 'pipe',
   });
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/client/package.json')));
@@ -104,7 +104,7 @@ try {
   fs.cpSync(path.join(installedClient, 'examples/starter'), starter, { recursive: true });
   const starterManifest = JSON.parse(fs.readFileSync(path.join(starter, 'package.json')));
   assert.equal(starterManifest.dependencies['@husklet/client'], manifest.version);
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
+  execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--offline', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {
     cwd: starter, stdio: 'pipe',
   });
   execFileSync('npm', ['test'], { cwd: starter, stdio: 'pipe' });
