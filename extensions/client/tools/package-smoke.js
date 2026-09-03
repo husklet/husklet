@@ -117,6 +117,48 @@ async function runPackedProtocolRefusal(starter, installedClient) {
   }
 }
 
+async function runPackedTruncatedGreeting(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host-truncated-greeting.sock');
+  let spoke = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    stream.on('data', () => { spoke = true; });
+    const greeting = wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+    });
+    // A clean EOF in the middle of a frame must not be mistaken for a host
+    // that never greeted us or leave a day-one starter waiting indefinitely.
+    stream.end(greeting.subarray(0, greeting.length - 1));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not reject a truncated greeting')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(spoke, false, 'truncated greeting must be rejected before the starter sends a request');
+    assert.equal(stdout, '');
+    assert.match(stderr, /^client-starter: startup failed: extension host closed with an unfinished frame \([1-9][0-9]* bytes buffered\)\n$/);
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -187,6 +229,7 @@ try {
   }
   await runPackedStarter(starter, starterClient, 'x86_64', 'SIGTERM', true);
   await runPackedProtocolRefusal(starter, starterClient);
+  await runPackedTruncatedGreeting(starter, starterClient);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
