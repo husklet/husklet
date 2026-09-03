@@ -368,6 +368,7 @@ try {
   const starter = path.join(scratch, 'starter');
   fs.cpSync(path.join(installedClient, 'examples/starter'), starter, { recursive: true });
   const starterManifest = JSON.parse(fs.readFileSync(path.join(starter, 'package.json')));
+  assert.equal(starterManifest.engines.node, manifest.engines.node, 'starter Node requirement drifted from the installed client');
   assert.equal(starterManifest.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterManifest.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/client/protocol\')])"');
   execFileSync('npm', ['install', '--ignore-scripts', '--no-save', '--offline', '--no-audit', '--no-fund', path.join(scratch, packed.filename)], {

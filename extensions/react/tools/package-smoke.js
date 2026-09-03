@@ -237,6 +237,7 @@ try {
   execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
+  assert.equal(starterPackage.engines.node, manifest.engines.node, 'starter Node requirement drifted from the installed React SDK');
   assert.equal(starterPackage.scripts.start, 'node main.js');
   assert.equal(starterPackage.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/react\'), import(\'react\')])"');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
