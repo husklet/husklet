@@ -94,6 +94,7 @@ impl Console {
             Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
             Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
+            Request::Retitle { slot, title } => Self::retitle(window, slot, title).map(|()| Answer::Done),
             Request::Ratio { slot, ratio } => Self::ratio(window, slot, *ratio).map(|()| Answer::Done),
             Request::Surface { origin, slot, division } => {
                 Self::surface(window, origin.as_deref(), slot, *division).map(Answer::Slot)
@@ -133,7 +134,7 @@ impl Console {
         Ok(TerminalTopology { active_tab, tabs })
     }
 
-    fn pane_inventory(window: &Rc<TermWin>) -> Result<PaneInventory, HostError> {
+    pub(super) fn pane_inventory(window: &Rc<TermWin>) -> Result<PaneInventory, HostError> {
         let topology = Self::topology(window)?;
         let mut panes = Vec::new();
         for tab in topology.tabs {
@@ -327,6 +328,14 @@ impl Console {
         }
         // A pane that exists but refused focus is not a pane an extension can
         // be told anything useful about, so it is reported the same way.
+        Err(absent(slot))
+    }
+
+    fn retitle(window: &Rc<TermWin>, slot: &str, title: &str) -> Result<(), HostError> {
+        let pane = Panes::at(window, slot).ok_or_else(|| absent(slot))?;
+        if Window::retitle_pane(window, &pane.widget, title) {
+            return Ok(());
+        }
         Err(absent(slot))
     }
 

@@ -252,26 +252,13 @@ impl<'a> WindowSession<'a> {
 impl TabEntry {
     /// Read the tab button's title label text for restoring the tab title.
     pub(crate) fn title(&self) -> String {
-        // button = [inner Box [ (icon?) label ], (x button)]; find the first Label in the tree.
-        Self::find_label(self.button.upcast_ref()).unwrap_or_else(|| "shell".to_string())
+        self.title.text().to_string()
     }
 
-    pub(crate) fn find_label(w: &gtk::Widget) -> Option<String> {
-        if let Some(l) = w.downcast_ref::<gtk::Label>() {
-            let t = l.text().to_string();
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
-        let mut c = w.first_child();
-        while let Some(ch) = c {
-            if let Some(s) = Self::find_label(&ch) {
-                return Some(s);
-            }
-            c = ch.next_sibling();
-        }
-        None
+    pub(crate) fn retitle(&mut self, title: &str) {
+        self.title.set_text(title);
     }
+
 }
 
 /// Walk a page's widget subtree into a [`PaneNode`], dumping each terminal's history to a file and

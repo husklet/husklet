@@ -58,6 +58,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         stale_provider_generations_cannot_authorize_replacements();
         failed_enable_has_no_socket_or_provider_until_durable_retry();
         panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::retitling_a_live_pane_preserves_its_slot_process_and_layout();
         panes::native_workspace_semantics_cross_the_terminal_request_bridge();
         panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
         panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
@@ -2674,6 +2675,39 @@ mod panes {
             Panes::read(&bench.window, "no-such-pane", 100),
             Reading::Absent,
             "a slot naming no pane is refused rather than answered with nothing"
+        );
+    }
+
+    pub(super) fn retitling_a_live_pane_preserves_its_slot_process_and_layout() {
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        let before = Console::topology(&bench.window).expect("topology before retitle");
+        let (relay, errands) = hl::extension::Relay::open();
+        let console = Console::new(&bench.window, errands);
+        let (sent, received) = std::sync::mpsc::channel();
+        let request = std::sync::Arc::new(relay);
+        let control = std::sync::Arc::clone(&request);
+        let addressed = slot.clone();
+        std::thread::spawn(move || sent.send(control.retitle(&addressed, "Build 🧪")).unwrap());
+        loop {
+            console.drain();
+            if let Ok(answer) = received.try_recv() {
+                answer.expect("retitle crossed the window relay");
+                break;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+        }
+        let inventory = Console::pane_inventory(&bench.window).expect("inventory after retitle");
+        let renamed = inventory.panes.iter().find(|pane| pane.slot == slot).expect("same pane remains");
+        assert_eq!(renamed.title.as_deref(), Some("Build 🧪"));
+        let after = Console::topology(&bench.window).expect("topology after retitle");
+        assert_eq!(before.active_tab, after.active_tab);
+        assert_eq!(before.tabs[0].root, after.tabs[0].root, "retitle does not rebuild or move the layout");
+        assert_eq!(after.tabs[0].title, "Build 🧪");
+        assert_eq!(
+            Panes::at(&bench.window, &slot).map(|pane| pane.content),
+            Some(terminal.upcast::<gtk::Widget>()),
+            "the same live terminal process widget remains under the slot"
         );
     }
 

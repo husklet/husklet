@@ -71,6 +71,7 @@ impl SurfaceRegistration {
 pub(crate) struct TabEntry {
     name: String,
     button: gtk::Box,
+    title: gtk::Label,
     persisted: bool,
 }
 
@@ -332,6 +333,14 @@ impl Window {
             .iter()
             .find(|entry| entry.name == name)
             .map(TabEntry::title)
+    }
+
+    pub(crate) fn retitle_pane(window: &Rc<TermWin>, pane: &gtk::Widget, title: &str) -> bool {
+        let Some(page) = Page::of(window, pane) else { return false };
+        let mut entries = window.entries.borrow_mut();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else { return false };
+        entry.retitle(title);
+        true
     }
 
     pub(crate) fn active_tab(window: &Rc<TermWin>) -> Option<String> {

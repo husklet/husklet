@@ -45,6 +45,9 @@ const fileContents = z.string().max(64 * 1024).refine(
   'file contents exceed 65536 UTF-8 bytes',
 );
 const containerName = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
+const paneTitle = z.string().refine((title) => title.trim().length > 0
+  && Buffer.byteLength(title, 'utf8') <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(title),
+'pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
 const hostname = z.string().min(1).max(253).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/);
 const resourceName = z.string().min(1).max(255).regex(
   /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
@@ -287,6 +290,7 @@ export function tools(api) {
     define('husklet_terminal_split', 'Split a pane beside or below the selected pane.', z.object({ slot: id, division: z.enum(['beside', 'below']) }).strict(), ({ slot: value, division }) => api.terminal.split(value, division)),
     define('husklet_terminal_spawn', "Run a bounded exact argv vector through the pane's existing shell; generated quoting prevents arguments from becoming shell syntax.", z.object({ slot: id, command }).strict(), async ({ slot: value, command: argv }) => { await api.terminal.spawn(value, argv); return { done: true }; }),
     define('husklet_terminal_focus', 'Focus one pane.', slot, async ({ slot: value }) => { await api.terminal.focus(value); return { done: true }; }),
+    define('husklet_terminal_retitle', 'Retitle the tab containing one live pane without replacing its process or layout.', z.object({ slot: id, title: paneTitle }).strict(), async ({ slot: value, title }) => { await api.terminal.retitle(value, title); return { done: true }; }),
     define('husklet_terminal_resize', 'Request a bounded terminal grid size.', z.object({ slot: id, columns: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }).strict(), async ({ slot: value, columns, rows }) => { await api.terminal.resizeGrid(value, columns, rows); return { done: true }; }),
     define('husklet_terminal_ratio', 'Set the pane share of its split.', z.object({ slot: id, ratio: z.number().min(0.05).max(0.95) }).strict(), async ({ slot: value, ratio }) => { await api.terminal.ratio(value, ratio); return { done: true }; }),
     define('husklet_terminal_close', 'Close one pane after explicit confirmation.', z.object({ slot: id, confirm: z.literal(true) }).strict(), async ({ slot: value }) => { await api.terminal.close(value); return { done: true }; }),

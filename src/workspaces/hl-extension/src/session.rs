@@ -204,6 +204,7 @@ impl Session {
             | Request::TerminalResizeGrid { .. }
             | Request::TerminalClosePane { .. }
             | Request::TerminalFocusPane { .. }
+            | Request::TerminalRetitlePane { .. }
             | Request::TerminalRatio { .. } => self.terminal(request, services),
             Request::PaneList => {
                 let port = self.peer.authority().port(Capability::PaneObserve, services.terminal)?;
@@ -580,6 +581,10 @@ impl Session {
             }
             Request::TerminalClosePane { slot } => port.close(slot).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
+            Request::TerminalRetitlePane { slot, title } => {
+                validate_pane_title(title)?;
+                port.retitle(slot, title).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::TerminalRatio { slot, ratio } => {
                 port.ratio(slot, *ratio).map(|()| Reply::Done).map_err(Failure::from)
             }
@@ -806,6 +811,15 @@ fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
+    })
+}
+
+fn validate_pane_title(title: &str) -> Result<(), Failure> {
+    if !title.trim().is_empty() && title.len() <= 256 && !title.chars().any(char::is_control) {
+        return Ok(());
+    }
+    Err(Failure::Conflict {
+        detail: "pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters".into(),
     })
 }
 

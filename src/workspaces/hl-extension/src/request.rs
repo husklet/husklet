@@ -251,6 +251,10 @@ pub enum Request {
     TerminalFocusPane {
         slot: String,
     },
+    TerminalRetitlePane {
+        slot: String,
+        title: String,
+    },
     TerminalRatio {
         slot: String,
         ratio: f64,
@@ -377,6 +381,7 @@ impl Request {
             | Self::TerminalResizeGrid { .. }
             | Self::TerminalClosePane { .. }
             | Self::TerminalFocusPane { .. }
+            | Self::TerminalRetitlePane { .. }
             | Self::TerminalRatio { .. } => Capability::TerminalControl,
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
@@ -667,6 +672,7 @@ mod tests {
         for request in [
             Request::TerminalClosePane { slot: "1".into() },
             Request::TerminalFocusPane { slot: "1".into() },
+            Request::TerminalRetitlePane { slot: "1".into(), title: "Build logs".into() },
             Request::TerminalRatio {
                 slot: "1".into(),
                 ratio: 0.5,

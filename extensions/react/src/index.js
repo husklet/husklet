@@ -44,6 +44,12 @@ function endpointAliases(options) {
   return aliases;
 }
 
+function exactPaneTitle(title) {
+  if (typeof title === 'string' && title.trim().length > 0
+    && new TextEncoder().encode(title).byteLength <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(title)) return title;
+  throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
+}
+
 function exactCommand(command) {
   if (!Array.isArray(command) || command.length < 1 || command.length > 64
     || command[0] === '' || command.some((argument) => typeof argument !== 'string'
@@ -279,6 +285,7 @@ export function workspace(session) {
       },
       close: (slot) => done('terminal_close_pane', { slot }),
       focus: (slot) => done('terminal_focus_pane', { slot }),
+      retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
     },
     files: {
@@ -509,7 +516,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'pull', 'startPull', 'pullStatus', 'cancelPull'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'ratio'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'retitle', 'ratio'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

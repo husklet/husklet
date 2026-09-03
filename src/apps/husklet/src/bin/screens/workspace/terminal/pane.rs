@@ -583,6 +583,7 @@ impl<'a> Tabs<'a> {
         tw.entries.borrow_mut().push(TabEntry {
             name: name.clone(),
             button: bx,
+            title: lbl,
             persisted,
         });
         Page::new(tw, &name).select();
@@ -659,6 +660,10 @@ impl<'a> Page<'a> {
             window,
             name: name.to_owned(),
         }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 
     pub(crate) fn select(&self) {

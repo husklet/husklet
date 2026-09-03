@@ -102,6 +102,11 @@ pub enum Request {
         /// The pane being focused.
         slot: String,
     },
+    /// The tab containing this live pane receives a new visible title.
+    Retitle {
+        slot: String,
+        title: String,
+    },
     /// How much of its split the named pane takes.
     Ratio {
         /// The pane being resized.
@@ -355,6 +360,13 @@ impl TerminalSurface for Relay {
         self.done(Request::Focus { slot: slot.to_owned() })
     }
 
+    fn retitle(&self, slot: &str, title: &str) -> Result<(), HostError> {
+        self.done(Request::Retitle {
+            slot: slot.to_owned(),
+            title: title.to_owned(),
+        })
+    }
+
     /// # Errors
     /// Returns a host failure when no window is drawing this workspace.
     fn ratio(&self, slot: &str, ratio: f64) -> Result<(), HostError> {
@@ -442,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_input_and_grid_cross_the_thread_boundary_unchanged() {
+    fn raw_input_grid_and_unicode_title_cross_the_thread_boundary_unchanged() {
         let (relay, errands) = Relay::open();
         let window = std::thread::spawn(move || {
             let input = errands.recv().expect("input errand");
@@ -463,12 +475,19 @@ mod tests {
                 }
             );
             grid.answer(Ok(Answer::Done));
+            let retitle = errands.recv().expect("retitle errand");
+            assert_eq!(
+                retitle.request(),
+                &Request::Retitle { slot: "shell-1".into(), title: " Build 🧪 ".into() }
+            );
+            retitle.answer(Ok(Answer::Done));
         });
 
         relay.write("shell-1", b"printf x").expect("input");
         relay
             .resize_grid("shell-1", GridSize { columns: 120, rows: 40 })
             .expect("grid");
+        relay.retitle("shell-1", " Build 🧪 ").expect("retitle");
         window.join().expect("window thread");
     }
 

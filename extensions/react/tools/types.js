@@ -380,6 +380,7 @@ export interface WorkspaceApi {
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     focus(slot: string): Promise<void>;
+    retitle(slot: string, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;
   };
   files: {

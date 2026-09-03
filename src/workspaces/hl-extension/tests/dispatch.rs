@@ -455,6 +455,11 @@ impl TerminalSurface for Host {
         Ok(())
     }
 
+    fn retitle(&self, _slot: &str, _title: &str) -> Result<(), HostError> {
+        self.ledger.note("terminal.retitle");
+        Ok(())
+    }
+
     fn close(&self, _slot: &str) -> Result<(), HostError> {
         self.ledger.note("terminal.close");
         Ok(())
@@ -1044,6 +1049,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
+            Request::TerminalRetitlePane { slot: "s1".into(), title: "Build 🧪".into() },
+            Capability::TerminalControl,
+        ),
+        (
             Request::FilesystemList { path: path("logs") },
             Capability::FilesystemRead,
         ),
@@ -1230,6 +1239,27 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
         Err(Failure::Conflict { .. })
     ));
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalControl], &[]);
+    for title in [String::new(), "   ".into(), "line\nbreak".into(), "nul\0byte".into(), "🧪".repeat(65)] {
+        assert!(matches!(
+            session.dispatch(&Request::TerminalRetitlePane { slot: "s1".into(), title }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+    assert_eq!(
+        session.dispatch(
+            &Request::TerminalRetitlePane { slot: "s1".into(), title: " Build 🧪 ".into() },
+            &services(&host),
+        ),
+        Ok(Reply::Done)
+    );
+    assert_eq!(host.ledger.reached(), ["terminal.retitle"]);
 }
 
 #[test]

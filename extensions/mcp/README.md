@@ -118,6 +118,12 @@ Pane inventory entries and the outer `husklet_pane_read` XML element carry that
 authoritative generation/revision cursor. The packaged day-one workflow reads
 the cursor before arming its wait and passes both values back explicitly.
 
+`husklet_terminal_retitle` changes the visible tab title through any live pane
+slot in that tab. Titles retain Unicode, must be nonblank, contain no control
+characters, and are limited to 256 UTF-8 bytes. Retitling does not close,
+replace, refocus, or rearrange the pane; a following pane inventory/read exposes
+the new title and a newer generation/revision cursor for verification.
+
 `husklet_container_change_wait` accepts the exact `state` and `created` values
 last observed for its immutable container ID. Supplying that cursor prevents the
 subscription's unchanged initial catalogue from completing the wait; a state

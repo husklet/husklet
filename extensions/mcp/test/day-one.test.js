@@ -28,6 +28,9 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const credits = [];
   const sockets = new Set();
   let eventChannel = 40;
+  let paneTitle = 'Shell';
+  let paneGeneration = 1;
+  let paneRevision = 0;
   let executionSubscriptions = 0;
   const host = net.createServer((socket) => {
     sockets.add(socket); socket.once('close', () => sockets.delete(socket));
@@ -62,9 +65,15 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
         else if (call === 'container_create') answer(frame, 'identity', containerId);
         else if (call === 'container_start' || call === 'container_rename' || call === 'container_stop' || call === 'container_remove'
+          || call === 'terminal_retitle_pane'
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
           answer(frame, 'done');
+          if (call === 'terminal_retitle_pane') {
+            paneTitle = argument.title;
+            paneGeneration += 1;
+            paneRevision += 1;
+          }
           if (call === 'event_subscribe' && argument.topic === 'image-pulls') setImmediate(() => socket.write(encode({
             channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'image_pulls', of: {
               job: '7', revision: 2, state: 'complete', coalesced: 0,
@@ -100,13 +109,17 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
             changed('terminal-1', 'terminal', 1, 0);
             changed('surface-1', 'surface', 7, 7);
           });
-          if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
+          if (call === 'terminal_write_pane') {
+            paneGeneration += 1;
+            paneRevision += 1;
+            changed('terminal-1', 'terminal', paneGeneration, paneRevision);
+          }
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8, 0);
         } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
         else if (call === 'execution_inspect') answer(frame, 'execution', { id: argument.id, container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' });
         else if (call === 'container_processes') answer(frame, 'processes', [{ pid: 7, command: 'worker', user: 'app' }]);
         else if (call === 'pane_list') answer(frame, 'panes', { panes: [
-          { slot: 'terminal-1', generation: 1, revision: 0, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
+          { slot: 'terminal-1', generation: paneGeneration, revision: paneRevision, kind: 'terminal', provider: null, tab: 'tab-1', title: paneTitle, focused: true },
           { slot: 'surface-1', generation: 7, revision: 7, kind: 'surface', provider: { extension: 'manager', provider: 'main' }, tab: 'tab-1', title: 'Manager', focused: false },
         ], truncated: false });
         else if (call === 'terminal_topology') answer(frame, 'topology', { active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Day one', root: {
@@ -142,6 +155,19 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   await client.callTool({ name: 'husklet_container_rename', arguments: {
     id: containerId, name: 'day-one-renamed',
   } });
+  const originalInventory = await client.callTool({ name: 'husklet_pane_list', arguments: {} });
+  const originalPane = JSON.parse(originalInventory.content[0].text).panes.find(({ slot }) => slot === 'terminal-1');
+  await client.callTool({ name: 'husklet_terminal_retitle', arguments: {
+    slot: 'terminal-1', title: 'Build 🧪',
+  } });
+  const renamedInventory = await client.callTool({ name: 'husklet_pane_list', arguments: {} });
+  const renamedPane = JSON.parse(renamedInventory.content[0].text).panes.find(({ slot }) => slot === 'terminal-1');
+  assert.deepEqual(
+    { title: renamedPane.title, generation: renamedPane.generation, revision: renamedPane.revision },
+    { title: 'Build 🧪', generation: 2, revision: 1 },
+  );
+  assert(originalPane.generation < renamedPane.generation || originalPane.revision < renamedPane.revision,
+    'retitle advances the observable pane cursor');
   const extensionChanged = await waitForInstalledExtensionChange(client, 'manager', 1_000);
   assert.equal(extensionChanged.extension.status, 'duty');
   const removedExecution = { id: 'execution-remove', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['/bin/remove'], user: 'app' };
@@ -170,7 +196,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(result.container.execution.id, 'execution-day-one');
   assert.equal(result.container.executionChanged.execution.running, false);
   assert.equal(result.terminal.changed.changed, true);
-  assert.equal(result.terminal.changed.change.generation, 2);
+  assert.equal(result.terminal.changed.change.generation, 3);
   assert.equal(result.terminal.changed.change.revision, 2);
   assert.equal(result.semantic.node, 5);
   assert.equal(result.semantic.changed.change.generation, 8);
@@ -179,7 +205,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'container_rename', 'extension_list', 'event_subscribe', 'event_unsubscribe',
+    'workspace_info', 'container_rename', 'pane_list', 'terminal_retitle_pane', 'pane_list', 'extension_list', 'event_subscribe', 'event_unsubscribe',
     'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',

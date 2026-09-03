@@ -933,6 +933,12 @@ pub trait TerminalSurface {
     /// Returns `HostError::Absent` when no pane is open under the slot.
     fn focus(&self, slot: &str) -> Result<(), HostError>;
 
+    /// Changes the title of the tab containing one live pane without replacing
+    /// that pane, its process, or its position in the layout.
+    fn retitle(&self, _slot: &str, _title: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal pane retitle is unavailable".into()))
+    }
+
     /// Sets how much of its split one pane takes, as a fraction in `0.05..=0.95`.
     ///
     /// # Errors

@@ -532,7 +532,7 @@ test('pane change observation subscribes over the live transport, filters metada
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
-test('terminal topology, bounded input and grid resize use exact typed calls', async () => {
+test('terminal topology, bounded input, grid resize and retitle use exact typed calls', async () => {
   const stage = await pair();
   const next = frames(stage.host);
   await next();
@@ -541,6 +541,7 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   const spawning = terminal.spawn('s1', ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
+  const retitling = terminal.retitle('s1', ' Build 🧪 ');
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
@@ -551,18 +552,25 @@ test('terminal topology, bounded input and grid resize use exact typed calls', a
   assert.deepEqual((await next()).payload, {
     call: 'terminal_resize_grid', with: { slot: 's1', columns: 120, rows: 40 },
   });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_retitle_pane', with: { slot: 's1', title: ' Build 🧪 ' },
+  });
   const tree = { active_tab: 't1', tabs: [] };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
-  await Promise.all([spawning, writing, resizing]);
+  await Promise.all([spawning, writing, resizing, retitling]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
   assert.throws(() => terminal.writeInput('s1', new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
+  for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
+    assert.throws(() => terminal.retitle('s1', title), /pane title must/);
+  }
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

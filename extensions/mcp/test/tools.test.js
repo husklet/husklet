@@ -15,7 +15,7 @@ function fake() {
     images: { list: record('images.list'), inspect: record('images.inspect'), pull: record('images.pull'), startPull: record('images.startPull', { job: '7' }), pullStatus: record('images.pullStatus', { job: '7', revision: 1, state: 'starting' }), cancelPull: record('images.cancelPull'), remove: record('images.remove'), prune: record('images.prune') },
     volumes: { list: record('volumes.list'), inspect: record('volumes.inspect'), create: record('volumes.create'), remove: record('volumes.remove') },
     networks: { list: record('networks.list'), inspect: record('networks.inspect'), create: record('networks.create'), remove: record('networks.remove'), connect: record('networks.connect'), disconnect: record('networks.disconnect') },
-    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
+    terminal: { tabs: record('terminal.tabs'), topology: record('terminal.topology'), read: record('terminal.read'), writeInput: record('terminal.writeInput'), openTab: record('terminal.openTab'), split: record('terminal.split'), spawn: record('terminal.spawn'), focus: record('terminal.focus'), retitle: record('terminal.retitle'), resizeGrid: record('terminal.resizeGrid'), ratio: record('terminal.ratio'), close: record('terminal.close') },
     files: { list: record('files.list'), stat: record('files.stat'), read: record('files.read'), write: record('files.write'), mkdir: record('files.mkdir'), rename: record('files.rename'), remove: record('files.remove') },
     watchExtensions: async () => async () => {}, watchExtensionAcquisitions: async () => async () => {}, watchImagePulls: async () => async () => {},
   }};
@@ -428,22 +428,28 @@ test('terminal layout tools use the host wire vocabulary and bounded destructive
   const split = listed.find(({ name }) => name === 'husklet_terminal_split');
   const resize = listed.find(({ name }) => name === 'husklet_terminal_resize');
   const ratio = listed.find(({ name }) => name === 'husklet_terminal_ratio');
+  const retitle = listed.find(({ name }) => name === 'husklet_terminal_retitle');
   const close = listed.find(({ name }) => name === 'husklet_terminal_close');
   assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'horizontal' }).success, false);
   assert.equal(split.inputSchema.safeParse({ slot: 'pane-1', division: 'beside' }).success, true);
   assert.equal(resize.inputSchema.safeParse({ slot: 'pane-1', columns: 0, rows: 24 }).success, false);
   assert.equal(ratio.inputSchema.safeParse({ slot: 'pane-1', ratio: 0.99 }).success, false);
   assert.equal(close.inputSchema.safeParse({ slot: 'pane-1' }).success, false);
+  for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
+    assert.equal(retitle.inputSchema.safeParse({ slot: 'pane-1', title }).success, false);
+  }
   await open.run({});
   await split.run({ slot: 'pane-1', division: 'below' });
   await resize.run({ slot: 'pane-1', columns: 120, rows: 40 });
   await ratio.run({ slot: 'pane-1', ratio: 0.6 });
+  await retitle.run({ slot: 'pane-1', title: ' Build 🧪 ' });
   await close.run({ slot: 'pane-1', confirm: true });
   assert.deepEqual(calls, [
     ['terminal.openTab', 'Terminal'],
     ['terminal.split', 'pane-1', 'below'],
     ['terminal.resizeGrid', 'pane-1', 120, 40],
     ['terminal.ratio', 'pane-1', 0.6],
+    ['terminal.retitle', 'pane-1', ' Build 🧪 '],
     ['terminal.close', 'pane-1'],
   ]);
 });
