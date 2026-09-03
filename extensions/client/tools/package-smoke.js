@@ -381,6 +381,8 @@ try {
   assert.equal(missingSocket.stderr, 'client-starter: startup failed: HUSKLET_EXTENSION_SOCKET is not set; an extension runs inside a workspace\n');
   const dockerfile = fs.readFileSync(path.join(starter, 'Dockerfile'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
+  assert.match(dockerfile, /^FROM \$\{NODE_IMAGE\}$/m);
+  assert(!dockerfile.includes('--platform='), 'framework-neutral starter must inherit the selected image architecture');
   assert.match(dockerfile, /COPY --chown=node:node package\.json/);
   assert.match(dockerfile, /COPY --chown=node:node node_modules\/@husklet\/client \.\/node_modules\/@husklet\/client/);
   assert.match(dockerfile, /require\('@husklet\/client\/package\.json'\)\.version/);
