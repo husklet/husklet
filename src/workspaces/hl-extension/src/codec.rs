@@ -215,6 +215,13 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
                 "modifiers": modifiers,
             }),
         ),
+        Event::Drag { node, id } => ("drag", node, id, serde_json::Value::Null),
+        Event::Drop { node, id, source, x, y } => (
+            "drop",
+            node,
+            id,
+            serde_json::json!({ "source": source, "x": x, "y": y }),
+        ),
         _ => return None,
     };
     let mut trigger = name.to_owned();
@@ -398,6 +405,18 @@ mod tests {
                 },
                 "pointer",
                 serde_json::json!({ "phase": "release", "x": 4.0, "y": null, "button": 1, "modifiers": 2 }),
+            ),
+            (Event::Drag { node, id: id() }, "drag", serde_json::json!({})),
+            (
+                Event::Drop {
+                    node,
+                    id: id(),
+                    source: NodeId::new(4),
+                    x: 7.0,
+                    y: 8.0,
+                },
+                "drop",
+                serde_json::json!({ "source": 4, "x": 7.0, "y": 8.0 }),
             ),
         ];
         for (event, name, detail) in cases {
