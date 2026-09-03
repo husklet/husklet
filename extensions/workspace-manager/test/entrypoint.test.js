@@ -71,6 +71,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }] }
             : name === 'volume_inspect'
               ? { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }
+              : name === 'network_create'
+                ? { reply: 'identity', with: networkId }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }] }
               : name === 'network_inspect'
@@ -197,6 +199,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 19, kind: KIND.event, payload: invocation(requests, 'Networks') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Complete container ID')));
+    peer.write(encode({ channel: 36, kind: KIND.event, payload: changeInvocation(requests, 'Network name', 'socket-net') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'socket-net')));
+    peer.write(encode({ channel: 37, kind: KIND.event, payload: invocation(requests, 'Create') }));
+    await until(() => calls.includes('network_create') && requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Created network socket-net.')));
+    assert.deepEqual(requests.find((request) => request.call === 'network_create').with, { name: 'socket-net' });
     peer.write(encode({ channel: 38, kind: KIND.event, payload: changeInvocation(requests, 'Complete container ID', containerId) }));
     peer.write(encode({ channel: 39, kind: KIND.event, payload: changeInvocation(requests, 'Endpoint aliases (comma-separated, optional)', 'database.internal, database_2') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'

@@ -582,6 +582,7 @@ export function Networks({ api, resource, networkDetails }) {
   const [aliases, setAliases] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const [error, setError] = useState(null);
+  const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
   const [operation, setOperation] = useState({ state: 'idle', request: null, error: null });
   const [disconnectRequest, setDisconnectRequest] = useState(null);
   const endpointInput = useRef({ container: '', aliases: '' });
@@ -589,7 +590,19 @@ export function Networks({ api, resource, networkDetails }) {
   const currentNetworks = useRef(new Set());
   currentNetworks.current = new Set((resource.data ?? []).map(resourceReference));
   const current = (id) => { if (currentNetworks.current.has(id)) return true; setError(new Error(`Network ${id} changed or disappeared; inspect and confirm again.`)); return false; };
-  const create = async () => { await api.networks.create(name.trim()); setName(''); await resource.reload(); };
+  const create = async () => {
+    const requested = name.trim();
+    if (!requested || creation.state === 'loading') return;
+    setCreation({ state: 'loading', name: requested, error: null });
+    try {
+      await api.networks.create(requested);
+      await resource.reload();
+      setName('');
+      setCreation({ state: 'success', name: requested, error: null });
+    } catch (cause) {
+      setCreation({ state: 'error', name: requested, error: cause });
+    }
+  };
   const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null }); await resource.reload(); };
   const inspect = async (network) => {
     const id = resourceReference(network);
@@ -633,7 +646,10 @@ export function Networks({ api, resource, networkDetails }) {
   };
   const view = bounded(resource.data);
   return h(Page, { title: 'Networks', subtitle: 'Bounded network inventory; attachment changes are accepted only for stopped containers.' },
-    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', onChange: (event) => setName(String(event.value ?? '')) }), h(Button, { label: 'Create', enabled: name.trim().length > 0, onInvoke: create }), h(Button, { label: 'Refresh', onInvoke: resource.reload })),
+    h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Network name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
+    creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating network ${creation.name}…` })) : null,
+    creation.state === 'error' ? h(Text, { label: boundedMessage(creation.error), color: 'danger', wrap: true }) : null,
+    creation.state === 'success' ? h(Text, { label: `Created network ${creation.name}.`, color: 'positive', wrap: true }) : null,
     h(Entry, { value: container, placeholder: 'Complete container ID', enabled: operation.state !== 'loading', onChange: (event) => { setContainer(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); setDisconnectRequest(null); } }),
     h(Entry, { value: aliases, placeholder: 'Endpoint aliases (comma-separated, optional)', enabled: operation.state !== 'loading', onChange: (event) => { setAliases(String(event.value ?? '')); setOperation({ state: 'idle', request: null, error: null }); } }),
     operation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `${title(operation.request.verb)}ing immutable endpoint…` })) : null,

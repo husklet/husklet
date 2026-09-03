@@ -693,6 +693,39 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   assert.equal(calls.filter((call) => call[0] === 'a'.repeat(32)).length, 3);
 });
 
+test('network creation exposes pending failure and retained retry before claiming success', async () => {
+  const calls = [];
+  let rejectFirst;
+  let attempt = 0;
+  const controlled = { networks: {
+    ...api.networks,
+    create: async (name) => {
+      calls.push(['create', name]); attempt += 1;
+      if (attempt === 1) await new Promise((_, reject) => { rejectFirst = reject; });
+      return 'a'.repeat(32);
+    },
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Networks, { api: controlled, resource }));
+  change(stage, 'Network name', ' private-net ');
+  invoke(stage, 'Create'); await settled();
+  assert.ok(labelled(stage, 'Creating network private-net…'));
+  assert.equal(isEnabled(stage, 'Creating…'), false);
+  assert.deepEqual(calls, [['create', 'private-net']]);
+
+  rejectFirst(new Error(`registry unavailable ${'x'.repeat(600)}`));
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Retry create'));
+  const failures = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text?.startsWith('registry unavailable'));
+  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+
+  invoke(stage, 'Retry create'); await settled(); await settled();
+  assert.deepEqual(calls, [['create', 'private-net'], ['create', 'private-net'], ['reload']]);
+  assert.ok(labelled(stage, 'Created network private-net.'));
+});
+
 test('disconnect consent snapshots immutable identities and can be cancelled without authority', async () => {
   const calls = [];
   const network = 'a'.repeat(32);
