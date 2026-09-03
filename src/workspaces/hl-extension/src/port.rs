@@ -75,6 +75,8 @@ pub struct ProcessList {
 pub enum ProcessScope {
     #[default]
     Initial,
+    /// Every process visible in the container's PID namespace at observation time.
+    Namespace,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -1133,6 +1135,13 @@ mod tests {
         assert_eq!(processes.pid_identity, super::ProcessPidIdentity::Snapshot);
         assert_eq!(processes.observed_at_ms, 0);
         assert!(!processes.truncated);
+    }
+
+    #[test]
+    fn namespace_process_scope_has_a_stable_wire_value() {
+        let value = serde_json::to_value(super::ProcessScope::Namespace).expect("scope");
+        assert_eq!(value, serde_json::json!("namespace"));
+        assert_eq!(serde_json::from_value::<super::ProcessScope>(value).expect("scope"), super::ProcessScope::Namespace);
     }
 
     #[test]

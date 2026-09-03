@@ -362,6 +362,7 @@ export function Processes({ api, resource }) {
   useEffect(() => { void load(); }, [load]);
   const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
   const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
+  const completeNamespace = snapshots.length > 0 && snapshots.every(({ rows }) => rows.scope === 'namespace');
   const view = bounded(processes);
   const failure = error ?? resource.error;
   const state = loading || resource.loading ? 'loading' : failure ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
@@ -375,7 +376,9 @@ export function Processes({ api, resource }) {
       error: failure?.message ?? String(failure ?? ''),
       retryLabel: 'Retry processes',
       onRetry: resource.error ? resource.reload : load,
-    }, h(Text, { label: 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
+    }, h(Text, { label: completeNamespace
+      ? 'Full container namespace snapshots; PIDs identify only this observation and may be reused.'
+      : 'Initial processes only; PIDs identify this snapshot and may be reused.', color: 'text-dim', wrap: true }),
     observed > 0 ? h(Text, { label: `Observed ${new Date(observed).toISOString()}`, color: 'text-dim' }) : null,
     ...view.records.map((process, index) => {
       const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';

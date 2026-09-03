@@ -34,7 +34,7 @@ test('process snapshots remove stale PID and scope claims across framed refresh 
             titles: ['PID', 'COMMAND'],
             processes: attempts === 3 ? [] : [[attempts === 1 ? '41' : '84', attempts === 1 ? 'stale-process' : 'current-process']],
             observed_at_ms: attempts === 1 ? 1_700_000_000_000 : 1_700_000_001_000,
-            scope: 'initial', pid_identity: 'snapshot', truncated: attempts === 1,
+            scope: attempts === 4 ? 'namespace' : 'initial', pid_identity: 'snapshot', truncated: attempts === 1,
           } };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
@@ -75,6 +75,7 @@ test('process snapshots remove stale PID and scope claims across framed refresh 
     invoke(stage, 'Refresh');
     await until(() => labelled(stage, 'current-process'));
     assert.ok(labelled(stage, 'PID 84'));
+    assert.ok(labelled(stage, 'Full container namespace snapshots; PIDs identify only this observation and may be reused.'));
     assert.equal(attempts, 4);
   } finally {
     stage?.render(null);

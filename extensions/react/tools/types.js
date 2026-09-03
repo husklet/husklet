@@ -316,7 +316,7 @@ export interface ContainerCreateSpec {
 }
 export interface ProcessList {
   container_id: string; titles: string[]; processes: string[][]; observed_at_ms: number;
-  scope: 'initial'; pid_identity: 'snapshot'; truncated: boolean;
+  scope: 'initial' | 'namespace'; pid_identity: 'snapshot'; truncated: boolean;
 }
 export interface ContainerOutput {
   stdout: number[]; stderr: number[]; truncated: boolean;
