@@ -224,11 +224,11 @@ export function workspace(session) {
     },
     images: {
       list: async () => expect(await session.call('image_list'), 'images'),
+      inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
       startPull: async (reference) => expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
       pullStatus: async (job) => expect(await session.call('image_pull_status', { job }), 'image_pull'),
       cancelPull: (job) => done('image_pull_cancel', { job }),
-      inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
       remove: (reference) => done('image_remove', { reference: immutableDigest(reference, 'image') }),
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
@@ -516,7 +516,7 @@ export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'attachTerminal'],
-    images: ['list', 'pull', 'startPull', 'pullStatus', 'cancelPull'],
+    images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'retitle', 'ratio'],
@@ -529,6 +529,7 @@ export const protocolCoverage = Object.freeze({
   unavailable: Object.freeze({
     workspace: ['renameWhileUpdating', 'mutateWhileRunning', 'controlHostingWorkspace'],
     containers: [],
+    images: [],
     terminal: ['switchOccupant'],
     events: ['drag', 'drop'],
     extensions: [],

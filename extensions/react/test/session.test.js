@@ -172,6 +172,10 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.terminal.includes('split'));
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
+  assert.deepEqual(protocolCoverage.available.images, [
+    'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune',
+  ]);
+  assert.deepEqual(protocolCoverage.unavailable.images, []);
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
   assert.ok(protocolCoverage.unavailable.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
@@ -183,6 +187,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.equal(typeof api.containers.processes, 'function');
   assert.equal(typeof api.volumes.create, 'function');
   assert.equal(typeof api.networks.connect, 'function');
+  assert.deepEqual(Object.keys(api.images), protocolCoverage.available.images,
+    'coverage must enumerate every callable typed image authority in API order');
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(api.terminal.switchOccupant, undefined);
 });

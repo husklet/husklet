@@ -149,7 +149,10 @@ through 1,000. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.
 
 `protocolCoverage` is the machine-readable inventory of what this protocol
-version really supports. Workspace creation, configuration and lifecycle are
+version really supports. Its image inventory includes the implemented bounded
+list/inspect and pull calls plus digest-bound removal and confirmed prune
+authority; callers do not need to infer those operations from TypeScript alone.
+Workspace creation, configuration and lifecycle are
 available under the explicit `workspace-control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. The `unavailable` section names remaining
