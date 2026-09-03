@@ -353,12 +353,15 @@ impl Session {
                 command,
                 user,
                 working_directory,
-            } => Ok(Reply::Identity(port.execute(
-                id,
-                command,
-                user.as_deref(),
-                working_directory.as_deref(),
-            )?)),
+            } => {
+                immutable_identity(id, &[32, 64], "container")?;
+                Ok(Reply::Identity(port.execute(
+                    id,
+                    command,
+                    user.as_deref(),
+                    working_directory.as_deref(),
+                )?))
+            }
             _ => Err(Failure::Unsupported {
                 call: "container control".into(),
             }),
@@ -830,7 +833,7 @@ fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Fail
         return Ok(());
     }
     Err(Failure::Conflict {
-        detail: format!("{noun} signaling requires the complete immutable ID returned by inspection"),
+        detail: format!("{noun} operation requires the complete immutable ID returned by inspection"),
     })
 }
 
@@ -1022,4 +1025,18 @@ fn acquisition_job(job: &str) -> Result<(), Failure> {
     Err(Failure::Conflict {
         detail: "extension acquisition job must contain 1..=128 bytes".into(),
     })
+}
+
+#[cfg(test)]
+mod immutable_identity_tests {
+    use super::immutable_identity;
+
+    #[test]
+    fn container_execution_refuses_names_prefixes_and_malformed_ids() {
+        for value in ["worker", "abcdef123456", &"A".repeat(32), &"g".repeat(64)] {
+            assert!(immutable_identity(value, &[32, 64], "container").is_err(), "accepted {value}");
+        }
+        assert!(immutable_identity(&"a".repeat(32), &[32, 64], "container").is_ok());
+        assert!(immutable_identity(&"b".repeat(64), &[32, 64], "container").is_ok());
+    }
 }

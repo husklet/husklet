@@ -216,7 +216,8 @@ export function workspace(session) {
       kill: (id, signal) => done('container_kill', { id: immutableIdentity(id, [32, 64], 'container'), signal }),
       exec: async (id, { command, user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
-          id, command, user: user ?? null, working_directory: workingDirectory ?? null,
+          id: immutableIdentity(id, [32, 64], 'container'), command,
+          user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
       attachTerminal: (id, command) => session.call('container_attach_terminal', {

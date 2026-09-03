@@ -771,8 +771,8 @@ pub trait ContainerControl {
         ))
     }
 
-    /// Starts an additional process detached from the extension connection and
-    /// returns its durable exec identity.
+    /// Starts an additional process in one complete immutable container identity,
+    /// detached from the extension connection, and returns its durable exec identity.
     fn execute(
         &self,
         _id: &str,

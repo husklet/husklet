@@ -38,7 +38,8 @@ node IDs, roles, state, and actions. Semantic actions require both the observed
 generation and revision, so replacement occupants fail closed; other tools use
 JSON. Container execution state is available as a
 read-only inspection tool under the host's `ContainerRead` grant. Container exec
-accepts only a bounded argv vector under `ContainerControl`. The
+accepts only a complete immutable container ID and bounded argv vector under
+`ContainerControl`. The
 `husklet_terminal_spawn` tool replaces one discovered terminal pane's process
 under `TerminalControl` with an exact 1..=64 element argv vector (4096 bytes per
 argument, 32768 bytes total). It never parses shell command text and does not

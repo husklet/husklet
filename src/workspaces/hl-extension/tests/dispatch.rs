@@ -1971,10 +1971,22 @@ fn execution_logs_require_a_stream_before_calling_host() {
 fn container_exec_returns_the_real_execution_identity() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
+    let immutable = "c".repeat(64);
+    let refused = session.dispatch(
+        &Request::ContainerExec {
+            id: "worker".into(),
+            command: vec!["worker".into()],
+            user: None,
+            working_directory: None,
+        },
+        &services(&host),
+    );
+    assert!(matches!(refused, Err(Failure::Conflict { .. })));
+    assert!(host.ledger.reached().is_empty(), "a mutable alias reached execution authority");
     let reply = session
         .dispatch(
             &Request::ContainerExec {
-                id: "c1".into(),
+                id: immutable,
                 command: vec!["worker".into()],
                 user: Some("1000".into()),
                 working_directory: Some("/work".into()),

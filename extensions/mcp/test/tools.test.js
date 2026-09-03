@@ -308,11 +308,13 @@ test('container create and exec accept only bounded structured authority', async
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', mounts: [{ volume: 'v'.repeat(256), target: '/data' }] }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', network: '-invalid' }).success, false);
   assert.equal(create.inputSchema.safeParse({ image: 'alpine:3.20', name: 'worker', ports: [{ container: 80, host: 0, protocol: 'tcp' }] }).success, false);
-  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: 'sh -lc whoami' }).success, false);
-  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: [] }).success, false);
-  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: Array(65).fill('x') }).success, false);
-  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['printf', '😀'.repeat(1025)] }).success, false);
-  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'], working_directory: 'relative' }).success, false);
+  const containerId = 'a'.repeat(64);
+  assert.equal(exec.inputSchema.safeParse({ id: 'c1', command: ['true'] }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: containerId, command: 'sh -lc whoami' }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: containerId, command: [] }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: containerId, command: Array(65).fill('x') }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: containerId, command: ['printf', '😀'.repeat(1025)] }).success, false);
+  assert.equal(exec.inputSchema.safeParse({ id: containerId, command: ['true'], working_directory: 'relative' }).success, false);
   assert.equal(attach.inputSchema.safeParse({ id: 'c1', command: ['sh'] }).success, false);
   assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['sh', '-i'] }).success, true);
   assert.equal(attach.inputSchema.safeParse({ id: 'a'.repeat(64), command: ['printf', 'é'] }).success, true);
@@ -327,10 +329,10 @@ test('container create and exec accept only bounded structured authority', async
   api.containers.create = async (...args) => { calls.push(['containers.create', ...args]); return 'c-created'; };
   api.containers.exec = async (...args) => { calls.push(['containers.exec', ...args]); return 'e-created'; };
   assert.deepEqual(JSON.parse((await create.run(spec)).content[0].text), { id: 'c-created' });
-  assert.deepEqual(JSON.parse((await exec.run({ id: 'c1', command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' })).content[0].text), { id: 'e-created' });
+  assert.deepEqual(JSON.parse((await exec.run({ id: containerId, command: ['printf', '%s', 'hello'], user: '1000', working_directory: '/work' })).content[0].text), { id: 'e-created' });
   assert.deepEqual(calls, [
     ['containers.create', spec],
-    ['containers.exec', 'c1', { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
+    ['containers.exec', containerId, { command: ['printf', '%s', 'hello'], user: '1000', workingDirectory: '/work' }],
   ]);
 });
 
