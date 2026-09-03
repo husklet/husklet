@@ -141,11 +141,16 @@ fn identified(event: &Event) -> bool {
 }
 
 #[test]
-fn every_declared_trigger_reports_when_the_component_is_worked() {
+fn every_declared_trigger_and_sortable_header_report_on_one_toolkit_thread() {
     if gtk::init().is_err() {
         eprintln!("skipped: no display connection");
         return;
     }
+    every_declared_trigger_reports_when_the_component_is_worked();
+    sortable_header_reports_current_source_version_without_reordering_rows();
+}
+
+fn every_declared_trigger_reports_when_the_component_is_worked() {
     let silent: Vec<String> = Tag::ALL.iter().flat_map(|tag| unreported(*tag)).collect();
     assert!(
         silent.is_empty(),
@@ -154,12 +159,7 @@ fn every_declared_trigger_reports_when_the_component_is_worked() {
     );
 }
 
-#[test]
 fn sortable_header_reports_current_source_version_without_reordering_rows() {
-    if gtk::init().is_err() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let mut session = Session::new();
     let widget = session.bound(Tag::DataTable, Trigger::Sort);
     worked(&widget, Trigger::Sort);
