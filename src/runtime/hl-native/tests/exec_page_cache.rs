@@ -120,6 +120,11 @@ fn x86_decode_authority_revalidates_after_fork() {
 }
 
 #[test]
+fn x86_translation_transaction_reuses_only_page_authorized_sequential_bytes() {
+    assert_eq!(exec_page_cache_test(2, 24), Ok(1));
+}
+
+#[test]
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
         assert_eq!(exec_page_cache_test(isa, 15), Ok(if isa == 1 { 3 } else { 2 }), "isa={isa}");

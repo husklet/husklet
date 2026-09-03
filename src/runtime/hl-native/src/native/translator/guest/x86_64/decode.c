@@ -31,7 +31,7 @@ _Static_assert(offsetof(decode_memo_entry, authority_epoch) == 208, "decode memo
 _Static_assert(offsetof(hl_x86_hot_context, memo) == 0, "decode memo must lead its context");
 _Static_assert(sizeof(((hl_x86_hot_context *)0)->memo) == 216 * DECODE_MEMO_SLOTS,
                "decode memo table footprint changed");
-_Static_assert(sizeof(hl_x86_hot_context) == 221320, "decode hot context footprint changed");
+_Static_assert(sizeof(hl_x86_hot_context) == 221400, "decode hot context footprint changed");
 
 static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
 
@@ -535,8 +535,74 @@ int hl_x86_decode_context_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86
     return decode_with(context, pc, I, context->memo, context->fetch_fn, context->fetch_opaque, bytes);
 }
 
+/* A transliterated block walks guest PCs monotonically while one authority
+   transaction protects every byte it publishes.  Fetch a small page-bounded
+   window once and decode successive instructions from it.  The artificial
+   window boundary is never exposed to decode_bytes: refill when fewer than 15
+   bytes remain unless the guest page itself ends first.  At a real page end we
+   retain decode_with's two-step rule -- inspect the bytes that are accessible,
+   then touch the next page only when the decoded length proves it is needed. */
+int hl_x86_decode_transaction_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
+                                    uint8_t decoded_bytes[HL_X86_MAX_INSN]) {
+    if (context == NULL || context->authority_state != 1)
+        return context == NULL ? -1 : hl_x86_decode_context_bytes(context, pc, I, decoded_bytes);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    ++g_decode_authority_samples;
+    ++g_decode_transaction_samples;
+    if (g_decode_transaction_samples == g_decode_transaction_invalidate_sample) {
+        g_decode_transaction_invalidate_sample = 0;
+        int begun = hl_guest_fetch_authority_begin();
+        hl_guest_fetch_authority_end(begun);
+    }
+#endif
+
+    size_t page_available = 4096u - (size_t)(pc & UINT64_C(4095));
+    size_t needed = page_available < X86_MAX_INSN ? page_available : X86_MAX_INSN;
+    size_t available = 0;
+    if (pc >= context->transaction_window_pc &&
+        pc - context->transaction_window_pc <= context->transaction_window_length)
+        available = context->transaction_window_length - (size_t)(pc - context->transaction_window_pc);
+    if (available < needed) {
+        size_t length = page_available;
+        if (length > HL_X86_TRANSACTION_WINDOW) length = HL_X86_TRANSACTION_WINDOW;
+        int fetched = context->fetch_fn != NULL
+                          ? context->fetch_fn(context->fetch_opaque, pc, context->transaction_window, length)
+                          : instruction_fetch(pc, context->transaction_window, length);
+        if (fetched != 0) {
+            memset(I, 0, sizeof *I);
+            context->transaction_window_length = 0;
+            return -1;
+        }
+        context->transaction_window_pc = pc;
+        context->transaction_window_length = (uint16_t)length;
+        available = length;
+    }
+
+    uint8_t bytes[X86_MAX_INSN] = {0};
+    size_t present = available < sizeof bytes ? available : sizeof bytes;
+    memcpy(bytes, context->transaction_window + (size_t)(pc - context->transaction_window_pc), present);
+    int length = decode_bytes(bytes, I);
+    if (length > (int)present) {
+        int fetched = context->fetch_fn != NULL
+                          ? context->fetch_fn(context->fetch_opaque, pc, bytes, sizeof bytes)
+                          : instruction_fetch(pc, bytes, sizeof bytes);
+        if (fetched != 0) {
+            memset(I, 0, sizeof *I);
+            return -1;
+        }
+        length = decode_bytes(bytes, I);
+    }
+    if (length > 0 && length <= X86_MAX_INSN) memcpy(decoded_bytes, bytes, (size_t)length);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (length > 0 && length <= X86_MAX_INSN) ++g_decode_memo_decodes;
+#endif
+    return length;
+}
+
 int hl_x86_decode_transaction_begin(hl_x86_hot_context *context) {
-    if (context == NULL || context->authority_source == NULL) return 0;
+    if (context == NULL) return 0;
+    context->transaction_window_length = 0;
+    if (context->authority_source == NULL) return 0;
     decode_authority authority = atomic_load_explicit(context->authority_source, memory_order_acquire) &
                                  ~HL_GUEST_FETCH_AUTHORITY_READER_MASK;
     if (!decode_authority_stable(authority)) return 0;
@@ -579,6 +645,7 @@ void hl_x86_decode_transaction_abort(hl_x86_hot_context *context) {
     context->authority_epoch = 0;
     context->authority_logical_generation = 0;
     context->authority_state = 0;
+    context->transaction_window_length = 0;
 }
 
 void hl_x86_decode_transaction_release(hl_x86_hot_context *context) {
@@ -601,6 +668,7 @@ void hl_x86_decode_transaction_release(hl_x86_hot_context *context) {
     context->authority_epoch = 0;
     context->authority_logical_generation = 0;
     context->authority_state = 0;
+    context->transaction_window_length = 0;
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -654,6 +722,112 @@ static int decode_context_fixture_fetch(void *opaque, uint64_t guest, void *dest
     int result = decode_memo_fetch(guest, destination, length);
     g_decode_memo_fixture = saved;
     return result;
+}
+
+typedef struct {
+    uint64_t base;
+    uint8_t bytes[128];
+    size_t length;
+    uint64_t fetches;
+    int first_page_executable;
+    int second_page_executable;
+} decode_window_fixture;
+
+static int decode_window_fixture_fetch(void *opaque, uint64_t guest, void *destination, size_t length) {
+    decode_window_fixture *fixture = opaque;
+    fixture->fetches++;
+    if (guest < fixture->base || guest - fixture->base > fixture->length ||
+        length > fixture->length - (size_t)(guest - fixture->base))
+        return -1;
+    uint64_t first_page = fixture->base >> 12;
+    uint64_t request_first = guest >> 12;
+    uint64_t request_last = length == 0 ? request_first : (guest + length - 1) >> 12;
+    if ((request_first == first_page && !fixture->first_page_executable) ||
+        (request_last > first_page && !fixture->second_page_executable))
+        return -1;
+    memcpy(destination, fixture->bytes + (size_t)(guest - fixture->base), length);
+    return 0;
+}
+
+static int decode_transaction_window_test(uint32_t scenario, uint64_t *fetches) {
+    _Atomic uint64_t unstable = 0;
+    decode_window_fixture fixture = {
+        .base = scenario == 46 || scenario == 47 ? UINT64_C(0x51000ffe) : UINT64_C(0x51000100),
+        .length = 128,
+        .first_page_executable = 1,
+        .second_page_executable = scenario != 46,
+    };
+    memset(fixture.bytes, 0x90, sizeof fixture.bytes);
+    if (scenario == 46 || scenario == 47) {
+        fixture.bytes[0] = 0x90;
+        fixture.bytes[1] = 0x66;
+        fixture.bytes[2] = 0x90;
+    }
+    hl_x86_hot_context *context =
+        hl_x86_hot_context_create(decode_window_fixture_fetch, &fixture, &unstable);
+    if (context == NULL) return -120;
+    hl_x86_insn instruction;
+    uint8_t bytes[X86_MAX_INSN];
+    int result = 0;
+    if (!hl_x86_decode_transaction_begin(context)) result = -121;
+    switch (scenario) {
+    case 45: /* Sequential instructions share one page-bounded fetch. */
+        for (uint64_t offset = 0; result == 0 && offset != 16; ++offset)
+            if (hl_x86_decode_transaction_bytes(context, fixture.base + offset, &instruction, bytes) != 1 ||
+                instruction.op != 0x90 || bytes[0] != 0x90)
+                result = -122;
+        if (result == 0 && fixture.fetches != 1) result = -123;
+        break;
+    case 46: /* A prefix at page end does not hide an inaccessible crossing. */
+        if (hl_x86_decode_transaction_bytes(context, fixture.base, &instruction, bytes) != 1 ||
+            hl_x86_decode_transaction_bytes(context, fixture.base + 1, &instruction, bytes) != -1)
+            result = -124;
+        if (result == 0 && fixture.fetches != 2) result = -125;
+        break;
+    case 47: /* A crossing instruction refills through the adjacent executable page. */
+        if (hl_x86_decode_transaction_bytes(context, fixture.base, &instruction, bytes) != 1 ||
+            hl_x86_decode_transaction_bytes(context, fixture.base + 1, &instruction, bytes) != 2 ||
+            instruction.op != 0x90 || bytes[0] != 0x66 || bytes[1] != 0x90)
+            result = -126;
+        if (result == 0 && fixture.fetches != 2) result = -127;
+        break;
+    case 48: /* A writer crossing the window still defeats publication. */
+        if (hl_x86_decode_transaction_bytes(context, fixture.base, &instruction, bytes) != 1 ||
+            hl_x86_decode_transaction_bytes(context, fixture.base + 1, &instruction, bytes) != 1)
+            result = -128;
+        hl_x86_decode_test_transaction_invalidate_before_commit();
+        if (result == 0 && hl_x86_decode_transaction_commit(context)) result = -129;
+        break;
+    case 49: /* A new transaction cannot inherit bytes from its predecessor. */
+        if (hl_x86_decode_transaction_bytes(context, fixture.base, &instruction, bytes) != 1 ||
+            instruction.op != 0x90)
+            result = -130;
+        hl_x86_decode_transaction_release(context);
+        fixture.bytes[0] = 0xc3;
+        if (!hl_x86_decode_transaction_begin(context) ||
+            hl_x86_decode_transaction_bytes(context, fixture.base, &instruction, bytes) != 1 ||
+            instruction.op != 0xc3 || fixture.fetches != 2)
+            result = -131;
+        break;
+    default: result = -132;
+    }
+    *fetches = fixture.fetches;
+    if (hl_x86_decode_transaction_rejected(context)) hl_x86_decode_transaction_abort(context);
+    hl_x86_decode_transaction_release(context);
+    hl_x86_hot_context_destroy(context);
+    return result;
+}
+
+int hl_x86_decode_transaction_window_test(uint64_t *fetches) {
+    uint64_t sequential_fetches = 0;
+    for (uint32_t scenario = 45; scenario <= 49; ++scenario) {
+        uint64_t observed = 0;
+        int result = decode_transaction_window_test(scenario, &observed);
+        if (result != 0) return result;
+        if (scenario == 45) sequential_fetches = observed;
+    }
+    *fetches = sequential_fetches;
+    return 0;
 }
 
 int hl_x86_hot_context_test(void) {

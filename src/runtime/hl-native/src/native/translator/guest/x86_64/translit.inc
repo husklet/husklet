@@ -4998,7 +4998,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     if (staged_telemetry) translit_attempt_telemetry_begin();
     struct insn first_insn;
     uint8_t first_bytes[HL_X86_MAX_INSN];
-    int first_decoded = hl_x86_decode_context_bytes(context, gpc, &first_insn, first_bytes);
+    int first_decoded = hl_x86_decode_transaction_bytes(context, gpc, &first_insn, first_bytes);
     int first_kind = first_decoded > 0 ? translit_classify(&first_insn) : TL_NO;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (first_decoded <= 0)
@@ -5145,7 +5145,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             insn = first_insn;
             decoded = first_decoded;
         } else {
-            decoded = hl_x86_decode_context_bytes(context, pc, &insn, bytes);
+            decoded = hl_x86_decode_transaction_bytes(context, pc, &insn, bytes);
         }
         if (count == 0 && pc == gpc && first_decoded > 0)
             memcpy(bytes, first_bytes, (size_t)first_insn.len);
@@ -7449,30 +7449,41 @@ static int translit_single_fetch_test(void) {
     translit_fall_fixture_length = 4096;
     atomic_store_explicit(&translit_fall_fixture_fetches, 0, memory_order_relaxed);
     atomic_store_explicit(&translit_fall_direct_fetches, 0, memory_order_relaxed);
-    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    _Atomic uint64_t authority = 0;
+    hl_x86_hot_context *context =
+        hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, &authority);
     struct interp_block *block = (struct interp_block *)arena;
     memset(block, 0, sizeof *block);
-    void *body = context == NULL ? NULL : translit_build(context, block, translit_fall_fixture_guest, NULL);
+    void *body = context == NULL || !hl_x86_decode_transaction_begin(context)
+                     ? NULL
+                     : translit_build(context, block, translit_fall_fixture_guest, NULL);
     uint64_t fetches = atomic_load_explicit(&translit_fall_fixture_fetches, memory_order_relaxed);
-    int exact = body != NULL && block->profile_insns == 2 && fetches == 2 &&
+    int exact = body != NULL && block->profile_insns == 2 && fetches == 1 &&
                 atomic_load_explicit(&translit_fall_direct_fetches, memory_order_relaxed) == 0;
 
-    if (context != NULL) hl_x86_hot_context_destroy(context);
+    if (context != NULL) {
+        hl_x86_decode_transaction_release(context);
+        hl_x86_hot_context_destroy(context);
+    }
     jit_body_owner_drop_generation(g_cache_gen);
     map_clear();
     g_cp = arena + sizeof(struct interp_block);
     memset(block, 0, sizeof *block);
     atomic_store_explicit(&translit_fall_fixture_fetches, 0, memory_order_relaxed);
     atomic_store_explicit(&translit_fall_direct_fetches, 0, memory_order_relaxed);
-    context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
-    body = context == NULL ? NULL
-                           : translit_build(context, block, translit_fall_fixture_guest + 4095, NULL);
+    context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, &authority);
+    body = context == NULL || !hl_x86_decode_transaction_begin(context)
+               ? NULL
+               : translit_build(context, block, translit_fall_fixture_guest + 4095, NULL);
     fetches = atomic_load_explicit(&translit_fall_fixture_fetches, memory_order_relaxed);
     exact = exact && body != NULL && block->profile_insns == 1 && fetches == 1 &&
             atomic_load_explicit(&translit_fall_direct_fetches, memory_order_relaxed) == 0;
 
     translit_fall_fixture_bytes = NULL;
-    if (context != NULL) hl_x86_hot_context_destroy(context);
+    if (context != NULL) {
+        hl_x86_decode_transaction_release(context);
+        hl_x86_hot_context_destroy(context);
+    }
     map_clear();
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache;

@@ -32,7 +32,11 @@ typedef struct insn {
     int evex_mask, evex_z, evex_b;
 } hl_x86_insn;
 
-enum { HL_X86_DECODE_MEMO_SLOTS = 1024, HL_X86_MAX_INSN = 15 };
+enum {
+    HL_X86_DECODE_MEMO_SLOTS = 1024,
+    HL_X86_MAX_INSN = 15,
+    HL_X86_TRANSACTION_WINDOW = 64,
+};
 typedef struct {
     uint64_t pc;
     hl_x86_insn instruction;
@@ -61,6 +65,12 @@ typedef struct {
     uint8_t riprel_readonly_enabled;
     uint8_t fs_load_bridge_enabled;
     uint8_t riprel_load_bridge_enabled;
+    /* A block build holds one byte-authority transaction.  Keep its sequential
+       instruction bytes page-bounded so the decoder does not repeat the guest
+       mapping lookup and copy for every instruction. */
+    uint64_t transaction_window_pc;
+    uint16_t transaction_window_length;
+    uint8_t transaction_window[HL_X86_TRANSACTION_WINDOW];
 } hl_x86_hot_context;
 
 hl_x86_hot_context *hl_x86_hot_context_create(hl_x86_context_fetch_fn fetch, void *opaque,
@@ -69,6 +79,8 @@ void hl_x86_hot_context_destroy(hl_x86_hot_context *context);
 int hl_x86_decode_context(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn);
 int hl_x86_decode_context_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn,
                                 uint8_t bytes[HL_X86_MAX_INSN]);
+int hl_x86_decode_transaction_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *insn,
+                                    uint8_t bytes[HL_X86_MAX_INSN]);
 int hl_x86_decode_transaction_begin(hl_x86_hot_context *context);
 int hl_x86_decode_transaction_commit(hl_x86_hot_context *context);
 int hl_x86_decode_transaction_rejected(const hl_x86_hot_context *context);
@@ -88,6 +100,7 @@ int hl_x86_hot_context_test(void);
 int hl_x86_hot_context_thread_test(void);
 int hl_x86_hot_context_allocation_test(void);
 int hl_x86_decode_authority_test(uint32_t scenario, uint64_t *fetches);
+int hl_x86_decode_transaction_window_test(uint64_t *fetches);
 void hl_x86_decode_test_invalidate_direct_registry(void);
 void hl_x86_decode_test_transaction_invalidate_on_sample(unsigned sample);
 void hl_x86_decode_test_transaction_invalidate_before_commit(void);

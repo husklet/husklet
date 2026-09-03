@@ -945,6 +945,7 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
     case 21: result = hl_x86_hot_context_test(); break;
     case 22: result = hl_x86_hot_context_thread_test(); break;
     case 23: result = hl_x86_hot_context_allocation_test(); break;
+    case 24: result = hl_x86_decode_transaction_window_test(scans); break;
     case 26:
     case 27:
     case 28:
