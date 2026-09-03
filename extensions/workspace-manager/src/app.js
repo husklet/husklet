@@ -674,6 +674,8 @@ export function Networks({ api, resource, networkDetails }) {
   const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
   const [operation, setOperation] = useState({ state: 'idle', request: null, error: null });
   const [disconnectRequest, setDisconnectRequest] = useState(null);
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const endpointInput = useRef({ container: '', aliases: '' });
   endpointInput.current = { container: container.trim(), aliases };
   const currentNetworks = useRef(new Set());
@@ -695,13 +697,23 @@ export function Networks({ api, resource, networkDetails }) {
   const remove = async (network) => { const id = resourceReference(network); if (!current(id)) return; await api.networks.remove(id); if (inspection.id === id) setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null }); await resource.reload(); };
   const inspect = async (network) => {
     const id = resourceReference(network);
+    const revision = ++inspectionRevision.current;
     setInspection({ id, state: 'loading', count: 0, detail: null, error: null });
     try {
       const detail = await api.networks.inspect(id);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(detail);
+      if (revision !== inspectionRevision.current) return;
       setInspection({ id, state: 'ready', count, detail, error: null });
-    } catch (error) { setInspection({ id, state: 'error', count: 0, detail: null, error }); }
+    } catch (error) { if (revision === inspectionRevision.current) setInspection({ id, state: 'error', count: 0, detail: null, error }); }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+    setDisconnectRequest(null);
+  }, [resource.data]);
   const request = (network, verb) => {
     const containerId = container.trim();
     if (!immutableContainerId(containerId)) throw new TypeError('Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.');
