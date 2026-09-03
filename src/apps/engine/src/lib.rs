@@ -601,6 +601,18 @@ fn rootfs_plan(
             .set("HL_PCACHE_OBSERVE", "1", false)
             .map_err(|error| Failure::Request(format!("cannot enable translation-cache observability: {error:?}")))?;
     }
+    if let Some(cache) = &launch.translation_cache {
+        // The typed box policy is also retained below because it owns the container contract, but
+        // target setup reads these launch options before that policy is projected in C. Supplying
+        // only the typed path therefore advertises a cache directory that the translator never
+        // enables. Keep the launch-time mirror explicit, as the product container path does.
+        options
+            .set("HL_PCACHE", "1", true)
+            .map_err(|error| Failure::Request(format!("cannot enable the translation cache: {error:?}")))?;
+        options
+            .set("HL_PCACHE_DIR", &cache.to_string_lossy(), true)
+            .map_err(|error| Failure::Request(format!("cannot set the translation-cache directory: {error:?}")))?;
+    }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
@@ -1162,6 +1174,8 @@ mod tests {
             plan.box_policy.translation_cache.as_deref(),
             Some(cache.as_os_str().as_encoded_bytes())
         );
+        assert_eq!(plan.options.get("HL_PCACHE"), Some("1"));
+        assert_eq!(plan.options.get("HL_PCACHE_DIR"), cache.to_str());
         let observed = rootfs_plan(
             root.path(),
             &launch(&[
