@@ -306,8 +306,12 @@ impl CheckpointJourney {
             || focused_slot.as_deref() != Some("1")
             || !history.is_empty()
         {
+            let missing_history = history
+                .iter()
+                .map(|slot| (*slot, Terminal::new(&terminals[*slot]).tail(20).0))
+                .collect::<Vec<_>>();
             return Err(format!(
-                "selected={:?} expected={split_page} focused={focused_slot:?} missing-history={history:?}",
+                "selected={:?} expected={split_page} focused={focused_slot:?} missing-history={missing_history:?}",
                 window.stack.visible_child_name()
             ));
         }
