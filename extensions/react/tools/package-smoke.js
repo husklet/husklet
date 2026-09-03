@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false) {
-  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}.sock`);
+async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false, oversizedRender = false) {
+  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
@@ -21,15 +21,25 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
       for (const frame of reader.take(chunk)) {
         if (frame.channel === 0 || frame.kind !== wire.KIND.request) continue;
         calls.push(frame.payload);
-        stream.write(wire.encode({
-          channel: frame.channel,
-          kind: wire.KIND.response,
-          payload: malformedRender && frame.payload.call === 'interface_render_at'
-            ? Buffer.from('{', 'utf8')
-            : frame.payload.call === 'interface_open_tab'
-            ? { reply: 'identity', with: 'packed-starter' }
-            : { reply: 'done' },
-        }), () => {
+        let response;
+        if (oversizedRender && frame.payload.call === 'interface_render_at') {
+          response = Buffer.alloc(wire.HEADER);
+          response.writeUInt32LE(wire.PAYLOAD_LIMIT + 1, 0);
+          response.writeUInt32LE(frame.channel, 4);
+          response.writeUInt8(wire.KIND.response, 8);
+          response.writeUInt8(wire.FLAG_END, 9);
+        } else {
+          response = wire.encode({
+            channel: frame.channel,
+            kind: wire.KIND.response,
+            payload: malformedRender && frame.payload.call === 'interface_render_at'
+              ? Buffer.from('{', 'utf8')
+              : frame.payload.call === 'interface_open_tab'
+              ? { reply: 'identity', with: 'packed-starter' }
+              : { reply: 'done' },
+          });
+        }
+        stream.write(response, () => {
           if (hostEof && frame.payload.call === 'interface_render_at') stream.destroy();
         });
       }
@@ -64,7 +74,7 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
     assert.equal(rendered.with.slot, 'packed-starter');
     assert.equal(rendered.with.frame.sequence, 1);
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
-    if (hostEof || malformedRender) {
+    if (hostEof || malformedRender || oversizedRender) {
       exit = child.exitCode !== null ? { code: child.exitCode, signal: child.signalCode } : await Promise.race([
         new Promise((resolve) => child.once('exit', (code, receivedSignal) => resolve({ code, signal: receivedSignal }))),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`packed React starter did not stop after host failure; stderr=${stderr}`)), 2_000)),
@@ -80,9 +90,11 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
     peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
   }
-  assert.deepEqual(exit, hostEof || malformedRender ? { code: 1, signal: null } : { code: 0, signal: null },
+  assert.deepEqual(exit, hostEof || malformedRender || oversizedRender ? { code: 1, signal: null } : { code: 0, signal: null },
     `packed React starter did not stop cleanly; stderr=${stderr}`);
-  if (malformedRender) {
+  if (oversizedRender) {
+    assert.equal(stderr, `react-starter: host connection ended: frame declares ${wire.PAYLOAD_LIMIT + 1} bytes, above the ${wire.PAYLOAD_LIMIT} limit\n`);
+  } else if (malformedRender) {
     assert.match(stderr, /^react-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/);
   } else {
     assert.equal(stderr, hostEof
@@ -233,6 +245,7 @@ try {
   await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', true);
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, true);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, false, true);
   await runPackedStarterDenied(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
