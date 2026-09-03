@@ -168,6 +168,21 @@ fn native_extension_cards_are_semantic_and_actionable() {
         grant.accessible_role() == gtk::AccessibleRole::ListItem
             && grant.parent().is_some_and(|parent| parent.accessible_role() == gtk::AccessibleRole::List)
     }), "native capability labels must retain the list structure exposed semantically");
+    let mut execution = fixture.roster.borrow().entries()[0].clone();
+    execution.granted = Grant::new([Capability::TerminalControl]);
+    let execution_grants = settings::capabilities(&execution);
+    let direct = execution_grants.observe_children();
+    assert_eq!(direct.n_items(), 2, "execution warning stays separate from the grant list");
+    let warning = direct.item(0).and_downcast::<gtk::Label>().expect("execution warning");
+    assert_eq!(warning.text(), hl_extension::Summary::EXECUTION_NOTICE);
+    assert_ne!(warning.accessible_role(), gtk::AccessibleRole::ListItem);
+    let list = direct.item(1).and_downcast::<gtk::Box>().expect("grant list");
+    assert_eq!(list.accessible_role(), gtk::AccessibleRole::List);
+    assert!(list
+        .observe_children()
+        .item(0)
+        .and_downcast::<gtk::Label>()
+        .is_some_and(|grant| grant.accessible_role() == gtk::AccessibleRole::ListItem));
     let enable = snapshot
         .root
         .children

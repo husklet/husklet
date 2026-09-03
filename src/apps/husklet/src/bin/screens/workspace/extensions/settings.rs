@@ -165,20 +165,23 @@ fn standing(stage: Stage) -> gtk::Label {
 }
 
 /// What the person agreed to, and the sentence a grant that runs code owes them.
-fn capabilities(entry: &Entry) -> gtk::Box {
+pub(super) fn capabilities(entry: &Entry) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    column.set_accessible_role(gtk::AccessibleRole::List);
     let summary = Summary::of(&entry.granted);
     if summary.execution {
         column.append(&line(Summary::EXECUTION_NOTICE, "fhint"));
     }
+    let grants = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    grants.set_accessible_role(gtk::AccessibleRole::List);
     if entry.granted.is_empty() {
-        column.append(&capability("granted nothing"));
+        grants.append(&capability("granted nothing"));
+        column.append(&grants);
         return column;
     }
     for granted in entry.granted.iter() {
-        column.append(&capability(granted.as_str()));
+        grants.append(&capability(granted.as_str()));
     }
+    column.append(&grants);
     column
 }
 
