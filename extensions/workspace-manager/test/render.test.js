@@ -395,6 +395,18 @@ test('container creation retains exact identity and retries only start after a p
   stage.render(h(Containers, { api: controlled, resource }));
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'worker');
+  change(stage, 'Command argv JSON (optional)', '["sh",7]');
+  assert.ok(labelled(stage, 'Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.'));
+  assert.equal(isEnabled(stage, 'Create and start'), false, 'invalid optional configuration cannot reach the host');
+  change(stage, 'Command argv JSON (optional)', '');
+  change(stage, 'Environment pairs JSON (optional)', '[["MODE","one"],["MODE","two"]]');
+  assert.ok(labelled(stage, 'Environment must contain at most 256 unique [name, value] pairs with bounded NUL-free strings.'));
+  assert.equal(isEnabled(stage, 'Create and start'), false);
+  change(stage, 'Environment pairs JSON (optional)', '');
+  change(stage, 'Working directory (optional)', '/workspace/../secret');
+  assert.ok(labelled(stage, 'Working directory must be an absolute, NUL-free path without dot segments and at most 4096 bytes.'));
+  assert.equal(isEnabled(stage, 'Create and start'), false);
+  change(stage, 'Working directory (optional)', '');
   invoke(stage, 'Create and start'); await settled(); await settled();
   assert.ok(labelled(stage, 'runtime temporarily unavailable'));
   assert.ok(labelled(stage, 'Retry start'), 'the exact created container remains recoverable');

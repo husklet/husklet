@@ -125,6 +125,43 @@ function Summary({ title: label, value, detail, onOpen }) {
     h(CardActions, {}, h(Button, { label: 'Open', variant: 'ghost', onInvoke: onOpen })));
 }
 
+function containerCreateOptions(draft) {
+  const bytes = (value) => new TextEncoder().encode(value).byteLength;
+  const commandText = draft.command.trim();
+  let command;
+  if (commandText) {
+    try { command = JSON.parse(commandText); } catch { throw new Error('Command must be valid JSON, such as ["sh","-lc","printf ready"].'); }
+    if (!Array.isArray(command) || command.length > 64 || (command.length > 0 && command[0] === '')
+      || command.some((argument) => typeof argument !== 'string' || argument.includes('\0') || bytes(argument) > 4_096)
+      || command.reduce((total, argument) => total + bytes(argument), 0) > 32_768) {
+      throw new Error('Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.');
+    }
+  }
+  const environmentText = draft.environment.trim();
+  let environment;
+  if (environmentText) {
+    try { environment = JSON.parse(environmentText); } catch { throw new Error('Environment must be valid JSON pairs, such as [["MODE","test"]].'); }
+    if (!Array.isArray(environment) || environment.length > 256
+      || environment.some((pair) => !Array.isArray(pair) || pair.length !== 2
+        || pair.some((value) => typeof value !== 'string')
+        || pair[0].length === 0 || pair[0].includes('=') || pair[0].includes('\0') || bytes(pair[0]) > 256
+        || pair[1].includes('\0') || bytes(pair[1]) > 8_192)
+      || new Set(environment.map(([name]) => name)).size !== environment.length) {
+      throw new Error('Environment must contain at most 256 unique [name, value] pairs with bounded NUL-free strings.');
+    }
+  }
+  const workingDirectory = draft.workingDirectory.trim();
+  if (workingDirectory && (!workingDirectory.startsWith('/') || bytes(workingDirectory) > 4_096
+    || workingDirectory.includes('\0') || workingDirectory.split('/').some((part) => part === '.' || part === '..'))) {
+    throw new Error('Working directory must be an absolute, NUL-free path without dot segments and at most 4096 bytes.');
+  }
+  return {
+    ...(command ? { command } : {}),
+    ...(environment ? { environment } : {}),
+    ...(workingDirectory ? { working_directory: workingDirectory } : {}),
+  };
+}
+
 export function Containers({ api, resource, containerDetails, onOpenExecution }) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
@@ -133,7 +170,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
-  const [draft, setDraft] = useState({ image: '', name: '' });
+  const [draft, setDraft] = useState({ image: '', name: '', command: '', environment: '', workingDirectory: '' });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
   const [creationNotice, setCreationNotice] = useState('');
@@ -176,16 +213,20 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     let target = created;
     try {
       if (!target) {
-        const id = await api.containers.create({ image: draft.image.trim(), name: draft.name.trim() });
+        const id = await api.containers.create({
+          image: draft.image.trim(), name: draft.name.trim(), ...containerCreateOptions(draft),
+        });
         target = { id, name: draft.name.trim() };
         setCreated(target);
       }
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
-      setCreated(null); setDraft({ image: '', name: '' });
+      setCreated(null); setDraft({ image: '', name: '', command: '', environment: '', workingDirectory: '' });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
   };
+  let configurationError = '';
+  try { containerCreateOptions(draft); } catch (error) { configurationError = error.message; }
   const remove = async (item) => {
     if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
       throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
@@ -207,12 +248,16 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       h(CardHeader, { label: 'Create a container', detail: 'Uses a local image and starts it after durable creation.' }),
       h(CardContent, {}, h(Row, { gap: 1, wrap: true },
         h(Entry, { value: draft.image, placeholder: 'Image reference', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, image: String(event.value ?? '') })) }),
-        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }))),
+        h(Entry, { value: draft.name, placeholder: 'Container name', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.command, placeholder: 'Command argv JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.environment, placeholder: 'Environment pairs JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }))),
       h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
         label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
-        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0)),
+        enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError)),
         onInvoke: createAndStart,
       })),
+      configurationError ? h(Text, { label: configurationError, color: 'danger', wrap: true }) : null,
       h(ErrorText, { error: creationError }), creationNotice ? h(Text, { label: creationNotice, color: 'positive', wrap: true }) : null),
     h(Toolbar, { loading: resource.loading, onRefresh: resource.reload }),
     h(ResourceState, {

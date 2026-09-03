@@ -153,12 +153,15 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.deepEqual(requests.find((request) => request.call === 'container_rename').with, { id: containerId, name: 'api-renamed' });
     peer.write(encode({ channel: 26, kind: KIND.event, payload: changeInvocation(requests, 'Image reference', 'alpine:3.20') }));
     peer.write(encode({ channel: 27, kind: KIND.event, payload: changeInvocation(requests, 'Container name', 'worker') }));
+    peer.write(encode({ channel: 43, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON (optional)', '["sh","-lc","printf ready"]') }));
+    peer.write(encode({ channel: 44, kind: KIND.event, payload: changeInvocation(requests, 'Environment pairs JSON (optional)', '[["MODE","test"],["EMPTY",""]]') }));
+    peer.write(encode({ channel: 45, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/workspace/app') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'worker')));
     peer.write(encode({ channel: 28, kind: KIND.event, payload: invocation(requests, 'Create and start') }));
     await until(() => calls.includes('container_create') && calls.includes('container_start'));
     assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
-      image: 'alpine:3.20', name: 'worker', entrypoint: null, command: [], environment: [], working_directory: null,
+      image: 'alpine:3.20', name: 'worker', entrypoint: null, command: ['sh', '-lc', 'printf ready'], environment: [['MODE', 'test'], ['EMPTY', '']], working_directory: '/workspace/app',
       hostname: null, user: null, labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null, pids_limit: null,
     });
     assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: createdContainerId });
