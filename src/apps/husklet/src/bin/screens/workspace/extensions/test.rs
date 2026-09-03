@@ -73,6 +73,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
         panes::providers_are_advertised_only_with_a_readable_projection();
         panes::a_pane_chooser_switches_to_a_provider_and_back_to_its_shell();
+        panes::a_surface_pane_can_split_and_return_without_losing_its_identity();
         panes::the_shipped_storybook_is_discoverable_as_a_pane_provider();
         panes::each_split_chooser_switches_its_own_pane_without_stealing_terminal_focus();
         panes::an_existing_pane_chooser_discovers_a_later_provider();
@@ -2731,8 +2732,8 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneChrome, PaneFocus, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
-        WindowSession, ABSENCE,
+        Adjustment, PaneChooser, PaneChrome, PaneFocus, PaneLauncher, Panes, Reading, Slots, SplitAction, Surface, Tabs,
+        TermWin, Window, WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::{Gallery, Shelf, Surfaces};
@@ -3716,6 +3717,48 @@ mod panes {
             original_topology
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
+    }
+
+    pub(super) fn a_surface_pane_can_split_and_return_without_losing_its_identity() {
+        let bench = Bench::new();
+        let (_terminal, slot) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        home.append(&interface);
+        let generation = gallery.enrol(
+            "postgres",
+            &interface,
+            &home,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("database").expect("provider id"),
+                title: "Postgres".to_owned(),
+                icon: Some("database-symbolic".to_owned()),
+            }],
+            Rc::new(|_| {}),
+        );
+        readable(&gallery, "postgres");
+        gallery.ready("postgres", generation);
+        Window::exhibit(&bench.window, gallery);
+        assert!(PaneChooser::provider_in(&bench.window, Some(&slot), "postgres", "database"));
+
+        SplitAction::focused(&bench.window, false);
+
+        let panes = Panes::all(&bench.window);
+        assert_eq!(panes.len(), 2, "the host split shortcut works while a surface owns focus");
+        let original = Panes::at(&bench.window, &slot).expect("original stable pane slot");
+        assert_eq!(original.occupant, Occupant::Surface, "splitting does not replace the provider");
+        let semantic = Window::gallery(&bench.window)
+            .expect("gallery")
+            .semantics("postgres", &slot)
+            .expect("surface semantic XML source remains live");
+        assert_eq!(semantic.root.label.as_deref(), Some("postgres"));
+        let new_shell = panes.iter().find(|pane| pane.slot != slot).expect("new split leaf");
+        assert_eq!(new_shell.occupant, Occupant::Terminal);
+
+        assert!(PaneChooser::terminal_in(&bench.window, Some(&slot)));
+        assert_eq!(Panes::at(&bench.window, &slot).expect("restored pane").occupant, Occupant::Terminal);
+        assert_eq!(Panes::all(&bench.window).len(), 2, "returning to terminal preserves the split layout");
     }
 
     pub(super) fn the_shipped_storybook_is_discoverable_as_a_pane_provider() {

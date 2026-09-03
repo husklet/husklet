@@ -222,15 +222,22 @@ fn editable_captures(focused: bool, shortcut: Option<Shortcut>) -> bool {
 
 impl SplitAction {
     pub(crate) fn focused(window: &Rc<TermWin>, vertical: bool) {
-        let Some(terminal) = window.focused.borrow().clone() else {
+        let Some(pane) = PaneChooser::selected(window) else {
             return;
         };
+        let terminal = pane
+            .content
+            .clone()
+            .downcast::<vte4::Terminal>()
+            .ok()
+            .or_else(|| window.displaced.borrow().get(&pane.slot).cloned());
+        let Some(terminal) = terminal else { return };
         let orientation = if vertical {
             gtk::Orientation::Vertical
         } else {
             gtk::Orientation::Horizontal
         };
-        PaneView::new(window, &terminal).split(orientation);
+        PaneView::split_at(window, &pane, &terminal, orientation);
     }
 }
 

@@ -271,7 +271,7 @@ impl PaneChooser {
         }
     }
 
-    fn selected(window: &Rc<TermWin>) -> Option<Occupancy> {
+    pub(crate) fn selected(window: &Rc<TermWin>) -> Option<Occupancy> {
         if let Some(terminal) = window.focused.borrow().as_ref() {
             if let Some(slot) = Slots::new(window).of(terminal) {
                 if let Some(pane) = Panes::at(window, &slot) {
@@ -890,7 +890,21 @@ impl<'a> PaneView<'a> {
         if old.parent().is_none() {
             return;
         }
-        let page = Page::of(tw, old.upcast_ref::<gtk::Widget>()).map(|page| page.name);
+        let Some(slot) = Slots::new(tw).of(&old) else { return };
+        let Some(pane) = Panes::at(tw, &slot) else { return };
+        Self::split_at(tw, &pane, &old, orient);
+    }
+
+    /// Divide a live pane while preserving its current occupant. A surface's
+    /// displaced terminal remains the cwd source, while topology authority is
+    /// the stable pane chrome and slot.
+    pub(crate) fn split_at(
+        tw: &Rc<TermWin>,
+        pane: &Occupancy,
+        old: &vte4::Terminal,
+        orient: gtk::Orientation,
+    ) {
+        let page = Page::of(tw, &pane.widget).map(|page| page.name);
         // OSC-7: split panes inherit the source pane's cwd. A fresh split gets a fresh slot; never restores.
         let split_cwd = old
             .current_directory_uri()
@@ -899,9 +913,8 @@ impl<'a> PaneView<'a> {
         if let Some(name) = &page {
             tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         }
-        let Some(slot) = Slots::new(tw).of(&old) else { return };
         let wrapped = PaneChrome::wrap(tw, &new);
-        if Panes::divide(tw, &slot, orient, &wrapped) {
+        if Panes::divide(tw, &pane.slot, orient, &wrapped) {
             new.grab_focus();
         }
     }
