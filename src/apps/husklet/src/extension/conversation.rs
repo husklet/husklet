@@ -637,6 +637,21 @@ impl Conversation {
                 .map_err(fault)?;
             return Ok(());
         }
+        if frame.kind == Kind::Close {
+            if let Some(topic) = self
+                .session
+                .topics()
+                .into_iter()
+                .find(|topic| self.subscriptions.channel(*topic) == Some(frame.channel))
+            {
+                self.session.unfollow(topic);
+                if topic == Topic::WorkspaceLifecycle {
+                    self.workspace_lifecycle_revision = None;
+                }
+                self.subscriptions.close(topic, &mut self.channels, &mut self.outbox);
+            }
+            return Ok(());
+        }
         if frame.kind == Kind::Credit {
             if let Some(topic) = self.replenish(frame) {
                 self.carry(topic)?;
@@ -1481,6 +1496,47 @@ mod tests {
                 >= 2,
             "the absence of a duplicate is from equality, not a stopped producer"
         );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn closing_an_event_channel_stops_observation_without_closing_calls() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(650)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Containers,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        let event = wire.receive().expect("initial event names its channel");
+        assert_eq!(event.kind, Kind::Event);
+        let reads_before_close = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+
+        wire.send(&Frame::new(event.channel, Kind::Close, Vec::new()))
+            .expect("channel close sent");
+        assert_eq!(wire.receive(), Err(Transit::Pending), "a closed channel emits no more events");
+        let reads_after_close = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+        assert_eq!(reads_after_close, reads_before_close, "a closed channel induces no service polling");
+
+        let answer = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
