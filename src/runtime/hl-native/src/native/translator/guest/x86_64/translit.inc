@@ -7703,6 +7703,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     uint64_t saved_generation = g_cache_gen;
     int saved_prof = g_prof;
     uint64_t saved_nonpie_lo = g_nonpie_lo;
+    size_t saved_body_bytes = translit_test_body_bytes;
     g_cache = arena;
     g_cp = arena + sizeof(struct interp_block);
     g_rw2rx = 0;
@@ -7731,6 +7732,7 @@ static int translit_mixed_fixture_test(unsigned scenario) {
     translit_test_decode_results = 0;
     translit_test_decode_successor_probes = 0;
     translit_test_decode_lookahead_consumed = 0;
+    if (scenario == 81) translit_test_body_bytes = 32;
     if (scenario == 229) {
         uint32_t owners_before = atomic_load_explicit(&set->count, memory_order_acquire);
         g_cp = arena;
@@ -7813,11 +7815,16 @@ static int translit_mixed_fixture_test(unsigned scenario) {
         uint32_t after = atomic_load_explicit(&set->count, memory_order_acquire);
         result = refused && body != NULL && after == JIT_BODY_OWNER_N - TL_MAX_OWNER_RANGES + 6 ? 0 : 124;
     } else if (scenario == 81) {
-        uint64_t guest = 0;
-        result = body == NULL && atomic_load_explicit(&set->count, memory_order_acquire) == 0 &&
-                         !jit_instruction_map_lookup((uint64_t)(uintptr_t)(arena + sizeof *block), &guest, NULL)
-                     ? 0
-                     : 125;
+        uint32_t published = atomic_load_explicit(&set->count, memory_order_acquire);
+        int exact = body != NULL && block->host_len <= translit_test_body_bytes + TL_EXIT_HEADROOM &&
+                    block->profile_insns > 0 && published == block->profile_insns + 1;
+        for (uint32_t offset = 0; exact && offset < block->host_len; offset++) {
+            uint64_t owner_guest = 0, instruction_guest = 0;
+            exact = jit_body_owner_lookup((uint64_t)(uintptr_t)body + offset, &owner_guest) &&
+                    jit_instruction_map_lookup((uint64_t)(uintptr_t)body + offset, &instruction_guest, NULL) &&
+                    owner_guest == instruction_guest;
+        }
+        result = exact ? 0 : 125;
     } else if (scenario == 82) {
         uint64_t guest = 0;
         int before = body != NULL && jit_body_owner_lookup((uint64_t)(uintptr_t)body, &guest) &&
@@ -7954,6 +7961,7 @@ done:
     g_cache_gen = saved_generation;
     g_prof = saved_prof;
     g_nonpie_lo = saved_nonpie_lo;
+    translit_test_body_bytes = saved_body_bytes;
     munmap(arena, arena_size);
     return result;
 }
