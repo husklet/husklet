@@ -118,7 +118,9 @@ test('concurrent pane-change waits share their host subscription until the last 
   await stopFirst();
   const probe = stage.session.call('workspace_info');
   assert.equal((await next()).payload.call, 'workspace_info', 'the first disposer must not unsubscribe the second wait');
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: {} } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine:3.20' },
+  } }));
   await probe;
 
   const stopped = stopSecond();
@@ -308,7 +310,9 @@ test('execution watcher uses exact topic and returns credit after delivery', asy
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'executions' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
-  const catalogue = { executions: [{ id: 'e1', running: false }], truncated: false };
+  const catalogue = { executions: [{
+    id: 'e1', container_id: 'c1', running: false, exit_code: 0, pid: 1, command: ['true'], user: 'root',
+  }], truncated: false };
   stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'executions', of: catalogue } }));
   assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [catalogue]);
   const stopping = stop(); assert.deepEqual((await next()).payload.with, { topic: 'executions' });
@@ -321,7 +325,9 @@ test('container watcher uses existing snapshot topic and returns credit after de
   const seen = []; const opening = api.watchContainers((value) => seen.push(value));
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'containers' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } })); const stop = await opening;
-  const containers = [{ id: 'a'.repeat(64), name: 'worker_2.prod', state: 'running' }];
+  const containers = [{
+    id: 'a'.repeat(64), name: 'worker_2.prod', image: 'alpine:3.20', state: 'running', created: 1,
+  }];
   stage.host.write(encode({ channel: 10, kind: KIND.event, payload: { snapshot: 'containers', of: containers } }));
   assert.equal((await next()).kind, KIND.credit); assert.deepEqual(seen, [containers]);
   assert.equal(seen[0][0].id, 'a'.repeat(64), 'rename observation preserves immutable identity');

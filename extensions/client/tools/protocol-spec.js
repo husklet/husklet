@@ -18,6 +18,9 @@ walk(schema, (node) => {
   assert.notEqual(node.kind, 'external_ref', `unresolved external protocol schema ${node.package}::${node.name}`);
   if (node.kind === 'ref') assert(schema.definitions[node.name], `unresolved protocol reference ${node.name}`);
 });
+for (const [name, definition] of Object.entries(schema.definitions)) {
+  assert(!(definition.kind === 'ref' && definition.name === name), `non-progressing self reference ${name}`);
+}
 
 const stable = (value) => JSON.stringify(value, Object.keys(value).sort());
 const runtime = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
@@ -29,7 +32,7 @@ export const PROTOCOL_TOPICS = Object.freeze(${JSON.stringify(schema.topics, nul
 const definitions = ${JSON.stringify(schema.definitions, null, 2)};
 const roots = ${JSON.stringify(schema.roots, null, 2)};
 
-function fail(path, expected) { throw new TypeError(\\`\\${path} must be \\${expected}\\`); }
+function fail(path, expected) { throw new TypeError(\`\${path} must be \${expected}\`); }
 function validate(schema, value, path) {
   switch (schema.kind) {
     case 'unit': if (value !== undefined && value !== null) fail(path, 'absent'); return;
@@ -39,35 +42,35 @@ function validate(schema, value, path) {
     case 'float': if (typeof value !== 'number' || !Number.isFinite(value)) fail(path, 'a finite number'); return;
     case 'optional': if (value !== null && value !== undefined) validate(schema.of, value, path); return;
     case 'newtype': return validate(schema.of, value, path);
-    case 'array': if (!Array.isArray(value)) fail(path, 'an array'); value.forEach((entry, index) => validate(schema.of, entry, \\`\\${path}[\\${index}]\\`)); return;
+    case 'array': if (!Array.isArray(value)) fail(path, 'an array'); value.forEach((entry, index) => validate(schema.of, entry, \`\${path}[\${index}]\`)); return;
     case 'tuple': {
       const fields = schema.items ?? schema.fields?.map((field) => field.schema) ?? [];
       if (fields.length === 1) return validate(fields[0], value, path);
-      if (!Array.isArray(value) || value.length !== fields.length) fail(path, \\`a \\${fields.length}-item tuple\\`);
-      fields.forEach((field, index) => validate(field, value[index], \\`\\${path}[\\${index}]\\`)); return;
+      if (!Array.isArray(value) || value.length !== fields.length) fail(path, \`a \${fields.length}-item tuple\`);
+      fields.forEach((field, index) => validate(field, value[index], \`\${path}[\${index}]\`)); return;
     }
-    case 'map': if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'an object map'); for (const [key, entry] of Object.entries(value)) { validate(schema.key, key, path); validate(schema.value, entry, \\`\\${path}.\\${key}\\`); } return;
+    case 'map': if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'an object map'); for (const [key, entry] of Object.entries(value)) { validate(schema.key, key, path); validate(schema.value, entry, \`\${path}.\${key}\`); } return;
     case 'ref': return validate(definitions[schema.name], value, path);
     case 'struct':
       if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'an object');
       for (const field of schema.fields) {
-        if (!field.optional && !(field.name in value)) fail(\\`\\${path}.\\${field.name}\\`, 'present');
-        if (field.name in value) validate(field.schema, value[field.name], \\`\\${path}.\\${field.name}\\`);
+        if (!field.optional && !(field.name in value)) fail(\`\${path}.\${field.name}\`, 'present');
+        if (field.name in value) validate(field.schema, value[field.name], \`\${path}.\${field.name}\`);
       }
-      if (schema.serde?.deny_unknown_fields) for (const key of Object.keys(value)) if (!schema.fields.some((field) => field.name === key)) fail(\\`\\${path}.\\${key}\\`, 'a declared field');
+      if (schema.serde?.deny_unknown_fields) for (const key of Object.keys(value)) if (!schema.fields.some((field) => field.name === key)) fail(\`\${path}.\${key}\`, 'a declared field');
       return;
     case 'enum': return validateEnum(schema, value, path);
-    default: throw new TypeError(\\`unsupported protocol schema kind \\${schema.kind} at \\${path}\\`);
+    default: throw new TypeError(\`unsupported protocol schema kind \${schema.kind} at \${path}\`);
   }
 }
 function validateEnum(schema, value, path) {
   const tag = schema.serde?.tag;
   const content = schema.serde?.content;
   if (tag) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value[tag] !== 'string') fail(path, \\`an object tagged by \\${tag}\\`);
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value[tag] !== 'string') fail(path, \`an object tagged by \${tag}\`);
     const variant = schema.variants.find((entry) => entry.name === value[tag]);
-    if (!variant) fail(\\`\\${path}.\\${tag}\\`, 'a known variant');
-    if (content) return validate(variant.payload, value[content], \\`\\${path}.\\${content}\\`);
+    if (!variant) fail(\`\${path}.\${tag}\`, 'a known variant');
+    if (content) return validate(variant.payload, value[content], \`\${path}.\${content}\`);
     if (variant.payload.kind === 'unit') return;
     const body = { ...value }; delete body[tag]; return validate(variant.payload, body, path);
   }
@@ -77,11 +80,12 @@ function validateEnum(schema, value, path) {
   }
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1) fail(path, 'an externally tagged variant');
   const [name] = Object.keys(value); const variant = schema.variants.find((entry) => entry.name === name);
-  if (!variant) fail(path, 'a known variant'); validate(variant.payload, value[name], \\`\\${path}.\\${name}\\`);
+  if (!variant) fail(path, 'a known variant'); validate(variant.payload, value[name], \`\${path}.\${name}\`);
 }
 export function validateRequest(value) { validate(roots.request, value, 'request'); return value; }
 export function validateReply(value) { validate(roots.reply, value, 'reply'); return value; }
 export function validateFailure(value) { validate(roots.failure, value, 'failure'); return value; }
+export function validateSnapshot(value) { validate(roots.snapshot, value, 'snapshot'); return value; }
 export function encodeRequest(call, payload) {
   return validateRequest(payload === undefined ? { call } : { call, with: payload });
 }
@@ -126,9 +130,11 @@ ${Object.entries(schema.definitions).map(([name, definition]) => `export type ${
 export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};
 export type WireFailure = ${type(schema.roots.failure)};
+export type WireSnapshot = ${type(schema.roots.snapshot)};
 export function validateRequest(value: unknown): WireRequest;
 export function validateReply(value: unknown): WireReply;
 export function validateFailure(value: unknown): WireFailure;
+export function validateSnapshot(value: unknown): WireSnapshot;
 export function encodeRequest(call: WireRequest['call'], payload?: unknown): WireRequest;
 `;
 const files = [['generated-protocol.js', runtime], ['generated-protocol.d.ts', declarations]];

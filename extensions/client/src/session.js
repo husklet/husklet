@@ -2,9 +2,10 @@
 
 import net from 'node:net';
 import { CONTROL, KIND, Reader, encode } from './wire.js';
+import { encodeRequest, PROTOCOL_VERSION } from './generated-protocol.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
-export const PROTOCOL = 1;
+export const PROTOCOL = PROTOCOL_VERSION;
 
 /** Where the host mounts the socket inside an extension's container. */
 export const SOCKET = 'HUSKLET_EXTENSION_SOCKET';
@@ -127,7 +128,7 @@ export class Session {
     if (this.#pending.length >= this.#limit) {
       return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
     }
-    const payload = argument === undefined ? { call: name } : { call: name, with: argument };
+    const payload = encodeRequest(name, argument);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const error = new Error(`extension call ${name} timed out after ${this.#timeout}ms`);

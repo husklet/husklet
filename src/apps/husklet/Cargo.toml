@@ -93,6 +93,9 @@ gui = [
 ]
 # Narrow hooks used only by hermetic native composition tests.
 native-test-hooks = []
+client-e2e = []
+# Explicit cross-language integration proof. Ordinary Rust gates never acquire
+# npm dependencies unless this focused client feature is enabled.
 
 [lints]
 workspace = true

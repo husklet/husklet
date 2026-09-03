@@ -302,3 +302,4 @@ export const protocolCoverage: Readonly<{
   unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
 export function semanticXml(tree: PaneSemanticTree): string;
+export * from './generated-protocol.js';

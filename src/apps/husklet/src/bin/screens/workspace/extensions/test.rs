@@ -4,6 +4,8 @@
 //! rendered widget reaches the extension that drew it.
 
 use std::cell::{Cell, RefCell};
+#[cfg(feature = "client-e2e")]
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
@@ -89,6 +91,13 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
     }
 }
+#[cfg(feature = "client-e2e")]
+#[test]
+fn a_real_client_discovers_native_terminal_and_rust_extension_surfaces() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| panes::client_socket_changes_native_ui());
+    assert!(ran, "the explicit client integration target requires an X display");
+}
+
 
 fn the_catalogue_has_a_readable_page_heading_at_narrow_and_wide_sizes() {
     for width in [300, 1_000] {
@@ -2837,6 +2846,234 @@ mod panes {
         }
         condition()
     }
+
+
+    #[cfg(feature = "client-e2e")]
+    pub(super) fn client_socket_changes_native_ui() {
+        use hl_extension::port::{
+            ContainerControl, ContainerInventory, Entry, ExtensionStore, ImageStore, NetworkStore, VolumeStore,
+            WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
+        };
+        use hl_extension::{Authority, Capability, Grant, RelativePath, Services, WorkspaceInfo};
+        use std::process::Command;
+
+        struct Unused;
+        impl ContainerInventory for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ContainerSummary>, HostError> {
+                unreachable!()
+            }
+            fn inspect(&self, _: &str) -> Result<hl_extension::port::ContainerSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl ContainerControl for Unused {
+            fn create(&self, _: &str, _: &str) -> Result<String, HostError> {
+                unreachable!()
+            }
+            fn start(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn stop(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+            fn remove(&self, _: &str) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+        impl ImageStore for Unused {
+            fn list(&self) -> Result<Vec<hl_extension::port::ImageSummary>, HostError> {
+                unreachable!()
+            }
+            fn pull(&self, _: &str) -> Result<hl_extension::port::ImageSummary, HostError> {
+                unreachable!()
+            }
+        }
+        impl VolumeStore for Unused {}
+        impl NetworkStore for Unused {}
+        impl WorkspaceInventory for Unused {
+            fn workspaces(&self) -> Result<Vec<hl_extension::port::WorkspaceState>, HostError> {
+                unreachable!()
+            }
+        }
+        impl WorkspaceControl for Unused {}
+        impl ExtensionStore for Unused {}
+        impl WorkspaceFiles for Unused {
+            fn list(&self, _: &RelativePath) -> Result<Vec<Entry>, HostError> {
+                unreachable!()
+            }
+            fn read(&self, _: &RelativePath) -> Result<Vec<u8>, HostError> {
+                unreachable!()
+            }
+            fn write(&self, _: &RelativePath, _: &[u8]) -> Result<(), HostError> {
+                unreachable!()
+            }
+        }
+
+        let fixture = super::Fixture::new(&[("agent-extension", false)]);
+        let view = Rc::clone(&fixture.view);
+        view.select_name("Extensions");
+        let bench = Bench::new();
+        let (_terminal, terminal_slot, slave) = bench.shell_with_pty();
+        let mut guest_side = std::fs::File::from(slave);
+        guest_side.write_all(b"agent-ready\r\n").expect("seed guest output");
+        let guest = std::thread::spawn(move || {
+            let expected = b"agent-status\n";
+            let mut received = vec![0_u8; expected.len()];
+            guest_side.read_exact(&mut received).expect("read MCP terminal input");
+            assert_eq!(received, expected, "MCP input reached the guest verbatim");
+            let answer = b"agent-received:agent-status\r\n";
+            guest_side.write_all(answer).expect("write guest response");
+        });
+        let gallery = Gallery::new();
+        gallery.enrol_native(view.semantic_registry());
+        let (post, deliveries) = super::super::super::extension::channel();
+        let (widget, reference) = super::super::super::extension::Interface::new(
+            deliveries,
+            Rc::new(|_: super::super::super::extension::Signal| {}),
+        );
+        let reference = reference.install();
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.append(&widget);
+        let provider_generation = gallery.enrol(
+            "containers",
+            &widget,
+            &holder,
+            &[hl_extension::PaneProvider {
+                id: ExtensionName::new("main").unwrap(),
+                title: "Containers".into(),
+                icon: None,
+            }],
+            Rc::new(|_| {}),
+        );
+        let weak = Rc::downgrade(&reference);
+        gallery.enrol_panes(
+            "containers",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .map(|page| page.borrow_mut().pane(slot))
+                    .unwrap_or_else(|| gtk::Box::new(gtk::Orientation::Vertical, 0).upcast())
+            }),
+        );
+        let weak = Rc::downgrade(&reference);
+        gallery.enrol_semantics(
+            "containers",
+            Rc::new(move |slot| {
+                weak.upgrade()
+                    .ok_or_else(|| HostError::Absent("reference extension surface closed".into()))?
+                    .borrow()
+                    .semantics(slot)
+            }),
+            Rc::new(|_, _| Err(HostError::Conflict("the reference proof is read-only".into()))),
+        );
+        gallery.ready("containers", provider_generation);
+        Window::exhibit(&bench.window, gallery.clone());
+        let surface_slot = Console::surface(&bench.window, Some("containers"), &terminal_slot, Division::Beside)
+            .expect("mount reference extension surface beside the terminal");
+        Console::switch_occupant(
+            &bench.window,
+            &surface_slot,
+            0,
+            &hl_extension::port::PaneOccupantTarget::Surface {
+                extension: "containers".into(),
+                provider: "main".into(),
+            },
+        )
+        .expect("fixture advertises its provider through typed pane inspection");
+        let frame = extension::Extension::new()
+            .observe(Vec::new())
+            .into_iter()
+            .find_map(|request| match request {
+                hl_extension::Request::InterfaceRender { frame } => Some(frame),
+                _ => None,
+            })
+            .expect("reference extension renders a frame");
+        post.send(super::super::super::extension::Delivery::FrameAt {
+            slot: surface_slot,
+            frame,
+        })
+        .expect("queue reference extension frame");
+        let (relay, errands) = hl::extension::Relay::open();
+        let console = Console::new(&bench.window, errands);
+
+        let temporary = tempfile::tempdir().expect("socket directory");
+        let socket = temporary.path().join("extension.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind real extension socket");
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("client session connects");
+            let authority = Authority::new(
+                ExtensionName::new("client-e2e").unwrap(),
+                Grant::new([
+                    Capability::TerminalRead,
+                    Capability::TerminalOutput,
+                    Capability::TerminalControl,
+                    Capability::PaneObserve,
+                    Capability::PaneSemanticRead,
+                    Capability::PaneSemanticControl,
+                ]),
+                Vec::new(),
+            );
+            let unused = Unused;
+            let services = Services {
+                workspace: WorkspaceInfo {
+                    name: "dev".into(),
+                    architecture: "arm64".into(),
+                    image: "alpine:3.20".into(),
+                },
+                workspaces: &unused,
+                workspace_control: &unused,
+                containers: &unused,
+                control: &unused,
+                images: &unused,
+                volumes: &unused,
+                networks: &unused,
+                terminal: &relay,
+                files: &unused,
+                extensions: &unused,
+            };
+            let mut conversation =
+                hl::extension::Conversation::new(stream, authority, "dev", hl::extension::Queue::new())
+                    .expect("conversation");
+            conversation.greet().expect("real handshake");
+            conversation.serve(&services).expect("real session");
+        });
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("repository root");
+        let script = root.join("extensions/client/test/native-socket-e2e.mjs");
+        assert!(
+            root.join("extensions/client/src/index.js").exists(),
+            "framework-neutral client source must exist"
+        );
+        let mut child = Command::new("node")
+            .arg(script)
+            .arg(&socket)
+            .arg(&terminal_slot)
+            .current_dir(root.join("extensions"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn real framework-neutral client");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && child.try_wait().expect("poll client child").is_none() {
+            console.drain();
+            gtk::glib::MainContext::default().iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().expect("MCP child output");
+        assert!(
+            output.status.success(),
+            "client bridge failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("<label>Extensions</label>"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("agent-received:agent-status"));
+        assert_eq!(view.shown().as_deref(), Some("Extensions"));
+        guest.join().expect("guest PTY responder");
+        served.join().expect("conversation thread");
+    }
+
 
     pub(super) fn native_workspace_semantics_cross_the_terminal_request_bridge() {
         use super::super::super::semantic::{ActionKind, Registry, Value};
