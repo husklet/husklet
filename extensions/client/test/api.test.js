@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import test from 'node:test';
 
-import { ExtensionError, PROTOCOL_CAPABILITIES, Session, protocolCoverage, protocolSurface, requestCapability, workspace } from '../src/index.js';
+import { ExtensionError, PROTOCOL_CAPABILITIES, Session, protocolCoverage, protocolSurface, requestCapability, validateUiEvent, workspace } from '../src/index.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -214,6 +214,14 @@ test('separately typed GUI interaction events remain deliverable and return cred
   assert.deepEqual(seen, [event]);
   assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, { channel: 9, kind: KIND.credit, payload: 1 });
   stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('generated UI event validation owns current payloads while protocol-1 legacy remains accepted', () => {
+  const current = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', slot: 'pane-1', source: 4, x: 2.5, y: 8 };
+  assert.equal(validateUiEvent(current), current);
+  assert.throws(() => validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop' }), /ui event/);
+  const legacy = { slot: 'pane-1', event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } } };
+  assert.equal(validateUiEvent(legacy), legacy);
 });
 
 test('concurrent pane-change waits share their host subscription until the last disposer', async () => {

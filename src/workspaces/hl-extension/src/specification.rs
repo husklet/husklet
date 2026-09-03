@@ -15,6 +15,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("src/manifest.rs", include_str!("manifest.rs")),
     ("src/subscription.rs", include_str!("subscription.rs")),
     ("src/capability.rs", include_str!("capability.rs")),
+    ("src/ui_event.rs", include_str!("ui_event.rs")),
     (
         "../hl-gui/src/identity.rs",
         include_str!("../../hl-gui/src/identity.rs"),
@@ -111,7 +112,7 @@ pub fn document() -> String {
         "Topic::ALL",
     );
     let mut references = BTreeSet::new();
-    let roots = ["Request", "Reply", "Failure", "Snapshot"]
+    let roots = ["Request", "Reply", "Failure", "Snapshot", "UiEvent"]
         .into_iter()
         .map(|name| {
             (

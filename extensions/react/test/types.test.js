@@ -8,6 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
 const declarations = fs.readFileSync(path.resolve(here, '../src/index.d.ts'), 'utf8');
 const clientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/index.d.ts'), 'utf8');
+const generatedClientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/generated-protocol.d.ts'), 'utf8');
 
 /** The body of one component's interface, as generated. */
 function shape(name) {
@@ -73,10 +74,11 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
 
 test('host events type the pane chooser identity as well as subscribed snapshots', () => {
   assert.match(clientDeclarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
-  assert.match(clientDeclarations, /export type InterfaceEvent =/);
-  assert.match(clientDeclarations, /InterfaceEventBase<'key', 'Key'> & \{ key: string; keycode: number; modifiers: number; pressed: boolean \}/);
-  assert.match(clientDeclarations, /phase: 'enter' \| 'motion' \| 'leave' \| 'press' \| 'release';/);
-  assert.match(clientDeclarations, /x: number \| null; y: number \| null; button: number; modifiers: number;/);
+  assert.match(clientDeclarations, /export type InterfaceEvent = WireUiEvent;/);
+  assert.match(clientDeclarations, /import type \{ WireUiEvent \} from '\.\/generated-protocol\.js';/);
+  assert.match(generatedClientDeclarations, /\{ interaction: "key" \} & \{ "trigger": string; "node": number; "id": string; "slot"\?: string \| null; "key": string; "keycode": number; "modifiers": number; "pressed": boolean \}/);
+  assert.match(generatedClientDeclarations, /export type UiPointerPhase = "enter" \| "motion" \| "leave" \| "press" \| "release";/);
+  assert.match(generatedClientDeclarations, /"x"\?: number \| null; "y"\?: number \| null; "button": number; "modifiers": number/);
   assert.match(clientDeclarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
   assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
   assert.doesNotMatch(

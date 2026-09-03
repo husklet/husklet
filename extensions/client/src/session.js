@@ -4,7 +4,7 @@ import net from 'node:net';
 import { CONTROL, FLAG_END, KIND, Reader, encode } from './wire.js';
 import {
   encodeRequest, PROTOCOL_CAPABILITIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_VERSION,
-  validateFailure, validateReplyFor, validateSnapshot,
+  validateFailure, validateReplyFor, validateSnapshot, validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
@@ -38,11 +38,7 @@ export function validateUiEvent(value) {
   const event = requiredObject(value, 'UI event');
   if (typeof event.pane_provider === 'string' && typeof event.slot === 'string') return value;
   if (typeof event.interaction === 'string') {
-    if (!['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'].includes(event.interaction)
-      || typeof event.trigger !== 'string' || !Number.isSafeInteger(event.node) || event.node < 0
-      || typeof event.id !== 'string' || event.id.length === 0 || event.id.length > 4096
-      || (event.slot !== undefined && typeof event.slot !== 'string')) throw new TypeError('UI interaction event is malformed');
-    return value;
+    return validateCurrentUiEvent(value);
   }
   // Protocol-1 hosts used either a string event tag or an externally-tagged
   // event object. Keep that compatibility path typed and bounded.

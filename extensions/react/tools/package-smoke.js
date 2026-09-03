@@ -227,8 +227,8 @@ try {
         }
         case 'pointer': {
           const phase: 'enter' | 'motion' | 'leave' | 'press' | 'release' = received.phase;
-          const x: number | null = received.x;
-          return phase + ':' + x;
+          const x: number | null | undefined = received.x;
+          return phase + ':' + String(x);
         }
         case 'select': return received.rows.join(',');
         case 'scroll': return received.dx + ',' + received.dy;

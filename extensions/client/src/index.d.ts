@@ -1,3 +1,5 @@
+import type { WireUiEvent } from './generated-protocol.js';
+
 export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
@@ -106,22 +108,7 @@ export interface PaneSelection { pane_provider: string; slot: string }
 export interface InterfaceEventBase<I extends string, T extends string> {
   interaction: I; trigger: T; node: number; id: string; slot?: string;
 }
-export type InterfaceEvent =
-  | InterfaceEventBase<'invoke', 'Invoke'>
-  | InterfaceEventBase<'submit', 'Submit'>
-  | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
-  | (InterfaceEventBase<'select', 'Select'> & { rows: number[]; collection?: CollectionSelection | null })
-  | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
-  | InterfaceEventBase<'close', 'Close'>
-  | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })
-  | (InterfaceEventBase<'key', 'Key'> & { key: string; keycode: number; modifiers: number; pressed: boolean })
-  | (InterfaceEventBase<'focus', 'Focus'> & { focused: boolean })
-  | (InterfaceEventBase<'pointer', 'Pointer'> & {
-      phase: 'enter' | 'motion' | 'leave' | 'press' | 'release';
-      x: number | null; y: number | null; button: number; modifiers: number;
-    })
-  | InterfaceEventBase<'drag', 'Drag'>
-  | (InterfaceEventBase<'drop', 'Drop'> & { source: number; x: number; y: number });
+export type InterfaceEvent = WireUiEvent;
 /** Protocol-1 interface spellings accepted from older hosts by the event router. */
 export type LegacyInterfaceEvent =
   | { slot?: string; event: string; node: number; id: string; value?: unknown }

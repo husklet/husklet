@@ -8,6 +8,7 @@ pub const SOURCE_PATHS: &[&str] = &[
     "src/manifest.rs",
     "src/subscription.rs",
     "src/capability.rs",
+    "src/ui_event.rs",
     "../hl-gui/src/identity.rs",
     "../hl-gui/src/node/patch.rs",
     "../hl-gui/src/node/prop.rs",

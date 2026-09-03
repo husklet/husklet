@@ -109,6 +109,7 @@ export function validateReplyFor(call, value) {
 }
 export function validateFailure(value) { validate(roots.failure, value, 'failure'); return value; }
 export function validateSnapshot(value) { validate(roots.snapshot, value, 'snapshot'); return value; }
+export function validateUiEvent(value) { validate(roots.uievent, value, 'ui event'); return value; }
 export function encodeRequest(call, payload) {
   return validateRequest(payload === undefined ? { call } : { call, with: payload });
 }
@@ -154,6 +155,7 @@ export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};
 export type WireFailure = ${type(schema.roots.failure)};
 export type WireSnapshot = ${type(schema.roots.snapshot)};
+export type WireUiEvent = ${type(schema.roots.uievent)};
 export const PROTOCOL_REPLIES: Readonly<Record<WireRequest['call'], WireReply['reply']>>;
 export const PROTOCOL_REQUEST_CAPABILITIES: Readonly<Record<WireRequest['call'], ExtensionCapability | null>>;
 export function validateRequest(value: unknown): WireRequest;
@@ -161,6 +163,7 @@ export function validateReply(value: unknown): WireReply;
 export function validateReplyFor(call: WireRequest['call'], value: unknown): WireReply;
 export function validateFailure(value: unknown): WireFailure;
 export function validateSnapshot(value: unknown): WireSnapshot;
+export function validateUiEvent(value: unknown): WireUiEvent;
 export function encodeRequest(call: WireRequest['call'], payload?: unknown): WireRequest;
 `;
 const files = [['generated-protocol.js', runtime], ['generated-protocol.d.ts', declarations]];

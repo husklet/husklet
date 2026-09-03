@@ -5444,6 +5444,105 @@ const definitions = {
       }
     ]
   },
+  "UiCollectionSelection": {
+    "fields": [
+      {
+        "name": "source",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "version",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "rows",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "UiSelectedRow"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "UiPointerPhase": {
+    "kind": "enum",
+    "serde": {},
+    "variants": [
+      {
+        "name": "enter",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "motion",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "leave",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "press",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "release",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
+  },
+  "UiSelectedRow": {
+    "fields": [
+      {
+        "name": "index",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "Variant": {
     "kind": "enum",
     "serde": {},
@@ -8938,6 +9037,718 @@ const roots = {
         }
       }
     ]
+  },
+  "uievent": {
+    "kind": "enum",
+    "serde": {
+      "deny_unknown_fields": true,
+      "tag": "interaction"
+    },
+    "variants": [
+      {
+        "name": "invoke",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "submit",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "change",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "PropValue"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "select",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "rows",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            },
+            {
+              "name": "collection",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "ref",
+                  "name": "UiCollectionSelection"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "scroll",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "dx",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            },
+            {
+              "name": "dy",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "close",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "context",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "x",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            },
+            {
+              "name": "y",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "key",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "keycode",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "modifiers",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "pressed",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "focus",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "focused",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "pointer",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "phase",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "UiPointerPhase"
+              }
+            },
+            {
+              "name": "x",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              }
+            },
+            {
+              "name": "y",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              }
+            },
+            {
+              "name": "button",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "modifiers",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "drag",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "drop",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "source",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "x",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            },
+            {
+              "name": "y",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "float"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
   }
 };
 
@@ -9002,6 +9813,7 @@ export function validateReplyFor(call, value) {
 }
 export function validateFailure(value) { validate(roots.failure, value, 'failure'); return value; }
 export function validateSnapshot(value) { validate(roots.snapshot, value, 'snapshot'); return value; }
+export function validateUiEvent(value) { validate(roots.uievent, value, 'ui event'); return value; }
 export function encodeRequest(call, payload) {
   return validateRequest(payload === undefined ? { call } : { call, with: payload });
 }

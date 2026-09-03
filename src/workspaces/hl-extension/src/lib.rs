@@ -25,6 +25,7 @@ mod request;
 mod session;
 pub mod specification;
 mod subscription;
+mod ui_event;
 
 #[cfg(test)]
 #[path = "../build_support.rs"]
@@ -56,6 +57,7 @@ pub use subscription::{
     ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
     WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
+pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow};
 
 /// Largest integer encoded as a JSON number on the cross-language wire.
 /// JavaScript cannot distinguish consecutive integers beyond this boundary.
