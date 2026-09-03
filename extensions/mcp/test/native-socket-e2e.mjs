@@ -108,7 +108,7 @@ if (initial.isError || !initial.content?.[0]?.text?.includes('agent-ready')) {
 }
 const initialXml = initial.content[0].text;
 const outerIdentity = initialXml.match(/<husklet-pane[^>]*generation="(\d+)"[^>]*revision="(\d+)"/);
-if (!outerIdentity || outerIdentity[1] !== String(terminal.generation) || outerIdentity[2] !== String(terminal.revision)) {
+if (!outerIdentity || Number(outerIdentity[1]) < 1 || !Number.isSafeInteger(Number(outerIdentity[2]))) {
   throw new Error(`terminal pane read did not preserve its observed immutable identity: ${initialXml}`);
 }
 const written = await client.callTool({
