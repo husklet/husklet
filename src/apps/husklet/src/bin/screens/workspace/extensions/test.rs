@@ -1608,6 +1608,19 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     assert_eq!(page.notice(), "reading extension manifest");
     assert!(page.poll());
     assert!(page.notice().contains("asks for"));
+    let capabilities = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::PROPOSAL_CAPABILITIES))
+        .expect("ready proposal exposes requested capabilities as one region");
+    assert_eq!(capabilities.accessible_role(), gtk::AccessibleRole::List);
+    let items = capabilities.observe_children();
+    assert_eq!(items.n_items(), 2);
+    assert!((0..items.n_items()).all(|index| {
+        items.item(index).and_downcast::<gtk::Widget>().is_some_and(|item| {
+            item.accessible_role() == gtk::AccessibleRole::ListItem
+                && descendants(&item).iter().any(|child| child.is::<gtk::CheckButton>())
+        })
+    }), "requested grants must be list items without losing their native checkbox controls");
     let ready = fixture.view.semantic_snapshot();
     assert!(!ready
         .root

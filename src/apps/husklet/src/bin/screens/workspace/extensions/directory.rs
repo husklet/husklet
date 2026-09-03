@@ -31,6 +31,7 @@ pub const PROGRESS: &str = "hl-extension-progress";
 pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
+pub const PROPOSAL_CAPABILITIES: &str = "hl-extension-proposal-capabilities";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
 pub const CAPABILITY_CHOICE: &str = "hl-extension-capability-choice";
 
@@ -473,10 +474,16 @@ impl Catalogue {
             self.proposal.append(&text(Summary::EXECUTION_NOTICE, "fhint"));
         }
         let selected = self.selection(manifest, manifest.capabilities.iter());
+        let capabilities = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        capabilities.add_css_class(PROPOSAL_CAPABILITIES);
+        capabilities.set_accessible_role(gtk::AccessibleRole::List);
         for capability in manifest.capabilities.iter() {
-            self.proposal
-                .append(&self.capability_choice(manifest, capability, &selected));
+            let item = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            item.set_accessible_role(gtk::AccessibleRole::ListItem);
+            item.append(&self.capability_choice(manifest, capability, &selected));
+            capabilities.append(&item);
         }
+        self.proposal.append(&capabilities);
         self.selected_semantics("Selected capabilities", &selected);
         self.proposal.append(&self.answer("Install"));
         self.proposal.set_visible(true);
