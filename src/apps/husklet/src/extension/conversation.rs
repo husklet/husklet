@@ -188,6 +188,9 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// How often a serving conversation yields to observation and the maximum
+    /// time one socket write may monopolize its worker.
+    const IO_TURN: Duration = Duration::from_millis(250);
     /// How long a connected peer has to complete the handshake.
     ///
     /// A process that connects and says nothing would otherwise hold the one
@@ -301,8 +304,7 @@ impl Conversation {
     /// Returns why the conversation ended, except a clean hangup, which is the
     /// ordinary end of a session and is reported as success.
     pub fn serve(&mut self, services: &Services<'_>) -> Result<(), Fault> {
-        const OBSERVE: Duration = Duration::from_millis(250);
-        self.control.set_read_timeout(Some(OBSERVE))?;
+        self.arm_io_deadlines()?;
         let mut partial_since = None;
         loop {
             match self.wire.receive() {
@@ -322,6 +324,11 @@ impl Conversation {
                 Err(other) => return Err(fault(other)),
             }
         }
+    }
+
+    fn arm_io_deadlines(&self) -> io::Result<()> {
+        self.control.set_read_timeout(Some(Self::IO_TURN))?;
+        self.control.set_write_timeout(Some(Self::IO_TURN))
     }
 
     /// Publishes changed full listings for topics backed by real production ports.
@@ -960,6 +967,48 @@ mod tests {
         fn semantic_revision(&self, revision: u64) {
             self.semantic_revision.store(revision, Ordering::Release);
         }
+    }
+
+    #[test]
+    fn credited_event_cannot_block_the_conversation_writer_without_bound() {
+        let (ours, _peer) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("stalled-reader").expect("name"),
+            Grant::new([Capability::ContainerRead]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.arm_io_deadlines().expect("socket deadlines");
+        let topic = hl_extension::Topic::Containers;
+        conversation.session.follow(topic);
+        conversation.route(topic).expect("subscription route");
+        let channel = conversation.subscriptions.channel(topic).expect("routed channel");
+        assert_eq!(
+            conversation.subscriptions.emit(
+                topic,
+                vec![b'x'; Frame::PAYLOAD_LIMIT],
+                &conversation.session,
+                &mut conversation.channels,
+                &mut conversation.outbox,
+            ),
+            Emission::Queued,
+        );
+
+        let started = Instant::now();
+        let error = conversation
+            .carry(topic)
+            .expect_err("a peer that never reads must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "credited event held the conversation worker for {:?}",
+            started.elapsed()
+        );
+        assert!(matches!(error, Fault::Socket(_)), "unexpected write failure: {error:?}");
+        assert_eq!(
+            conversation.outbox.depth(channel),
+            0,
+            "failed write is not retained without bound"
+        );
     }
 
     /// In-memory adapters: no container runtime and no window.
