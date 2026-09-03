@@ -66,6 +66,7 @@ import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
 const { createElement: h, useMemo, useRef, useState } = React;
 
 const INTERACTION_HISTORY = 5;
+export const SEARCH_RESULT_LIMIT = 24;
 export const FLOW_STORIES = Object.freeze([
   RESOURCE_STATE_STORY, IMAGE_PULL_STORY, WORKSPACE_FILE_EDIT_STORY, EXTENSION_LIFECYCLE_STORY, WORKSPACE_LAYOUT_STORY, CONTAINER_OPERATIONS_STORY, CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
   QUERY_PLAN_STORY, DEPENDENCY_GRAPH_STORY, NETWORK_WATERFALL_STORY, COVERAGE_STORY,
@@ -118,29 +119,64 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
   const [search, setSearch] = useState('');
   const family = families.find((candidate) => candidate.name === activeFamily) ?? families[0];
   const query = search.trim().toLocaleLowerCase();
-  const visible = family.tags.filter((tag) => query.length === 0 || tag.name.toLocaleLowerCase().includes(query));
+  const results = searchResults(families, query);
   return h(
     Scroll,
     { width: 'fill', height: 'fill' },
     h(
       List,
       { pad: 1 },
+      h(ListSubheader, { key: 'find', label: 'Find a story', tooltip: 'search every flow and component family' }),
+      h(Entry, {
+        key: 'search', value: search, placeholder: 'Search flows and components',
+        onChange: (event) => setSearch(String(event.value ?? '').slice(0, 80)),
+      }),
+      ...(query.length > 0
+        ? [
+            h(ListSubheader, { key: 'results', label: 'Search results', value: String(results.length) }),
+            ...results.map((result) => h(ListItemButton, {
+              key: `${result.kind}:${result.name}`,
+              label: result.name,
+              tooltip: result.detail,
+              selected: selected === result.name,
+              onInvoke: () => {
+                if (result.family) onFamily(result.family);
+                onSelect(result.name);
+              },
+            })),
+            ...(results.length === 0
+              ? [h(Text, { key: 'none', label: 'No flows or components match this search.', color: 'text-dim', wrap: true })]
+              : []),
+          ]
+        : [
       h(ListSubheader, { key: 'flows', label: 'End-user flows', tooltip: 'whole product states composed from the library' }),
       ...FLOW_STORIES.map((story) => h(ListItemButton, { key: story, label: story, selected: selected === story, onInvoke: () => onSelect(story) })),
       h(ListSubheader, { key: 'components', label: 'Components', tooltip: 'choose one bounded catalogue family' }),
       h(Select, {
         key: 'family', value: family.name,
         choices: families.map((candidate) => ({ value: candidate.name, label: candidate.label })),
-        onChange: (event) => { setSearch(''); onFamily(String(event.value)); },
+        onChange: (event) => onFamily(String(event.value)),
       }),
-      h(Entry, { key: 'search', value: search, placeholder: 'Search active family', onChange: (event) => setSearch(String(event.value ?? '').slice(0, 80)) }),
       h(ListSubheader, { key: family.name, label: family.label, tooltip: family.note }),
-      ...visible.map((tag) => h(ListItemButton, {
+      ...family.tags.map((tag) => h(ListItemButton, {
         key: tag.name, label: tag.name, selected: tag.name === selected, onInvoke: () => onSelect(tag.name),
       })),
-      ...(visible.length === 0 ? [h(Text, { key: 'none', label: 'No components match this family search.', color: 'text-dim', wrap: true })] : []),
+        ]),
     ),
   );
+}
+
+/** A bounded global navigation projection; no query materializes the catalogue. */
+export function searchResults(families, query) {
+  const normalized = String(query ?? '').trim().toLocaleLowerCase();
+  if (normalized.length === 0) return [];
+  const flows = FLOW_STORIES
+    .filter((name) => name.toLocaleLowerCase().includes(normalized))
+    .map((name) => ({ kind: 'flow', name, detail: 'End-user flow', family: null }));
+  const components = families.flatMap((family) => family.tags
+    .filter((tag) => tag.name.toLocaleLowerCase().includes(normalized))
+    .map((tag) => ({ kind: 'component', name: tag.name, detail: family.label, family: family.name })));
+  return [...flows, ...components].slice(0, SEARCH_RESULT_LIMIT);
 }
 
 /** The selected component, alive, with the properties currently set on it. */
