@@ -50,6 +50,11 @@ export async function runPaneAgentTurn(client, {
   const terminalBefore = await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 });
   const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
   const revision = attribute(semanticBefore, 'revision');
+  const generation = semantic.generation;
+  if (!Number.isSafeInteger(generation) || generation < 0
+      || !Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error('semantic pane discovery and snapshot must expose a nonnegative generation/revision cursor');
+  }
   const node = nodeForLabel(semanticBefore, actionLabel);
 
   await call(client, 'husklet_terminal_write_bytes', {
@@ -59,7 +64,10 @@ export async function runPaneAgentTurn(client, {
   // Arm the one-shot subscription first; request ordering prevents a fast UI
   // update from racing past observation.
   const waiting = call(client, 'husklet_pane_wait', {
-    slot: semantic.slot, timeout_ms: waitMs,
+    slot: semantic.slot,
+    after_generation: generation,
+    after_revision: revision,
+    timeout_ms: waitMs,
   });
   await call(client, 'husklet_pane_action', {
     slot: semantic.slot, revision, node, action: 'invoke',
@@ -71,6 +79,6 @@ export async function runPaneAgentTurn(client, {
 
   return {
     terminal: { slot: terminal.slot, snapshot: terminalBefore },
-    semantic: { slot: semantic.slot, revision, node, before: semanticBefore, changed, after: semanticAfter },
+    semantic: { slot: semantic.slot, generation, revision, node, before: semanticBefore, changed, after: semanticAfter },
   };
 }

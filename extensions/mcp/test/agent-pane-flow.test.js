@@ -16,8 +16,8 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
     call: async (name, argument) => {
       calls.push([name, argument]);
       if (name === 'pane_list') return { reply: 'panes', with: { panes: [
-        { slot: 'term-1', kind: 'terminal', provider: null, tab: 't', title: 'Shell', focused: true },
-        { slot: 'native-1', kind: 'native', provider: null, tab: null, title: 'Workspace', focused: false },
+        { slot: 'term-1', generation: 1, revision: 3, kind: 'terminal', provider: null, tab: 't', title: 'Shell', focused: true },
+        { slot: 'native-1', generation: 2, revision: 41, kind: 'native', provider: null, tab: null, title: 'Workspace', focused: false },
       ], truncated: false } };
       if (name === 'terminal_topology') return { reply: 'topology', with: {
         active_tab: 't', tabs: [{ id: 't', title: 'Shell', root: pane }],
@@ -38,6 +38,9 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
       }
       if (name === 'event_subscribe') {
         calls.push(['subscription-ready']);
+        queueMicrotask(() => { for (const listener of listeners) listener({ snapshot: 'pane_changes', of: {
+          slot: 'native-1', kind: 'native', revision: 41, generation: 2, coalesced: 0,
+        } }); });
         return { reply: 'done' };
       }
       if (name === 'event_unsubscribe') return { reply: 'done' };
@@ -51,8 +54,10 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
 
   const answer = await runPaneAgentTurn(client, { terminalBytes: Uint8Array.from([0, 3, 255]), waitMs: 1000 });
   assert.equal(answer.semantic.revision, 41);
+  assert.equal(answer.semantic.generation, 2);
   assert.equal(answer.semantic.node, 7);
   assert.equal(answer.semantic.changed.change.coalesced, 3);
+  assert.equal(answer.semantic.changed.change.revision, 42, 'the unchanged initial cursor did not settle the wait');
   assert.match(answer.semantic.after, /revision="41"/);
   assert(calls.some(([name, argument]) => name === 'terminal_write_pane'
     && argument.slot === 'term-1' && Buffer.from(argument.contents).equals(Buffer.from([0, 3, 255]))));
@@ -61,6 +66,8 @@ test('agent flow discovers, observes, writes exact bytes, acts at its observed r
   assert.equal(calls.filter(([name]) => name === 'pane_semantic_read').length, 3);
   assert.equal(calls.filter(([name]) => name === 'event_subscribe').length, 1);
   assert.equal(calls.filter(([name]) => name === 'event_unsubscribe').length, 1);
+  assert(calls.some(([name, argument]) => name === 'event_subscribe'
+    && argument.topic === 'pane-changes'));
 
   await client.close();
   await server.close();
