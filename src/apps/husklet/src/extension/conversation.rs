@@ -321,45 +321,45 @@ impl Conversation {
     fn observe(&mut self, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
         let mut snapshots = Vec::new();
-        if self.session.may_emit(Topic::Containers) {
+        if self.may_observe(Topic::Containers) {
             if let Ok(containers) = services.containers.list() {
                 snapshots.push(Snapshot::Containers(containers));
             }
         }
-        if self.session.may_emit(Topic::Executions) {
+        if self.may_observe(Topic::Executions) {
             if let Ok(executions) = services.containers.executions() {
                 snapshots.push(Snapshot::Executions(executions));
             }
         }
-        if self.session.may_emit(Topic::Images) {
+        if self.may_observe(Topic::Images) {
             if let Ok(images) = services.images.list() {
                 snapshots.push(Snapshot::Images(images));
             }
         }
-        if self.session.may_emit(Topic::ImagePulls) {
+        if self.may_observe(Topic::ImagePulls) {
             snapshots.extend(services.images.pull_changes().into_iter().map(Snapshot::ImagePulls));
         }
-        if self.session.may_emit(Topic::Volumes) {
+        if self.may_observe(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
                 snapshots.push(Snapshot::Volumes(volumes));
             }
         }
-        if self.session.may_emit(Topic::Networks) {
+        if self.may_observe(Topic::Networks) {
             if let Ok(networks) = services.networks.list() {
                 snapshots.push(Snapshot::Networks(networks));
             }
         }
-        if self.session.may_emit(Topic::Terminal) {
+        if self.may_observe(Topic::Terminal) {
             if let Ok(tabs) = services.terminal.tabs() {
                 snapshots.push(Snapshot::Terminal(tabs));
             }
         }
-        if self.session.may_emit(Topic::Extensions) {
+        if self.may_observe(Topic::Extensions) {
             if let Ok(extensions) = services.extensions.list() {
                 snapshots.push(Snapshot::Extensions(extensions));
             }
         }
-        if self.session.may_emit(Topic::ExtensionAcquisitions) {
+        if self.may_observe(Topic::ExtensionAcquisitions) {
             if let Some(batch) = self.drain_extension_events() {
                 for (index, invalidation) in batch.acquisitions.into_iter().enumerate() {
                     snapshots.push(Snapshot::ExtensionAcquisitions(
@@ -376,12 +376,12 @@ impl Conversation {
                 }
             }
         }
-        if self.session.may_emit(Topic::WorkspaceEvents) {
+        if self.may_observe(Topic::WorkspaceEvents) {
             if let Some(batch) = self.events.as_ref().and_then(super::host::Events::drain) {
                 snapshots.push(Snapshot::WorkspaceEvents(batch));
             }
         }
-        if self.session.may_emit(Topic::WorkspaceLifecycle) {
+        if self.may_observe(Topic::WorkspaceLifecycle) {
             if let Some(revision) = self.workspace_lifecycle_revision {
                 if let Ok(changes) = services.workspace_control.lifecycle_since(revision) {
                     for change in changes {
@@ -406,6 +406,21 @@ impl Conversation {
         }
         self.observe_panes(services)?;
         Ok(())
+    }
+
+    /// Whether collecting a topic can produce an event the peer is currently
+    /// allowed to receive. The first collection has no route yet and is what
+    /// allocates one; after that, exhausted channel credit stops work at the
+    /// service boundary rather than repeatedly rebuilding snapshots which
+    /// cannot leave the host. Returned credit makes the next observation read
+    /// fresh state, so a stalled peer resumes from the latest full snapshot.
+    fn may_observe(&self, topic: Topic) -> bool {
+        if !self.session.may_emit(topic) {
+            return false;
+        }
+        self.subscriptions
+            .channel(topic)
+            .is_none_or(|channel| self.channels.credit(channel).is_some_and(|credit| credit > 0))
     }
 
     fn flush_interactions(&mut self) -> Result<(), Fault> {
@@ -838,8 +853,18 @@ mod tests {
     struct Host {
         ledger: Arc<Ledger>,
     }
-    impl hl_extension::port::VolumeStore for Host {}
-    impl hl_extension::port::NetworkStore for Host {}
+    impl hl_extension::port::VolumeStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
+            self.ledger.note("volumes.list");
+            Ok(Vec::new())
+        }
+    }
+    impl hl_extension::port::NetworkStore for Host {
+        fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
+            self.ledger.note("networks.list");
+            Ok(Vec::new())
+        }
+    }
 
     impl ContainerInventory for Host {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -911,6 +936,11 @@ mod tests {
                 size: 1,
                 created: 0,
             })
+        }
+
+        fn pull_changes(&self) -> Vec<hl_extension::port::ImagePullChange> {
+            self.ledger.note("images.pull_changes");
+            Vec::new()
         }
     }
 
@@ -1450,6 +1480,69 @@ mod tests {
         let released = peer.receive().expect("latest event released");
         let latest: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
         assert!(matches!(latest, Snapshot::Containers(containers) if containers[0].created == 99));
+    }
+
+    #[test]
+    fn stalled_subscriptions_do_no_service_reads_and_resume_after_exact_credit() {
+        let ledger = Arc::new(Ledger::default());
+        let host = Host {
+            ledger: Arc::clone(&ledger),
+        };
+        let (ours, _theirs) = UnixStream::pair().expect("socket pair");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([
+                Capability::ContainerRead,
+                Capability::ImageRead,
+                Capability::ImageWrite,
+                Capability::VolumeRead,
+                Capability::NetworkRead,
+                Capability::TerminalRead,
+            ]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        let topics = [
+            hl_extension::Topic::Containers,
+            hl_extension::Topic::Executions,
+            hl_extension::Topic::Images,
+            hl_extension::Topic::ImagePulls,
+            hl_extension::Topic::Volumes,
+            hl_extension::Topic::Networks,
+            hl_extension::Topic::Terminal,
+        ];
+        for topic in topics {
+            conversation.session.follow(topic);
+            conversation.route(topic).expect("subscription route");
+            let channel = conversation.subscriptions.channel(topic).expect("routed channel");
+            for _ in 0..hl_extension::Channels::CREDIT {
+                assert_eq!(
+                    conversation.channels.reserve(channel),
+                    Ok(hl_extension::Permission::Send),
+                    "every initial credit is available for {topic:?}",
+                );
+            }
+            assert_eq!(conversation.channels.credit(channel), Some(0));
+        }
+
+        conversation.observe(&services(&host)).expect("stalled observation");
+        assert!(
+            ledger.reached().is_empty(),
+            "zero credit must stop work before every subscribed service boundary"
+        );
+
+        let resumed = hl_extension::Topic::Containers;
+        let channel = conversation.subscriptions.channel(resumed).expect("container channel");
+        let credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+        conversation
+            .exchange(&credit, &services(&host))
+            .expect("credit returned");
+        conversation.observe(&services(&host)).expect("resumed observation");
+        assert_eq!(
+            ledger.reached(),
+            vec!["containers.list"],
+            "only the exact replenished topic resumes, from a fresh service read"
+        );
     }
 
     #[test]
