@@ -158,6 +158,23 @@ function containerCreateOptions(draft) {
   const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
   const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
   const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
+  const mountsText = draft.mounts.trim();
+  let mounts;
+  if (mountsText) {
+    try { mounts = JSON.parse(mountsText); } catch { throw new Error('Mounts must be valid JSON, such as [{"volume":"cache","target":"/cache","read_only":true}].'); }
+    const allowed = new Set(['volume', 'target', 'read_only']);
+    if (!Array.isArray(mounts) || mounts.length > 64
+      || mounts.some((mount) => !mount || typeof mount !== 'object' || Array.isArray(mount)
+        || Object.keys(mount).some((key) => !allowed.has(key))
+        || typeof mount.volume !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(mount.volume)
+        || typeof mount.target !== 'string' || !mount.target.startsWith('/') || bytes(mount.target) > 4_096
+        || mount.target.includes('\0') || mount.target.split('/').some((part) => part === '.' || part === '..')
+        || (mount.read_only !== undefined && typeof mount.read_only !== 'boolean'))
+      || new Set(mounts.map((mount) => mount.target)).size !== mounts.length) {
+      throw new Error('Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.');
+    }
+    mounts = mounts.map(({ volume, target, read_only = false }) => ({ volume, target, read_only }));
+  }
   return {
     ...(command ? { command } : {}),
     ...(environment ? { environment } : {}),
@@ -165,6 +182,7 @@ function containerCreateOptions(draft) {
     ...(memoryMb === null ? {} : { memory_mb: memoryMb }),
     ...(cpus === null ? {} : { cpus }),
     ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
+    ...(mounts ? { mounts } : {}),
   };
 }
 
@@ -188,7 +206,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({
-    image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '',
+    image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '',
   });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -241,7 +259,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
       setCreated(null); setDraft({
-        image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '',
+        image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '',
       });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
@@ -275,7 +293,8 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.workingDirectory, placeholder: 'Working directory (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') })) }),
         h(Entry, { value: draft.memoryMb, placeholder: 'Memory limit MiB (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, memoryMb: String(event.value ?? '') })) }),
         h(Entry, { value: draft.cpus, placeholder: 'CPU limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, cpus: String(event.value ?? '') })) }),
-        h(Entry, { value: draft.pidsLimit, placeholder: 'PID limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') })) }))),
+        h(Entry, { value: draft.pidsLimit, placeholder: 'PID limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.mounts, placeholder: 'Named volume mounts JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, mounts: String(event.value ?? '') })) }))),
       h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
         label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
         enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError)),

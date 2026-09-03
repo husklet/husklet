@@ -468,6 +468,52 @@ test('container creation validates exact resource bounds and retains them until 
   assert.equal(fieldValue(stage, 'PID limit (optional)'), '');
 });
 
+test('container creation accepts only bounded named-volume mounts and retains them until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('volume attachment temporarily unavailable');
+      return 'mounted-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'mounted');
+  const placeholder = 'Named volume mounts JSON (optional)';
+  const error = 'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.';
+  for (const invalid of [
+    '[{"volume":"cache","target":"relative"}]',
+    '[{"volume":"cache","target":"/cache/../secret"}]',
+    '[{"volume":"cache","target":"/cache","read_only":"yes"}]',
+    '[{"volume":"cache","target":"/same"},{"volume":"data","target":"/same"}]',
+    JSON.stringify(Array.from({ length: 65 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` }))),
+    '[{"source":"/host","target":"/guest"}]',
+  ]) {
+    change(stage, placeholder, invalid);
+    assert.ok(labelled(stage, error));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, placeholder, JSON.stringify(Array.from({ length: 64 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` }))));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 64-mount boundary is accepted');
+  const requested = '[{"volume":"cache","target":"/cache","read_only":true},{"volume":"data","target":"/srv/data"}]';
+  change(stage, placeholder, requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'volume attachment temporarily unavailable'));
+  assert.equal(fieldValue(stage, placeholder), requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'mounted', mounts: [
+    { volume: 'cache', target: '/cache', read_only: true },
+    { volume: 'data', target: '/srv/data', read_only: false },
+  ] };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'mounted-container'], ['reload']]);
+  assert.equal(fieldValue(stage, placeholder), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
