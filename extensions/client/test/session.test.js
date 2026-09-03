@@ -568,3 +568,38 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
     await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('real Unix container start wait arms first and ignores unchanged initial state', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-start-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const id = 'a'.repeat(32);
+  const summary = (state) => ({ id, name: 'agent', image: 'alpine:3.20', state, created: 1 });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        setImmediate(() => socket.write(encode({ channel: 31, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('created')] } })));
+      } else if (frame.payload.call === 'container_start') {
+        socket.write(encode({ channel: 32, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('created')] } }));
+        socket.write(encode({ channel: 33, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running')] } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'container-start-wait', granted: ['container-read', 'container-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).containers.startAndWait(id);
+    assert.equal(result.changed, true); assert.equal(result.container.state, 'running');
+    assert.deepEqual(calls, ['event_subscribe', 'container_start', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -56,6 +56,9 @@ const removed = await host.extensions.removeAndWait(extension.name, extension.im
 
 // Consent is bound to this ready revision. Inventory is armed before commit.
 const installed = await host.extensions.installAndWait(status.job, status.revision, status.candidate.requested);
+
+// Arm observation before starting; an unchanged initial snapshot cannot settle this.
+const running = await host.containers.startAndWait(containerId);
 if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
 ```
 

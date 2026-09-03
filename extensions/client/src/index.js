@@ -447,6 +447,35 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
+  api.containers.startAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('container start wait timeout must be between 1 and 30000ms');
+    }
+    let sequence = 0; let baseline = 0; let started = false; let observed; let timer;
+    const running = new Promise((resolve) => {
+      observed = (containers) => {
+        sequence += 1;
+        if (!started || sequence <= baseline) return;
+        const current = containers.find((container) => container.id === identity);
+        if (current?.state === 'running') resolve(current);
+      };
+    });
+    const stop = await api.watchContainers(observed);
+    baseline = sequence;
+    try {
+      started = true;
+      await api.containers.start(identity);
+      const container = await Promise.race([
+        running,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return container === null ? { changed: false, id: identity, state: 'running' } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchImages = (listener) => watch('images', 'images', listener, 'image');
   api.watchVolumes = (listener) => watch('volumes', 'volumes', listener, 'volume');
   api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');

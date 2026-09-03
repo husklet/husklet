@@ -261,6 +261,11 @@ export interface WorkspaceApi {
     /** Backwards-compatible shorthand for an image and optional container name. */
     create(image: string, name?: string): Promise<string>;
     start(id: string): Promise<void>;
+    /** Arm bounded inventory, start an immutable ID, then accept only a later running snapshot. */
+    startAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; state: 'running' }
+    >;
     stop(id: string): Promise<void>;
     remove(id: string): Promise<void>;
     pause(id: string): Promise<void>;
