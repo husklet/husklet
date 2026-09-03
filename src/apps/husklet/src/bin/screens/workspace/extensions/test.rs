@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate, Roster};
-use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Stage, Wire};
+use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Stage, Wire, PROTOCOL};
 use hl_ws::storage::Directory;
 
 use super::super::{Page, View};
-use super::{Catalogue, Cleanup, Gallery, Inspection, PendingInspection, Shared, Shelf, Surfaces, directory, settings};
+use super::{directory, settings, Catalogue, Cleanup, Gallery, Inspection, PendingInspection, Shared, Shelf, Surfaces};
 
 /// The style class the fake surface carries, so a test can tell an extension's
 /// own page from the settings page beside it.
@@ -47,6 +47,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue();
+        the_catalogue_has_a_readable_page_heading_at_narrow_and_wide_sizes();
         registry_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
@@ -88,6 +89,35 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     }
 }
 
+fn the_catalogue_has_a_readable_page_heading_at_narrow_and_wide_sizes() {
+    for width in [300, 1_000] {
+        let fixture = Fixture::new(&[]);
+        fixture.view.select_name(Page::Extensions.title());
+        let window = gtk::Window::builder()
+            .default_width(width)
+            .default_height(600)
+            .child(&fixture.view.widget)
+            .build();
+        window.present();
+        while gtk::glib::MainContext::default().iteration(false) {}
+        let labels: Vec<_> = descendants(fixture._catalogue.viewport().upcast_ref())
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+            .collect();
+        let title = labels
+            .iter()
+            .find(|label| label.text() == "Extensions")
+            .unwrap_or_else(|| panic!("Extensions page title is absent at {width}px"));
+        assert!(title.is_visible());
+        assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
+        let installed = labels
+            .iter()
+            .find(|label| label.text() == "Installed")
+            .expect("Installed section");
+        assert!(title.allocation().y() <= installed.allocation().y());
+    }
+}
+
 #[test]
 fn a_terminal_projection_carries_rendered_text_and_cursor() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
@@ -122,12 +152,10 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Granted capabilities"))
         .expect("the consented authority is visible to agents");
-    assert!(
-        grants
-            .value
-            .as_deref()
-            .is_some_and(|value| { value.contains("interface") && value.contains("container-read") })
-    );
+    assert!(grants
+        .value
+        .as_deref()
+        .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
     let enable = snapshot
         .root
         .children
@@ -146,20 +174,16 @@ fn native_extension_cards_are_semantic_and_actionable() {
     assert_eq!(fixture.stage("semantic"), Stage::Duty);
     let refreshed = fixture.view.semantic_snapshot();
     assert!(refreshed.revision > snapshot.revision);
-    assert!(
-        refreshed
-            .root
-            .children
-            .iter()
-            .any(|node| node.label.as_deref() == Some("Disable"))
-    );
-    assert!(
-        refreshed
-            .root
-            .children
-            .iter()
-            .any(|node| node.label.as_deref() == Some("Read manifest"))
-    );
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Disable")));
+    assert!(refreshed
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Read manifest")));
 
     let empty = Fixture::new(&[]).view.semantic_snapshot();
     assert!(empty.root.children.iter().any(|node| {
@@ -1233,16 +1257,12 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
                 .map(|label| label.text().to_string())
         })
         .collect();
-    assert!(
-        labels
-            .iter()
-            .any(|line| line.contains("installed") && line.contains("sha256:aaaa"))
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|line| line.contains("candidate  2.0.0") && line.contains("sha256:cccc"))
-    );
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("installed") && line.contains("sha256:aaaa")));
+    assert!(labels
+        .iter()
+        .any(|line| line.contains("candidate  2.0.0") && line.contains("sha256:cccc")));
     assert!(
         labels.iter().any(|line| line == "+ container-control"),
         "new authority is called out explicitly: {labels:?}"
@@ -1421,13 +1441,11 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     assert!(page.poll());
     assert!(page.notice().contains("asks for"));
     let ready = fixture.view.semantic_snapshot();
-    assert!(
-        !ready
-            .root
-            .children
-            .iter()
-            .any(|node| node.label.as_deref() == Some("Cancel download"))
-    );
+    assert!(!ready
+        .root
+        .children
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Cancel download")));
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a ready image still awaits consent"
@@ -2001,7 +2019,7 @@ fn shake(wire: &mut Wire<UnixStream>) -> Result<(), hl_extension::Transit> {
 }
 
 fn a_click_on_a_rendered_button_reaches_the_extension() {
-    use super::super::extension::{Delivery, Interface, Signal, channel};
+    use super::super::extension::{channel, Delivery, Interface, Signal};
 
     let temporary = tempfile::tempdir().expect("temporary directory");
     let socket = temporary.path().join("run/extension.sock");
@@ -2195,7 +2213,7 @@ fn stale_provider_generations_cannot_authorize_replacements() {
 }
 
 fn failed_enable_has_no_socket_or_provider_until_durable_retry() {
-    use super::super::extension::{Delivery, Interface, Signal, channel};
+    use super::super::extension::{channel, Delivery, Interface, Signal};
 
     let storage = tempfile::tempdir().expect("storage");
     let root = storage.path().join("workspace");
@@ -2615,13 +2633,13 @@ mod panes {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::ExtensionName;
     use hl_extension::port::{Division, HostError, LayoutNode, Occupant, TerminalSurface};
+    use hl_extension::ExtensionName;
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        ABSENCE, Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin,
-        Window, WindowSession,
+        Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+        WindowSession, ABSENCE,
     };
     use super::super::Console;
     use super::super::{Gallery, Shelf, Surfaces};
@@ -3102,12 +3120,10 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
         };
         assert!(!inventory.truncated);
-        assert!(
-            inventory
-                .panes
-                .iter()
-                .any(|pane| { pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native })
-        );
+        assert!(inventory
+            .panes
+            .iter()
+            .any(|pane| { pane.slot == "workspace" && pane.kind == hl_extension::PaneKind::Native }));
 
         let (sent, received) = std::sync::mpsc::channel();
         let request = std::sync::Arc::clone(&relay);
@@ -3601,7 +3617,11 @@ mod panes {
         .expect("shipped Storybook manifest");
         let manifest = hl_extension::Manifest::parse(&document, hl_extension::PROTOCOL)
             .expect("host accepts shipped Storybook manifest");
-        let provider = manifest.pane_providers.first().expect("Storybook pane provider").clone();
+        let provider = manifest
+            .pane_providers
+            .first()
+            .expect("Storybook pane provider")
+            .clone();
 
         let bench = Bench::new();
         let (_terminal, slot) = bench.shell();
@@ -4000,7 +4020,7 @@ mod panes {
     }
 
     pub(super) fn two_same_extension_panes_render_independently_by_slot() {
-        use super::super::super::extension::{Delivery, Interface, channel};
+        use super::super::super::extension::{channel, Delivery, Interface};
         use hl_gui::{Element, Reconciliation};
 
         let bench = Bench::new();

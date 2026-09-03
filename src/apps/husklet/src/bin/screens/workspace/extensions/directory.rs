@@ -14,7 +14,7 @@ use gtk::prelude::*;
 use hl::extension::{Acquisition, Candidate};
 use hl_extension::{Capability, Grant, Manifest, Summary, Update};
 
-use super::{Inspection, PendingInspection, Shelf, moment};
+use super::{moment, Inspection, PendingInspection, Shelf};
 
 /// Style class on the field an image reference is typed into.
 pub const REFERENCE: &str = "hl-extension-reference";
@@ -239,7 +239,9 @@ impl Catalogue {
         let reference = self.reference.text().trim().to_owned();
         self.forget();
         if reference.is_empty() {
-            self.say("Enter an OCI image, for example acme/my-extension:1.2.3 or registry.example.com/team/extension:1.2.3");
+            self.say(
+                "Enter an OCI image, for example acme/my-extension:1.2.3 or registry.example.com/team/extension:1.2.3",
+            );
             return;
         }
         if reference.len() > 512 {
@@ -860,6 +862,9 @@ impl Catalogue {
     /// Lays the page out and puts its polling on the main loop.
     fn assemble(self: &Rc<Self>) {
         use super::super::semantic::{ActionKind, Value};
+        let title = text("Extensions", "dashtitle");
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
+        self.widget.append(&title);
         self.widget.append(&text("Installed", "dhead"));
         self.widget.append(&self.listing);
         self.widget.append(&text("Register an image", "dhead"));
