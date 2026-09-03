@@ -340,30 +340,96 @@ mod color_picker_tests {
 }
 
 #[derive(Clone)]
-pub struct FontPicker(gtk::FontDialogButton);
+pub struct FontPicker {
+    button: gtk::Button,
+    stored: Rc<RefCell<String>>,
+    changed: Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>>,
+}
 
 impl FontPicker {
     pub fn new(family: &str) -> Self {
-        let button = gtk::FontDialogButton::new(Some(gtk::FontDialog::new()));
-        button.set_use_font(true);
-        button.set_use_size(false);
-        let picker = Self(button);
+        let button = gtk::Button::new();
+        let stored = Rc::new(RefCell::new(family.to_owned()));
+        let changed: Rc<RefCell<Vec<Rc<dyn Fn(&str)>>>> = Rc::new(RefCell::new(Vec::new()));
+        let dialog = gtk::FontDialog::builder().title("Pick a Font").modal(true).build();
+        {
+            let stored = stored.clone();
+            let changed = changed.clone();
+            button.connect_clicked(move |button| {
+                let parent = button.root().and_downcast::<gtk::Window>();
+                let initial = gtk::pango::FontDescription::from_string(&stored.borrow());
+                let button = button.clone();
+                let stored = stored.clone();
+                let changed = changed.clone();
+                dialog.choose_font(
+                    parent.as_ref(),
+                    Some(&initial),
+                    gtk::gio::Cancellable::NONE,
+                    move |result| {
+                        let Ok(description) = result else { return };
+                        let Some(family) = description.family() else { return };
+                        let family = family.to_string();
+                        stored.replace(family.clone());
+                        button.set_label(&family);
+                        button.set_tooltip_text(Some(&format!("Terminal font: {family}")));
+                        for listener in changed.borrow().iter() {
+                            listener(&family);
+                        }
+                    },
+                );
+            });
+        }
+        let picker = Self {
+            button,
+            stored,
+            changed,
+        };
         picker.set_value(family);
         picker
     }
 
-    pub fn widget(&self) -> &gtk::FontDialogButton {
-        &self.0
+    pub fn widget(&self) -> &gtk::Button {
+        &self.button
     }
 
     pub fn set_value(&self, family: &str) {
-        self.0.set_font_desc(&gtk::pango::FontDescription::from_string(family));
+        self.stored.replace(family.to_owned());
+        self.button.set_label(family);
+        self.button.set_tooltip_text(Some(&format!("Terminal font: {family}")));
+        for listener in self.changed.borrow().iter() {
+            listener(family);
+        }
+    }
+
+    pub fn connect_value_changed(&self, listener: impl Fn(&str) + 'static) {
+        self.changed.borrow_mut().push(Rc::new(listener));
     }
 
     pub fn value(&self) -> String {
-        self.0
-            .font_desc()
-            .and_then(|description| description.family().map(|family| family.to_string()))
-            .unwrap_or_default()
+        self.stored.borrow().clone()
+    }
+}
+
+#[cfg(test)]
+mod font_picker_tests {
+    use super::FontPicker;
+    use gtk::prelude::ButtonExt;
+
+    #[test]
+    fn unavailable_font_families_remain_visible_and_are_not_discarded() {
+        if gtk::init().is_err() {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+        let picker = FontPicker::new("Definitely Missing Husklet Font");
+        assert_eq!(picker.value(), "Definitely Missing Husklet Font");
+        assert_eq!(
+            picker.widget().label().as_deref(),
+            Some("Definitely Missing Husklet Font")
+        );
+
+        picker.set_value("Another Missing Font");
+        assert_eq!(picker.value(), "Another Missing Font");
+        assert_eq!(picker.widget().label().as_deref(), Some("Another Missing Font"));
     }
 }

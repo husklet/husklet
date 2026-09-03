@@ -485,12 +485,9 @@ fn register_font(semantics: &screens::workspace::semantic::Registry, path: &str,
     );
     let registry = semantics.clone();
     let path = path.to_owned();
-    input.widget().connect_font_desc_notify(move |input| {
-        let family = input
-            .font_desc()
-            .and_then(|description| description.family().map(|family| family.to_string()))
-            .unwrap_or_default();
-        registry.update(&path, Value::Public(&family), !input.is_sensitive());
+    let widget = input.widget().clone();
+    input.connect_value_changed(move |family| {
+        registry.update(&path, Value::Public(family), !widget.is_sensitive());
     });
 }
 
