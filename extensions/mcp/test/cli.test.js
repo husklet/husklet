@@ -133,9 +133,26 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
     'husklet_terminal_resize', 'husklet_terminal_ratio',
     'husklet_terminal_switch_occupant', 'husklet_terminal_close',
   ]);
+  const confirmedIdentity = new Map([
+    ['husklet_workspace_update', ['generation']], ['husklet_workspace_delete', ['generation']],
+    ['husklet_extension_enable', ['image_digest']], ['husklet_extension_disable', ['image_digest']],
+    ['husklet_extension_remove', ['image_digest']], ['husklet_extension_acquisition_cancel', ['job', 'revision']],
+    ['husklet_extension_install', ['job', 'revision']], ['husklet_extension_update', ['job', 'revision']],
+    ['husklet_execution_signal', ['id']], ['husklet_execution_remove', ['id']], ['husklet_container_stop', ['id']],
+    ['husklet_container_remove', ['id']], ['husklet_container_kill', ['id']],
+    ['husklet_volume_remove', ['generation']], ['husklet_network_remove', ['reference']],
+    ['husklet_network_disconnect', ['reference', 'container']], ['husklet_image_remove', ['reference']],
+    ['husklet_terminal_close', ['generation', 'revision']],
+  ]);
   for (const tool of listed.tools.filter(({ name }) => cursorBound.has(name))) {
     assert.ok(tool.inputSchema.required.includes('generation'), `${tool.name} packaged without generation`);
     assert.ok(tool.inputSchema.required.includes('revision'), `${tool.name} packaged without revision`);
+  }
+  for (const [name, identity] of confirmedIdentity) {
+    const tool = listed.tools.find((candidate) => candidate.name === name);
+    assert.ok(tool, `${name} missing from packaged CLI`);
+    assert.ok(tool.inputSchema.required.includes('confirm'), `${name} packaged without confirmation`);
+    for (const field of identity) assert.ok(tool.inputSchema.required.includes(field), `${name} packaged without ${field}`);
   }
   assert(listed.tools.some(({ name }) => name === 'husklet_workspace_info'));
   assert(listed.tools.some(({ name }) => name === 'husklet_container_attach_terminal'));

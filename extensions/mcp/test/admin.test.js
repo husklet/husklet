@@ -385,7 +385,7 @@ test('admin workflow confines files to socket workspace and cleans success and f
   const executionId = 'e'.repeat(32);
   const signalStart = calls.length;
   const signaled = await client.callTool({
-    name: 'husklet_execution_signal', arguments: { id: executionId, signal: 'SIGRTMAX-14' },
+    name: 'husklet_execution_signal', arguments: { id: executionId, signal: 'SIGRTMAX-14', confirm: true },
   });
   assert.notEqual(signaled.isError, true);
   assert.deepEqual(calls.slice(signalStart), [{

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, paneXml, semanticXml, tools } from '../src/index.js';
+import { workspace } from '../../react/src/index.js';
 
 function fake() {
   const calls = [];
@@ -36,6 +39,73 @@ const slotMutations = [
   'husklet_terminal_resize', 'husklet_terminal_ratio',
   'husklet_terminal_switch_occupant', 'husklet_terminal_close',
 ];
+
+const confirmedAuthority = new Map([
+  ['husklet_workspace_adopt', ['configuration']],
+  ['husklet_workspace_update', ['generation']],
+  ['husklet_workspace_delete', ['generation']],
+  ['husklet_extension_enable', ['image_digest']],
+  ['husklet_extension_disable', ['image_digest']],
+  ['husklet_extension_remove', ['image_digest']],
+  ['husklet_extension_acquire', ['reference']],
+  ['husklet_extension_acquisition_cancel', ['job', 'revision']],
+  ['husklet_extension_install', ['job', 'revision']],
+  ['husklet_extension_update', ['job', 'revision']],
+  ['husklet_execution_signal', ['id']],
+  ['husklet_execution_remove', ['id']],
+  ['husklet_container_stop', ['id']],
+  ['husklet_container_remove', ['id']],
+  ['husklet_container_kill', ['id']],
+  ['husklet_volume_remove', ['generation']],
+  ['husklet_network_remove', ['reference']],
+  ['husklet_network_disconnect', ['reference', 'container']],
+  ['husklet_image_remove', ['reference']],
+  // Prune is a host-selected bulk operation; the protocol exposes no target-set revision.
+  ['husklet_image_prune', []],
+  // Removal is confined beneath a pinned workspace dirfd, but files have no stable generation.
+  ['husklet_file_remove', []],
+  ['husklet_terminal_close', ['generation', 'revision']],
+]);
+
+test('every confirmation-gated MCP authority is classified with its strongest observed identity', () => {
+  const listed = tools(fake().api);
+  const gated = listed.filter(({ inputSchema }) => inputSchema?.shape?.confirm);
+  assert.deepEqual(gated.map(({ name }) => name).sort(), [...confirmedAuthority.keys()].sort(),
+    'a confirmation-gated tool must be classified, and a classified authority must stay gated');
+  for (const tool of gated) {
+    assert.equal(tool.inputSchema.shape.confirm.safeParse(true).success, true, `${tool.name} refuses literal confirmation`);
+    assert.equal(tool.inputSchema.shape.confirm.safeParse(false).success, false, `${tool.name} accepts false confirmation`);
+    assert.equal(tool.inputSchema.shape.confirm.safeParse(undefined).success, false, `${tool.name} makes confirmation optional`);
+    for (const field of confirmedAuthority.get(tool.name)) {
+      assert.ok(tool.inputSchema.shape[field], `${tool.name} lacks observed authority field ${field}`);
+    }
+  }
+});
+
+test('every React method referenced by an advertised MCP handler exists on the real typed facade', () => {
+  const api = workspace({ call: async () => { throw new Error('not invoked'); } });
+  const sources = [
+    ['index.js', api],
+    ['panes.js', api.terminal],
+  ];
+  for (const [name, root] of sources) {
+    const source = fs.readFileSync(path.resolve(import.meta.dirname, `../src/${name}`), 'utf8');
+    const references = new Set([...source.matchAll(/\bapi((?:\.[A-Za-z_$][\w$]*)+)/g)].map((match) => match[1]));
+    for (const reference of references) {
+      const segments = reference.slice(1).split('.');
+      let value = root;
+      for (const segment of segments) value = value?.[segment];
+      assert.ok(value != null && (typeof value === 'function' || typeof value === 'object'),
+        `${name} advertises handler reference api${reference}, absent from @husklet/react`);
+    }
+  }
+  for (const operation of ['create', 'start', 'stop', 'delete']) {
+    assert.equal(typeof api[operation], 'function', `dynamic workspace mutation ${operation} is absent from @husklet/react`);
+  }
+  for (const operation of ['start', 'pause', 'unpause', 'restart']) {
+    assert.equal(typeof api.containers[operation], 'function', `dynamic container mutation ${operation} is absent from @husklet/react`);
+  }
+});
 
 test('every MCP slot-targeted terminal mutation requires the complete pane cursor', () => {
   const listed = tools(fake().api);
@@ -433,7 +503,7 @@ test('execution catalogue and output are finite strict reads', async () => {
   assert.deepEqual(calls, [['containers.executions'], ['containers.executionLogs', execution, { stdout: true, stderr: false }]]);
 });
 
-test('execution signaling targets an execution with a strict bounded signal', async () => {
+test('execution signaling targets an execution with a strict bounded signal and confirmation', async () => {
   const { api, calls } = fake();
   const signal = tools(api).find(({ name }) => name === 'husklet_execution_signal');
   const immutable = 'b'.repeat(32);
@@ -442,8 +512,10 @@ test('execution signaling targets an execution with a strict bounded signal', as
   assert.equal(signal.inputSchema.safeParse({ id: 'friendly', signal: 'SIGTERM' }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'x'.repeat(33) }).success, false);
   assert.equal(signal.inputSchema.safeParse({ id: immutable, signal: '😀'.repeat(9) }).success, false);
-  assert.equal(signal.inputSchema.safeParse({ id: 'e1', signal: 'TERM', confirm: true }).success, false);
-  await signal.run({ id: immutable, signal: 'SIGTERM' });
+  assert.equal(signal.inputSchema.safeParse({ id: immutable, signal: 'SIGTERM' }).success, false);
+  assert.equal(signal.inputSchema.safeParse({ id: immutable, signal: 'SIGTERM', confirm: false }).success, false);
+  assert.equal(calls.length, 0, 'missing confirmation cannot reach execution authority');
+  await signal.run({ id: immutable, signal: 'SIGTERM', confirm: true });
   assert.deepEqual(calls, [['containers.signalExecution', immutable, 'SIGTERM']]);
 });
 
@@ -1054,7 +1126,7 @@ test('a real MCP client lists strict tools and calls through the React session c
     id: immutableExecution, container_id: 'container-1', running: true, exit_code: null,
   });
   await client.callTool({ name: 'husklet_execution_wait', arguments: { id: immutableExecution, timeout_ms: 250 } });
-  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'b'.repeat(32), signal: 'SIGHUP' } });
+  await client.callTool({ name: 'husklet_execution_signal', arguments: { id: 'b'.repeat(32), signal: 'SIGHUP', confirm: true } });
   const refusedStop = await client.callTool({ name: 'husklet_container_stop', arguments: { id: 'container-1' } });
   assert.equal(refusedStop.isError, true);
   const refusedKill = await client.callTool({ name: 'husklet_container_kill', arguments: { id: 'container-1', signal: 'SIGKILL' } });
