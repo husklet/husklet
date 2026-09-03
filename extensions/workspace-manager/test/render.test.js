@@ -284,6 +284,27 @@ test('a completed image pull reports success, refreshes inventory and retains it
   assert.ok(stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text === 'alpine:3.20'));
 });
 
+test('an image pull status older than its announced revision is ignored', async () => {
+  const statuses = []; let publish; let reloads = 0;
+  const controlled = { ...api, images: { ...api.images,
+    startPull: async () => ({ job: 'ordered' }),
+    pullStatus: async () => statuses.shift(),
+    cancelPull: async () => {},
+  }, watchImagePulls: async (listener) => { publish = listener; return async () => {}; } };
+  const stage = host();
+  stage.render(h(Images, { api: controlled, resource: { data: [], loading: false, error: null, reload: async () => { reloads += 1; } } }));
+  change(stage, 'registry/image:tag', 'alpine:3.20'); invoke(stage, 'Pull'); await settled(); await settled();
+  statuses.push({ job: 'ordered', reference: 'alpine:3.20', revision: 2, state: 'pulling', status: 'Stale read', layer: 'stale', current: 20, total: 100, image: null, error: null });
+  await publish({ job: 'ordered', revision: 3, state: 'pulling', coalesced: 0 });
+  await settled(); await settled();
+  assert.equal(labelled(stage, 'Layer stale'), undefined, 'status older than its triggering event has no authority');
+  statuses.push({ job: 'ordered', reference: 'alpine:3.20', revision: 4, state: 'complete', status: 'Pull complete', layer: null, current: 100, total: 100, image: { id: 'i1' }, error: null });
+  await publish({ job: 'ordered', revision: 4, state: 'complete', coalesced: 0 });
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Pulled alpine:3.20.'));
+  assert.equal(reloads, 1, 'only the accepted completion refreshes inventory');
+});
+
 test('volume and network panels render bounded real inventories and controls', () => {
   const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
   const volumeFrame = host().render(h(Volumes, { api, resource: resource([{ name: 'cache', driver: 'local' }]) }));

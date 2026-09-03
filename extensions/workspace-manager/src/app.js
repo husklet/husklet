@@ -752,7 +752,7 @@ export function Images({ api, resource, imageDetails }) {
     void api.watchImagePulls(async (change) => {
       if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
       const status = await api.images.pullStatus(pull.job);
-      if (disposed) return;
+      if (disposed || status.job !== pull.job || status.revision < change.revision) return;
       setPull(status);
       if (status.state === 'complete') { setNotice(`Pulled ${status.reference}.`); await resource.reload(); }
     }).then((dispose) => { if (disposed) void dispose(); else stop = dispose; }).catch((error) => {
@@ -760,7 +760,10 @@ export function Images({ api, resource, imageDetails }) {
     });
     return () => { disposed = true; if (stop) void stop(); };
   }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
-  const cancelPull = () => run('pull-cancel', async () => { await api.images.cancelPull(pull.job); setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' })); });
+  const cancelPull = () => run('pull-cancel', async () => {
+    await api.images.cancelPull(pull.job);
+    setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' }));
+  });
   const inspect = async (item) => {
     const revision = ++inspectionRevision.current;
     setBusy(`inspect:${item.id}`);
