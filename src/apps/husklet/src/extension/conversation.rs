@@ -631,6 +631,12 @@ impl Conversation {
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
+        if frame.kind == Kind::Ping {
+            self.wire
+                .send(&Frame::new(frame.channel, Kind::Pong, frame.payload.clone()))
+                .map_err(fault)?;
+            return Ok(());
+        }
         if frame.kind == Kind::Credit {
             if let Some(topic) = self.replenish(frame) {
                 self.carry(topic)?;
@@ -1412,6 +1418,30 @@ mod tests {
         assert_eq!(ledger.reached(), vec!["containers.list"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()), "a hangup is not a fault");
+    }
+
+    #[test]
+    fn a_ping_is_answered_without_disturbing_the_next_call() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let channel = hl_extension::ChannelId::new(17);
+        let payload = b"client-heartbeat-41".to_vec();
+        wire.send(&Frame::new(channel, Kind::Ping, payload.clone()))
+            .expect("ping sent over the Unix socket");
+        let pong = wire.receive().expect("bounded pong");
+        assert_eq!(pong.kind, Kind::Pong);
+        assert_eq!(pong.channel, channel, "the heartbeat retains its correlation channel");
+        assert_eq!(pong.payload, payload, "the heartbeat retains its opaque correlation payload");
+        assert!(ledger.reached().is_empty(), "heartbeats never dispatch workspace authority");
+
+        let answer = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()), "a hangup after a pong stays clean");
     }
 
     #[test]
