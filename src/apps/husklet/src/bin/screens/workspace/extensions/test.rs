@@ -3239,6 +3239,18 @@ mod panes {
             Reading::Absent,
             "a slot naming no pane is refused rather than answered with nothing"
         );
+
+        terminal.feed(b"\x1b[?1049h\x1b[2J\x1b[Halternate \xf0\x9f\xa7\xaa");
+        assert!(
+            until(|| {
+                let shown = lines(&bench, &slot, 100).join("\n");
+                shown.contains("alternate \u{1f9ea}") && !shown.contains("quick brown") && !shown.contains('\u{1b}')
+            }),
+            "alternate screen projection must replace primary scrollback: {:?}",
+            lines(&bench, &slot, 100)
+        );
+        terminal.feed(b"\x1b[?1049l");
+        assert!(until(|| lines(&bench, &slot, 100).iter().any(|line| line.contains("quick brown"))));
     }
 
     pub(super) fn stale_pane_identity_cannot_authorize_terminal_input() {

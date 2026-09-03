@@ -23,10 +23,14 @@ impl Terminal<'_> {
     /// it to be cut afterwards. The flag says whether older rows were left.
     pub(crate) fn tail(&self, lines: usize) -> (Vec<String>, bool) {
         let terminal = self.0;
-        let (first, last) = match terminal.vadjustment() {
-            Some(adjustment) => (adjustment.lower() as i64, adjustment.upper() as i64),
-            None => (0, terminal.row_count()),
-        };
+        // VTE row coordinates end at the live cursor row. GtkAdjustment's
+        // `upper` is a viewport adjustment bound, not the final rendered row;
+        // on an alternate screen it can be smaller than the cursor row and
+        // would make current content disappear from the projection.
+        let first = terminal.vadjustment().map_or(0, |adjustment| adjustment.lower() as i64);
+        let (_, cursor_row) = terminal.cursor_position();
+        // `text_range_format` takes an exclusive ending row.
+        let last = cursor_row.max(0).saturating_add(1);
         let (start, end) = history_row_range(first, last, lines);
         let (text, _length) = terminal.text_range_format(vte4::Format::Text, start, 0, end, -1);
         let raw = text.map(|extracted| extracted.to_string()).unwrap_or_default();
