@@ -95,6 +95,14 @@ impl PaneNode {
         }
     }
 
+    fn contains_slot(&self, slot: &str) -> bool {
+        match self {
+            Self::Leaf(pane) => pane.slot.as_deref() == Some(slot),
+            Self::Surface(pane) => pane.slot.as_deref() == Some(slot),
+            Self::Split { a, b, .. } => a.contains_slot(slot) || b.contains_slot(slot),
+        }
+    }
+
     fn write(&self, out: &mut String) {
         match self {
             Self::Leaf(pane) => {
@@ -139,6 +147,10 @@ pub struct SessionTab {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Session {
     pub tabs: Vec<SessionTab>,
+    /// Zero-based selected tab among the persisted terminal tabs. The overview is not persisted.
+    pub selected_tab: Option<usize>,
+    /// Stable slot of the terminal pane that owned keyboard focus when the workspace was closed.
+    pub focused_pane: Option<String>,
 }
 
 impl Session {
@@ -154,7 +166,14 @@ impl Session {
     /// Serialize to the prefix-notation text format.
     #[must_use]
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# hl session layout\nversion 1\n");
+        let mut out = String::from("# hl session layout\nversion 2\nview ");
+        let selected = self
+            .selected_tab
+            .map_or_else(|| "-".to_owned(), |index| index.to_string());
+        out.push_str(&selected);
+        out.push(' ');
+        out.push_str(&Layout::escape(self.focused_pane.as_deref().unwrap_or("-")));
+        out.push('\n');
         for tab in &self.tabs {
             out.push_str("tab ");
             out.push_str(&Layout::escape(&tab.title));
@@ -178,9 +197,39 @@ impl Session {
             .flat_map(|l| l.split_whitespace())
             .collect();
         let mut layout = Layout::new(&toks);
-        if layout.next() != Some("version") || layout.next() != Some("1") {
-            return Err(Layout::invalid("missing supported `version 1` header"));
+        if layout.next() != Some("version") {
+            return Err(Layout::invalid("missing supported layout version header"));
         }
+        let version = layout
+            .next()
+            .ok_or_else(|| Layout::invalid("missing supported layout version"))?;
+        let (selected_tab, focused_pane) = match version {
+            "1" => (None, None),
+            "2" => {
+                if layout.next() != Some("view") {
+                    return Err(Layout::invalid("version 2 layout is missing its view state"));
+                }
+                let selected = layout
+                    .next()
+                    .ok_or_else(|| Layout::invalid("view state is missing its selected tab"))?;
+                let selected_tab = if selected == "-" {
+                    None
+                } else {
+                    Some(
+                        selected
+                            .parse::<usize>()
+                            .map_err(|_| Layout::invalid("selected tab is not an index"))?,
+                    )
+                };
+                let focused_pane = Layout::value(
+                    layout
+                        .next()
+                        .ok_or_else(|| Layout::invalid("view state is missing its focused pane"))?,
+                );
+                (selected_tab, focused_pane)
+            }
+            _ => return Err(Layout::invalid("missing supported layout version")),
+        };
         let mut tabs = Vec::new();
         while layout.peek().is_some() {
             if layout.next() != Some("tab") {
@@ -193,7 +242,22 @@ impl Session {
             let root = layout.node()?;
             tabs.push(SessionTab { title, root });
         }
-        Ok(Session { tabs })
+        if selected_tab.is_some_and(|index| index >= tabs.len()) {
+            return Err(Layout::invalid("selected tab is outside the persisted tab list"));
+        }
+        if let Some(slot) = focused_pane.as_deref() {
+            let selected = selected_tab
+                .and_then(|index| tabs.get(index))
+                .ok_or_else(|| Layout::invalid("focused pane has no selected persisted tab"))?;
+            if !selected.root.contains_slot(slot) {
+                return Err(Layout::invalid("focused pane is outside the selected persisted tab"));
+            }
+        }
+        Ok(Session {
+            tabs,
+            selected_tab,
+            focused_pane,
+        })
     }
 
     /// Opens a workspace session, distinguishing an absent session from unreadable or malformed state.

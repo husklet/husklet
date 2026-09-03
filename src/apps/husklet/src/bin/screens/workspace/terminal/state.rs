@@ -213,6 +213,13 @@ impl<'a> WindowSession<'a> {
         let mut hist_idx = 0usize;
         let generation = HistoryGeneration::new(&storage)?;
         let mut tabs = Vec::new();
+        let visible = tw.stack.visible_child_name().map(|name| name.to_string());
+        let focused_pane = tw
+            .focused
+            .borrow()
+            .as_ref()
+            .and_then(|terminal| Slots::new(tw).of(terminal));
+        let mut selected_tab = None;
         // entries[0] is the non-closable overview; shells are the rest.
         let entries: Vec<(String, String)> = {
             let es = tw.entries.borrow();
@@ -227,10 +234,20 @@ impl<'a> WindowSession<'a> {
                 continue;
             };
             if let Some(root) = self.snapshot_node(&child, &storage, generation.as_str(), &mut hist_idx)? {
+                if visible.as_deref() == Some(page_name.as_str()) {
+                    selected_tab = Some(tabs.len());
+                }
                 tabs.push(SessionTab { title, root });
             }
         }
-        let session = Session { tabs };
+        // Selecting the overview does not clear GTK's last-terminal cache. That stale terminal is
+        // useful when returning to a shell tab, but it is not the focused pane of the saved view.
+        let focused_pane = selected_tab.and(focused_pane);
+        let session = Session {
+            tabs,
+            selected_tab,
+            focused_pane,
+        };
         if session.tabs.is_empty() {
             Session::clear(&storage)
         } else {
@@ -449,6 +466,7 @@ impl WindowSession<'_> {
         let tw = self.window;
         launcher.observe(RestoreEvent::Started);
         let storage = tw.ws.storage_dir(&Home::current().root());
+        let mut restored = Vec::with_capacity(session.tabs.len());
         for tab in &session.tabs {
             let n = tw.shell_no.get() + 1;
             tw.shell_no.set(n);
@@ -464,9 +482,19 @@ impl WindowSession<'_> {
                 tab.title.clone()
             };
             let name = Tabs::new(tw).add(&title, None, &paneroot, true);
-            tw.pids.borrow_mut().entry(name).or_default().extend(pids);
-            if let Some(t) = first {
-                t.grab_focus();
+            tw.pids.borrow_mut().entry(name.clone()).or_default().extend(pids);
+            restored.push((name, first));
+        }
+        if let Some((name, fallback)) = restored.get(session.selected_tab.unwrap_or(0)) {
+            Page::new(tw, name).select();
+            let focused = session
+                .focused_pane
+                .as_deref()
+                .is_some_and(|slot| Panes::focus(tw, slot));
+            if !focused {
+                if let Some(terminal) = fallback {
+                    terminal.grab_focus();
+                }
             }
         }
         launcher.observe(RestoreEvent::Completed);

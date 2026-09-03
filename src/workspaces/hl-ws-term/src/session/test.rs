@@ -34,6 +34,8 @@ fn sample_session() -> Session {
                 },
             },
         ],
+        selected_tab: Some(1),
+        focused_pane: Some("2".to_owned()),
     }
 }
 
@@ -42,6 +44,8 @@ fn layout_roundtrips() {
     let s = sample_session();
     let text = s.serialize();
     let back = Session::parse(&text).unwrap();
+    assert_eq!(back.selected_tab, Some(1));
+    assert_eq!(back.focused_pane.as_deref(), Some("2"));
     assert_eq!(back.tabs.len(), 2);
     assert_eq!(back.tabs[0].title, "shell 1");
     // ratio is formatted to 4 decimals; compare the structure with tolerance.
@@ -64,6 +68,8 @@ fn escaping_survives_spaces_and_specials() {
                 slot: None,
             }),
         }],
+        selected_tab: Some(0),
+        focused_pane: None,
     };
     let back = Session::parse(&s.serialize()).unwrap();
     assert_eq!(back.tabs[0].title, "a b%c");
@@ -136,6 +142,8 @@ fn successful_layout_commit_prunes_only_unreferenced_histories() {
                 ..Pane::default()
             }),
         }],
+        selected_tab: Some(0),
+        focused_pane: None,
     };
 
     session.save(temporary.path()).unwrap();
@@ -241,6 +249,8 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
                 })),
             },
         }],
+        selected_tab: Some(0),
+        focused_pane: Some("1".to_owned()),
     };
 
     let parsed = Session::parse(&session.serialize()).expect("a layout with a surface pane");
@@ -254,6 +264,27 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
         1,
         "a surface holds no scrollback file to retain"
     );
+}
+
+#[test]
+fn version_one_layouts_open_without_inventing_view_state() {
+    let session = Session::parse("version 1\ntab shell leaf /root - 7\n").unwrap();
+
+    assert_eq!(session.selected_tab, None);
+    assert_eq!(session.focused_pane, None);
+    assert_eq!(session.tabs[0].root.leaves()[0].slot.as_deref(), Some("7"));
+}
+
+#[test]
+fn view_state_must_name_members_of_the_persisted_layout() {
+    for invalid in [
+        "version 2\nview 1 7\ntab shell leaf /root - 7\n",
+        "version 2\nview 0 absent\ntab shell leaf /root - 7\n",
+        "version 2\nview - 7\ntab shell leaf /root - 7\n",
+        "version 2\nview 0 8\ntab first leaf /root - 7\ntab second leaf /root - 8\n",
+    ] {
+        assert!(Session::parse(invalid).is_err(), "accepted {invalid:?}");
+    }
 }
 
 #[test]

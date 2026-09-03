@@ -5,6 +5,124 @@ struct OfflineLauncher {
     events: RefCell<Vec<(RestoreEvent, std::time::Instant)>>,
 }
 
+#[test]
+fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
+    assert!(
+        crate::test_support::on_the_toolkit_thread(|| {
+            let pty_baseline = open_pty_count();
+            let temporary = tempfile::tempdir().unwrap();
+            let mut workspace = WorkspaceConfig::new(
+                format!("view-state-{}", std::process::id()),
+                "offline.invalid/unused",
+                hl_ws::Arch::Amd64,
+            );
+            workspace.storage = Some(temporary.path().join("workspace"));
+            let tw = Window::bench(&workspace);
+            Tabs::new(&tw).overview();
+            let launcher = OfflineLauncher {
+                events: RefCell::new(Vec::new()),
+            };
+            let session = Session {
+                tabs: vec![
+                    SessionTab {
+                        title: "source".into(),
+                        root: PaneNode::Leaf(Pane {
+                            slot: Some("source".into()),
+                            ..Pane::default()
+                        }),
+                    },
+                    SessionTab {
+                        title: "build".into(),
+                        root: PaneNode::Split {
+                            dir: SplitDir::Horizontal,
+                            ratio: 0.35,
+                            a: Box::new(PaneNode::Leaf(Pane {
+                                slot: Some("build-log".into()),
+                                ..Pane::default()
+                            })),
+                            b: Box::new(PaneNode::Leaf(Pane {
+                                slot: Some("build-shell".into()),
+                                ..Pane::default()
+                            })),
+                        },
+                    },
+                    SessionTab {
+                        title: "tests".into(),
+                        root: PaneNode::Leaf(Pane {
+                            slot: Some("tests".into()),
+                            ..Pane::default()
+                        }),
+                    },
+                ],
+                selected_tab: Some(1),
+                focused_pane: Some("build-shell".into()),
+            };
+
+            WindowSession::new(&tw).restore_with(&session, &launcher);
+            await_prompts(&tw, 4);
+            await_view(&tw, 1, "build-shell");
+            WindowSession::new(&tw).save().unwrap();
+
+            let reopened = Session::open(&workspace.storage_dir(&Home::current().root())).unwrap();
+            assert_eq!(reopened.selected_tab, Some(1));
+            assert_eq!(reopened.focused_pane.as_deref(), Some("build-shell"));
+            assert_eq!(
+                reopened.tabs.iter().map(|tab| tab.title.as_str()).collect::<Vec<_>>(),
+                ["source", "build", "tests"]
+            );
+            assert!(matches!(
+                reopened.tabs[1].root,
+                PaneNode::Split {
+                    dir: SplitDir::Horizontal,
+                    ..
+                }
+            ));
+
+            let overview = tw.entries.borrow().first().unwrap().name.clone();
+            Page::new(&tw, &overview).select();
+            assert_eq!(
+                tw.focused
+                    .borrow()
+                    .as_ref()
+                    .and_then(|terminal| Slots::new(&tw).of(terminal))
+                    .as_deref(),
+                Some("build-shell"),
+                "fixture did not retain the stale terminal focus that the overview must suppress"
+            );
+            WindowSession::new(&tw).save().unwrap();
+            let overview_saved = Session::open(&workspace.storage_dir(&Home::current().root())).unwrap();
+            assert_eq!(overview_saved.selected_tab, None);
+            assert_eq!(overview_saved.focused_pane, None);
+
+            let pids = launcher
+                .events
+                .borrow()
+                .iter()
+                .filter_map(|(event, _)| match event {
+                    RestoreEvent::PaneStarted(pid) => Some(*pid),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for pid in pids {
+                assert!(std::process::Command::new("/bin/kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .status()
+                    .unwrap()
+                    .success());
+            }
+            tw.closing.set(true);
+            if let Some(root) = tw.stack.root().and_then(|root| root.downcast::<gtk::Window>().ok()) {
+                root.close();
+            }
+            while let Some(child) = tw.stack.first_child() {
+                tw.stack.remove(&child);
+            }
+            await_cleanup(&tw, pty_baseline);
+        }),
+        "view-state round trip requires an Xvfb display"
+    );
+}
+
 impl PaneLauncher for OfflineLauncher {
     fn spawn(
         &self,
@@ -79,6 +197,8 @@ fn characterize(panes: usize) {
             title: format!("{panes} panes"),
             root: layout(panes, 0),
         }],
+        selected_tab: Some(0),
+        focused_pane: None,
     };
     WindowSession::new(&tw).restore_with(&session, &launcher);
     let frame_ran_before_restore_returned = first_frame.get();
@@ -201,6 +321,35 @@ fn await_prompts(window: &TermWin, panes: usize) {
         assert!(
             std::time::Instant::now() < deadline,
             "{panes}-pane prompt marker timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn await_view(window: &Rc<TermWin>, selected: usize, focused: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        while glib::MainContext::default().iteration(false) {}
+        let selected_name = window
+            .entries
+            .borrow()
+            .iter()
+            .skip(1)
+            .filter(|entry| entry.persisted)
+            .nth(selected)
+            .map(|entry| entry.name.clone());
+        let visible = window.stack.visible_child_name().map(|name| name.to_string());
+        let focused_slot = window
+            .focused
+            .borrow()
+            .as_ref()
+            .and_then(|terminal| Slots::new(window).of(terminal));
+        if selected_name == visible && focused_slot.as_deref() == Some(focused) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "selected/focused view state timed out"
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
