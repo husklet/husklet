@@ -47,7 +47,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         removing_an_extension_takes_its_pages_with_it();
         failed_removal_keeps_a_disabled_record_and_offers_retry();
         extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue();
-        docker_hub_references_are_explained_and_validated_before_acquisition();
+        registry_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
         a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
@@ -1020,7 +1020,7 @@ fn capability_choice(page: &Catalogue, capability: Capability) -> gtk::CheckButt
         .unwrap_or_else(|| panic!("missing {} capability choice", capability.as_str()))
 }
 
-fn docker_hub_references_are_explained_and_validated_before_acquisition() {
+fn registry_references_are_explained_and_validated_before_acquisition() {
     let fixture = Fixture::new(&[]);
     let attempts = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&attempts);
@@ -1034,16 +1034,26 @@ fn docker_hub_references_are_explained_and_validated_before_acquisition() {
         .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
         .map(|label| label.text().to_string())
         .collect();
-    assert!(copy.iter().any(|line| line.contains("Docker Hub examples")));
+    assert!(copy.iter().any(|line| line.contains("private registry")));
 
     typed(&page, "not a reference with spaces");
     page.inspect();
     assert!(attempts.borrow().is_empty(), "invalid input never starts acquisition");
-    assert!(page.notice().contains("not a valid image reference"));
+    assert!(page.notice().contains("not a valid OCI image reference"));
 
     typed(&page, "alpine:3.20");
     page.inspect();
     assert_eq!(attempts.borrow().as_slice(), ["docker.io/library/alpine:3.20"]);
+
+    typed(&page, "registry.example.com/team/extension:1.2.3");
+    page.inspect();
+    assert_eq!(
+        attempts.borrow().as_slice(),
+        [
+            "docker.io/library/alpine:3.20",
+            "registry.example.com/team/extension:1.2.3"
+        ]
+    );
 }
 
 fn update_candidate(digest: &str, version: &str) -> Candidate {

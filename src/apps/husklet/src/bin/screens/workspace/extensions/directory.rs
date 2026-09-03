@@ -234,7 +234,7 @@ impl Catalogue {
         let reference = self.reference.text().trim().to_owned();
         self.forget();
         if reference.is_empty() {
-            self.say("Enter a Docker Hub image, for example acme/my-extension:1.2.3");
+            self.say("Enter an OCI image, for example acme/my-extension:1.2.3 or registry.example.com/team/extension:1.2.3");
             return;
         }
         if reference.len() > 512 {
@@ -245,7 +245,7 @@ impl Catalogue {
             Ok(reference) => reference.to_string(),
             Err(_) => {
                 self.say(
-                    "That is not a valid image reference. Try acme/my-extension:1.2.3 or acme/my-extension@sha256:…",
+                    "That is not a valid OCI image reference. Try acme/my-extension:1.2.3, registry.example.com/team/extension:1.2.3, or a digest reference.",
                 );
                 return;
             }
@@ -860,7 +860,7 @@ impl Catalogue {
         self.widget.append(&text("Register an image", "dhead"));
         self.reference.add_css_class(REFERENCE);
         self.reference
-            .set_placeholder_text(Some("Docker Hub image, e.g. acme/my-extension:1.2.3"));
+            .set_placeholder_text(Some("OCI image, e.g. registry.example.com/team/extension:1.2.3"));
         self.semantics.register(
             "extensions/reference",
             "textbox",
@@ -891,7 +891,7 @@ impl Catalogue {
         }
         self.widget.append(&self.reference);
         self.widget.append(&text(
-            "Docker Hub examples: acme/my-extension:1.2.3 · acme/my-extension@sha256:…",
+            "Docker Hub or private registry: acme/my-extension:1.2.3 · registry.example.com/team/extension:1.2.3 · digest references supported",
             "dhint",
         ));
         self.inspect.add_css_class(INSPECT);
