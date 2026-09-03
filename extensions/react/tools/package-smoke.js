@@ -139,7 +139,7 @@ try {
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
   assert.equal(starterPackage.scripts.start, 'node main.js');
-  assert.equal(starterPackage.scripts.test, 'node --check main.js');
+  assert.equal(starterPackage.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/react\'), import(\'react\')])"');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
   assert.equal(starterPackage.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterPackage.dependencies.react, '18.3.1');

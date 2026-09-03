@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node main.js",
-    "test": "node --check main.js"
+    "test": "node --check main.js && node --input-type=module --eval \"await Promise.all([import('@husklet/client'), import('@husklet/react'), import('react')])\""
   },
   "dependencies": {
     "@husklet/client": "0.1.0",
