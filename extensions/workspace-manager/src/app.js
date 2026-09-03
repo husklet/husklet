@@ -606,14 +606,21 @@ export function Volumes({ api, resource, volumeDetails }) {
     } catch (error) { setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
   };
   const view = bounded(resource.data);
+  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Volumes', subtitle: 'Bounded local volume inventory and safe, non-force lifecycle.' },
     h(Row, { gap: 1 }, h(Entry, { value: name, placeholder: 'Volume name', enabled: creation.state !== 'loading', onChange: (event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); } }), h(Button, { label: creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create', enabled: creation.state !== 'loading' && name.trim().length > 0, onInvoke: () => { void create(); } }), h(Button, { label: 'Refresh', enabled: creation.state !== 'loading', onInvoke: resource.reload })),
     creation.state === 'loading' ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: `Creating volume ${creation.name}…` })) : null,
     creation.state === 'error' ? h(Text, { label: boundedMessage(creation.error), color: 'danger', wrap: true }) : null,
     creation.state === 'success' ? h(Text, { label: `Created volume ${creation.name}.`, color: 'positive', wrap: true }) : null,
-    h(ErrorText, { error: resource.error }),
-    h(InventoryEmpty, { resource, records: view.records, label: 'No volumes', detail: 'Create a named volume above when a workload needs durable storage.' }),
-    ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
+    h(ResourceState, {
+      state: inventoryState,
+      loadingLabel: 'Reading volumes…',
+      emptyLabel: 'No volumes',
+      emptyDetail: 'Create a named volume above when a workload needs durable storage.',
+      error: resource.error?.message ?? String(resource.error ?? ''),
+      retryLabel: 'Retry volumes',
+      onRetry: resource.reload,
+    }, ...view.records.map((volume) => h(Card, { key: `${volume.name}:${volume.generation}`, variant: inspection.name === volume.name ? 'filled' : 'outline' },
       h(CardHeader, { label: volume.name, detail: volume.driver }),
       h(CardActions, { gap: 1 }, h(Button, { label: inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect', onInvoke: () => inspect(volume) }), h(ConfirmAction, {
         authorityKey: `volume:${volume.name}:${volume.generation}:remove`,
@@ -628,7 +635,7 @@ export function Volumes({ api, resource, volumeDetails }) {
             : inspection.count === 0
               ? h(EmptyState, { label: 'No volume details', detail: 'The host returned no inspectable fields.' })
               : h(StructuredDetail, { value: inspection.detail })) : null)),
-    h(Omitted, { count: view.omitted }));
+    h(Omitted, { count: view.omitted })));
 }
 
 export function Networks({ api, resource, networkDetails }) {
