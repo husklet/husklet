@@ -120,6 +120,7 @@ stack.pages {{ background-color:{BG2}; }}
 .settings-workspace-name {{ font-size:15px; font-weight:650; }}
 .settings-image {{ color:{DIM}; font-family:'SF Mono',ui-monospace,monospace; font-size:11.5px; }}
 .settings-card-description {{ color:{DIM}; font-size:11.5px; margin-bottom:2px; }}
+.settings-group-title {{ color:{DIM}; font-size:12px; font-weight:650; letter-spacing:.03em; }}
 .settings-grid > flowboxchild {{ padding:0; min-width:220px; }}
 .settings-grid > flowboxchild:selected {{ background:transparent; }}
 .settings-apply-note {{ color:{DIM}; background-color:rgba(91,141,239,.09); border:1px solid rgba(91,141,239,.24); border-radius:9px; padding:10px 12px; }}

@@ -45,26 +45,25 @@ impl Overview<'_> {
             Some("Blank = auto (bash -il, else sh -i)."),
         ));
 
-        let sections = gtk::FlowBox::new();
-        sections.add_css_class("settings-grid");
-        sections.set_selection_mode(gtk::SelectionMode::None);
-        sections.set_min_children_per_line(1);
-        sections.set_max_children_per_line(2);
-        sections.set_column_spacing(14);
-        sections.set_row_spacing(14);
-        sections.set_homogeneous(false);
-        for card in [
-            shell,
-            Self::decorate(form.terminal(), "Terminal appearance and history for each new tab."),
-            Self::decorate(form.resources(), "Optional limits for workloads in this workspace."),
-            Self::decorate(form.environment(), "Variables inherited by every new shell."),
-            Self::decorate(form.mounts(), "Host folders made available inside the workspace."),
-            Self::decorate(form.docker(), "Control access to the host-compatible Docker API."),
-            Self::decorate(form.network(), "Configure how this workspace reaches private networks."),
-        ] {
-            sections.insert(&card, -1);
-        }
-        main.append(&sections);
+        let terminal = Self::group(
+            "Terminal defaults",
+            [
+                shell,
+                Self::decorate(form.terminal(), "Terminal appearance and history for each new tab."),
+            ],
+        );
+        let runtime = Self::group(
+            "Workspace runtime",
+            [
+                Self::decorate(form.resources(), "Optional limits for workloads in this workspace."),
+                Self::decorate(form.environment(), "Variables inherited by every new shell."),
+                Self::decorate(form.mounts(), "Host folders made available inside the workspace."),
+                Self::decorate(form.docker(), "Control access to the host-compatible Docker API."),
+                Self::decorate(form.network(), "Configure how this workspace reaches private networks."),
+            ],
+        );
+        main.append(&terminal);
+        main.append(&runtime);
 
         Self::populate(&form, workspace);
         let save = Self::save_row(Rc::clone(&form), workspace.clone(), semantics);
@@ -159,6 +158,30 @@ impl Overview<'_> {
         copy.set_wrap(true);
         card.insert_child_after(&copy, card.first_child().as_ref());
         card
+    }
+
+    /// A presentation-only group around existing settings cards.
+    fn group<const N: usize>(title: &str, cards: [gtk::Box; N]) -> gtk::Box {
+        let group = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        group.add_css_class("settings-group");
+        let heading = gtk::Label::new(Some(title));
+        heading.add_css_class("settings-group-title");
+        heading.set_xalign(0.0);
+        group.append(&heading);
+
+        let grid = gtk::FlowBox::new();
+        grid.add_css_class("settings-grid");
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_min_children_per_line(1);
+        grid.set_max_children_per_line(2);
+        grid.set_column_spacing(14);
+        grid.set_row_spacing(14);
+        grid.set_homogeneous(false);
+        for card in cards {
+            grid.insert(&card, -1);
+        }
+        group.append(&grid);
+        group
     }
 
     fn populate(form: &Form, workspace: &WorkspaceConfig) {
@@ -630,15 +653,37 @@ mod tests {
                     .any(|line| line.contains("Running tabs keep their current settings")),
                 "apply timing is explained before saving"
             );
+            assert_eq!(
+                text.iter()
+                    .filter(|line| matches!(line.as_str(), "Terminal defaults" | "Workspace runtime"))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["Terminal defaults", "Workspace runtime"],
+                "settings cards are split into two plainly named groups"
+            );
 
-            let grid = widgets
+            let grids: Vec<_> = widgets
                 .iter()
-                .find(|widget| widget.has_css_class("settings-grid"))
-                .and_then(|widget| widget.downcast_ref::<gtk::FlowBox>())
-                .expect("settings has a responsive card grid");
-            assert_eq!(grid.min_children_per_line(), 1);
-            assert_eq!(grid.max_children_per_line(), 2);
-            assert_eq!(grid.observe_children().n_items(), 7);
+                .filter(|widget| widget.has_css_class("settings-grid"))
+                .map(|widget| {
+                    widget
+                        .downcast_ref::<gtk::FlowBox>()
+                        .expect("settings grids are flow boxes")
+                })
+                .collect();
+            assert_eq!(grids.len(), 2);
+            assert_eq!(
+                grids
+                    .iter()
+                    .map(|grid| grid.observe_children().n_items())
+                    .collect::<Vec<_>>(),
+                [2, 5],
+                "all seven existing cards remain in their intended groups"
+            );
+            for grid in grids {
+                assert_eq!(grid.min_children_per_line(), 1);
+                assert_eq!(grid.max_children_per_line(), 2);
+            }
 
             let window = gtk::Window::builder()
                 .default_width(300)
