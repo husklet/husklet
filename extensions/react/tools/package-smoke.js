@@ -1,12 +1,74 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
+
+async function runPackedStarter(consumer, installedStarter) {
+  const starter = path.join(consumer, 'starter');
+  fs.cpSync(installedStarter, starter, { recursive: true });
+  const socket = path.join(consumer, 'starter.sock');
+  const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const calls = [];
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel === 0 || frame.kind !== wire.KIND.request) continue;
+        calls.push(frame.payload);
+        stream.write(wire.encode({
+          channel: frame.channel,
+          kind: wire.KIND.response,
+          payload: frame.payload.call === 'interface_open_tab'
+            ? { reply: 'identity', with: 'packed-starter' }
+            : { reply: 'done' },
+        }));
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'react-starter', granted: ['interface'] },
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socket, resolve);
+  });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => (stderr += chunk));
+  try {
+    for (let attempt = 0; attempt < 400 && !calls.some(({ call }) => call === 'interface_render_at'); attempt += 1) {
+      if (child.exitCode !== null) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.deepEqual(calls[0], { call: 'interface_open_tab', with: { title: 'React starter' } });
+    const rendered = calls.find(({ call }) => call === 'interface_render_at');
+    assert(rendered, `packed starter did not render through a real socket; stderr=${stderr}`);
+    assert.equal(rendered.with.slot, 'packed-starter');
+    assert.equal(rendered.with.frame.sequence, 1);
+    assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
+    assert.equal(stderr, '');
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGTERM');
+    if (child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve));
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
 
 function packageStageFiles(dockerfile, destination) {
   const packageStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\}$/m, 1)[0];
@@ -66,6 +128,7 @@ try {
   assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
   assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);
   assert.match(starterDockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
+  await runPackedStarter(consumer, installedStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);
