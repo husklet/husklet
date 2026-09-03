@@ -160,7 +160,10 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     if rows.len() != options.samples as usize * ORDER.len() {
         return Err("developer benchmark ledger is incomplete".into());
     }
-    validate_outputs(&rows)?;
+    if let Err(error) = validate_outputs(&rows) {
+        fs::write(options.results.join("first-divergence.txt"), format!("{error}\n"))?;
+        return Err(error);
+    }
     publish_report(&options.results, &rows)
 }
 
@@ -288,6 +291,10 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
     let phase_ns = validate_phases(&marks, elapsed)?;
     let receipt = backend_receipt(mode, &String::from_utf8(stderr)?)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
+    fs::write(
+        options.results.join(format!("stdout-{sample}-{position}-{mode:?}.txt")),
+        &output,
+    )?;
     let semantic = output
         .split(|byte| *byte == b'\n')
         .filter(|line| line.len() == 67 && line[64..] == *b"  -")
@@ -489,11 +496,24 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
     let Some(first) = rows.first() else {
         return Err("developer benchmark produced no rows".into());
     };
-    if rows
+    if let Some(divergent) = rows
         .iter()
-        .any(|row| row.stdout_sha256 != first.stdout_sha256 || row.semantic_sha256 != first.semantic_sha256)
+        .find(|row| row.stdout_sha256 != first.stdout_sha256 || row.semantic_sha256 != first.semantic_sha256)
     {
-        return Err("developer benchmark backends produced different output".into());
+        return Err(format!(
+            "developer benchmark backends produced different output: baseline={:?}/{}/{} stdout={} semantic={}; divergent={:?}/{}/{} stdout={} semantic={}",
+            first.mode,
+            first.sample,
+            first.position,
+            first.stdout_sha256,
+            first.semantic_sha256,
+            divergent.mode,
+            divergent.sample,
+            divergent.position,
+            divergent.stdout_sha256,
+            divergent.semantic_sha256,
+        )
+        .into());
     }
     Ok(())
 }
@@ -614,7 +634,11 @@ mod tests {
             backend_receipt: String::new(),
         };
         assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Translated, "same")]).is_ok());
-        assert!(validate_outputs(&[row(Mode::Native, "same"), row(Mode::Supervised, "different")]).is_err());
+        let error = validate_outputs(&[row(Mode::Native, "same"), row(Mode::Supervised, "different")])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("baseline=Native/0/0 stdout=same semantic=same"));
+        assert!(error.contains("divergent=Supervised/0/0 stdout=different semantic=different"));
     }
 
     #[test]
