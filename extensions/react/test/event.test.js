@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { connect, render, useHostEvents, usePaneSelection } from '../src/index.js';
-import { Button, Column, Container, Text } from '../src/components.js';
+import { Button, Column, Container, DataTable, Text } from '../src/components.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -206,6 +206,23 @@ test('bounded keyboard, focus and pointer details reach their React handlers', a
   assert.equal(seen[0].key, 'a');
   assert.equal(seen[1].focused, true);
   assert.deepEqual([seen[2].x, seen[2].y], [2, 3]);
+  session.close();
+  stage.close();
+});
+
+test('a version-bound virtual row edit reaches only its DataTable handler', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  let seen = null;
+  render(h(DataTable, { source: 7, schema: [{ key: 'name', editable: true }], onEdit: (event) => { seen = event; } }), session);
+  await until(() => stage.calls.length >= 2);
+  const patches = stage.calls.find(({ call }) => call === 'interface_render_at').with.frame.patches;
+  const edit = patches.find((patch) => patch.SetHandler?.handler.trigger === 'Edit').SetHandler;
+  await stage.push({ interaction: 'edit', trigger: 'Edit', node: edit.id, id: edit.handler.id, source: 7, version: 4, row: { index: 9, id: 'immutable-9' }, column: 'name', value: 'renamed' });
+  await until(() => seen !== null);
+  assert.deepEqual({ source: seen.source, version: seen.version, row: seen.row, column: seen.column, value: seen.value }, {
+    source: 7, version: 4, row: { index: 9, id: 'immutable-9' }, column: 'name', value: 'renamed',
+  });
   session.close();
   stage.close();
 });

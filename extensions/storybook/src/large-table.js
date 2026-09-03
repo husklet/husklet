@@ -8,7 +8,7 @@ export const OPERATION_HISTORY_LIMIT = 6;
 export const SOURCE = 100;
 export const SCHEMA = Object.freeze([
   { key: 'id', title: 'ID', width: { chars: 12 }, sortable: true },
-  { key: 'name', title: 'Workspace record', width: 'fill', sortable: true },
+  { key: 'name', title: 'Workspace record', width: 'fill', sortable: true, editable: true },
   { key: 'state', title: 'State', width: { chars: 12 } },
 ]);
 
@@ -21,6 +21,7 @@ export class LargeRecordSource {
     this.descending = false;
     this.state = 'ready';
     this.generated = 0;
+    this.edits = new Map();
   }
 
   length() {
@@ -54,7 +55,20 @@ export class LargeRecordSource {
       return { key: 0, cells: [{ Text: 'unavailable' }, { Text: 'The source refused this window' }, { Badge: { label: 'error', tone: 'Danger' } }] };
     }
     const logical = this.descending ? this.length() - index - 1 : index;
-    return { key: logical, cells: [{ Number: logical }, { Text: `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'Positive' : 'Warning' } }] };
+    return { key: logical, cells: [{ Number: logical }, { Text: this.edits.get(String(logical)) ?? `${this.filter || 'record'}-${logical}` }, { Badge: { label: logical % 3 ? 'ready' : 'busy', tone: logical % 3 ? 'Positive' : 'Warning' } }] };
+  }
+
+  async edit(event) {
+    const current = event.source === SOURCE && event.version === this.version;
+    const value = String(event.value ?? '').trim();
+    if (!current) return { accepted: false, reason: 'stale version' };
+    if (event.column !== 'name' || !event.row?.id || value.length === 0 || new TextEncoder().encode(value).length > 256) {
+      return { accepted: false, reason: 'invalid value' };
+    }
+    this.edits.set(String(event.row.id), value);
+    this.version += 1;
+    await this.publish();
+    return { accepted: true };
   }
 }
 
@@ -126,6 +140,10 @@ export function LargeDataTableStory({ source }) {
         const label = !current || rows.length === 0 ? 'No current record selected' : `Selected immutable record ${String(rows[0].id)}`;
         setSelected(label);
         record(label.toLowerCase());
+      },
+      onEdit: async (event) => {
+        const result = await source.edit(event);
+        record(result.accepted ? `renamed immutable record ${event.row.id}` : `edit refused: ${result.reason}`);
       },
     }),
     h(Text, { label: selected, color: 'text-dim' }),

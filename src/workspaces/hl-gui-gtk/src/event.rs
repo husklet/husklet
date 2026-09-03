@@ -20,6 +20,7 @@ const REPORT_LIMIT: usize = 1024;
 #[derive(Clone, Debug, Default)]
 pub struct Reports {
     queue: Rc<RefCell<VecDeque<Event>>>,
+    authorities: Rc<RefCell<HashMap<(NodeId, Trigger), EventId>>>,
 }
 
 impl Reports {
@@ -46,9 +47,20 @@ impl Reports {
         queue.push_back(event);
     }
 
+    pub(crate) fn bind(&self, node: NodeId, trigger: Trigger, id: EventId) {
+        self.authorities.borrow_mut().insert((node, trigger), id);
+    }
+
+    pub(crate) fn id(&self, node: NodeId, trigger: Trigger) -> Option<EventId> {
+        self.authorities.borrow().get(&(node, trigger)).cloned()
+    }
+
     /// Drops interaction whose producer authority was withdrawn before the
     /// host had a chance to drain it.
     pub(crate) fn withdraw(&self, node: NodeId, trigger: Option<Trigger>) {
+        self.authorities
+            .borrow_mut()
+            .retain(|(held, kind), _| *held != node || trigger.is_some_and(|wanted| wanted != *kind));
         self.queue.borrow_mut().retain(|event| {
             event_authority(event)
                 .is_none_or(|(held, kind)| held != node || trigger.is_some_and(|wanted| wanted != kind))
@@ -76,6 +88,7 @@ fn event_authority(event: &Event) -> Option<(NodeId, Trigger)> {
         Event::Expand { node, .. } => (*node, Trigger::Expand),
         Event::Submit { node, .. } => (*node, Trigger::Submit),
         Event::Select { node, .. } => (*node, Trigger::Select),
+        Event::Edit { node, .. } => (*node, Trigger::Edit),
         Event::Scroll { node, .. } => (*node, Trigger::Scroll),
         Event::Close { node, .. } => (*node, Trigger::Close),
         Event::Context { node, .. } => (*node, Trigger::Context),
@@ -164,6 +177,7 @@ pub(crate) struct Bindings {
 impl Bindings {
     /// Points a trigger at an identity, connecting the signal on first use.
     pub(crate) fn set(&mut self, widget: &gtk::Widget, node: NodeId, handler: &Handler, reports: &Reports) {
+        reports.bind(node, handler.trigger, handler.id.clone());
         let key = (node, handler.trigger);
         if let Some(slot) = self.slots.get(&key) {
             slot.set(handler.id.clone());
@@ -199,6 +213,9 @@ fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, re
         Trigger::Toggle => toggle(widget, node, slot, reports),
         Trigger::Expand => expand(widget, node, slot, reports),
         Trigger::Select => select(widget, node, slot, reports),
+        // Editable collection cells consult the current authority at commit
+        // time; their virtualized factories are installed with the schema.
+        Trigger::Edit => {}
         Trigger::Scroll => scroll(widget, node, slot, reports),
         Trigger::Close => close(widget, node, slot, reports),
         Trigger::Context => context(&target, node, slot, reports),
@@ -270,7 +287,9 @@ fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 }
 
 fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    let Some(button) = widget.downcast_ref::<gtk::Button>() else { return };
+    let Some(button) = widget.downcast_ref::<gtk::Button>() else {
+        return;
+    };
     let reports = reports.clone();
     let slot = slot.clone();
     button.connect_clicked(move |_| identified(&reports, &slot, |id| Event::Activate { node, id }));

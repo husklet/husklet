@@ -9,9 +9,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Tree};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -153,12 +153,21 @@ mod unix {
             let channel = ChannelId::new(4);
             wire.send(&Frame::new(
                 channel,
-                Kind::Request,
+                Kind::Event,
                 serde_json::to_vec(&request).expect("row request encodes"),
             ))
             .expect("row request reaches Storybook");
             let answer = loop {
-                let carried = wire.receive().expect("Storybook answers the row request");
+                let carried = wire.receive().unwrap_or_else(|error| {
+                    let mut diagnostic = String::new();
+                    child
+                        .stderr
+                        .as_mut()
+                        .expect("captured stderr")
+                        .read_to_string(&mut diagnostic)
+                        .ok();
+                    panic!("Storybook answers the row request: {error:?}; stderr: {diagnostic}")
+                });
                 if carried.kind == Kind::Credit {
                     continue;
                 }
@@ -290,10 +299,9 @@ mod unix {
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
             "DataTable" => {
-                let entry = find::<gtk::Entry>(root, |entry| {
-                    entry.placeholder_text().as_deref() == Some("Filter records")
-                });
+                let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
                 entry.set_text("needle");
+                entry.emit_by_name::<()>("activate", &[]);
             }
             "Keyboard and semantic actions" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.placeholder_text().as_deref() == Some("storybook"));

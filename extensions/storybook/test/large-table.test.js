@@ -119,6 +119,26 @@ test('selection requires immutable current-generation authority and remains boun
     .some((patch) => patch.SetProp?.value?.Text === 'No current record selected'));
 });
 
+test('edits bind immutable row and source version, validate, and advance the version', async () => {
+  const mutations = [];
+  const source = new LargeRecordSource(async (call, argument) => mutations.push([call, argument]));
+  assert.deepEqual(await source.edit({ source: SOURCE, version: 1, row: { index: 42, id: '42' }, column: 'name', value: 'renamed' }), { accepted: true });
+  assert.equal(source.version, 2);
+  assert.equal(source.row(42).cells[1].Text, 'renamed');
+  assert.equal(mutations.at(-1)[1].mutation.Length.version, 2);
+  assert.deepEqual(await source.edit({ source: SOURCE, version: 1, row: { index: 42, id: '42' }, column: 'name', value: 'stale' }), { accepted: false, reason: 'stale version' });
+  assert.equal(source.row(42).cells[1].Text, 'renamed');
+  assert.deepEqual(await source.edit({ source: SOURCE, version: 2, row: { index: 42, id: '42' }, column: 'name', value: ' '.repeat(2) }), { accepted: false, reason: 'invalid value' });
+});
+
+test('the rendered 100k-row table exposes only the declared editable column', () => {
+  const stage = host();
+  const source = new LargeRecordSource();
+  const frame = stage.render(h(LargeDataTableStory, { source }));
+  const schema = frame.patches.find((patch) => patch.SetProp?.prop === 'Schema').SetProp.value.Schema;
+  assert.deepEqual(schema.filter((column) => column.editable).map((column) => column.key), ['name']);
+});
+
 test('the high-density operations story is selectable in the shipped playground', () => {
   const stage = host();
   const source = new LargeRecordSource();

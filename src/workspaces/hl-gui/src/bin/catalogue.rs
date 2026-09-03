@@ -724,7 +724,7 @@ const PROPS: &[Entry] = &[
         group: "collection",
         editor: "schema",
         values: &["Schema"],
-        note: "table columns: key, title, width as a Length, align, sortable",
+        note: "table columns: key, title, width as a Length, align, sortable, editable",
     },
     Entry {
         prop: Prop::Source,

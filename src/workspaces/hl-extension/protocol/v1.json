@@ -483,6 +483,13 @@
           "schema": {
             "kind": "boolean"
           }
+        },
+        {
+          "name": "editable",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
         }
       ],
       "kind": "struct",
@@ -5098,6 +5105,12 @@
         },
         {
           "name": "Select",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Edit",
           "payload": {
             "kind": "unit"
           }
@@ -9865,6 +9878,93 @@
           }
         },
         {
+          "name": "edit",
+          "payload": {
+            "fields": [
+              {
+                "name": "trigger",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "node",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "version",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "row",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "UiSelectedRow"
+                }
+              },
+              {
+                "name": "column",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "value",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "scroll",
           "payload": {
             "fields": [
@@ -10365,7 +10465,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:24c0064052d88ae6",
+  "source_fingerprint": "fnv1a64:28f9cc7f8ef6a513",
   "specification_version": 1,
   "topics": [
     {

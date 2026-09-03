@@ -34,6 +34,18 @@ pub enum UiEvent {
         rows: Vec<u64>,
         collection: Option<UiCollectionSelection>,
     },
+    #[serde(rename = "edit")]
+    Edit {
+        trigger: String,
+        node: u64,
+        id: String,
+        slot: Option<String>,
+        source: u64,
+        version: u64,
+        row: UiSelectedRow,
+        column: String,
+        value: String,
+    },
     #[serde(rename = "scroll")]
     Scroll {
         trigger: String,
@@ -207,6 +219,20 @@ impl UiEvent {
                         .collect(),
                 }),
             },
+            Event::Edit { node, id, edit } => Self::Edit {
+                trigger: "Edit".into(),
+                node: node.raw(),
+                id: id.as_str().into(),
+                slot,
+                source: edit.source.raw(),
+                version: edit.version.raw(),
+                row: UiSelectedRow {
+                    index: edit.row.index,
+                    id: edit.row.id.to_string(),
+                },
+                column: edit.column.clone(),
+                value: edit.value.clone(),
+            },
             Event::Scroll { node, id, dx, dy } => Self::Scroll {
                 trigger: "Scroll".into(),
                 node: node.raw(),
@@ -301,7 +327,7 @@ impl UiEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::UiEvent;
+    use super::{UiEvent, UiSelectedRow};
     use serde_json::json;
 
     #[test]
@@ -355,6 +381,31 @@ mod tests {
                 "invented": true
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn edit_wire_shape_carries_versioned_row_authority() {
+        let event = UiEvent::Edit {
+            trigger: "Edit".into(),
+            node: 3,
+            id: "3:Edit".into(),
+            slot: Some("pane".into()),
+            source: 7,
+            version: 11,
+            row: UiSelectedRow {
+                index: 9,
+                id: "immutable-9".into(),
+            },
+            column: "name".into(),
+            value: "renamed".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "interaction":"edit", "trigger":"Edit", "node":3, "id":"3:Edit", "slot":"pane",
+                "source":7, "version":11, "row":{"index":9,"id":"immutable-9"}, "column":"name", "value":"renamed"
+            })
         );
     }
 }

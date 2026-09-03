@@ -757,6 +757,13 @@ const definitions = {
         "schema": {
           "kind": "boolean"
         }
+      },
+      {
+        "name": "editable",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
       }
     ],
     "kind": "struct",
@@ -5377,6 +5384,12 @@ const definitions = {
         }
       },
       {
+        "name": "Edit",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "Activate",
         "payload": {
           "kind": "unit"
@@ -9244,6 +9257,93 @@ const roots = {
                   "kind": "ref",
                   "name": "UiCollectionSelection"
                 }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "edit",
+        "payload": {
+          "fields": [
+            {
+              "name": "trigger",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "node",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "source",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "version",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "row",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "UiSelectedRow"
+              }
+            },
+            {
+              "name": "column",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             }
           ],

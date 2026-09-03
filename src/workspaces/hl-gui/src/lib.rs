@@ -39,8 +39,8 @@ pub use component::{
     QueryOperator, QueryPlanNode, QueryPlanSource, TestCase, TestStatus, TimelineEvent,
 };
 pub use data::{
-    Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
-    Version,
+    Cell, CollectionEdit, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId,
+    SourceMutation, Version,
 };
 pub use dialog::{Action, Dialog, Role};
 pub use element::{Element, Reconciliation};

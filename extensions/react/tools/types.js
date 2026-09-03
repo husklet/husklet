@@ -171,6 +171,7 @@ export interface ColumnSpec {
   width?: Length;
   align?: ${union(catalogue().enums.Align)};
   sortable?: boolean;
+  editable?: boolean;
 }
 
 /** One interaction, as the host reports it. */
@@ -184,6 +185,7 @@ export interface Report {
 export interface SelectedCollectionRow { index: number; id: string; }
 export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
 export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
+export interface EditReport extends Report { source: number; version: number; row: SelectedCollectionRow; column: string; value: string; }
 
 /** What every component takes, whatever it is. */
 export interface NodeProps {
@@ -208,7 +210,7 @@ function component(tag, props, enums) {
     lines.push(`  ${camel(name)}?: ${typed(entry, enums)};`);
   }
   for (const trigger of tag.triggers) {
-    lines.push(`  on${trigger}?: (report: ${trigger === 'Select' ? 'SelectionReport' : 'Report'}) => void;`);
+    lines.push(`  on${trigger}?: (report: ${trigger === 'Select' ? 'SelectionReport' : trigger === 'Edit' ? 'EditReport' : 'Report'}) => void;`);
   }
   lines.push('}');
   return lines.join('\n');

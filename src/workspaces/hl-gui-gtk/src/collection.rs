@@ -1,7 +1,7 @@
 //! Collection binding: declared columns and the rows answering a window.
 
 use gtk::prelude::*;
-use hl_gui::{Align, Column, Length, Prop, PropValue, RowWindow, SourceId};
+use hl_gui::{Align, Cell, CollectionEdit, Column, Event, Length, Node, Prop, PropValue, RowWindow, SourceId, Trigger};
 
 use crate::rows::{Rows, UNIT};
 
@@ -13,9 +13,15 @@ const CHARACTER_PIXELS: i32 = 9;
 const CELL_MARGIN: i32 = 8;
 
 /// Applies a collection-shaped property.
-pub(crate) fn configure(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
+pub(crate) fn configure(
+    widget: &gtk::Widget,
+    node: &Node,
+    prop: Prop,
+    value: &PropValue,
+    reports: &crate::event::Reports,
+) {
     match (prop, value) {
-        (Prop::Schema, PropValue::Schema(columns)) => schema(widget, columns),
+        (Prop::Schema, PropValue::Schema(columns)) => schema(widget, node, columns, reports),
         // Binding a table to a source is what gives it its model: waiting for
         // the first window instead would leave a bound table showing the rows
         // of whatever source it was bound to before.
@@ -27,7 +33,7 @@ pub(crate) fn configure(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
 }
 
 /// Rebuilds the declared columns of a table.
-fn schema(widget: &gtk::Widget, columns: &[Column]) {
+fn schema(widget: &gtk::Widget, node: &Node, columns: &[Column], reports: &crate::event::Reports) {
     let Some(view) = component::table::columns(widget) else {
         return;
     };
@@ -38,14 +44,25 @@ fn schema(widget: &gtk::Widget, columns: &[Column]) {
         view.remove_column(&column);
     }
     for (index, column) in columns.iter().enumerate() {
-        view.append_column(&declare(column, index));
+        view.append_column(&declare(&view, node, column, index, reports));
     }
 }
 
-fn declare(column: &Column, index: usize) -> gtk::ColumnViewColumn {
+fn declare(
+    view: &gtk::ColumnView,
+    node: &Node,
+    column: &Column,
+    index: usize,
+    reports: &crate::event::Reports,
+) -> gtk::ColumnViewColumn {
     let factory = gtk::SignalListItemFactory::new();
     let align = column.align;
-    factory.connect_setup(move |_, item| setup(item, align));
+    let editable = column.editable;
+    let view = view.downgrade();
+    let reports = reports.clone();
+    let node_id = node.id;
+    let key = column.key.clone();
+    factory.connect_setup(move |_, item| setup(item, align, editable, &view, node_id, &key, &reports));
     factory.connect_bind(move |_, item| bind(item, index));
     let declared = gtk::ColumnViewColumn::new(Some(&column.title), Some(factory));
     declared.set_resizable(true);
@@ -58,10 +75,66 @@ fn declare(column: &Column, index: usize) -> gtk::ColumnViewColumn {
     declared
 }
 
-fn setup(item: &gtk::glib::Object, align: Align) {
+fn setup(
+    item: &gtk::glib::Object,
+    align: Align,
+    editable: bool,
+    view: &gtk::glib::WeakRef<gtk::ColumnView>,
+    node: hl_gui::NodeId,
+    column: &str,
+    reports: &crate::event::Reports,
+) {
     let Ok(item) = item.clone().downcast::<gtk::ListItem>() else {
         return;
     };
+    if editable {
+        let entry = gtk::Entry::new();
+        entry.set_has_frame(false);
+        entry.set_max_length(Cell::MAX_TEXT_BYTES as i32);
+        entry.set_margin_start(CELL_MARGIN);
+        entry.set_margin_end(CELL_MARGIN);
+        item.set_child(Some(&entry));
+        let item = item.downgrade();
+        let view = view.clone();
+        let column = column.to_owned();
+        let reports = reports.clone();
+        entry.connect_activate(move |entry| {
+            let (Some(item), Some(view), Some(id)) = (item.upgrade(), view.upgrade(), reports.id(node, Trigger::Edit))
+            else {
+                return;
+            };
+            let Some(model) = view
+                .model()
+                .and_then(|m| m.downcast::<gtk::MultiSelection>().ok())
+                .and_then(|m| m.model())
+                .and_then(|m| m.downcast::<Rows>().ok())
+            else {
+                return;
+            };
+            let Some(selection) = model.selection(&[u64::from(item.position())]) else {
+                return;
+            };
+            let Some(row) = selection.rows.into_iter().next() else {
+                return;
+            };
+            let value = entry.text().to_string();
+            if value.len() > Cell::MAX_TEXT_BYTES || value.contains('\0') {
+                return;
+            }
+            reports.push(Event::Edit {
+                node,
+                id,
+                edit: CollectionEdit {
+                    source: selection.source,
+                    version: selection.version,
+                    row,
+                    column: column.clone(),
+                    value,
+                },
+            });
+        });
+        return;
+    }
     let label = gtk::Label::new(None);
     label.set_halign(match align {
         Align::Center => gtk::Align::Center,
@@ -81,11 +154,17 @@ fn bind(item: &gtk::glib::Object, index: usize) {
     let (Some(child), Some(entry)) = (item.child(), item.item()) else {
         return;
     };
-    let (Ok(label), Ok(text)) = (child.downcast::<gtk::Label>(), entry.downcast::<gtk::StringObject>()) else {
+    let Ok(text) = entry.downcast::<gtk::StringObject>() else {
         return;
     };
     let cells = text.string();
-    label.set_text(cells.split(UNIT).nth(index).unwrap_or(""));
+    let value = cells.split(UNIT).nth(index).unwrap_or("");
+    if let Ok(label) = child.clone().downcast::<gtk::Label>() {
+        label.set_text(value);
+    }
+    if let Ok(entry) = child.downcast::<gtk::Entry>() {
+        entry.set_text(value);
+    }
 }
 
 /// The virtualized model behind a table, created on first use.

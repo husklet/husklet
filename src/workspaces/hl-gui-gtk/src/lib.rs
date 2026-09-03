@@ -185,12 +185,12 @@ impl Renderer for Surface {
                     self.sources.insert(*source, *id);
                 }
                 let (widget, node) = self.describe(*id, tree)?;
-                prop::apply(widget, node, *prop, value);
+                prop::apply(widget, node, *prop, value, &self.reports);
                 Ok(())
             }
             Patch::ClearProp { id, prop } => {
                 let (widget, node) = self.describe(*id, tree)?;
-                prop::clear(widget, node, *prop);
+                prop::clear(widget, node, *prop, &self.reports);
                 Ok(())
             }
             Patch::SetHandler { id, handler } => {

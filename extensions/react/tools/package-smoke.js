@@ -233,6 +233,7 @@ try {
           return phase + ':' + String(x);
         }
         case 'select': return received.rows.join(',');
+        case 'edit': return received.row.id + ':' + received.column + '=' + received.value;
         case 'scroll': return received.dx + ',' + received.dy;
         case 'context': return received.x + ',' + received.y;
         case 'focus': return String(received.focused);

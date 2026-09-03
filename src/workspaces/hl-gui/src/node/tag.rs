@@ -280,7 +280,7 @@ catalogue! {
     TableRow: children, props[Gap], triggers[],
     TableCell: leaf, props[Label, Value, Ellipsize, Wrap, Tone], triggers[],
     TableSortLabel: leaf, props[Label, Icon, Enabled, Tone], triggers[Invoke],
-    DataTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
+    DataTable: leaf, props[Schema, Source], triggers[Select, Edit, Scroll, Key, Focus, Pointer, Context],
     KeyValueTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     TreeTable: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],
     EventStream: leaf, props[Schema, Source], triggers[Select, Scroll, Key, Focus, Pointer, Context],

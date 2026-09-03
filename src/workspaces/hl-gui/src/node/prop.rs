@@ -236,6 +236,7 @@ pub enum Trigger {
     Change,
     Submit,
     Select,
+    Edit,
     Activate,
     Toggle,
     Expand,

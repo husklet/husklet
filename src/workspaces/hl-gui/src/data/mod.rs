@@ -7,6 +7,7 @@ mod cache;
 
 pub use cache::{Lookup, RowCache};
 
+use crate::render::SelectedRow;
 use crate::style::{Align, Length, Tone};
 
 /// Identity of one data source within a session.
@@ -75,6 +76,8 @@ pub struct Column {
     pub width: Length,
     pub align: Align,
     pub sortable: bool,
+    #[cfg_attr(feature = "wire", serde(default))]
+    pub editable: bool,
 }
 
 impl Column {
@@ -85,6 +88,7 @@ impl Column {
             width: Length::Content,
             align: Align::Start,
             sortable: false,
+            editable: false,
         }
     }
 
@@ -105,6 +109,22 @@ impl Column {
         self.sortable = true;
         self
     }
+
+    #[must_use]
+    pub const fn editable(mut self) -> Self {
+        self.editable = true;
+        self
+    }
+}
+
+/// One version-bound edit of a materialized virtual row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionEdit {
+    pub source: SourceId,
+    pub version: Version,
+    pub row: SelectedRow,
+    pub column: String,
+    pub value: String,
 }
 
 /// One rendered cell. Typed so alignment and formatting are the adapter's job,
@@ -289,7 +309,13 @@ pub enum SourceMutation {
 
 #[cfg(test)]
 mod tests {
-    use super::RowRange;
+    use super::{Column, RowRange};
+
+    #[test]
+    fn columns_are_read_only_unless_editing_is_explicit() {
+        assert!(!Column::new("name", "Name").editable);
+        assert!(Column::new("name", "Name").editable().editable);
+    }
 
     #[test]
     fn block_alignment_snaps_down_to_the_containing_block() {

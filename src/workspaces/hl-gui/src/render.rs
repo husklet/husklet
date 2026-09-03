@@ -77,6 +77,11 @@ pub enum Event {
         rows: Vec<u64>,
         collection: Option<CollectionSelection>,
     },
+    Edit {
+        node: NodeId,
+        id: EventId,
+        edit: crate::data::CollectionEdit,
+    },
     Scroll {
         node: NodeId,
         id: EventId,

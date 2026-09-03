@@ -108,6 +108,7 @@ export interface ColumnSpec {
   width?: Length;
   align?: "start" | "Start" | "center" | "Center" | "end" | "End" | "stretch" | "Stretch";
   sortable?: boolean;
+  editable?: boolean;
 }
 
 /** One interaction, as the host reports it. */
@@ -121,6 +122,7 @@ export interface Report {
 export interface SelectedCollectionRow { index: number; id: string; }
 export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
 export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
+export interface EditReport extends Report { source: number; version: number; row: SelectedCollectionRow; column: string; value: string; }
 
 /** What every component takes, whatever it is. */
 export interface NodeProps {
@@ -3232,11 +3234,12 @@ export interface DataTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;
+  onEdit?: (report: EditReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3267,7 +3270,7 @@ export interface KeyValueTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
@@ -3302,7 +3305,7 @@ export interface TreeTableProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
@@ -3337,7 +3340,7 @@ export interface EventStreamProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
@@ -3372,7 +3375,7 @@ export interface FileBrowserProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
-  /** table columns: key, title, width as a Length, align, sortable */
+  /** table columns: key, title, width as a Length, align, sortable, editable */
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
