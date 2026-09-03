@@ -68,6 +68,10 @@ impl Settings {
         main.append(&standing);
         main.append(&capabilities(entry));
         let refusal = line("", REFUSAL);
+        // Confirmation, cleanup progress, and retryable lifecycle failures all
+        // replace this text in place. Announce those transitions without
+        // moving focus away from the confirmation or retry controls.
+        refusal.set_accessible_role(gtk::AccessibleRole::Status);
         refusal.set_visible(false);
         main.append(&actions(shelf, entry, &refusal, &standing, semantics, update));
         main.append(&refusal);

@@ -823,6 +823,15 @@ fn failed_removal_keeps_a_disabled_record_and_offers_retry() {
     }));
     assert_eq!(fixture.stage("alpha"), Stage::Standby);
     assert_eq!(attempts.load(Ordering::Acquire), 1);
+    let refusal = fixture
+        .extension_tagged("alpha", settings::REFUSAL)
+        .and_downcast::<gtk::Label>()
+        .expect("the failed removal remains visible beside its retry");
+    assert_eq!(
+        refusal.accessible_role(),
+        gtk::AccessibleRole::Status,
+        "removal progress and retryable failure must be announced without moving focus"
+    );
     let failed = fixture.view.semantic_snapshot();
     assert!(failed.root.children.iter().any(|node| {
         node.label.as_deref() == Some("alpha") && node.value.as_deref() == Some("disabled · removal failed")
