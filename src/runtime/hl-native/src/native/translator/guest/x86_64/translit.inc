@@ -8978,7 +8978,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         live.rip = source;
         for (unsigned reg = 0; reg < 16; reg++) live.r[reg] = UINT64_C(0x8192a3b4c5d6e700) + reg;
         live.r[4] = stack;
-        translit_flags_out(&live, UINT64_C(0xed7));
+        translit_flags_out(&live, UINT64_C(0xad7));
         uint64_t expected_flags = translit_flags_in(&live);
         live.ibtc_base = (uint64_t)g_ibtc;
         run_block(context, &live, source_block);
@@ -8989,23 +8989,20 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         int registers_exact = live.r[0] == 42 && live.r[4] == stack;
         for (unsigned reg = 1; reg < 16; reg++)
             if (reg != 4 && live.r[reg] != UINT64_C(0x8192a3b4c5d6e700) + reg) registers_exact = 0;
-        uint64_t actual_flags = translit_flags_in(&live);
-        result = !registers_exact                                                   ? 182
-                 : actual_flags != expected_flags || live.df != 1                  ? 183
-                 : live.rip != continuation + 5                                    ? 184
-                 : below_after != below || above_after != above                    ? 185
-                 : return_after != continuation                                    ? 186
-                 : live.jcc_ibtc_miss != 0                                         ? 187
-                 : translit_test_jcc_ibtc_site.restore_end == NULL                  ? 188
-                 : atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
-                                        memory_order_relaxed) != ret_hit_before + 1 ? 189
-                 : __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) !=
-                           direct_jmp_hit_before                                    ? 190
-                 : __atomic_load_n(&translit_direct_jmp_ibtc_miss, __ATOMIC_RELAXED) !=
-                           direct_jmp_miss_before                                   ? 191
-                 : __atomic_load_n(&translit_direct_jmp_ibtc_irq, __ATOMIC_RELAXED) !=
-                           direct_jmp_irq_before                                    ? 192
-                                                                                   : 0;
+        result = registers_exact && translit_flags_in(&live) == expected_flags && live.df == 1 &&
+                         live.rip == continuation + 5 && below_after == below && above_after == above &&
+                         return_after == continuation && live.jcc_ibtc_miss == 0 &&
+                         translit_test_jcc_ibtc_site.restore_end != NULL &&
+                         atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
+                                              memory_order_relaxed) == ret_hit_before + 1 &&
+                         __atomic_load_n(&translit_direct_jmp_ibtc_hit, __ATOMIC_RELAXED) ==
+                             direct_jmp_hit_before &&
+                         __atomic_load_n(&translit_direct_jmp_ibtc_miss, __ATOMIC_RELAXED) ==
+                             direct_jmp_miss_before &&
+                         __atomic_load_n(&translit_direct_jmp_ibtc_irq, __ATOMIC_RELAXED) ==
+                             direct_jmp_irq_before
+                     ? 0
+                     : 182;
         goto done_call_ibtc;
     }
     struct cpu cpu = {0};
