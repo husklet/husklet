@@ -41,6 +41,19 @@ Low-level calls accept an optional `AbortSignal` as the third argument:
 await session.call('workspace_info', undefined, { signal });
 ```
 
+The complete typed facade can be bound without changing individual method
+signatures. This applies to nested container, terminal, filesystem, and other
+methods as well:
+
+```js
+const cancellable = workspace(session).withSignal(signal);
+await cancellable.containers.inspect(containerId);
+```
+
+When a bound watcher is already active, abort removes its listener and releases
+its reference-counted host subscription. Aborting while its subscribe call is
+still pending follows the ordered-call fail-closed rule below.
+
 An already-aborted signal rejects without writing. Because protocol v1 orders
 replies on one channel and has no request identifiers, aborting after a request
 was written closes the session and rejects every pending call; this prevents a

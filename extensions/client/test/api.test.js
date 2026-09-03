@@ -58,6 +58,49 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('the complete typed facade binds cancellation without changing method arguments', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const controller = new AbortController();
+  const api = workspace(stage.session).withSignal(controller.signal);
+  const pending = api.containers.inspect('a'.repeat(32));
+  assert.deepEqual((await next()).payload, { call: 'container_inspect', with: { id: 'a'.repeat(32) } });
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  await assert.rejects(api.info(), /closed/);
+  stage.host.destroy(); stage.server.close();
+});
+
+test('an already-aborted typed facade emits no Unix request frame', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(workspace(stage.session, { signal: controller.signal }).info(), { name: 'AbortError' });
+  const wrote = await Promise.race([
+    next().then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 20)),
+  ]);
+  assert.equal(wrote, false);
+  await stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('aborting a bound watcher releases its shared subscription without closing the session', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const controller = new AbortController();
+  const api = workspace(stage.session).withSignal(controller.signal);
+  const watching = api.watchContainers(() => {});
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'containers' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await watching;
+  controller.abort();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stop();
+  const info = workspace(stage.session).info();
+  assert.equal((await next()).payload.call, 'workspace_info');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } } }));
+  assert.equal((await info).name, 'dev');
+  await stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pending calls are bounded and a timeout closes the ambiguous ordered stream', async () => {
   const stage = await pair({ pendingLimit: 2, timeout: 100 });
   const next = frames(stage.host);

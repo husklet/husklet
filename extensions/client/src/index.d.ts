@@ -185,6 +185,8 @@ export function connect(options?: ConnectOptions): Promise<Session>;
 export interface WorkspaceApi {
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
+  /** Returns the complete typed facade with every call bound to this signal. */
+  withSignal(signal: AbortSignal): WorkspaceApi;
   info(): Promise<WorkspaceInfo>;
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
@@ -311,7 +313,7 @@ export interface WorkspaceApi {
 
 export function requestCapability(call: string): string;
 
-export function workspace(session: Session): WorkspaceApi;
+export function workspace(session: Session, options?: CallOptions): WorkspaceApi;
 export const protocolSurface: Readonly<{
   requests: Readonly<Record<string,
     | Readonly<{ kind: 'facade' | 'subscription'; api: string }>

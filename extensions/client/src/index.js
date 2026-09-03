@@ -65,7 +65,17 @@ export async function connect(options = {}) {
   return Session.connect(options.path, options);
 }
 
-export function workspace(session) {
+export function workspace(session, { signal } = {}) {
+  const hostSession = session;
+  if (signal !== undefined) {
+    session = new Proxy(hostSession, {
+      get(target, property) {
+        if (property === 'call') return (name, argument) => target.call(name, argument, { signal });
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
   const expect = (reply, kind) => {
     if (reply?.reply !== kind) throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected ${kind}`);
     return reply.with;
@@ -75,8 +85,8 @@ export function workspace(session) {
     if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     return done(call, { topic });
   };
-  const states = subscriptions.get(session) ?? new Map();
-  subscriptions.set(session, states);
+  const states = subscriptions.get(hostSession) ?? new Map();
+  subscriptions.set(hostSession, states);
   const subscribe = async (topic) => {
     if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     let state = states.get(topic);
@@ -107,7 +117,7 @@ export function workspace(session) {
     state.references -= 1;
     const operation = state.operation.then(async () => {
       if (state.references === 0 && state.active) {
-        await subscription('event_unsubscribe', topic);
+        await expect(await hostSession.call('event_unsubscribe', { topic }), 'done');
         state.active = false;
       }
       if (state.references === 0 && !state.active) states.delete(topic);
@@ -358,6 +368,25 @@ export function workspace(session) {
     subscribe,
     unsubscribe,
   };
+  Object.defineProperty(api, 'withSignal', {
+    value: (nextSignal) => workspace(hostSession, { signal: nextSignal }),
+    enumerable: false,
+  });
+  const watch = async (topic, snapshot, listener, label) => {
+    if (typeof listener !== 'function') throw new TypeError(`${label} listener must be a function`);
+    const off = hostSession.onEvent((event) => { if (event?.snapshot === snapshot) listener(event.of); });
+    try { await subscribe(topic); } catch (error) { off(); throw error; }
+    let stopping;
+    const stop = () => stopping ??= (async () => {
+      signal?.removeEventListener('abort', onAbort);
+      off();
+      await unsubscribe(topic);
+    })();
+    const onAbort = () => { void stop(); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) await stop();
+    return stop;
+  };
   const providerCatalogue = (extensions) => {
     if (!Array.isArray(extensions) || extensions.some((extension) => typeof extension.enabled !== 'boolean' || !Array.isArray(extension.pane_providers))) {
       throw new Error('host does not expose installed provider declarations');
@@ -394,20 +423,8 @@ export function workspace(session) {
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
   };
-  api.watchContainers = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('container listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'containers') listener(event.of); });
-    try { await api.subscribe('containers'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('containers'); };
-  };
-  api.watchPaneChanges = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('pane change listener must be a function');
-    const off = session.onEvent((event) => {
-      if (event?.snapshot === 'pane_changes') listener(event.of);
-    });
-    try { await api.subscribe('pane-changes'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('pane-changes'); };
-  };
+  api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
+  api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
   api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
     const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
     if (!providerName(extension) || !providerName(provider)) throw new TypeError('provider wait requires exact bounded extension and provider names');
@@ -447,42 +464,12 @@ export function workspace(session) {
       timer = setTimeout(() => finish({ changed: false, state, after }), timeoutMs);
     });
   };
-  api.watchExecutions = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('execution listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'executions') listener(event.of); });
-    try { await api.subscribe('executions'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('executions'); };
-  };
-  api.watchImagePulls = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('image pull listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'image_pulls') listener(event.of); });
-    try { await api.subscribe('image-pulls'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('image-pulls'); };
-  };
-  api.watchExtensions = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('extension listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'extensions') listener(event.of); });
-    try { await api.subscribe('extensions'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('extensions'); };
-  };
-  api.watchExtensionAcquisitions = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('extension acquisition listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'extension_acquisitions') listener(event.of); });
-    try { await api.subscribe('extension-acquisitions'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('extension-acquisitions'); };
-  };
-  api.watchWorkspaceLifecycle = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('workspace lifecycle listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_lifecycle') listener(event.of); });
-    try { await api.subscribe('workspace-lifecycle'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('workspace-lifecycle'); };
-  };
-  api.watchWorkspaceEvents = async (listener) => {
-    if (typeof listener !== 'function') throw new TypeError('workspace event listener must be a function');
-    const off = session.onEvent((event) => { if (event?.snapshot === 'workspace_events') listener(event.of); });
-    try { await api.subscribe('workspace-events'); } catch (error) { off(); throw error; }
-    return async () => { off(); await api.unsubscribe('workspace-events'); };
-  };
+  api.watchExecutions = (listener) => watch('executions', 'executions', listener, 'execution');
+  api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
+  api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
+  api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
+  api.watchWorkspaceLifecycle = (listener) => watch('workspace-lifecycle', 'workspace_lifecycle', listener, 'workspace lifecycle');
+  api.watchWorkspaceEvents = (listener) => watch('workspace-events', 'workspace_events', listener, 'workspace event');
   return api;
 }
 
