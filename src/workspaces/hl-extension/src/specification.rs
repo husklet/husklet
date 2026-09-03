@@ -8,6 +8,7 @@ use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
+    ("src/specification.rs", include_str!("specification.rs")),
     ("src/request.rs", include_str!("request.rs")),
     ("src/port.rs", include_str!("port.rs")),
     ("src/manifest.rs", include_str!("manifest.rs")),
@@ -274,6 +275,9 @@ fn type_schema(ty: &Type, owner: &str, references: &mut BTreeSet<String>) -> Val
                 other => panic!("unsupported path arguments {other:?}"),
             };
             match name.as_str() {
+                "Grant" if !arguments.is_empty() => {
+                    json!({"kind":"array","of":type_schema(arguments[0],owner,references),"unique":true})
+                }
                 "Option" => json!({"kind":"optional","of":type_schema(arguments[0],owner,references)}),
                 "Vec" => json!({"kind":"array","of":type_schema(arguments[0],owner,references)}),
                 "Box" => type_schema(arguments[0], owner, references),
@@ -416,6 +420,22 @@ mod tests {
     fn every_reference_resolves_inside_the_document() {
         let document: serde_json::Value = serde_json::from_str(&super::document()).unwrap();
         let definitions = document["definitions"].as_object().unwrap();
+        for name in definitions.keys() {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut current = name.as_str();
+            loop {
+                seen.insert(current);
+                let Some(next) = definitions
+                    .get(current)
+                    .filter(|schema| schema["kind"] == "ref")
+                    .and_then(|schema| schema["name"].as_str())
+                else {
+                    break;
+                };
+                assert!(!seen.contains(next), "zero-progress reference cycle begins at {name}");
+                current = next;
+            }
+        }
         fn visit(value: &serde_json::Value, definitions: &serde_json::Map<String, serde_json::Value>) {
             if value.get("kind").and_then(serde_json::Value::as_str) == Some("ref") {
                 let name = value["name"].as_str().unwrap();

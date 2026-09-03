@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub const SOURCE_PATHS: &[&str] = &[
+    "src/specification.rs",
     "src/request.rs",
     "src/port.rs",
     "src/manifest.rs",
