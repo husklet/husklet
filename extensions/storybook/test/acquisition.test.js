@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import React from 'react';
 
-import { acquisitionStates } from '../src/acquisition.js';
+import { AcquisitionProgressStory, acquisitionStates } from '../src/acquisition.js';
+import { host } from './host.js';
+
+const { createElement: h } = React;
 
 test('acquisition examples preserve the user-visible semantic lifecycle', () => {
   assert.deepEqual(
@@ -18,4 +22,18 @@ test('acquisition examples preserve the user-visible semantic lifecycle', () => 
       byKey[key].actions.includes('Cancel download'),
     ),
   );
+});
+
+test('acquisition states are selectable without materializing every state at once', () => {
+  const stage = host();
+  const frame = stage.render(h(AcquisitionProgressStory));
+  assert.equal(frame.patches.filter((patch) => patch.Create?.tag === 'Card').length, 1);
+  const select = frame.patches.find((patch) => patch.Create?.tag === 'Select')?.Create.id;
+  assert.ok(select);
+  assert.equal(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: 'ready' }), true);
+  const labels = stage.frames.flatMap(({ patches }) => patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  assert.ok(labels.includes('Ready for consent'));
+  assert.ok(labels.includes('Install') && labels.includes('Cancel'));
 });

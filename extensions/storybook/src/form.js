@@ -114,7 +114,8 @@ export function ValidatedSettingsFormStory() {
           if (next && !tags.includes(next)) setTags([...tags, next]);
           setTag('');
         },
-      }, ...tags.map((held) => h(ToggleButton, {
+      }),
+      h(Column, { key: 'held-tags', gap: 1 }, ...tags.map((held) => h(ToggleButton, {
         key: held,
         label: held,
         checked: true,
@@ -126,10 +127,10 @@ export function ValidatedSettingsFormStory() {
     ...(invalid
       ? [h(ValidationSummary, {
         key: 'invalid',
-        label: 'Fix the highlighted field before saving.',
-        detail: reviewed ? 'Workspace name is ready for correction.' : '1 problem found.',
+        label: 'Fix workspace name.',
+        detail: reviewed ? 'Ready to correct.' : '1 problem.',
         tone: 'danger',
-      }, h(Button, { label: 'Review workspace name', onInvoke: () => setReviewed(true) }))]
+      }), h(Button, { key: 'review', label: 'Review workspace name', onInvoke: () => setReviewed(true) })]
       : []),
     ...(saved
       ? [h(Banner, { key: 'saved', label: `Defaults saved for ${name.trim()}.`, tone: 'positive' })]

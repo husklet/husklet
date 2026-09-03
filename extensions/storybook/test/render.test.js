@@ -185,12 +185,12 @@ test('the form story validates submit, recovers on change, and confirms success'
   let before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }));
   let patches = stage.since(before);
-  assert.ok(node(patches, 'ValidationSummary', 'Fix the highlighted field before saving.'));
+  assert.ok(node(patches, 'ValidationSummary', 'Fix workspace name.'));
   const review = node(patches, 'Button', 'Review workspace name');
   assert.ok(review, 'validation summary has no corrective action');
   const beforeReview = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke` });
-  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Workspace name is ready for correction.'));
+  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Ready to correct.'));
   assert.ok(
     patches.some((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Tone' && patch.SetProp.value.Tone === 'Danger'),
     'invalid submission does not mark the field or feedback as dangerous',
@@ -236,17 +236,26 @@ test('the validated form is selectable as a canonical end-user flow', () => {
   assert.ok(node(patches, 'Heading', 'Workspace defaults'), 'selecting the form flow does not render it');
 });
 
-test('the acquisition flow renders every semantic progress state and only its supported actions', () => {
+test('the acquisition flow selects every semantic progress state without materializing them together', () => {
   const stage = host();
   const first = stage.render(h(Playground));
   const item = node(first.patches, 'ListItemButton', ACQUISITION_STORY);
   assert.ok(item, 'the sidebar has no acquisition flow');
   const before = stage.frames.length;
   assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
-  const patches = stage.since(before);
-  for (const state of acquisitionStates) {
-    assert.ok(node(patches, 'CardHeader', state.title), `${state.key} is absent`);
-    assert.ok(node(patches, 'InlineMessage', state.status), `${state.key} has no semantic status`);
+  const initial = stage.since(before);
+  const select = created(initial).find((entry) => entry.tag === 'Select')?.id;
+  assert.ok(select, 'the lifecycle state selector is absent');
+  const patches = [...initial];
+  for (const [index, state] of acquisitionStates.entries()) {
+    const start = stage.frames.length;
+    if (index !== 0) {
+      assert.ok(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: state.key }));
+      patches.push(...stage.since(start));
+    }
+    const visible = index === 0 ? initial : stage.since(start);
+    assert.ok(node(visible, 'CardHeader', state.title), `${state.key} is absent`);
+    assert.ok(node(visible, 'InlineMessage', state.status), `${state.key} has no semantic status`);
   }
   for (const action of ['Cancel download', 'Retry', 'Install', 'Cancel']) {
     assert.ok(node(patches, 'Button', action), `${action} is not demonstrated`);
