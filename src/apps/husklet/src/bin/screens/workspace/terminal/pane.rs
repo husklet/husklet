@@ -4,7 +4,7 @@ fn page_owns_focus<T: PartialEq>(focused: Option<&T>, page: &[T]) -> bool {
     focused.is_some_and(|focused| page.iter().any(|candidate| candidate == focused))
 }
 
-pub(super) struct PaneFocus;
+pub(crate) struct PaneFocus;
 
 /// The small control that selects what the current pane draws.
 pub(crate) struct PaneChooser;
@@ -166,6 +166,7 @@ impl PaneChooser {
             terminal.connect_clicked(move |_| {
                 if Self::terminal_in(&window, target.as_deref()) {
                     chooser.set_icon_name(Self::TERMINAL_ICON);
+                    Self::dismiss(&window, &chooser);
                 }
             });
         }
@@ -225,6 +226,7 @@ impl PaneChooser {
                 choice.connect_clicked(move |_| {
                     if Self::provider_generation_in(&window, target.as_deref(), &extension, generation, &id) {
                         chooser.set_icon_name(&icon);
+                        Self::dismiss(&window, &chooser);
                     }
                 });
                 choices.append(&choice);
@@ -252,6 +254,21 @@ impl PaneChooser {
         let popover = gtk::Popover::new();
         popover.set_child(Some(&choices));
         button.set_popover(Some(&popover));
+    }
+
+    fn dismiss(window: &TermWin, chooser: &gtk::MenuButton) {
+        if let Some(popover) = chooser.popover() {
+            popover.popdown();
+        }
+        if let Some(terminal) = window.focused.borrow().as_ref().filter(|terminal| terminal.parent().is_some()) {
+            terminal.add_tick_callback(|terminal, _| {
+                if !terminal.is_mapped() {
+                    return glib::ControlFlow::Continue;
+                }
+                terminal.grab_focus();
+                glib::ControlFlow::Break
+            });
+        }
     }
 
     fn selected(window: &Rc<TermWin>) -> Option<Occupancy> {
@@ -460,7 +477,7 @@ impl PaneSwap {
 }
 
 impl PaneFocus {
-    pub(super) fn wire(tw: &Rc<TermWin>, terminal: &vte4::Terminal) {
+    pub(crate) fn wire(tw: &Rc<TermWin>, terminal: &vte4::Terminal) {
         let tw = tw.clone();
         let focused = terminal.clone();
         let controller = gtk::EventControllerFocus::new();

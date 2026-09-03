@@ -2699,7 +2699,7 @@ mod panes {
     use hl_ws_term::session::{PaneNode, SurfacePane};
 
     use super::super::super::terminal::{
-        Adjustment, PaneChooser, PaneChrome, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+        Adjustment, PaneChooser, PaneChrome, PaneFocus, PaneLauncher, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
         WindowSession, ABSENCE,
     };
     use super::super::Console;
@@ -3793,6 +3793,9 @@ mod panes {
         let bench = Bench::new();
         let (first, first_slot) = bench.shell();
         let (second, second_slot) = bench.beside(&first);
+        let host = bench.page.root().and_downcast::<gtk::Window>().expect("terminal window");
+        host.set_default_size(900, 600);
+        host.present();
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3811,6 +3814,7 @@ mod panes {
         readable(&gallery, "postgres");
         gallery.ready("postgres", generation);
         Window::exhibit(&bench.window, gallery);
+        PaneFocus::wire(&bench.window, &first);
         assert!(Panes::focus(&bench.window, &first_slot));
         assert!(until(|| first.has_focus()), "the first terminal owns keyboard focus");
 
@@ -3819,16 +3823,20 @@ mod panes {
             .into_iter()
             .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
             .expect("every split leaf owns a chooser");
+        assert!(until(|| chooser.is_mapped()), "split chooser is mapped in the real window");
         assert!(chooser.is_focusable(), "the chooser is keyboard reachable");
         PaneChooser::populate(&bench.window, &chooser);
-        let postgres = chooser
-            .popover()
+        let provider_popover = chooser.popover().expect("provider popover");
+        let postgres = Some(provider_popover.clone())
             .into_iter()
             .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
             .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
             .find(|button| button.label().as_deref() == Some("Postgres"))
             .expect("provider choice");
+        provider_popover.popup();
+        assert!(until(|| provider_popover.is_visible()), "keyboard-opened chooser is visible before selection");
         postgres.emit_clicked();
+        assert!(until(|| !provider_popover.is_visible()), "a successful provider selection dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
 
         assert_eq!(
@@ -3846,19 +3854,22 @@ mod panes {
             "the chooser replaces its own leaf"
         );
         assert!(
-            first.has_focus(),
+            until(|| first.has_focus()),
             "switching an adjacent pane preserves terminal keyboard focus"
         );
 
         PaneChooser::populate(&bench.window, &chooser);
-        let terminal = chooser
-            .popover()
+        let terminal_popover = chooser.popover().expect("terminal popover");
+        let terminal = Some(terminal_popover.clone())
             .into_iter()
             .flat_map(|popover| super::descendants(popover.upcast_ref::<gtk::Widget>()))
             .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
             .find(|button| button.label().as_deref() == Some("Terminal"))
             .expect("terminal is always available");
+        terminal_popover.popup();
+        assert!(until(|| terminal_popover.is_visible()), "terminal choice is made from the open chooser");
         terminal.emit_clicked();
+        assert!(until(|| !terminal_popover.is_visible()), "returning to the terminal dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
         assert_eq!(
             Panes::at(&bench.window, &second_slot)
@@ -3867,6 +3878,7 @@ mod panes {
             second.upcast::<gtk::Widget>(),
             "the displaced terminal identity is restored"
         );
+        host.close();
     }
 
     pub(super) fn a_stale_open_chooser_cannot_select_a_replaced_provider() {
