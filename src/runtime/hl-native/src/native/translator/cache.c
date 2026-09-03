@@ -1362,7 +1362,9 @@ static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest
         /* Publish liveness last: every live entry already has metadata, a live-list position, and either
            complete reverse-index nodes or the overflow latch which forces the authoritative full scan. */
         table->map[destination].generation = g_map_epoch;
-        map_host_cache_invalidate();
+        /* Publishing a new key cannot stale a positive host-cache entry, and
+           misses are never cached.  Destructive invalidation and epoch changes
+           advance the cache generation at their own call sites. */
         return MAP_PUT_OK;
     }
     return MAP_PUT_FULL;

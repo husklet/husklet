@@ -128,8 +128,15 @@ fn x86_translation_transaction_reuses_only_page_authorized_sequential_bytes() {
 fn alternating_translation_targets_expose_every_authoritative_map_probe() {
     for isa in [1, 2] {
         assert_eq!(exec_page_cache_test(isa, 15), Ok(if isa == 1 { 3 } else { 2 }), "isa={isa}");
-        assert_eq!(exec_page_cache_test(isa, 16), Ok(if isa == 1 { 4 } else { 3 }), "isa={isa}");
         assert_eq!(exec_page_cache_test(isa, 17), Ok(2), "isa={isa}");
+    }
+}
+
+#[test]
+fn additive_translation_publication_preserves_positive_host_cache_entries() {
+    for isa in [1, 2] {
+        let probes = exec_page_cache_test(isa, 16).unwrap();
+        assert_eq!(probes, if isa == 1 { 3 } else { 2 }, "isa={isa}");
     }
 }
 
