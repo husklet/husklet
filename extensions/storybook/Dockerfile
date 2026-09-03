@@ -26,5 +26,6 @@ CMD ["node", "/app/src/main.js"]
 # hl_extension::manifest::Manifest; unknown fields are refused, not ignored.
 LABEL husklet.extension.protocol="1"
 LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"
+LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"
 # The label names where the manifest lives; the host reads the file.
 LABEL husklet.extension.manifest="/etc/husklet/extension.toml"

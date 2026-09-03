@@ -82,6 +82,8 @@ for extension in storybook workspace-manager; do
   expect_literal "$dockerfile" 'LABEL husklet.extension.manifest="/etc/husklet/extension.toml"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"'
+  # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
+  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"'
 
   [[ "$(sed -n 's/^name = "\([^"]*\)"$/\1/p' "$root/$manifest")" == "$extension" ]] \
     || fail "$manifest must declare name = \"$extension\""

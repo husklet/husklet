@@ -19,4 +19,5 @@ CMD ["node", "/app/src/main.js"]
 
 LABEL husklet.extension.protocol="1"
 LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"
+LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"
 LABEL husklet.extension.manifest="/etc/husklet/extension.toml"
