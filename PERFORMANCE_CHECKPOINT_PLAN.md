@@ -27,8 +27,8 @@ labels or a successful exit are not sufficient.
 | --- | --- | --- | --- | --- |
 | Linux x86_64 | x86_64 | Native supervised | Native and translated coverage | Native receipt, semantic hash, timing and counters |
 | Linux AArch64 | AArch64 | Native supervised | Translated until native ARM capture is implemented | Native receipt on physical/real ARM; translated checkpoint journey |
-| Linux x86_64 | AArch64 | Translated | Translated | Production run, two checkpoint cycles, counters |
-| Linux AArch64 | x86_64 | Translated | Translated | Production run, two checkpoint cycles, counters |
+| Linux x86_64 | AArch64 | Interpreter-only today; translated backend required | Interpreter until a translator exists | Production run, two checkpoint cycles, counters, explicit interpreter receipt |
+| Linux AArch64 | x86_64 | x86-to-AArch64 translated | Translated | Production run, two checkpoint cycles, counters, explicit translated receipt |
 
 QEMU/TCG may prove cross-ISA and ARM functional behavior. It must never be used as
 evidence for native ARM performance. Native ARM performance requires an actual ARM
@@ -137,8 +137,10 @@ explicit user-facing close and reopen budgets justified by the observed floor.
 
 ## Translator profiling and acceptance
 
-Profile both x86_64-to-AArch64 and AArch64-to-x86_64, as well as forced same-ISA
-translation, with the same production workload. Attribute generated code with
+Profile both x86_64-host/AArch64-guest and AArch64-host/x86_64-guest, as well as
+forced same-ISA translation, with the same production workload. The former is
+interpreter-only today: that missing translator is an implementation gap and must
+not be mislabeled as translated execution. Attribute generated code with
 timestamped JIT records across exec/generation reuse. Report generated guest bodies,
 branch helpers, decode/build, syscall handling, cache load/build, libc, and unknown
 user-space samples separately.
