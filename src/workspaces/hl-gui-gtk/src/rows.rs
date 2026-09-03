@@ -11,7 +11,9 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use hl_gui::{Cell, Lookup, RowCache, RowRange, RowRequest, RowWindow, SourceId, Tone};
+use hl_gui::{
+    Cell, CollectionSelection, Lookup, RowCache, RowRange, RowRequest, RowWindow, SelectedRow, SourceId, Tone,
+};
 
 /// Separates cell values within one encoded row.
 pub(crate) const UNIT: char = '\u{1f}';
@@ -180,6 +182,29 @@ impl Rows {
     pub fn is_pending(&self, position: u32) -> bool {
         matches!(self.cache().borrow().row(u64::from(position)), Lookup::Pending)
     }
+
+    /// Resolves visible positions to producer-owned identities in one current
+    /// source generation. Any placeholder or unavailable row fails closed.
+    #[must_use]
+    pub fn selection(&self, positions: &[u64]) -> Option<CollectionSelection> {
+        let cache = self.cache();
+        let cache = cache.borrow();
+        let rows = positions
+            .iter()
+            .map(|index| match cache.row(*index) {
+                Lookup::Ready(row) => Some(SelectedRow {
+                    index: *index,
+                    id: row.key,
+                }),
+                Lookup::Pending | Lookup::Unavailable | Lookup::Absent => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(CollectionSelection {
+            source: cache.source(),
+            version: cache.version(),
+            rows,
+        })
+    }
 }
 
 /// Renders one row as unit-separated cells, which is what a column factory
@@ -205,5 +230,39 @@ fn badge(label: &str, tone: Tone) -> String {
         Tone::Warning => format!("▲ {label}"),
         Tone::Danger => format!("✕ {label}"),
         Tone::Neutral | Tone::Accent => label.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hl_gui::{Row, Version};
+
+    #[test]
+    fn selection_resolves_producer_identity_only_for_current_materialized_rows() {
+        gtk::init().expect("GTK initializes under the display-backed test gate");
+        let model = Rows::new(SourceId::new(7));
+        model.resize(Version::new(3), 4);
+        assert!(model.selection(&[0]).is_none(), "placeholder identity fails closed");
+        assert!(model.item(1).is_some(), "realizing a row schedules its window");
+        let request = model.drain().pop().expect("row request");
+        model.deliver(&RowWindow {
+            source: request.source,
+            version: request.version,
+            request: request.id,
+            range: request.range,
+            rows: (0..4)
+                .map(|index| Row::new(900 + index, [Cell::text(format!("row-{index}"))]))
+                .collect(),
+        });
+
+        let selected = model.selection(&[1]).expect("materialized row has authority");
+        assert_eq!(selected.source, SourceId::new(7));
+        assert_eq!(selected.version, Version::new(3));
+        assert_eq!(selected.rows, vec![SelectedRow { index: 1, id: 901 }]);
+
+        model.invalidate(Version::new(4), None);
+        assert!(model.selection(&[1]).is_none(), "superseded row identity fails closed");
+        assert!(model.selection(&[99]).is_none(), "absent row identity fails closed");
     }
 }

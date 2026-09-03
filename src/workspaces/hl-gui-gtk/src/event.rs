@@ -240,6 +240,7 @@ fn select(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
                 node,
                 id,
                 rows: vec![u64::from(drop.selected())],
+                collection: None,
             });
         });
         return;
@@ -264,13 +265,24 @@ fn connect_selection(view: &gtk::ColumnView, node: NodeId, slot: &Slot, reports:
     let slot = slot.clone();
     selection.connect_selection_changed(move |selection, _, _| {
         let bitset = selection.selection();
-        let rows = gtk::BitsetIter::init_first(&bitset)
+        let rows: Vec<u64> = gtk::BitsetIter::init_first(&bitset)
             .into_iter()
             .flat_map(|(iter, first)| std::iter::once(first).chain(iter))
             .take(SELECTION_LIMIT as usize)
             .map(u64::from)
             .collect();
-        identified(&reports, &slot, |id| Event::Select { node, id, rows });
+        let Some(model) = selection.model().and_then(|model| model.downcast::<crate::Rows>().ok()) else {
+            return;
+        };
+        let Some(collection) = model.selection(&rows) else {
+            return;
+        };
+        identified(&reports, &slot, |id| Event::Select {
+            node,
+            id,
+            rows,
+            collection: Some(collection),
+        });
     });
 }
 

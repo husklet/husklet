@@ -181,6 +181,10 @@ export interface Report {
   value: unknown;
 }
 
+export interface SelectedCollectionRow { index: number; id: string; }
+export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
+export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
+
 /** What every component takes, whatever it is. */
 export interface NodeProps {
   key?: string | number | null;
@@ -204,7 +208,7 @@ function component(tag, props, enums) {
     lines.push(`  ${camel(name)}?: ${typed(entry, enums)};`);
   }
   for (const trigger of tag.triggers) {
-    lines.push(`  on${trigger}?: (report: Report) => void;`);
+    lines.push(`  on${trigger}?: (report: ${trigger === 'Select' ? 'SelectionReport' : 'Report'}) => void;`);
   }
   lines.push('}');
   return lines.join('\n');
@@ -342,7 +346,7 @@ export type InterfaceEvent =
   | InterfaceEventBase<'invoke', 'Invoke'>
   | InterfaceEventBase<'submit', 'Submit'>
   | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
-  | (InterfaceEventBase<'select', 'Select'> & { rows: number[] })
+  | (InterfaceEventBase<'select', 'Select'> & { rows: number[]; collection?: CollectionSelection | null })
   | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
   | InterfaceEventBase<'close', 'Close'>
   | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })

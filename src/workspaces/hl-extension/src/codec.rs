@@ -147,7 +147,21 @@ pub fn interaction(event: &hl_gui::Event, slot: Option<&str>) -> Option<Vec<u8>>
         Event::Invoke { node, id } => ("invoke", node, id, serde_json::Value::Null),
         Event::Submit { node, id } => ("submit", node, id, serde_json::Value::Null),
         Event::Change { node, id, value } => ("change", node, id, serde_json::json!({ "value": value })),
-        Event::Select { node, id, rows } => ("select", node, id, serde_json::json!({ "rows": rows })),
+        Event::Select {
+            node,
+            id,
+            rows,
+            collection,
+        } => (
+            "select",
+            node,
+            id,
+            serde_json::json!({ "rows": rows, "collection": collection.as_ref().map(|selected| serde_json::json!({
+                "source": selected.source.raw(),
+                "version": selected.version.raw(),
+                "rows": selected.rows.iter().map(|row| serde_json::json!({ "index": row.index, "id": row.id.to_string() })).collect::<Vec<_>>(),
+            })) }),
+        ),
         Event::Focus { node, id, focused } => ("focus", node, id, serde_json::json!({ "focused": focused })),
         _ => return None,
     };
@@ -188,4 +202,36 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interaction;
+    use hl_gui::{CollectionSelection, Event, EventId, NodeId, SelectedRow, SourceId, Version};
+
+    #[test]
+    fn collection_selection_encodes_generation_and_producer_identity() {
+        let payload = interaction(
+            &Event::Select {
+                node: NodeId::new(9),
+                id: EventId::new("9:Select"),
+                rows: vec![42],
+                collection: Some(CollectionSelection {
+                    source: SourceId::new(7),
+                    version: Version::new(3),
+                    rows: vec![SelectedRow { index: 42, id: 90_042 }],
+                }),
+            },
+            Some("surface-1"),
+        )
+        .expect("selection is encodable");
+        let value: serde_json::Value = serde_json::from_slice(&payload).expect("JSON event");
+        assert_eq!(value["rows"], serde_json::json!([42]));
+        assert_eq!(
+            value["collection"],
+            serde_json::json!({
+                "source": 7, "version": 3, "rows": [{ "index": 42, "id": "90042" }]
+            })
+        );
+    }
 }

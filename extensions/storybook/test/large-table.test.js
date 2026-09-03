@@ -84,13 +84,15 @@ test('the story controls visibly demonstrate loading, empty, error, filter and s
   assert.equal(source.descending, true);
 });
 
-test('selection and keyboard focus produce a bounded operational detail history', () => {
+test('selection requires immutable current-generation authority and remains bounded', () => {
   const stage = host();
   const source = new LargeRecordSource();
   const first = stage.render(h(LargeDataTableStory, { source }));
   const table = first.patches.find((patch) => patch.Create?.tag === 'DataTable').Create.id;
 
-  stage.surface.dispatch({ trigger: 'Select', node: table, id: `${table}:Select`, rows: Array.from({ length: 1_000 }, (_, index) => index + 42) });
+  stage.surface.dispatch({ trigger: 'Select', node: table, id: `${table}:Select`, rows: [42], collection: {
+    source: SOURCE, version: source.version, rows: [{ index: 42, id: '90042' }],
+  } });
   for (let index = 0; index < OPERATION_HISTORY_LIMIT + 4; index += 1) {
     stage.surface.dispatch({ trigger: 'Focus', node: table, id: `${table}:Focus`, focused: true });
   }
@@ -98,11 +100,18 @@ test('selection and keyboard focus produce a bounded operational detail history'
   const labels = stage.frames.flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
-  assert.ok(labels.includes('Selected logical row 42'));
+  assert.ok(labels.includes('Selected immutable record 90042'));
   assert.ok(labels.includes(`Recent operations (${OPERATION_HISTORY_LIMIT}/${OPERATION_HISTORY_LIMIT})`));
   const final = stage.frames.at(-1).patches.filter((patch) => patch.SetProp?.prop === 'Label');
   assert(final.length <= OPERATION_HISTORY_LIMIT + 1, 'one event must not materialize an unbounded detail list');
   assert(!JSON.stringify(stage.frames).includes('1041'), 'selection details must not serialize all selected rows');
+
+  source.version += 1;
+  stage.surface.dispatch({ trigger: 'Select', node: table, id: `${table}:Select`, rows: [42], collection: {
+    source: SOURCE, version: source.version - 1, rows: [{ index: 42, id: '90042' }],
+  } });
+  assert.ok(stage.frames.flatMap((frame) => frame.patches)
+    .some((patch) => patch.SetProp?.value?.Text === 'No current record selected'));
 });
 
 test('the high-density operations story is selectable in the shipped playground', () => {

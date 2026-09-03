@@ -1,6 +1,6 @@
 //! The toolkit port. Implementors live in the embedding application, never here.
 
-use crate::data::{RowRequest, RowWindow};
+use crate::data::{RowRequest, RowWindow, SourceId, Version};
 use crate::node::{EventId, NodeId, Patch, Tree};
 use crate::style::Theme;
 
@@ -59,6 +59,7 @@ pub enum Event {
         node: NodeId,
         id: EventId,
         rows: Vec<u64>,
+        collection: Option<CollectionSelection>,
     },
     Scroll {
         node: NodeId,
@@ -100,6 +101,21 @@ pub enum Event {
     },
     /// The host needs a window of rows it does not have cached.
     Rows(RowRequest),
+}
+
+/// Immutable authority for rows selected from one version of a windowed source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionSelection {
+    pub source: SourceId,
+    pub version: Version,
+    pub rows: Vec<SelectedRow>,
+}
+
+/// A visible position paired with the producer-owned identity delivered there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedRow {
+    pub index: u64,
+    pub id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

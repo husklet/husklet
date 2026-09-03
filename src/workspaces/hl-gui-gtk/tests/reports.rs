@@ -13,7 +13,7 @@
 //! rather than passing silently.
 
 use gtk::prelude::*;
-use hl_gui::{Choice, Event, EventId, NodeId, Prop, PropValue, Tag, Tree, Trigger};
+use hl_gui::{Cell, Choice, Event, EventId, NodeId, Prop, PropValue, Renderer, Row, RowWindow, Tag, Tree, Trigger};
 use hl_gui_gtk::Surface;
 
 /// One producer, one tree, one rendered surface.
@@ -55,6 +55,30 @@ impl Session {
             self.canvas
                 .resize(hl_gui::SourceId::new(1), hl_gui::Version::new(1), 1)
                 .expect("a selectable source has one row");
+            let view = self
+                .widgets()
+                .into_iter()
+                .find_map(|widget| widget.downcast::<gtk::ColumnView>().ok())
+                .expect("a source component has a column view");
+            let rows = view
+                .model()
+                .and_then(|model| model.downcast::<gtk::MultiSelection>().ok())
+                .and_then(|selection| selection.model())
+                .and_then(|model| model.downcast::<hl_gui_gtk::Rows>().ok())
+                .expect("a source component has windowed rows");
+            assert!(rows.item(0).is_some());
+            let request = self.canvas.requests(0).pop().expect("realizing the row requests it");
+            Renderer::rows(
+                &mut self.canvas,
+                &RowWindow {
+                    source: request.source,
+                    version: request.version,
+                    request: request.id,
+                    range: request.range,
+                    rows: vec![Row::new(41, [Cell::text("ready")])],
+                },
+            )
+            .expect("the selectable row arrives");
         }
         let class = format!("hl-{}", tag.as_str().to_ascii_lowercase());
         self.widgets()

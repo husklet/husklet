@@ -85,6 +85,13 @@ test('host events type the pane chooser identity as well as subscribed snapshots
   );
 });
 
+test('windowed selection types immutable source generation and row identity', () => {
+  assert.match(declarations, /interface SelectedCollectionRow \{ index: number; id: string; \}/);
+  assert.match(declarations, /interface CollectionSelection \{ source: number; version: number; rows: SelectedCollectionRow\[\]; \}/);
+  assert.match(shape('DataTable'), /onSelect\?: \(report: SelectionReport\) => void;/);
+  assert.match(declarations, /collection\?: CollectionSelection \| null/);
+});
+
 test('event hooks expose typed lifecycle-safe subscriptions', () => {
   assert.match(
     declarations,

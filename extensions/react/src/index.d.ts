@@ -118,6 +118,10 @@ export interface Report {
   value: unknown;
 }
 
+export interface SelectedCollectionRow { index: number; id: string; }
+export interface CollectionSelection { source: number; version: number; rows: SelectedCollectionRow[]; }
+export interface SelectionReport extends Report { rows: number[]; collection?: CollectionSelection | null; }
+
 /** What every component takes, whatever it is. */
 export interface NodeProps {
   key?: string | number | null;
@@ -2145,7 +2149,7 @@ export interface AutocompleteProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
   onContext?: (report: Report) => void;
@@ -2718,7 +2722,7 @@ export interface SelectProps extends NodeProps {
   /** defaults to enabled when absent */
   enabled?: boolean;
   onChange?: (report: Report) => void;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
 }
@@ -3230,7 +3234,7 @@ export interface DataTableProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3265,7 +3269,7 @@ export interface KeyValueTableProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3300,7 +3304,7 @@ export interface TreeTableProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3335,7 +3339,7 @@ export interface EventStreamProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -3370,7 +3374,7 @@ export interface FileBrowserProps extends NodeProps {
   schema?: ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
-  onSelect?: (report: Report) => void;
+  onSelect?: (report: SelectionReport) => void;
   onScroll?: (report: Report) => void;
   onKey?: (report: Report) => void;
   onFocus?: (report: Report) => void;
@@ -5554,7 +5558,7 @@ export type InterfaceEvent =
   | InterfaceEventBase<'invoke', 'Invoke'>
   | InterfaceEventBase<'submit', 'Submit'>
   | (InterfaceEventBase<'change', 'Change'> & { value?: unknown })
-  | (InterfaceEventBase<'select', 'Select'> & { rows: number[] })
+  | (InterfaceEventBase<'select', 'Select'> & { rows: number[]; collection?: CollectionSelection | null })
   | (InterfaceEventBase<'scroll', 'Scroll'> & { dx: number; dy: number })
   | InterfaceEventBase<'close', 'Close'>
   | (InterfaceEventBase<'context', 'Context'> & { x: number; y: number })

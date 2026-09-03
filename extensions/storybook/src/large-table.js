@@ -115,8 +115,9 @@ export function LargeDataTableStory({ source }) {
       grow: true,
       onFocus: () => record('focused records'),
       onSelect: (event) => {
-        const rows = Array.isArray(event.rows) ? event.rows.slice(0, 1) : [];
-        const label = rows.length === 0 ? 'No record selected' : `Selected logical row ${String(rows[0])}`;
+        const rows = Array.isArray(event.collection?.rows) ? event.collection.rows.slice(0, 1) : [];
+        const current = event.collection?.source === SOURCE && event.collection?.version === source.version;
+        const label = !current || rows.length === 0 ? 'No current record selected' : `Selected immutable record ${String(rows[0].id)}`;
         setSelected(label);
         record(label.toLowerCase());
       },
