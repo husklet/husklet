@@ -273,7 +273,10 @@ impl Server {
                         || request.op == MEMBER_STDIO
                         || self.recovery_object_request(connection, request, name))
             }
-            CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,
+            CapturePhase::Complete
+            | CapturePhase::Aborting { .. }
+            | CapturePhase::Refusing { .. }
+            | CapturePhase::RecoveryFinished { .. } => false,
             // `SOURCE_*` resolve `self.source`, the committed generation a restore
             // reads. During a capture that is the PREVIOUS image, not the group
             // being written, and `CheckpointSink` exposes no read path, so there is

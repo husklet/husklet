@@ -41,7 +41,7 @@ pub(super) const MEMBER_EXITED: u32 = 23;
 /// The coordinator has DECIDED not to publish this capture, and says why: the name is the reason,
 /// the same text the engine writes to its own stderr. It is what turns a decided refusal into a
 /// host-side failure at the moment of the decision rather than at the host's own deadline.
-pub(super) const CAPTURE_REFUSED: u32 = 24;
+pub(super) const DECIDES_REFUSAL: u32 = 24;
 /// Did a host process ever prove exact membership of the running capture generation? Payload is
 /// `[u64 host pid]`; the reply value is 1 when a `REGISTER_READY` record exists for that pid at this
 /// generation and 0 when none does. The coordinator asks only about a process it has already observed to
@@ -58,6 +58,10 @@ pub(super) const MEMBER_STDIO: u32 = 26;
 /// and no exit can straddle the count. Gated like a publishing op: only a process that itself proved
 /// membership may seal.
 pub(super) const SEAL_MEMBERSHIP: u32 = 27;
+/// Queries whether the broker has durably latched this refusal generation.
+pub(super) const REFUSAL_LATCHED: u32 = 28;
+/// Completes a latched refusal after every other live channel resumed or ended.
+pub(super) const SETTLE_REFUSAL: u32 = 29;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

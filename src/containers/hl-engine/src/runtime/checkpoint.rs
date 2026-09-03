@@ -33,11 +33,11 @@ mod test;
 mod transaction;
 use participants::ParticipantLedger;
 use protocol::{
-    CAPTURE_REFUSED, CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
+    CLAIM, COMMIT, DECIDES_REFUSAL, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
     MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
-    OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT,
-    RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SOURCE_LIST,
-    SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REFUSAL_LATCHED, REGISTER_READY,
+    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP,
+    SETTLE_REFUSAL, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -88,6 +88,10 @@ enum CapturePhase {
         result: Result<(), CaptureFailure>,
     },
     Active {
+        id: u64,
+        deadline: std::time::Instant,
+    },
+    Refusing {
         id: u64,
         deadline: std::time::Instant,
     },
@@ -163,6 +167,8 @@ pub(crate) struct Server {
     /// host-side report of a failed capture named the failure and not the cause. The coordinator now
     /// sends the reason before it exits, and this is where it is held for the report.
     refusal: Mutex<Option<String>>,
+    /// Channels which observed `RELEASE_RESUME` for the refusing generation.
+    refusal_resumed: Mutex<HashSet<i32>>,
     /// First concrete cause attached to a failed capture generation.
     ///
     /// Generation filtering avoids a success-path clear and first-wins keeps a
@@ -201,6 +207,10 @@ impl Server {
         drop(capture);
         *self.participants.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
         *self.refusal.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
+        self.refusal_resumed
+            .lock()
+            .map_err(|_| CaptureFailure::Poisoned)?
+            .clear();
         *self.failure_diagnostic.lock().map_err(|_| CaptureFailure::Poisoned)? = None;
         Ok(())
     }
@@ -225,6 +235,7 @@ impl Server {
             member_terminals: Arc::new(member_stdio::MemberTerminals::default()),
             participants: Mutex::new(None),
             refusal: Mutex::new(None),
+            refusal_resumed: Mutex::new(HashSet::new()),
             failure_diagnostic: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
@@ -356,6 +367,7 @@ impl Server {
             }
             CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Refusing { .. } => Err(CaptureFailure::Busy),
             CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
             _ => Err(CaptureFailure::Busy),
         }
@@ -399,6 +411,7 @@ impl Server {
             CapturePhase::RecoveryFinished { result: Err(error), .. } => Err(error),
             CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Refusing { .. } => Err(CaptureFailure::Busy),
             CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),
             CapturePhase::Aborting { .. } => Err(CaptureFailure::Busy),
             CapturePhase::Finished { result: Ok(()), .. } => Ok(None),
@@ -579,6 +592,33 @@ impl Server {
                             return Err(CaptureFailure::Poisoned);
                         }
                     };
+                }
+                CapturePhase::Refusing { id: active, deadline } if active == id => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        capture.phase = CapturePhase::Finished {
+                            id,
+                            result: Err(CaptureFailure::Deadline),
+                        };
+                        self.capture_changed.notify_all();
+                        drop(capture);
+                        self.interrupt_channels();
+                        return self
+                            .settle_failed_capture(id, CaptureFailure::Deadline)
+                            .map(|failure| Some(Err(failure)));
+                    }
+                    if now >= wake {
+                        return Ok(None);
+                    }
+                    let wait = deadline.min(wake).saturating_duration_since(now);
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, wait)
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() && std::time::Instant::now() >= wake {
+                        return Ok(None);
+                    }
                 }
                 CapturePhase::Aborting { id: active } if active == id => {
                     let now = std::time::Instant::now();

@@ -2198,7 +2198,7 @@ fn checkpoint_request_named(op: u32, generation: u32, name: &str) -> Vec<u8> {
     request
 }
 
-/// A DECIDED refusal ends the capture at the decision, and says what the decision was.
+/// A refusal decision is latched before it becomes terminal, so parked members can resume first.
 ///
 /// The coordinator used to abort only its own group and `_exit(70)`. Nothing told the broker, so the
 /// remaining members parked out their hold, resumed, and held their channels open -- and the client sat
@@ -2209,7 +2209,7 @@ fn checkpoint_request_named(op: u32, generation: u32, name: &str) -> Vec<u8> {
 /// assertion that the capture is terminal LONG before the deadline, under a failure distinct from a
 /// breakage, with the engine's own words recoverable from the server.
 #[test]
-fn a_refusal_ends_the_capture_at_the_decision_and_keeps_the_reason() {
+fn a_refusal_is_latched_blocks_publication_and_settles_only_after_resume() {
     let _serial = TRANSPORT_SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2234,9 +2234,40 @@ fn a_refusal_ends_the_capture_at_the_decision_and_keeps_the_reason() {
 
     let reason = "guest fd 10 is a pipe -- shared pipe restore is not yet supported";
     coordinator
-        .write_all(&checkpoint_request_named(protocol::CAPTURE_REFUSED, 9, reason))
+        .write_all(&checkpoint_request_named(protocol::DECIDES_REFUSAL, 9, reason))
         .expect("refusal frame");
     assert_eq!(read_reply(&mut coordinator).0, 0, "the refusal frame was rejected");
+
+    coordinator
+        .write_all(&checkpoint_request(protocol::REFUSAL_LATCHED, 9, &[]))
+        .expect("latch query");
+    assert_eq!(
+        read_reply(&mut coordinator),
+        (0, 1),
+        "the refusal generation was not latched"
+    );
+
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_millis(50))
+            .expect("capture wait before settlement"),
+        None,
+        "the refusal became terminal before settlement"
+    );
+    coordinator
+        .write_all(&checkpoint_request_named(protocol::OBJECT_BEGIN, 9, "late"))
+        .expect("late publication");
+    assert_eq!(
+        read_reply(&mut coordinator).0,
+        -1,
+        "publication entered a refusing generation"
+    );
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+
+    coordinator
+        .write_all(&checkpoint_request(protocol::SETTLE_REFUSAL, 9, &[]))
+        .expect("settlement");
+    assert_eq!(read_reply(&mut coordinator).0, 0, "settlement was refused");
 
     // Two seconds against a thirty-second deadline: the wait has to be answered by the DECISION, not by
     // the deadline, or this returns Ok(None) and the assertion fails.
@@ -2246,7 +2277,7 @@ fn a_refusal_ends_the_capture_at_the_decision_and_keeps_the_reason() {
     assert_eq!(
         settled,
         Some(Err(crate::runtime::checkpoint::CaptureFailure::Refused)),
-        "a decided refusal did not fail the capture at the decision"
+        "a settled refusal did not fail the capture"
     );
     assert_eq!(
         server.capture_refusal().as_deref(),
@@ -2260,6 +2291,80 @@ fn a_refusal_ends_the_capture_at_the_decision_and_keeps_the_reason() {
     server.stop();
     drop(coordinator);
     served.join().expect("broker worker");
+}
+
+#[test]
+fn refusal_settlement_requires_every_live_peer_to_resume_or_end() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(17, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    let (peer, _remote) = UnixStream::pair().expect("peer channel");
+    let descriptor = peer.as_raw_fd();
+    server.channels.lock().unwrap().insert(descriptor, Arc::new(peer));
+    server
+        .decide_refusal(17, "unsupported shared pipe".into())
+        .expect("refusal decision");
+
+    assert_eq!(
+        server.settle_refusal(17, -1),
+        Err(()),
+        "an unreleased live peer was ignored"
+    );
+    assert_eq!(server.release_disposition(17, descriptor), protocol::RELEASE_RESUME);
+    server.settle_refusal(17, -1).expect("released refusal settlement");
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2))
+            .expect("capture wait"),
+        Some(Err(CaptureFailure::Refused))
+    );
+}
+
+#[test]
+fn refusing_generation_timeout_is_terminal_and_not_a_capture_refusal() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(23, std::time::Instant::now() + Duration::from_millis(40))
+        .expect("capture admission");
+    server
+        .decide_refusal(23, "decision awaiting settlement".into())
+        .expect("refusal decision");
+
+    assert_eq!(
+        server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2)),
+        Err(CaptureFailure::Failed),
+        "an expired transaction was reported as a clean refusal"
+    );
+}
+
+#[test]
+fn last_channel_loss_while_refusing_is_terminal() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(29, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+    server
+        .decide_refusal(29, "decision awaiting settlement".into())
+        .expect("refusal decision");
+    let accepted = super::broker::AcceptedChannel::new(Arc::clone(&server));
+    assert_eq!(
+        server.settle_refusal(29, -1),
+        Err(()),
+        "an accepted channel not yet scheduled was treated as terminal"
+    );
+    drop(accepted);
+
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2))
+            .expect("capture wait"),
+        Some(Err(CaptureFailure::Failed)),
+        "transport loss was reported as a clean refusal"
+    );
 }
 
 fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
@@ -3093,10 +3198,10 @@ fn a_parked_member_is_released_to_exit_only_once_the_manifest_has_committed() {
         .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
         .expect("capture generation");
     // Running capture: HOLD, and only for this member's own generation.
-    assert_eq!(server.release_disposition(9), protocol::RELEASE_HOLD);
-    assert_eq!(server.release_disposition(8), protocol::RELEASE_RESUME);
+    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_HOLD);
+    assert_eq!(server.release_disposition(8, -1), protocol::RELEASE_RESUME);
     server.publish_manifest(&[0_u8; 8]).expect("publish the manifest");
-    assert_eq!(server.release_disposition(9), protocol::RELEASE_EXIT);
+    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_EXIT);
     assert!(server.committed(), "EXIT was answered without a committed image");
 
     // A capture that is abandoned releases every member to RESUME instead, which is the whole
@@ -3106,9 +3211,9 @@ fn a_parked_member_is_released_to_exit_only_once_the_manifest_has_committed() {
     let id = server
         .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
         .expect("capture generation");
-    assert_eq!(server.release_disposition(9), protocol::RELEASE_HOLD);
+    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_HOLD);
     server.abort_capture(id).expect("abort the capture");
-    assert_eq!(server.release_disposition(9), protocol::RELEASE_RESUME);
+    assert_eq!(server.release_disposition(9, -1), protocol::RELEASE_RESUME);
     assert!(!server.committed());
 }
 

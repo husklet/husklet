@@ -1,8 +1,8 @@
 use super::{
-    CAPTURE_REFUSED, CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
+    CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
     MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT,
-    REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request,
-    SEAL_MEMBERSHIP, Server,
+    REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply,
+    Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -55,6 +55,12 @@ impl Server {
             Some(CapturePhase::Recovery { id, .. }) => {
                 self.record_failure(id, message);
                 if self.fail_recovery(id, failure).is_err() {
+                    self.interrupt_channels();
+                }
+            }
+            Some(CapturePhase::Refusing { id, .. }) => {
+                self.record_failure(id, message);
+                if self.finish_refusal_terminal(id, failure).is_err() {
                     self.interrupt_channels();
                 }
             }
@@ -165,13 +171,13 @@ impl Server {
                 // stopped with its whole thread registry held, and a park that
                 // counted as a capture mutation would hold `publish_manifest`
                 // behind the very processes it is waiting to release.
-                let reply = Reply::value(self.release_disposition(request.generation));
+                let reply = Reply::value(self.release_disposition(request.generation, descriptor));
                 if reply.write(&mut channel).is_err() {
                     return;
                 }
                 continue;
             }
-            if request.op == CAPTURE_REFUSED {
+            if request.op == DECIDES_REFUSAL {
                 // A DECIDED failure, not a stalled one. The coordinator has already made up its mind and
                 // is about to exit; without this the broker learned nothing, the peers parked out their
                 // hold and resumed holding their channels open, and the client waited its whole deadline
@@ -185,13 +191,26 @@ impl Server {
                 } else {
                     name.clone()
                 };
-                self.record_refusal(reason.clone());
-                let _ = Reply::ok().write(&mut channel);
-                self.fail_as(
-                    format!("checkpoint capture refused by the engine: {reason}"),
-                    CaptureFailure::Refused,
-                );
-                return;
+                let decided = self.decide_refusal(u64::from(request.generation), reason);
+                let reply = decided.map_or_else(|()| Reply::error(), |()| Reply::ok());
+                let _ = reply.write(&mut channel);
+                continue;
+            }
+            if request.op == REFUSAL_LATCHED {
+                let reply = Reply::value(u64::from(self.refusal_latched(u64::from(request.generation))));
+                if reply.write(&mut channel).is_err() {
+                    return;
+                }
+                continue;
+            }
+            if request.op == SETTLE_REFUSAL {
+                let settled = self.settle_refusal(u64::from(request.generation), descriptor);
+                let reply = settled.map_or_else(|()| Reply::error(), |()| Reply::ok());
+                let _ = reply.write(&mut channel);
+                if settled.is_ok() {
+                    return;
+                }
+                continue;
             }
             if request.op == MEMBER_RESTORED {
                 // Scope-checked like every other publication: only a restore may name a restored
@@ -324,6 +343,68 @@ fn publishes_capture_bytes(op: u32) -> bool {
 }
 
 impl Server {
+    pub(super) fn decide_refusal(&self, id: u64, reason: String) -> Result<(), ()> {
+        let mut capture = self.capture_lock().map_err(|_| ())?;
+        let deadline = match capture.phase {
+            CapturePhase::Active { id: active, deadline } if active == id => deadline,
+            CapturePhase::Refusing { id: active, .. } if active == id => return Ok(()),
+            _ => return Err(()),
+        };
+        capture.phase = CapturePhase::Refusing { id, deadline };
+        self.refusal_resumed.lock().map_err(|_| ())?.clear();
+        self.record_refusal(reason);
+        self.capture_changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn refusal_latched(&self, id: u64) -> bool {
+        self.capture_lock()
+            .is_ok_and(|capture| matches!(capture.phase, CapturePhase::Refusing { id: active, .. } if active == id))
+    }
+
+    pub(super) fn settle_refusal(&self, id: u64, coordinator: i32) -> Result<(), ()> {
+        let mut capture = self.capture_lock().map_err(|_| ())?;
+        let deadline = match capture.phase {
+            CapturePhase::Refusing { id: active, deadline } if active == id => deadline,
+            _ => return Err(()),
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(());
+        }
+        let channels = self.channels.lock().map_err(|_| ())?;
+        let resumed = self.refusal_resumed.lock().map_err(|_| ())?;
+        if self.connections.load(Ordering::Acquire) > channels.len()
+            || channels
+                .keys()
+                .any(|descriptor| *descriptor != coordinator && !resumed.contains(descriptor))
+        {
+            return Err(());
+        }
+        drop(resumed);
+        drop(channels);
+        capture.phase = CapturePhase::Finished {
+            id,
+            result: Err(CaptureFailure::Refused),
+        };
+        self.capture_changed.notify_all();
+        Ok(())
+    }
+
+    fn finish_refusal_terminal(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Refusing { id: active, .. } if active == id) {
+            return Err(CaptureFailure::Busy);
+        }
+        capture.phase = CapturePhase::Finished {
+            id,
+            result: Err(failure),
+        };
+        self.capture_changed.notify_all();
+        drop(capture);
+        self.interrupt_channels();
+        Ok(())
+    }
+
     /// What a member parked inside its own freeze must do next.
     ///
     /// Release is tied to broker-observed capture state, never to a timer in the
@@ -331,7 +412,7 @@ impl Server {
     /// reads the transport failure as `RESUME`, so no crash can leave the tree
     /// frozen. `HOLD` is returned only while this member's own capture is still
     /// running and still inside its deadline.
-    pub(super) fn release_disposition(&self, generation: u32) -> u64 {
+    pub(super) fn release_disposition(&self, generation: u32, descriptor: i32) -> u64 {
         let Ok(capture) = self.capture_lock() else {
             return RELEASE_RESUME;
         };
@@ -345,6 +426,16 @@ impl Server {
                 }
             }
             CapturePhase::Publishing { id } if id == generation => RELEASE_HOLD,
+            CapturePhase::Refusing { id, deadline } if id == generation => {
+                if std::time::Instant::now() >= deadline {
+                    RELEASE_RESUME
+                } else {
+                    if let Ok(mut resumed) = self.refusal_resumed.lock() {
+                        resumed.insert(descriptor);
+                    }
+                    RELEASE_RESUME
+                }
+            }
             CapturePhase::Finished { id, result: Ok(()) } if id == generation => RELEASE_EXIT,
             CapturePhase::Complete if self.committed.load(Ordering::Acquire) => RELEASE_EXIT,
             _ => RELEASE_RESUME,
