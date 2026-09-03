@@ -560,11 +560,7 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
             {
                 return Err("translated arm did not prove available codegen and nonzero translated entries".into());
             }
-            stderr
-                .lines()
-                .find(|line| line.starts_with("[diag] backend-shape "))
-                .expect("typed parser established one backend-shape record")
-                .to_owned()
+            backend_shape_receipt(stderr).expect("typed parser established one backend-shape record")
         }
         ExecutionBackend::Aarch64Interpreter => {
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
@@ -577,17 +573,20 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
                     "AArch64 interpreter did not prove unavailable codegen and exclusive interpreted execution".into(),
                 );
             }
-            stderr
-                .lines()
-                .find(|line| line.starts_with("[diag] backend-shape "))
-                .expect("typed parser established one backend-shape record")
-                .to_owned()
+            backend_shape_receipt(stderr).expect("typed parser established one backend-shape record")
         }
     };
     Ok(format!(
         "guest_isa={} backend={backend:?} {evidence}",
         guest_isa.as_str()
     ))
+}
+
+fn backend_shape_receipt(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .find(|line| line.starts_with("[diag] backend-shape "))
+        .map(str::to_owned)
 }
 
 fn read_ledger(path: &Path, samples: u32) -> Result<Vec<Row>, Error> {
@@ -843,6 +842,13 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn translated_receipt_uses_the_product_backend_shape_prefix() {
+        let shape = "[diag] backend-shape version=13 crossings=19 translated_entries=0 interpreted_entries=19";
+        assert_eq!(backend_shape_receipt(shape).as_deref(), Some(shape));
+        assert!(backend_shape_receipt("[diag] backend-tree crossings=19").is_none());
     }
 
     #[test]
