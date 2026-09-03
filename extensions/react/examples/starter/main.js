@@ -16,5 +16,35 @@ function App() {
   );
 }
 
-const session = await connect();
-render(React.createElement(App), session, { title: 'React starter' });
+let session;
+let stopping = false;
+let connected = false;
+const report = (kind, error) => process.stderr.write(`react-starter: ${kind}: ${error instanceof Error ? error.message : String(error)}\n`);
+const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  session?.close();
+};
+
+try {
+  session = await connect({
+    onClose: (error) => {
+      if (!connected || stopping) return;
+      stopping = true;
+      process.exitCode = 1;
+      report('host connection ended', error);
+    },
+  });
+  connected = true;
+  const surface = render(React.createElement(App), session, { title: 'React starter' });
+  await surface.ready;
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+} catch (error) {
+  if (!stopping) {
+    stopping = true;
+    process.exitCode = 1;
+    report('startup failed', error);
+  }
+  session?.close();
+}

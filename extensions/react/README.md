@@ -34,6 +34,13 @@ base image's non-root runtime. The starter defaults to the immutable base-image
 tag released with this SDK; override `HUSKLET_REACT_IMAGE` deliberately when
 testing against another runtime.
 
+`npm start` reports missing sockets, handshake failures, and unexpected host EOF
+on stderr and exits nonzero. `SIGINT` and `SIGTERM` close an established session
+without reporting a false failure. It never reconnects automatically: the socket
+is an authority credential, so a replacement must be launched and granted by the
+host. The host validates `extension.toml` before starting the image; `npm start`
+alone exercises the entrypoint and cannot validate image manifest registration.
+
 ```js
 import React, { useState } from 'react';
 import { Button, Column, Text, connect, render } from '@husklet/react';
