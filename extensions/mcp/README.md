@@ -232,13 +232,17 @@ client-side flow for an LLM integration. Pass it an initialized MCP `Client`:
 import { runPaneAgentTurn } from '@husklet/mcp/examples/agent-pane-flow.mjs';
 
 const observation = await runPaneAgentTurn(client, {
+  terminalSlot: 'terminal-build', // exact slots previously chosen from husklet_pane_list
+  semanticSlot: 'workspace',
   actionLabel: 'Refresh',
   terminalBytes: Uint8Array.from([0x03]), // one exact Ctrl-C byte, not shell text
   waitMs: 5_000,
 });
 ```
 
-The turn discovers slots before reading them, reads at most 100 terminal lines,
+The turn discovers slots before reading them. Optional `terminalSlot` and
+`semanticSlot` select exact discovered panes across arbitrary tabs and splits;
+omitting them selects the first compatible pane. It reads at most 100 terminal lines,
 reads either a native or extension semantic tree, and invokes a node using the
 revision returned with that same tree. It writes the supplied bytes through the
 canonical-base64 tool, using the generation/revision returned by the terminal

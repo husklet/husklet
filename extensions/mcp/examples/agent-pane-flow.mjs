@@ -35,6 +35,8 @@ const nodeForLabel = (xml, label) => {
 export async function runPaneAgentTurn(client, {
   terminalBytes = Uint8Array.from([0x03]),
   actionLabel = 'Refresh',
+  terminalSlot,
+  semanticSlot,
   waitMs = 5_000,
 } = {}) {
   if (!(terminalBytes instanceof Uint8Array) || terminalBytes.byteLength < 1 || terminalBytes.byteLength > 65_536) {
@@ -43,8 +45,14 @@ export async function runPaneAgentTurn(client, {
 
   const inventory = JSON.parse(await call(client, 'husklet_pane_list'));
   const panes = Array.isArray(inventory.panes) ? inventory.panes : [];
-  const terminal = panes.find(({ kind }) => kind === 'terminal');
-  const semantic = panes.find(({ kind }) => kind === 'native' || kind === 'surface');
+  for (const [name, slot] of [['terminalSlot', terminalSlot], ['semanticSlot', semanticSlot]]) {
+    if (slot !== undefined && (typeof slot !== 'string' || slot.length < 1 || slot.length > 256)) {
+      throw new TypeError(`${name} must be a nonempty string of at most 256 characters`);
+    }
+  }
+  const terminal = panes.find((pane) => pane.kind === 'terminal' && (terminalSlot === undefined || pane.slot === terminalSlot));
+  const semantic = panes.find((pane) => (pane.kind === 'native' || pane.kind === 'surface')
+    && (semanticSlot === undefined || pane.slot === semanticSlot));
   if (!terminal || !semantic) throw new Error('one terminal and one semantic pane are required');
 
   const terminalBefore = await call(client, 'husklet_pane_read', { slot: terminal.slot, lines: 100 });
