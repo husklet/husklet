@@ -33,6 +33,7 @@ import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_L
 import { WorkspaceLayoutStory, boundedPanes, PANE_LIMIT, TITLE_LIMIT } from '../src/workspace-layout.js';
 import { ExtensionLifecycleStory, boundedExtensions, EXTENSION_LIMIT, GRANT_LIMIT, FIELD_LIMIT } from '../src/extension-lifecycle.js';
 import { WorkspaceFileEditStory, boundedFiles, FILE_LIMIT, PATH_LIMIT, CONTENT_LIMIT } from '../src/workspace-file-edit.js';
+import { ImagePullStory, boundedPull, LAYER_LIMIT, REFERENCE_LIMIT, STATUS_LIMIT } from '../src/image-pull.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -68,6 +69,7 @@ test('every composed story has a readable root and a bounded initial wire frame'
     ['workspace layout', h(WorkspaceLayoutStory)],
     ['extension lifecycle', h(ExtensionLifecycleStory)],
     ['workspace file edit', h(WorkspaceFileEditStory)],
+    ['image pull', h(ImagePullStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -182,6 +184,33 @@ test('workspace file review independently bounds paths, content, and interactive
   const changed = stage.since(before);
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Renamed src/server.js to src/server.review.js.'));
   assert(changed.some((patch) => patch.SetProp?.value?.Text?.startsWith('src/server.review.js · ')));
+});
+
+test('image pull independently bounds progress, target, digest, error, and cancellation', () => {
+  const pull = boundedPull({
+    job: '42', reference: 'r'.repeat(REFERENCE_LIMIT + 9), platform: 'linux/s390x', state: 'invented',
+    digest: 'sha256:short', error: `failure\n${'e'.repeat(STATUS_LIMIT + 9)}`,
+    layers: Array.from({ length: LAYER_LIMIT + 4 }, (_, index) => ({ id: `layer-${index}`, current: 20, total: 10 })),
+  });
+  assert.equal(pull.layers.length, LAYER_LIMIT);
+  assert.equal(pull.layers[0].current, 10);
+  assert.equal(pull.reference.length, REFERENCE_LIMIT);
+  assert.equal(pull.platform, 'linux/amd64');
+  assert.equal(pull.state, 'failed');
+  assert.equal(pull.digest, '');
+  assert.equal(pull.error.length, STATUS_LIMIT);
+  assert(!pull.error.includes('\n'));
+
+  const stage = host();
+  const first = stage.render(h(ImagePullStory));
+  const cancel = node(first.patches, 'Button', 'Cancel pull');
+  assert(cancel);
+  const before = stage.frames.length;
+  assert(stage.surface.dispatch({ trigger: 'Invoke', node: cancel, id: `${cancel}:Invoke` }));
+  const changed = stage.since(before);
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Retry pull'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Cancelled image-pull job 42; the existing local image is unchanged.'));
+  assert(!changed.some((patch) => patch.SetProp?.value?.Text?.startsWith('sha256:')));
 });
 test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 
