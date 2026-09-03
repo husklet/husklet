@@ -106,6 +106,13 @@ extension, terminal-tab, and topology results have no compatible completeness
 field, so MCP fails closed if its item, nesting, string, or 65,536-byte response
 bound would omit data. A successful response from those tools is therefore the
 complete host-provided inventory; host-side bounds still apply where documented.
+Inspect/configuration and acquisition-status tools likewise return their existing
+object shapes only when MCP can serialize the complete bounded object. They fail
+closed instead of shortening nested arrays, strings, fields, or identities.
+Workspace configuration environment entries whose names indicate credentials
+are retained by name with their values replaced by `[redacted]`; ordinary values
+remain exact. This is presentation redaction, not an immutable configuration
+revision, so mutations still require the separately observed generation.
 Image lookup and pulls accept tags, while `husklet_image_remove` accepts only a
 complete immutable `sha256:` digest plus literal confirmation. A tag cannot be
 re-resolved to a different image between inspection and removal.

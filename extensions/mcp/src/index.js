@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
-import { FILE_BYTES_LIMIT, fileRangeResult, fileResult, inventoryResult, logResult, result } from './bounds.js';
+import { FILE_BYTES_LIMIT, detailResult, fileRangeResult, fileResult, inventoryResult, logResult, result } from './bounds.js';
 import { paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
@@ -225,7 +225,7 @@ export function tools(api) {
   const definitions = [
     define('husklet_workspace_info', 'Describe the hosting workspace.', empty, () => api.info()),
     define('husklet_workspace_list', 'List workspace summaries, failing closed if MCP cannot return the complete host inventory.', empty, () => api.list(), inventory()),
-    define('husklet_workspace_inspect', 'Inspect one named workspace.', z.object({ name: id }).strict(), ({ name }) => api.inspect(name)),
+    define('husklet_workspace_inspect', 'Inspect one complete named workspace configuration; secret-named environment values are redacted and local clipping fails closed.', z.object({ name: id }).strict(), ({ name }) => api.inspect(name), detailResult),
     define('husklet_workspace_create', 'Create one workspace from a complete bounded configuration.', z.object({ configuration: workspaceConfiguration }).strict(), ({ configuration }) => api.create(configuration)),
     define('husklet_workspace_adopt', 'Assign immutable identity to the exact unchanged legacy workspace after explicit confirmation.', z.object({ configuration: legacyWorkspaceConfiguration, confirm: z.literal(true) }).strict(), ({ configuration }) => api.adopt(configuration)),
     define('husklet_workspace_update', 'Replace the exact observed stopped workspace generation after explicit confirmation.', workspaceUpdate, ({ name, generation, configuration }) => api.update(name, generation, configuration)),
@@ -233,19 +233,19 @@ export function tools(api) {
     define('husklet_workspace_delete', 'Delete the exact observed stopped workspace generation after explicit confirmation.', z.object({ name: id, generation: workspaceGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.delete(name, generation); return { done: true }; }),
     define('husklet_workspace_mutate_wait', 'Arm lifecycle observation, perform one bounded workspace mutation, then return its result and matching authoritative change.', workspaceMutation, (input) => observeWorkspaceMutation(api, input)),
     define('husklet_extension_list', 'List installed extension records and lifecycle status, failing closed if MCP cannot return the complete host inventory.', empty, () => api.extensions.list(), inventory()),
-    define('husklet_extension_inspect', 'Inspect one installed extension record.', z.object({ name: extensionName }).strict(), ({ name }) => api.extensions.inspect(name)),
+    define('husklet_extension_inspect', 'Inspect one complete installed extension record without local clipping.', z.object({ name: extensionName }).strict(), ({ name }) => api.extensions.inspect(name), detailResult),
     define('husklet_extension_enable', 'Enable the exact inspected extension image after explicit confirmation.', z.object({ name: extensionName, image_digest: imageDigest, confirm: z.literal(true) }).strict(), async ({ name, image_digest }) => { await api.extensions.enable(name, image_digest); return { done: true }; }),
     define('husklet_extension_disable', 'Disable the exact inspected extension image after explicit confirmation.', z.object({ name: extensionName, image_digest: imageDigest, confirm: z.literal(true) }).strict(), async ({ name, image_digest }) => { await api.extensions.disable(name, image_digest); return { done: true }; }),
     define('husklet_extension_remove', 'Forget the exact inspected extension image after explicit confirmation; this does not install or pull images.', z.object({ name: extensionName, image_digest: imageDigest, confirm: z.literal(true) }).strict(), async ({ name, image_digest }) => { await api.extensions.remove(name, image_digest); return { done: true }; }),
     define('husklet_extension_acquire', 'Start bounded asynchronous inspection of one image reference after explicit confirmation.', z.object({ reference: imageReference, confirm: z.literal(true) }).strict(), ({ reference }) => api.extensions.startAcquisition(reference)),
-    define('husklet_extension_acquisition', 'Read bounded acquisition progress, candidate digest, installed digest observed for consent, manifest identity, and requested grants.', z.object({ job: extensionJob }).strict(), ({ job }) => api.extensions.acquisition(job)),
+    define('husklet_extension_acquisition', 'Read complete bounded acquisition progress, candidate digest, installed digest observed for consent, manifest identity, and requested grants without local clipping.', z.object({ job: extensionJob }).strict(), ({ job }) => api.extensions.acquisition(job), detailResult),
     define('husklet_extension_acquisition_cancel', 'Cancel one observed acquisition revision after explicit confirmation.', z.object({ job: extensionJob, revision: acquisitionRevision, confirm: z.literal(true) }).strict(), async ({ job, revision }) => { await api.extensions.cancelAcquisition(job, revision); return { done: true }; }),
     define('husklet_extension_install', 'Consent and atomically install the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.install(job, revision, granted)),
     define('husklet_extension_update', 'Consent and atomically replace an installed extension with the observed revision of a ready digest-bound candidate.', z.object({ job: extensionJob, revision: acquisitionRevision, granted: extensionGrant, confirm: z.literal(true) }).strict(), ({ job, revision, granted }) => api.extensions.update(job, revision, granted)),
     define('husklet_container_list', 'List containers, failing closed if MCP cannot return the complete host inventory.', empty, () => api.containers.list(), inventory()),
-    define('husklet_container_inspect', 'Inspect one container.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value)),
+    define('husklet_container_inspect', 'Inspect one complete container record without local clipping.', z.object({ id }).strict(), ({ id: value }) => api.containers.inspect(value), detailResult),
     define('husklet_container_processes', 'Read a bounded timestamped process snapshot bound to the complete immutable container ID actually sampled; scope says initial or full namespace, and PIDs are snapshot-local and reusable.', z.object({ id }).strict(), ({ id: value }) => api.containers.processes(value)),
-    define('husklet_container_execution', 'Inspect one bounded execution by its complete immutable ID.', z.object({ id: executionIdentity }).strict(), ({ id: value }) => api.containers.execution(value)),
+    define('husklet_container_execution', 'Inspect one complete bounded execution by its complete immutable ID without local clipping.', z.object({ id: executionIdentity }).strict(), ({ id: value }) => api.containers.execution(value), detailResult),
     define('husklet_execution_list', 'List the bounded durable execution catalogue; MCP promotes its truncation marker if it omits rows.', empty, () => api.containers.executions(), inventory('executions')),
     define('husklet_execution_logs', 'Replay bounded captured stdout/stderr bytes for one immutable execution ID; eof means the execution was complete before replay, while per-stream flags report host or MCP truncation.', z.object({ id: executionIdentity, stdout: z.boolean().default(true), stderr: z.boolean().default(true) }).strict().refine(({ stdout, stderr }) => stdout || stderr, 'stdout or stderr is required'), ({ id: value, stdout, stderr }) => api.containers.executionLogs(value, { stdout, stderr }), logResult),
     define('husklet_execution_wait', 'Wait up to 30 seconds for one immutable execution ID to stop and return its final state.', z.object({ id: executionIdentity, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ id: value, timeout_ms }) => api.containers.waitExecution(value, { timeoutMs: timeout_ms })),
@@ -266,24 +266,24 @@ export function tools(api) {
     define('husklet_container_remove', 'Remove one complete immutable container ID after explicit confirmation; names and prefixes are refused.', z.object({ id: containerIdentity, confirm: z.literal(true) }).strict(), async ({ id: value }) => { await api.containers.remove(value); return { done: true }; }),
     define('husklet_container_kill', 'Signal one complete immutable container ID after explicit confirmation; names, prefixes and process PIDs are refused.', z.object({ id: containerIdentity, signal: signalName, confirm: z.literal(true) }).strict(), async ({ id: value, signal }) => { await api.containers.kill(value, signal); return { done: true }; }),
     define('husklet_volume_list', 'List local volume summaries, failing closed if MCP cannot return the complete host inventory.', empty, () => api.volumes.list(), inventory()),
-    define('husklet_volume_inspect', 'Inspect one local volume.', z.object({ name: resourceName }).strict(), ({ name }) => api.volumes.inspect(name)),
+    define('husklet_volume_inspect', 'Inspect one complete local volume record without local clipping.', z.object({ name: resourceName }).strict(), ({ name }) => api.volumes.inspect(name), detailResult),
     define('husklet_volume_create', 'Create one named local volume.', z.object({ name: resourceName }).strict(), ({ name }) => api.volumes.create(name)),
     define('husklet_volume_remove', 'Remove one exact observed volume generation after explicit confirmation.', z.object({ name: resourceName, generation: volumeGeneration, confirm: z.literal(true) }).strict(), async ({ name, generation }) => { await api.volumes.remove(name, generation); return { done: true }; }),
     define('husklet_network_list', 'List local network summaries, failing closed if MCP cannot return the complete host inventory.', empty, () => api.networks.list(), inventory()),
-    define('husklet_network_inspect', 'Inspect one local network.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference)),
+    define('husklet_network_inspect', 'Inspect one complete local network record without local clipping.', z.object({ reference: id }).strict(), ({ reference }) => api.networks.inspect(reference), detailResult),
     define('husklet_network_create', 'Create one named local network.', z.object({ name: resourceName }).strict(), ({ name }) => api.networks.create(name)),
     define('husklet_network_remove', 'Remove one immutable network ID after explicit confirmation; names and prefixes are refused.', z.object({ reference: networkIdentity, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.networks.remove(reference); return { done: true }; }),
     define('husklet_network_connect', 'Connect one immutable container ID to one immutable network ID with optional bounded DNS aliases.', z.object({ reference: networkIdentity, container: containerIdentity, aliases: endpointAliases }).strict(), async ({ reference, container, aliases }) => { await api.networks.connect(reference, container, { aliases }); return { done: true }; }),
     define('husklet_network_disconnect', 'Disconnect one immutable container ID from one immutable network ID after explicit confirmation.', z.object({ reference: networkIdentity, container: containerIdentity, confirm: z.literal(true) }).strict(), async ({ reference, container }) => { await api.networks.disconnect(reference, container); return { done: true }; }),
     define('husklet_image_list', 'List local image summaries, failing closed if MCP cannot return the complete host inventory.', empty, () => api.images.list(), inventory()),
-    define('husklet_image_inspect', 'Inspect one local image.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference)),
+    define('husklet_image_inspect', 'Inspect one complete local image record without local clipping.', z.object({ reference: id }).strict(), ({ reference }) => api.images.inspect(reference), detailResult),
     define('husklet_image_pull', 'Pull one explicit image reference.', z.object({ reference: id }).strict(), ({ reference }) => api.images.pull(reference)),
     define('husklet_image_pull_start', 'Start a bounded asynchronous image pull. Prefer this observable workflow over the synchronous compatibility tool.', z.object({ reference: imageReference }).strict(), ({ reference }) => api.images.startPull(reference)),
     define('husklet_image_pull_status', 'Read the latest bounded status for one exact image-pull job.', z.object({ job: imagePullJob }).strict(), async ({ job }) => {
       const status = await api.images.pullStatus(job);
       if (status.job !== job) throw new Error(`host returned image pull job ${status.job}, expected ${job}`);
       return status;
-    }),
+    }, detailResult),
     define('husklet_image_pull_cancel', 'Cancel one active image-pull job; cancellation is safe and does not require destructive confirmation.', z.object({ job: imagePullJob }).strict(), async ({ job }) => { await api.images.cancelPull(job); return { done: true, job }; }),
     define('husklet_image_remove', 'Remove one immutable image digest after explicit confirmation; mutable tags and partial digests are refused.', z.object({ reference: imageDigest, confirm: z.literal(true) }).strict(), async ({ reference }) => { await api.images.remove(reference); return { done: true }; }),
     define('husklet_image_prune', 'Prune unused images after explicit confirmation.', z.object({ confirm: z.literal(true) }).strict(), () => api.images.prune()),

@@ -67,6 +67,10 @@ function strictInventory(value, key = '', depth = 0) {
   }
   if (Array.isArray(value)) {
     if (value.length > INVENTORY_ITEMS_LIMIT) throw new RangeError('inventory nested array exceeds the MCP item limit');
+    if (key === 'environment') return value.map((item) => {
+      if (!Array.isArray(item) || item.length !== 2) throw new TypeError('environment entry must be a name/value pair');
+      return [strictInventory(item[0], '', depth + 1), SECRET.test(String(item[0])) ? '[redacted]' : strictInventory(item[1], '', depth + 1)];
+    });
     return value.map((item) => strictInventory(item, '', depth + 1));
   }
   if (value && typeof value === 'object') {
@@ -91,6 +95,15 @@ export function inventoryResult(value, field) {
   const text = JSON.stringify(strictInventory(bounded));
   if (new TextEncoder().encode(text).byteLength > OUTPUT_LIMIT) {
     throw new RangeError(`inventory exceeds the ${OUTPUT_LIMIT}-byte MCP output limit`);
+  }
+  return { content: [{ type: 'text', text }] };
+}
+
+/** Serialize one complete detail object, redacted but never locally clipped. */
+export function detailResult(value) {
+  const text = JSON.stringify(strictInventory(value));
+  if (new TextEncoder().encode(text).byteLength > OUTPUT_LIMIT) {
+    throw new RangeError(`detail exceeds the ${OUTPUT_LIMIT}-byte MCP output limit`);
   }
   return { content: [{ type: 'text', text }] };
 }
