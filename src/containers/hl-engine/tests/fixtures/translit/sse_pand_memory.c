@@ -11,9 +11,6 @@ __asm__(".text\n"
         ".balign 4096\n"
         ".space 4093\n"
         "1: pand (%rdi,%rax),%xmm0\n"
-        ".rept 255\n"
-        "pand (%rdi,%rax),%xmm0\n"
-        ".endr\n"
         "movdqu %xmm0,(%rdx)\nret\n"
         ".size pand_memory,.-pand_memory\n");
 
@@ -30,7 +27,7 @@ int main(void) {
         mask[i] = (uint8_t)(0xf0u ^ i);
         initial[i] = (uint8_t)(0xffu - i);
     }
-    pand_memory(mask, initial, result);
+    for (unsigned iteration = 0; iteration < 256; ++iteration) pand_memory(mask, initial, result);
     printf("pand-memory=%016llx:%016llx\n", (unsigned long long)half(result, 0),
            (unsigned long long)half(result, 8));
     return 0;

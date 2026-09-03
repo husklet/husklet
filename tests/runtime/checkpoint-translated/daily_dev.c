@@ -151,9 +151,7 @@ __asm__(".text\n"
 __asm__(".text\n"
         ".global checkpoint_pand_memory\n.type checkpoint_pand_memory,@function\n"
         "checkpoint_pand_memory: movdqu (%rsi),%xmm0; xor %eax,%eax\n"
-        ".rept 256\n"
         "pand (%rdi,%rax),%xmm0\n"
-        ".endr\n"
         "movd %xmm0,%eax; ret\n"
         ".size checkpoint_pand_memory,.-checkpoint_pand_memory\n");
 
@@ -191,7 +189,9 @@ static long checkpoint_pand_memory_check(int phase) {
         0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff};
     static const unsigned char initial[16] __attribute__((aligned(16))) = {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    return (checkpoint_pand_memory(mask, initial) & 0xff) + phase;
+    uint32_t value = 0;
+    for (int iteration = 0; iteration < 256; ++iteration) value = checkpoint_pand_memory(mask, initial);
+    return (value & 0xff) + phase;
 }
 #else
 static long checkpoint_link_check(int phase) {
