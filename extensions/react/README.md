@@ -22,6 +22,7 @@ Start from the complete context shipped in this package:
 cp -R node_modules/@husklet/react/examples/starter my-extension
 cd my-extension
 npm install
+npm test
 docker build -t my-extension .
 ```
 

@@ -139,6 +139,7 @@ try {
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
   assert.equal(starterPackage.scripts.start, 'node main.js');
+  assert.equal(starterPackage.scripts.test, 'node --check main.js');
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
   assert.equal(starterPackage.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterPackage.dependencies.react, '18.3.1');
@@ -156,6 +157,7 @@ try {
     'install', '--ignore-scripts', '--no-audit', '--no-fund',
     path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1',
   ], { cwd: standaloneStarter, stdio: 'pipe' });
+  execFileSync('npm', ['test'], { cwd: standaloneStarter, stdio: 'pipe' });
   const starterLock = JSON.parse(fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'));
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
   assert.equal(starterLock.packages['node_modules/@husklet/client'].version, manifest.version);

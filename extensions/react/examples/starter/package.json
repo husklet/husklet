@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "start": "node main.js"
+    "start": "node main.js",
+    "test": "node --check main.js"
   },
   "dependencies": {
     "@husklet/client": "0.1.0",
