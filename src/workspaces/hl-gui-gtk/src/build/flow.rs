@@ -60,19 +60,38 @@ impl LayoutManagerImpl for Weave {
     }
 
     fn measure(&self, widget: &gtk::Widget, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-        let lines = self.lines(widget, for_size);
         let spacing = self.spacing.get();
         if orientation == self.direction.get() {
-            // A wrapping container can always be as narrow as its widest
-            // child; its natural size is the whole run on one line.
-            let widest = lines
+            let unconstrained = self.lines(widget, -1);
+            let floor = unconstrained
                 .iter()
                 .flat_map(|line| &line.children)
                 .map(|(child, _, _)| minimum(child, self.direction.get() == gtk::Orientation::Vertical))
-                .max();
-            let natural = lines.iter().map(|line| line.main).max().unwrap_or(0);
-            return (widest.unwrap_or(0), natural.max(widest.unwrap_or(0)), -1, -1);
+                .max()
+                .unwrap_or(0);
+            let natural = unconstrained.iter().map(|line| line.main).max().unwrap_or(0).max(floor);
+            let minimum = if for_size < 0 {
+                floor
+            } else {
+                // GTK may ask the inverse half of height-for-width (or
+                // width-for-height) while checking a widget's geometry. Find
+                // the narrowest main-axis extent whose wrapped cross extent
+                // actually fits the supplied constraint.
+                let mut low = floor;
+                let mut high = natural;
+                while low < high {
+                    let candidate = low + (high - low) / 2;
+                    if extent(&self.lines(widget, candidate), spacing) <= for_size {
+                        high = candidate;
+                    } else {
+                        low = candidate + 1;
+                    }
+                }
+                low
+            };
+            return (minimum, natural, -1, -1);
         }
+        let lines = self.lines(widget, for_size);
         let stacked = extent(&lines, spacing);
         (stacked, stacked, -1, -1)
     }
