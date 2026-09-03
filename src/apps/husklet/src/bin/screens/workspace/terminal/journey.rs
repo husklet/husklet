@@ -30,18 +30,52 @@ impl CheckpointJourney {
             let Some(terminal) = Self::active_terminal(&window) else {
                 return glib::ControlFlow::Continue;
             };
-            terminal.feed_child(
-                b"HUSKLET_GUI_CONTINUITY=$(cat /proc/sys/kernel/random/uuid); export HUSKLET_GUI_CONTINUITY; printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-before; (while :; do printf x >> /tmp/husklet-gui-progress; sleep .05; done) & printf '%s\\n' \"$!\" > /tmp/husklet-gui-child\n",
+            parent.set_default_size(913, 617);
+            PaneView::new(&window, &terminal).split(gtk::Orientation::Horizontal);
+            Tabs::new(&window).terminal();
+            Self::prepare_initial_topology(&path_for_prompt, &app, &parent, &window);
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn prepare_initial_topology(
+        path: &str,
+        app: &gtk::Application,
+        parent: &gtk::ApplicationWindow,
+        window: &Rc<TermWin>,
+    ) {
+        let path = path.to_owned();
+        let app = app.clone();
+        let parent = parent.clone();
+        let window = window.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            let Some(terminals) = Self::terminals(&window) else {
+                return glib::ControlFlow::Continue;
+            };
+            for (slot, terminal) in terminals.iter().enumerate() {
+                terminal.feed_child(Self::initial_command(slot).as_bytes());
+            }
+            let split_page = Page::of(&window, terminals[1].upcast_ref()).expect("split pane has no page");
+            split_page.select();
+            terminals[1].grab_focus();
+            Self::record(
+                &path,
+                "initial_topology_typed tabs=2 panes=3 selected=split focused=1 geometry=913x617",
             );
-            Self::record(&path_for_prompt, "initial_command_typed");
-            let path = path_for_prompt.clone();
+
+            let path_for_close = path.clone();
             let app = app.clone();
             let parent = parent.clone();
             let terminal_window = window.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
-                Self::record(&path, "close_requested");
+            glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+                if !Self::initial_state_visible(&terminal_window) {
+                    return glib::ControlFlow::Continue;
+                }
+                Self::record(&path_for_close, "initial_state_ready");
+                Self::record(&path_for_close, "close_requested");
                 parent.close();
-                Self::choose_continue(&path, &app, &parent, &terminal_window.ws, 1);
+                Self::choose_continue(&path_for_close, &app, &parent, &terminal_window.ws, 1);
+                glib::ControlFlow::Break
             });
             glib::ControlFlow::Break
         });
@@ -120,12 +154,21 @@ impl CheckpointJourney {
         let parent = parent.clone();
         let window = window.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
-            let Some(terminal) = Self::active_terminal(&window) else {
+            let Some(terminals) = Self::terminals(&window) else {
                 return glib::ControlFlow::Continue;
             };
-            terminal.feed_child(
-                format!("printf '%s\\n' \"$HUSKLET_GUI_CONTINUITY\" > /tmp/husklet-gui-continuity-after-{cycle}\n")
-                    .as_bytes(),
+            if !Self::restored_topology(&parent, &window, &terminals) {
+                return glib::ControlFlow::Continue;
+            }
+            for (slot, terminal) in terminals.iter().enumerate() {
+                terminal.feed_child(Self::reopen_command(slot, cycle).as_bytes());
+            }
+            Self::record(
+                &path,
+                &Self::event(
+                    "topology_restored tabs=2 panes=3 selected=split focused=1 geometry=913x617",
+                    cycle,
+                ),
             );
             Self::record(&path, &Self::event("reopen_command_typed", cycle));
             if cycle == 2 {
@@ -168,6 +211,78 @@ impl CheckpointJourney {
             .borrow()
             .clone()
             .or_else(|| window.stack.visible_child().and_then(|page| PaneView::first(&page)))
+    }
+
+    fn terminals(window: &Rc<TermWin>) -> Option<[vte4::Terminal; 3]> {
+        Some([
+            Window::pane(window, "0")?,
+            Window::pane(window, "1")?,
+            Window::pane(window, "2")?,
+        ])
+    }
+
+    fn initial_command(slot: usize) -> String {
+        const DIRECTORIES: [&str; 3] = ["/tmp", "/var", "/root"];
+        format!(
+            "HUSKLET_GUI_SLOT_{slot}=$(cat /proc/sys/kernel/random/uuid); export HUSKLET_GUI_SLOT_{slot}; cd {}; printf 'history-slot-{slot}\\n'; printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-before; (while :; do printf x >> /tmp/husklet-gui-progress-{slot}; sleep .05; done) &\n",
+            DIRECTORIES[slot]
+        )
+    }
+
+    fn reopen_command(slot: usize, cycle: usize) -> String {
+        format!(
+            "printf '%s|%s\\n' \"$HUSKLET_GUI_SLOT_{slot}\" \"$PWD\" > /tmp/husklet-gui-slot-{slot}-after-{cycle}; printf 'reopened-slot-{slot}-cycle-{cycle}\\n'\n"
+        )
+    }
+
+    fn initial_state_visible(window: &Rc<TermWin>) -> bool {
+        let Some(terminals) = Self::terminals(window) else {
+            return false;
+        };
+        terminals.iter().enumerate().all(|(slot, terminal)| {
+            Terminal::new(terminal)
+                .history()
+                .contains(&format!("history-slot-{slot}"))
+        })
+    }
+
+    fn restored_topology(
+        parent: &gtk::ApplicationWindow,
+        window: &Rc<TermWin>,
+        terminals: &[vte4::Terminal; 3],
+    ) -> bool {
+        if window.entries.borrow().iter().filter(|entry| entry.persisted).count() != 2
+            || parent.width() != 913
+            || parent.height() != 617
+        {
+            return false;
+        }
+        let tabs = Window::tabs(window);
+        let Some((split_page, _, split_slots)) = tabs
+            .iter()
+            .find(|(_, _, slots)| slots.iter().map(String::as_str).eq(["0", "1"]))
+        else {
+            return false;
+        };
+        if !tabs
+            .iter()
+            .any(|(_, _, slots)| slots.iter().map(String::as_str).eq(["2"]))
+            || split_slots.len() != 2
+        {
+            return false;
+        }
+        let focused_slot = window
+            .focused
+            .borrow()
+            .as_ref()
+            .and_then(|terminal| Slots::new(window).of(terminal));
+        window.stack.visible_child_name().as_deref() == Some(split_page.as_str())
+            && focused_slot.as_deref() == Some("1")
+            && terminals.iter().enumerate().all(|(slot, terminal)| {
+                Terminal::new(terminal)
+                    .history()
+                    .contains(&format!("history-slot-{slot}"))
+            })
     }
 
     fn record(path: &str, event: &str) {

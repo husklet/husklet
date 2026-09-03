@@ -75,18 +75,11 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "reopen_command_typed",
         Duration::from_secs(60),
     );
-    let before = wait_text(
-        &rootfs.join("tmp/husklet-gui-continuity-before"),
-        Duration::from_secs(10),
-    );
-    let after = wait_text(
-        &rootfs.join("tmp/husklet-gui-continuity-after-1"),
-        Duration::from_secs(10),
-    );
-    assert_eq!(before, after, "reopen lost shell-local continuity state");
-    let progress = rootfs.join("tmp/husklet-gui-progress");
-    let first = std::fs::metadata(&progress).unwrap().len();
-    wait_for_growth(&progress, first, Duration::from_secs(5));
+    let before = slot_state(&rootfs, "before");
+    let after = slot_state(&rootfs, "after-1");
+    assert_eq!(before, after, "reopen lost per-pane shell state or cwd");
+    let first_progress = progress_sizes(&rootfs);
+    wait_for_all_growth(&rootfs, first_progress, Duration::from_secs(5));
     let events = std::fs::read_to_string(&receipt).unwrap();
     let restored_ready_ms = unix_millis() - event_time(&events, "manager_reopen_clicked");
     std::fs::write(&cycle_ready, b"ready\n").unwrap();
@@ -97,13 +90,10 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "reopen_command_typed_cycle2",
         Duration::from_secs(60),
     );
-    let after_second = wait_text(
-        &rootfs.join("tmp/husklet-gui-continuity-after-2"),
-        Duration::from_secs(10),
-    );
-    assert_eq!(before, after_second, "second reopen lost shell-local continuity state");
-    let second_start = std::fs::metadata(&progress).unwrap().len();
-    wait_for_growth(&progress, second_start, Duration::from_secs(5));
+    let after_second = slot_state(&rootfs, "after-2");
+    assert_eq!(before, after_second, "second reopen lost per-pane shell state or cwd");
+    let second_progress = progress_sizes(&rootfs);
+    wait_for_all_growth(&rootfs, second_progress, Duration::from_secs(5));
 
     let events = std::fs::read_to_string(&receipt).unwrap();
     for required in [
@@ -112,11 +102,13 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
         "domain_offline",
         "manager_reopen_clicked",
         "reopen_command_typed",
+        "topology_restored tabs=2 panes=3 selected=split focused=1 geometry=913x617",
         "close_requested_cycle2",
         "dialog_continue_clicked_cycle2",
         "domain_offline_cycle2",
         "manager_reopen_clicked_cycle2",
         "reopen_command_typed_cycle2",
+        "topology_restored tabs=2 panes=3 selected=split focused=1 geometry=913x617_cycle2",
         "journey_complete",
     ] {
         assert!(
@@ -147,12 +139,12 @@ async fn production_gui_closes_through_continue_dialog_and_reopens_from_manager(
     std::fs::write(
         evidence.join("result.receipt"),
         format!(
-            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second}\nbackground=progressing\ncycles=2\n"
+            "close_ms={close_ms}\nrestored_ready_ms={restored_ready_ms}\nclose_second_ms={close_second_ms}\nrestored_second_ready_ms={restored_second_ready_ms}\ncontinuity={after_second:?}\nbackground=3/3-progressing\ntabs=2\npanes=3\nselected=split\nfocused=1\ngeometry=913x617\ncycles=2\n"
         ),
     )
     .unwrap();
     eprintln!(
-        "gui-checkpoint close_ms={close_ms} restored_ready_ms={restored_ready_ms} close_second_ms={close_second_ms} restored_second_ready_ms={restored_second_ready_ms} continuity={after_second}"
+        "gui-checkpoint close_ms={close_ms} restored_ready_ms={restored_ready_ms} close_second_ms={close_second_ms} restored_second_ready_ms={restored_second_ready_ms} continuity={after_second:?}"
     );
 }
 
@@ -210,15 +202,38 @@ fn wait_text(path: &Path, timeout: Duration) -> String {
     }
 }
 
-fn wait_for_growth(path: &Path, initial: u64, timeout: Duration) {
+fn slot_state(rootfs: &Path, suffix: &str) -> Vec<String> {
+    (0..3)
+        .map(|slot| {
+            wait_text(
+                &rootfs.join(format!("tmp/husklet-gui-slot-{slot}-{suffix}")),
+                Duration::from_secs(10),
+            )
+        })
+        .collect()
+}
+
+fn progress_sizes(rootfs: &Path) -> [u64; 3] {
+    std::array::from_fn(|slot| {
+        std::fs::metadata(rootfs.join(format!("tmp/husklet-gui-progress-{slot}")))
+            .unwrap()
+            .len()
+    })
+}
+
+fn wait_for_all_growth(rootfs: &Path, initial: [u64; 3], timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > initial) {
+        let growing = (0..3).all(|slot| {
+            std::fs::metadata(rootfs.join(format!("tmp/husklet-gui-progress-{slot}")))
+                .is_ok_and(|metadata| metadata.len() > initial[slot])
+        });
+        if growing {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "restored child process did not resume progress"
+            "not every restored pane's child process resumed progress"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
