@@ -51,7 +51,6 @@ export async function runPaneAgentTurn(client, {
   const semanticBefore = await call(client, 'husklet_pane_snapshot', { slot: semantic.slot });
   const generation = attribute(semanticBefore, 'generation');
   const revision = attribute(semanticBefore, 'revision');
-  const generation = semantic.generation;
   if (!Number.isSafeInteger(generation) || generation < 0
       || !Number.isSafeInteger(revision) || revision < 0) {
     throw new Error('semantic pane discovery and snapshot must expose a nonnegative generation/revision cursor');
