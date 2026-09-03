@@ -196,6 +196,11 @@ export interface WorkspaceApi {
     remove(name: string, generation: string): Promise<void>;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
+    /** Wait for this exact acquisition job revision to advance, then return its authoritative status. */
+    waitForAcquisition(job: string, afterRevision: number, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; status: ExtensionAcquisitionStatus }
+      | { changed: false; job: string; revision: number }
+    >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;

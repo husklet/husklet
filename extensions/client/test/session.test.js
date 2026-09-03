@@ -110,6 +110,50 @@ test('real Unix semantic action wait arms before authority and disposes after ch
   }
 });
 
+test('real Unix acquisition wait filters its cursor and disposes after authoritative status', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+        if (frame.payload.call === 'event_subscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+          socket.write(encode({ channel: 12, kind: KIND.event, payload: { snapshot: 'extension_acquisitions', of: {
+            job: 'job-7', revision: 4, state: 'pulling', coalesced: 0,
+          } } }));
+          socket.write(encode({ channel: 12, kind: KIND.event, payload: { snapshot: 'extension_acquisitions', of: {
+            job: 'job-7', revision: 5, state: 'ready', coalesced: 1,
+          } } }));
+        } else if (frame.payload.call === 'extension_acquisition_status') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+            job: 'job-7', reference: 'registry/demo:1', revision: 5, state: 'ready',
+            progress: null, candidate: null, error: null,
+          } } }));
+        } else if (frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'acquisition-wait', granted: ['extension-install'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4);
+    assert.equal(result.changed, true); assert.equal(result.status.revision, 5);
+    assert.deepEqual(calls, ['event_subscribe', 'extension_acquisition_status', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
   const socketPath = path.join(directory, 'host.sock');

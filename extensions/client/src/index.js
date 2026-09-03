@@ -566,6 +566,46 @@ export function workspace(session, { signal } = {}) {
   api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
   api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
   api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
+  api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
+    if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {
+      throw new TypeError('extension acquisition wait requires a 1..128 byte job identity');
+    }
+    if (!Number.isSafeInteger(afterRevision) || afterRevision < 0) {
+      throw new TypeError('extension acquisition wait requires a nonnegative safe integer revision');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension acquisition wait timeout must be between 1 and 30000ms');
+    }
+    let dispose; let timer; let settled = false; let reading = false; let latest;
+    return new Promise((resolve, reject) => {
+      const finish = (value, error) => {
+        if (settled) return; settled = true; clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      };
+      const observe = (change) => {
+        if (settled || change.job !== job || change.revision <= afterRevision) return;
+        latest = change;
+        if (reading) return;
+        reading = true;
+        void (async () => {
+          try {
+            while (latest && !settled) {
+              const expected = latest; latest = undefined;
+              const status = await api.extensions.acquisition(job);
+              if (status.job !== job || status.revision < expected.revision || status.revision <= afterRevision) continue;
+              finish({ changed: true, status });
+            }
+          } catch (error) { finish(undefined, error); }
+          finally { reading = false; }
+        })();
+      };
+      api.watchExtensionAcquisitions(observe).then((stop) => {
+        dispose = stop;
+        if (settled) void stop();
+      }, (error) => finish(undefined, error));
+      timer = setTimeout(() => finish({ changed: false, job, revision: afterRevision }), timeoutMs);
+    });
+  };
   api.watchWorkspaceLifecycle = (listener) => watch('workspace-lifecycle', 'workspace_lifecycle', listener, 'workspace lifecycle');
   api.watchWorkspaceEvents = (listener) => watch('workspace-events', 'workspace_events', listener, 'workspace event');
   return api;

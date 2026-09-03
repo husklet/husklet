@@ -30,6 +30,15 @@ const acted = await host.terminal.actAndWait(pane.slot, {
 if (acted.changed) console.log(acted.readable.text);
 ```
 
+Extension acquisition also has a non-polling cursor. Read status once, then arm
+the exact job before waiting for its next coalesced revision:
+
+```js
+const current = await host.extensions.acquisition(job);
+const next = await host.extensions.waitForAcquisition(job, current.revision);
+if (next.changed) console.log(next.status.state, next.status.progress);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 

@@ -145,6 +145,7 @@ wrong caller.
 - `host.extensions.cancelAcquisition(...)` — `extension_acquisition_cancel`, requires `extension-install`.
 - `host.extensions.install(...)` — `extension_install`, requires `extension-install`.
 - `host.extensions.update(...)` — `extension_update`, requires `extension-install`.
+- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extension-install`.
 
 ## Semantics
 
