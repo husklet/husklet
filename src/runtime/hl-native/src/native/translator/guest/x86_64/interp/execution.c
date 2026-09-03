@@ -395,6 +395,7 @@ struct interp_block {
     uint8_t profile_jcc_fall_stitches;
     uint8_t profile_fallback_kind;
     uint64_t profile_fallback_form;
+    uint64_t profile_sse_riprel_form;
 #endif
 };
 
@@ -460,6 +461,7 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;
     block->profile_fallback_form = 0;
+    block->profile_sse_riprel_form = 0;
 #endif
     uint64_t jcc_ibtc_sites = 0;
     (void)hl_x86_decode_transaction_begin(context);

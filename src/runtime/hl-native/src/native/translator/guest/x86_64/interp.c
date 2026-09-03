@@ -746,9 +746,14 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
         unsigned exit_kind = terminal_completed ? terminator : HL_BACKEND_SHAPE_T_IRQ;
         hl_backend_tree_translated_exit(exit_kind, (packed >> TL_SHAPE_JMP_SHIFT) & TL_SHAPE_STITCH_MASK,
                                         (packed >> TL_SHAPE_COND_FALL_SHIFT) & TL_SHAPE_STITCH_MASK);
-        if (terminal_completed && terminator == HL_BACKEND_SHAPE_T_FALLTHROUGH)
-            hl_backend_tree_translated_fall_stop((packed >> TL_SHAPE_FALL_STOP_SHIFT) &
-                                                 TL_SHAPE_FALL_STOP_MASK);
+        if (terminal_completed && terminator == HL_BACKEND_SHAPE_T_FALLTHROUGH) {
+            unsigned fall_stop =
+                (packed >> TL_SHAPE_FALL_STOP_SHIFT) & TL_SHAPE_FALL_STOP_MASK;
+            hl_backend_tree_translated_fall_stop(fall_stop);
+            if (fall_stop == HL_BACKEND_FALL_SSE_RIPREL_LOWER)
+                hl_backend_tree_sse_riprel_form(translit_sse_riprel_runtime_key(
+                    context, cpu->rip, block->profile_sse_riprel_form));
+        }
         unsigned would_link_family =
             (packed >> TL_SHAPE_WOULD_FAMILY_SHIFT) & TL_SHAPE_WOULD_FAMILY_MASK;
         unsigned would_link_disposition =

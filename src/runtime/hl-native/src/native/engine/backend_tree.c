@@ -19,6 +19,10 @@
 
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
+#define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
+#endif
 
 enum hl_backend_finalize_caller {
     HL_BACKEND_FINALIZE_UNKNOWN,
@@ -553,6 +557,11 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t direct_call_ibtc_fills;
     _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     _Atomic uint64_t direct_call_ibtc_fast_redispatch;
+    _Atomic uint64_t sse_riprel_form_keyed;
+    _Atomic uint64_t sse_riprel_form_overflow;
+    _Atomic uint64_t sse_riprel_form_unique;
+    _Atomic uint64_t sse_riprel_form_collisions;
+    struct hl_backend_executed_form sse_riprel_forms[HL_BACKEND_SSE_RIPREL_FORM_SLOTS];
     struct hl_backend_tree_slot slots[HL_BACKEND_TREE_SLOTS];
 };
 
@@ -619,6 +628,79 @@ struct hl_backend_tree_summary {
 static struct hl_backend_tree_shared *g_backend_tree;
 static struct hl_backend_tree_slot *g_backend_tree_self;
 static int g_backend_tree_lifecycle_owned;
+
+static void hl_backend_tree_sse_riprel_form(uint64_t key) {
+    struct hl_backend_tree_shared *tree = g_backend_tree;
+    // Like translated_fall_stop, this event belongs to the shared tree even before a fork child
+    // has claimed its per-process lifecycle slot.
+    if (tree == NULL) return;
+    // A restored or legacy descriptor can carry no hook key. It still belongs in the exact total;
+    // classify it as overflow rather than silently making the form census smaller than the fall census.
+    if (key == 0) {
+        atomic_fetch_add_explicit(&tree->sse_riprel_form_overflow, 1, memory_order_relaxed);
+        return;
+    }
+    unsigned start = (unsigned)hl_backend_executed_form_mix(key) &
+                     (HL_BACKEND_SSE_RIPREL_FORM_SLOTS - 1u);
+    for (unsigned probe = 0; probe < HL_BACKEND_SSE_RIPREL_FORM_SLOTS; ++probe) {
+        struct hl_backend_executed_form *form =
+            &tree->sse_riprel_forms[(start + probe) & (HL_BACKEND_SSE_RIPREL_FORM_SLOTS - 1u)];
+        uint32_t state = atomic_load_explicit(&form->state, memory_order_acquire);
+        if (state == 2 && form->key == key) {
+            atomic_fetch_add_explicit(&form->count, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tree->sse_riprel_form_keyed, 1, memory_order_relaxed);
+            return;
+        }
+        /* A fork child can die after reserving this MAP_SHARED slot. Never wait for another
+           process's transient publication: preserve the exact total as overflow and let every
+           surviving recorder continue. */
+        if (state == 1) {
+            atomic_fetch_add_explicit(&tree->sse_riprel_form_overflow, 1, memory_order_relaxed);
+            return;
+        }
+        if (state == 0) {
+            uint32_t expected = 0;
+            if (!atomic_compare_exchange_strong_explicit(&form->state, &expected, 1,
+                                                         memory_order_acquire, memory_order_relaxed)) {
+                atomic_fetch_add_explicit(&tree->sse_riprel_form_overflow, 1, memory_order_relaxed);
+                return;
+            }
+            form->key = key;
+            atomic_store_explicit(&form->count, 1, memory_order_relaxed);
+            atomic_store_explicit(&form->state, 2, memory_order_release);
+            atomic_fetch_add_explicit(&tree->sse_riprel_form_unique, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tree->sse_riprel_form_keyed, 1, memory_order_relaxed);
+            return;
+        }
+        atomic_fetch_add_explicit(&tree->sse_riprel_form_collisions, 1, memory_order_relaxed);
+    }
+    atomic_fetch_add_explicit(&tree->sse_riprel_form_overflow, 1, memory_order_relaxed);
+}
+
+static void hl_backend_tree_sse_riprel_snapshot(uint64_t keys[HL_BACKEND_SSE_RIPREL_FORM_TOP],
+                                                 uint64_t counts[HL_BACKEND_SSE_RIPREL_FORM_TOP],
+                                                 uint64_t *keyed, uint64_t *overflow,
+                                                 uint64_t *unique, uint64_t *collisions) {
+    struct hl_backend_tree_shared *tree = g_backend_tree;
+    if (tree == NULL) return;
+    *keyed = atomic_load_explicit(&tree->sse_riprel_form_keyed, memory_order_relaxed);
+    *overflow = atomic_load_explicit(&tree->sse_riprel_form_overflow, memory_order_relaxed);
+    *unique = atomic_load_explicit(&tree->sse_riprel_form_unique, memory_order_relaxed);
+    *collisions = atomic_load_explicit(&tree->sse_riprel_form_collisions, memory_order_relaxed);
+    for (unsigned slot = 0; slot < HL_BACKEND_SSE_RIPREL_FORM_SLOTS; ++slot) {
+        struct hl_backend_executed_form *form = &tree->sse_riprel_forms[slot];
+        if (atomic_load_explicit(&form->state, memory_order_acquire) != 2) continue;
+        uint64_t key = form->key, count = atomic_load_explicit(&form->count, memory_order_relaxed);
+        unsigned rank = 0;
+        while (rank < HL_BACKEND_SSE_RIPREL_FORM_TOP &&
+               (counts[rank] > count || (counts[rank] == count && keys[rank] <= key))) ++rank;
+        if (rank == HL_BACKEND_SSE_RIPREL_FORM_TOP) continue;
+        for (unsigned move = HL_BACKEND_SSE_RIPREL_FORM_TOP - 1; move > rank; --move) {
+            keys[move] = keys[move - 1]; counts[move] = counts[move - 1];
+        }
+        keys[rank] = key; counts[rank] = count;
+    }
+}
 
 static uint64_t hl_backend_shape_mix(uint64_t value) {
     value ^= value >> 33;
@@ -1581,6 +1663,46 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     if (g_backend_tree_self == NULL) return 10;
     if (scenario == 17) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 0 ? 0 : 110;
     if (scenario == 18) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 1 ? 0 : 111;
+    if (scenario == 19) {
+        hl_backend_tree_sse_riprel_form(UINT64_C(0x111));
+        pid_t child = fork();
+        if (child < 0) return 112;
+        if (child == 0) {
+            hl_backend_tree_sse_riprel_form(UINT64_C(0x222));
+            _exit(0);
+        }
+        if (hl_backend_tree_wait(child, 0) != 0) return 113;
+        uint64_t keys[HL_BACKEND_SSE_RIPREL_FORM_TOP] = {0};
+        uint64_t counts[HL_BACKEND_SSE_RIPREL_FORM_TOP] = {0};
+        uint64_t keyed = 0, overflow = 0, unique = 0, collisions = 0;
+        hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow, &unique, &collisions);
+        if (keyed != 2 || overflow != 0 || unique != 2 || counts[0] != 1 || counts[1] != 1) return 114;
+        hl_backend_tree_begin(1, host);
+        memset(keys, 0, sizeof keys);
+        memset(counts, 0, sizeof counts);
+        keyed = overflow = unique = collisions = 0;
+        hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow, &unique, &collisions);
+        return keyed == 0 && overflow == 0 && unique == 0 && collisions == 0 ? 0 : 115;
+    }
+    if (scenario == 20) {
+        uint64_t key = UINT64_C(0x333);
+        unsigned start = (unsigned)hl_backend_executed_form_mix(key) &
+                         (HL_BACKEND_SSE_RIPREL_FORM_SLOTS - 1u);
+        pid_t child = fork();
+        if (child < 0) return 116;
+        if (child == 0) {
+            atomic_store_explicit(&g_backend_tree->sse_riprel_forms[start].state, 1,
+                                  memory_order_release);
+            _exit(0);
+        }
+        if (hl_backend_tree_wait(child, 0) != 0) return 117;
+        hl_backend_tree_sse_riprel_form(key);
+        uint64_t keys[HL_BACKEND_SSE_RIPREL_FORM_TOP] = {0};
+        uint64_t counts[HL_BACKEND_SSE_RIPREL_FORM_TOP] = {0};
+        uint64_t keyed = 0, overflow = 0, unique = 0, collisions = 0;
+        hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow, &unique, &collisions);
+        return keyed == 0 && overflow == 1 && unique == 0 ? 0 : 118;
+    }
     if (scenario == 16) {
         struct hl_backend_tree_slot *birth = hl_backend_tree_prepare_fork();
         if (birth == NULL) return 104;

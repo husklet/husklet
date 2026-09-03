@@ -558,6 +558,19 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn sse_rip_relative_form_census_reconciles_with_executed_fallthroughs() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        for scenario in 227..=228 {
+            // SAFETY: each selector runs one isolated child fixture and returns only its exit status.
+            assert_eq!(unsafe { hook(scenario) }, 0, "SSE RIP-relative census scenario {scenario}");
+        }
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn unresolved_direct_jmp_ibtc_lifecycle_is_exact() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()

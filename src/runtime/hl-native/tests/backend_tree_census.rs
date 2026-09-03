@@ -162,6 +162,24 @@ fn executed_fall_stop_reasons_reconcile_exactly_to_translated_fallthroughs() {
 }
 
 #[test]
+fn sse_riprel_forms_aggregate_after_begin_before_fork_and_reset_between_runs() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 19)
+            .unwrap_or_else(|status| panic!("ISA {isa} SSE form fork/reset scenario failed: {status}"));
+    }
+}
+
+#[test]
+fn stranded_sse_riprel_form_reservation_becomes_overflow_without_wedging_survivor() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 20)
+            .unwrap_or_else(|status| panic!("ISA {isa} SSE form stranded reservation scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn each_real_translation_stop_site_keeps_its_exact_reason() {
     // The hook scenarios exercise marker transport and exact counter reconciliation. This wiring
     // clamp makes a mutation at any real build-loop assignment red as well: replacing one site by

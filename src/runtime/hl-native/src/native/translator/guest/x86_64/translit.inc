@@ -1713,6 +1713,21 @@ static void translit_unsupported_record_completed(const struct insn *insn, uint6
 
 static void translit_unsupported_top(const translit_unsupported_form *forms, unsigned form_count,
                                      uint64_t top_key[8], uint64_t top_count[8]);
+
+static uint64_t translit_sse_riprel_runtime_key(hl_x86_hot_context *context, uint64_t guest_pc,
+                                                 uint64_t descriptor_key) {
+    struct insn insn;
+    (void)descriptor_key;
+    uint64_t key = 0;
+    if (context == NULL) return 0;
+    int begun = hl_x86_decode_transaction_begin(context);
+    int decoded = begun ? hl_x86_decode_context(context, guest_pc, &insn) : 0;
+    int committed = begun && hl_x86_decode_transaction_commit(context);
+    if (committed && decoded > 0)
+        key = translit_unsupported_key(&insn);
+    hl_x86_decode_transaction_release(context);
+    return key;
+}
 #endif
 
 // A displaced ET_EXEC has distinct guest/link and host/storage coordinates. Stage one admits only
@@ -3957,6 +3972,13 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         return 0;
     }
     if (scenario == 205) return translit_single_fetch_test();
+    if (scenario == 227 || scenario == 228) {
+        pid_t child = fork();
+        if (child < 0) return 97;
+        if (child == 0) _exit(translit_fall_fixture_test(scenario));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 99;
+    }
     if (scenario == 1) return translit_riprel_target(0x8D, 0, lo + 0x123, lo, hi, bias) == lo + 0x123 ? 0 : 1;
     if (scenario == 2)
         return translit_riprel_target(0x8B, 0, lo + 0x123, lo, hi, bias) == lo + bias + 0x123 ? 0 : 2;
@@ -5657,6 +5679,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                                  &movsd_save_end, &movsd_op_end)) {
                     a->cursor = instruction_start;
                     fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
+#if defined(HL_NATIVE_TEST_HOOKS)
+                    block->profile_sse_riprel_form = translit_unsupported_key(&insn);
+#endif
                     break;
                 }
             }
@@ -7110,6 +7135,8 @@ static int translit_fall_fixture_test(unsigned scenario) {
     static const uint8_t fs_transaction[] = {0x64, 0x48, 0x8b, 0x04, 0x25, 0x40, 0x23, 0x01, 0x00};
     static const uint8_t tl_no[] = {0x90, 0x0f, 0x0b};
     static const uint8_t sse_to_tl_no[] = {0x66, 0x0f, 0xef, 0xc0, 0x0f, 0x0b};
+    static const uint8_t sse_riprel_movdqa[] = {0x90, 0x66, 0x0f, 0x6f, 0x05, 0, 0, 0, 0};
+    static const uint8_t sse_riprel_movups[] = {0x90, 0x0f, 0x10, 0x05, 0, 0, 0, 0};
     uint8_t cap[TL_MAX_INSNS + 1];
     memset(cap, 0x90, TL_MAX_INSNS);
     cap[TL_MAX_INSNS] = 0x0f;
@@ -7127,7 +7154,23 @@ static int translit_fall_fixture_test(unsigned scenario) {
     case 78: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
     case 79: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
     case 80: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
+    case 227: bytes = sse_riprel_movdqa; length = sizeof sse_riprel_movdqa;
+              expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
+    case 228: bytes = sse_riprel_movups; length = sizeof sse_riprel_movups;
+              expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
     default: return 90;
+    }
+    uint8_t *far_guest = MAP_FAILED;
+    if (scenario == 227 || scenario == 228) {
+        far_guest = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+        if (far_guest == MAP_FAILED) {
+            munmap(arena, arena_size);
+            return 98;
+        }
+        memcpy(far_guest, bytes, length);
+        bytes = far_guest;
+        length = 4096;
     }
     uint8_t *saved_cache = g_cache;
     uint8_t *saved_cp = g_cp;
@@ -7146,10 +7189,18 @@ static int translit_fall_fixture_test(unsigned scenario) {
     // Scenario 73 freezes the pre-bridge NORMAL_TO_FS fall boundary.  Keep that control explicit now
     // that ordinary missing-option contexts enable the bridge; scenarios 181/184 cover the default.
     if (scenario == 73) (void)hl_option_set("HL_TRANSLIT_FS_LOAD_BRIDGE", "0", 1);
+    _Atomic uint64_t fixture_authority = HL_GUEST_FETCH_AUTHORITY_VERSION_ONE;
     hl_x86_hot_context *context =
         hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL,
-                                  scenario >= 78 ? hl_guest_fetch_authority_source() : NULL);
-    if (scenario >= 78 && context != NULL) {
+                                  scenario >= 78 && scenario <= 80 ? hl_guest_fetch_authority_source() : NULL);
+    if ((scenario == 227 || scenario == 228) && context != NULL)
+        context->authority_source = &fixture_authority;
+    if ((scenario == 227 || scenario == 228) && context != NULL &&
+        jit_body_owner_set_for(g_cache_gen, 1) == NULL) {
+        hl_x86_hot_context_destroy(context);
+        context = NULL;
+    }
+    if (scenario >= 78 && scenario <= 80 && context != NULL) {
         // Scenario 78 needs an authority-backed memo entry so the next transaction
         // exercises invalidation while accepting that entry.  Prime it through the
         // same begin/commit/release path used by translation, not by seeding internals.
@@ -7235,6 +7286,10 @@ static int translit_fall_fixture_test(unsigned scenario) {
                 actual == expected;
     int cap_exact = scenario != 76 ||
                     (block->profile_insns == TL_MAX_INSNS && block->guest_end == translit_fall_fixture_guest + TL_MAX_INSNS);
+    uint64_t expected_sse_riprel_form = block->profile_sse_riprel_form;
+    // A chained terminal returns through the dispatcher-entered source descriptor, whose hook key
+    // need not describe the terminal block. Model that lifecycle explicitly for the second form.
+    if (scenario == 228) block->profile_sse_riprel_form = 0;
     struct cpu fixture_cpu = {0};
     fixture_cpu.rip = translit_fall_fixture_guest;
     fixture_cpu.fs_base = (uint64_t)(uintptr_t)(arena + arena_size - 8) - UINT64_C(0x12340);
@@ -7250,6 +7305,37 @@ static int translit_fall_fixture_test(unsigned scenario) {
                    summary.translated_fall_stop[expected] == 1;
     for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; reason++)
         if (reason != expected && summary.translated_fall_stop[reason] != 0) executed = 0;
+    if (scenario == 227 || scenario == 228) {
+        uint64_t keys[8] = {0}, counts[8] = {0};
+        uint64_t keyed = 0, overflow = 0, unique = 0, collisions = 0;
+        hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow, &unique, &collisions);
+        executed &= keyed == 1 && overflow == 0 &&
+                    keyed + overflow == summary.translated_fall_stop[HL_BACKEND_FALL_SSE_RIPREL_LOWER] &&
+                    counts[0] == 1 && keys[0] == expected_sse_riprel_form;
+        /* A chained terminal whose runtime identity cannot be decoded must never inherit the
+           dispatcher-entered source descriptor's plausible but unrelated key. */
+        if (scenario == 228) {
+            hl_x86_hot_context *begin_refused_context =
+                hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+            uint64_t begin_refused_key = begin_refused_context == NULL ? UINT64_MAX :
+                translit_sse_riprel_runtime_key(begin_refused_context,
+                                                translit_fall_fixture_guest,
+                                                expected_sse_riprel_form);
+            hl_x86_decode_test_transaction_invalidate_before_commit();
+            uint64_t invalidated_key = translit_sse_riprel_runtime_key(
+                context, translit_fall_fixture_guest, expected_sse_riprel_form);
+            hl_x86_hot_context_destroy(begin_refused_context);
+            hl_backend_tree_begin(1, effective_host_services());
+            hl_backend_tree_sse_riprel_form(begin_refused_key);
+            hl_backend_tree_sse_riprel_form(invalidated_key);
+            memset(keys, 0, sizeof keys); memset(counts, 0, sizeof counts);
+            keyed = overflow = unique = collisions = 0;
+            hl_backend_tree_sse_riprel_snapshot(keys, counts, &keyed, &overflow,
+                                                 &unique, &collisions);
+            executed &= begin_refused_key == 0 && invalidated_key == 0 &&
+                        keyed == 0 && overflow == 2 && unique == 0;
+        }
+    }
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
     if (scenario == 73) (void)hl_option_unset("HL_TRANSLIT_FS_LOAD_BRIDGE");
@@ -7258,7 +7344,10 @@ static int translit_fall_fixture_test(unsigned scenario) {
     g_cp = saved_cp;
     g_rw2rx = saved_rw2rx;
     g_cache_gen = saved_generation;
+    if (far_guest != MAP_FAILED) munmap(far_guest, 4096);
     munmap(arena, arena_size);
+    if (scenario == 227 || scenario == 228)
+        return built && cap_exact && executed ? 0 : 200 + (!built ? 1 : 0) + (!cap_exact ? 2 : 0) + (!executed ? 4 : 0);
     return built && cap_exact && executed ? 0 : 100 + (int)(scenario - 71);
 }
 
@@ -9448,6 +9537,26 @@ static int translit_unsupported_report(char *out, size_t size) {
     if (site_added < 0 || (size_t)site_added >= size - (size_t)used) return -1;
     used += site_added;
     if ((size_t)used + 1u >= size) return -1;
+    out[used++] = '\n';
+    out[used] = '\0';
+    uint64_t sse_key[8] = {0}, sse_count[8] = {0};
+    uint64_t sse_keyed = 0, sse_overflow = 0, sse_unique = 0, sse_collisions = 0;
+    hl_backend_tree_sse_riprel_snapshot(sse_key, sse_count, &sse_keyed, &sse_overflow,
+                                        &sse_unique, &sse_collisions);
+    int added = snprintf(out + used, size - (size_t)used,
+                         "[diag] sse-riprel total=%llu keyed=%llu overflow=%llu forms=%llu collisions=%llu top=",
+                         (unsigned long long)(sse_keyed + sse_overflow), (unsigned long long)sse_keyed,
+                         (unsigned long long)sse_overflow,
+                         (unsigned long long)sse_unique, (unsigned long long)sse_collisions);
+    if (added < 0 || (size_t)added >= size - (size_t)used) return -1;
+    used += added;
+    for (unsigned rank = 0; rank < 8 && sse_count[rank] != 0; rank++) {
+        added = snprintf(out + used, size - (size_t)used, "%s%llx:%llu", rank == 0 ? "" : ",",
+                         (unsigned long long)sse_key[rank], (unsigned long long)sse_count[rank]);
+        if (added < 0 || (size_t)added >= size - (size_t)used) return -1;
+        used += added;
+    }
+    if ((size_t)used + 2u >= size) return -1;
     out[used++] = '\n';
     out[used] = '\0';
     return used;
