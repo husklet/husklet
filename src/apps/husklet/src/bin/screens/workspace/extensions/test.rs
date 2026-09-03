@@ -1553,6 +1553,16 @@ fn a_failed_registry_read_can_be_retried_without_duplicate_work() {
     assert!(action.is_sensitive());
     assert_eq!(action.label().as_deref(), Some("Retry"));
     assert!(page.notice().contains("temporarily unavailable"));
+    let notice = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::NOTICE))
+        .and_downcast::<gtk::Label>()
+        .expect("the registry failure remains visibly actionable");
+    assert_eq!(
+        notice.accessible_role(),
+        gtk::AccessibleRole::Status,
+        "registry failure and retry readiness must be announced without moving focus"
+    );
 
     page.inspect();
     assert!(!action.is_sensitive());

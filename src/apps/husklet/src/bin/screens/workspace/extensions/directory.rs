@@ -96,6 +96,11 @@ impl Catalogue {
             .build();
         viewport.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         let notice = text("", NOTICE);
+        // Validation, acquisition, cancellation, consent, and retry all report
+        // through this one changing line. Mark it as a live status so its new
+        // value is announced without pulling focus away from the active field
+        // or action.
+        notice.set_accessible_role(gtk::AccessibleRole::Status);
         let proposal = gtk::Box::new(gtk::Orientation::Vertical, 6);
         proposal.add_css_class(PROPOSAL);
         proposal.set_visible(false);
