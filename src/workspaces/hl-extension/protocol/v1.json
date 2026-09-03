@@ -135,6 +135,203 @@
     }
   ],
   "definitions": {
+    "Align": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Start",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Center",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "End",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Stretch",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Bounds": {
+      "fields": [
+        {
+          "name": "minimum",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "Length"
+            }
+          }
+        },
+        {
+          "name": "maximum",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "Length"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Cell": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Text",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "Number",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "float"
+            }
+          }
+        },
+        {
+          "name": "Bytes",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "Badge",
+          "payload": {
+            "fields": [
+              {
+                "name": "label",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "tone",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Tone"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Stamp",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "Empty",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Choice": {
+      "fields": [
+        {
+          "name": "value",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "label",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Column": {
+      "fields": [
+        {
+          "name": "key",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "width",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Length"
+          }
+        },
+        {
+          "name": "align",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Align"
+          }
+        },
+        {
+          "name": "sortable",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ContainerCreateSpec": {
       "fields": [
         {
@@ -494,6 +691,44 @@
         }
       ]
     },
+    "Edges": {
+      "fields": [
+        {
+          "name": "top",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Length"
+          }
+        },
+        {
+          "name": "end",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Length"
+          }
+        },
+        {
+          "name": "bottom",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Length"
+          }
+        },
+        {
+          "name": "start",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Length"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "Entry": {
       "fields": [
         {
@@ -532,6 +767,13 @@
         }
       ],
       "kind": "struct",
+      "serde": {}
+    },
+    "EventId": {
+      "kind": "newtype",
+      "of": {
+        "kind": "string"
+      },
       "serde": {}
     },
     "ExecutionList": {
@@ -614,6 +856,44 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionAcquisitionChange": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "coalesced",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
           }
         }
       ],
@@ -916,9 +1196,30 @@
       "serde": {}
     },
     "Frame": {
-      "kind": "external_ref",
-      "name": "Frame",
-      "package": "hl-gui"
+      "fields": [
+        {
+          "name": "sequence",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "patches",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Patch"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "Grant": {
       "kind": "ref",
@@ -942,6 +1243,28 @@
             "bits": 16,
             "kind": "integer",
             "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Handler": {
+      "fields": [
+        {
+          "name": "trigger",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Trigger"
+          }
+        },
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "EventId"
           }
         }
       ],
@@ -1048,6 +1371,44 @@
         },
         {
           "name": "space_reclaimed",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ImagePullChange": {
+      "fields": [
+        {
+          "name": "job",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "state",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "coalesced",
           "optional": false,
           "schema": {
             "bits": 64,
@@ -1372,6 +1733,46 @@
         }
       ]
     },
+    "Length": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Step",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "Chars",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 16,
+              "kind": "integer",
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "Fill",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Content",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
     "NetworkSummary": {
       "fields": [
         {
@@ -1406,6 +1807,15 @@
       "kind": "struct",
       "serde": {}
     },
+    "NodeId": {
+      "kind": "newtype",
+      "of": {
+        "bits": 64,
+        "kind": "integer",
+        "signed": false
+      },
+      "serde": {}
+    },
     "Occupant": {
       "kind": "enum",
       "serde": {
@@ -1420,6 +1830,98 @@
         },
         {
           "name": "surface",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Orientation": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Horizontal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Vertical",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "PaneChange": {
+      "fields": [
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "kind",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "PaneChangeKind"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "coalesced",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "PaneChangeKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "surface",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "native",
           "payload": {
             "kind": "unit"
           }
@@ -1799,8 +2301,284 @@
       "kind": "struct",
       "serde": {}
     },
+    "Patch": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Create",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "tag",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Tag"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Insert",
+          "payload": {
+            "fields": [
+              {
+                "name": "parent",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "child",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "before",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "NodeId"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Move",
+          "payload": {
+            "fields": [
+              {
+                "name": "parent",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "child",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "before",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "NodeId"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "SetProp",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "prop",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Prop"
+                }
+              },
+              {
+                "name": "value",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PropValue"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "ClearProp",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "prop",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Prop"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "SetHandler",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "handler",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Handler"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "ClearHandler",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              },
+              {
+                "name": "trigger",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Trigger"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NodeId"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
     "PeerName": {
       "kind": "string"
+    },
+    "PointerPhase": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "move",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "enter",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "leave",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "press",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "release",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "click",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "context",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "scroll",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
     },
     "ProcessList": {
       "fields": [
@@ -1904,8 +2682,587 @@
         }
       ]
     },
+    "Prop": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Label",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Detail",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Value",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Placeholder",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Help",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Icon",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Tooltip",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Uri",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Enabled",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Visible",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Selected",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Checked",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Expanded",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Busy",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Secret",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Destructive",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Monospace",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Wrap",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Ellipsize",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Variant",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Tone",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Scale",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Color",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Gap",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Pad",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Grow",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Width",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Height",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Align",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Justify",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Columns",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Span",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "RowSpan",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Orientation",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Position",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Minimum",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Maximum",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Step",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Fraction",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Schema",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Source",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "RowHeight",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Choices",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "PropValue": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Text",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "Number",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "float"
+            }
+          }
+        },
+        {
+          "name": "Integer",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "Flag",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "boolean"
+            }
+          }
+        },
+        {
+          "name": "Token",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Token"
+            }
+          }
+        },
+        {
+          "name": "Length",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Length"
+            }
+          }
+        },
+        {
+          "name": "Edges",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Edges"
+            }
+          }
+        },
+        {
+          "name": "Bounds",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Bounds"
+            }
+          }
+        },
+        {
+          "name": "Variant",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Variant"
+            }
+          }
+        },
+        {
+          "name": "Tone",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Tone"
+            }
+          }
+        },
+        {
+          "name": "Scale",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Scale"
+            }
+          }
+        },
+        {
+          "name": "Align",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Align"
+            }
+          }
+        },
+        {
+          "name": "Orientation",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Orientation"
+            }
+          }
+        },
+        {
+          "name": "Choices",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "Choice"
+              }
+            }
+          }
+        },
+        {
+          "name": "Schema",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "Column"
+              }
+            }
+          }
+        },
+        {
+          "name": "Source",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "SourceId"
+            }
+          }
+        },
+        {
+          "name": "Nothing",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
     "RelativePath": {
       "kind": "string"
+    },
+    "RequestId": {
+      "kind": "newtype",
+      "of": {
+        "bits": 64,
+        "kind": "integer",
+        "signed": false
+      },
+      "serde": {}
+    },
+    "Row": {
+      "fields": [
+        {
+          "name": "key",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "cells",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Cell"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "RowRange": {
+      "fields": [
+        {
+          "name": "start",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "count",
+          "optional": false,
+          "schema": {
+            "bits": 32,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "RowWindow": {
+      "fields": [
+        {
+          "name": "source",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "SourceId"
+          }
+        },
+        {
+          "name": "version",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Version"
+          }
+        },
+        {
+          "name": "request",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RequestId"
+          }
+        },
+        {
+          "name": "range",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RowRange"
+          }
+        },
+        {
+          "name": "rows",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Row"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "Scale": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Caption",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Body",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Title",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Display",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
     },
     "SemanticActionKind": {
       "kind": "enum",
@@ -2029,10 +3386,141 @@
       "kind": "struct",
       "serde": {}
     },
+    "SourceId": {
+      "kind": "newtype",
+      "of": {
+        "bits": 64,
+        "kind": "integer",
+        "signed": false
+      },
+      "serde": {}
+    },
     "SourceMutation": {
-      "kind": "external_ref",
-      "name": "SourceMutation",
-      "package": "hl-gui"
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Open",
+          "payload": {
+            "fields": [
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceId"
+                }
+              },
+              {
+                "name": "columns",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "Column"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Length",
+          "payload": {
+            "fields": [
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceId"
+                }
+              },
+              {
+                "name": "version",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Version"
+                }
+              },
+              {
+                "name": "rows",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Window",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "RowWindow"
+            }
+          }
+        },
+        {
+          "name": "Invalidate",
+          "payload": {
+            "fields": [
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceId"
+                }
+              },
+              {
+                "name": "version",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Version"
+                }
+              },
+              {
+                "name": "range",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "RowRange"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Close",
+          "payload": {
+            "fields": [
+              {
+                "name": "source",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "SourceId"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "TabSummary": {
       "fields": [
@@ -2093,6 +3581,996 @@
       "kind": "struct",
       "serde": {}
     },
+    "Tag": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Column",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Row",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Grid",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Scroll",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Splitter",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Stack",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Overlay",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Container",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Spacer",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Separator",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Card",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CardHeader",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CardContent",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CardActions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CardMedia",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CardActionArea",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Paper",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Section",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Toolbar",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "HeaderBar",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Sidebar",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Text",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Heading",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Code",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Link",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Icon",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Badge",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Avatar",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "AvatarGroup",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Chip",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Image",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ImageList",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ImageListItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Progress",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Spinner",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Meter",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Skeleton",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "EmptyState",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Stat",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Toast",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Banner",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "AlertTitle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "InlineMessage",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ValidationSummary",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Button",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "IconButton",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ToggleButton",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ButtonGroup",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ToggleButtonGroup",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "SplitButton",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Fab",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "SpeedDial",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "SpeedDialAction",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Overflow",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Entry",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Search",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CommandPalette",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TagInput",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NumberEntry",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TextArea",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "PasswordEntry",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Autocomplete",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TextField",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "InputAdornment",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Slider",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DatePicker",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TimePicker",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ColorPicker",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FilePicker",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Rating",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FormControl",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FormLabel",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FormHelperText",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FormControlLabel",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FormGroup",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Switch",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Checkbox",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Radio",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "RadioGroup",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Select",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "List",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListRow",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemText",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemIcon",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemAvatar",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemButton",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemAction",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListItemSecondaryAction",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ListSubheader",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Table",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableHead",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableBody",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableFooter",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableRow",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableCell",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TableSortLabel",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DataTable",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "KeyValueTable",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TreeTable",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "EventStream",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FileBrowser",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TablePagination",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Tree",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TreeItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Tabs",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TabPage",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Breadcrumb",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Pagination",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "PaginationItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Stepper",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Step",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StepLabel",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StepContent",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StepConnector",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StepIcon",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NavigationRail",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NavigationRailItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "BottomNavigation",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "BottomNavigationAction",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Accordion",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "AccordionSummary",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "AccordionDetails",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "AccordionActions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Expander",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Dialog",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DialogTitle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DialogContent",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DialogContentText",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DialogActions",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Popover",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "ContextMenu",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Menu",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "MenuItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Drawer",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DrawerPanel",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CodeView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "HexView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "MarkdownView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "JsonView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "LogView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Video",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Chart",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Sparkline",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "FlameGraph",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "MemoryMap",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DisassemblyView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TimelineView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TestReportView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "CoverageView",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NetworkWaterfall",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NetworkRequest",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NetworkPhase",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DependencyGraph",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DependencyNode",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DependencyEdge",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DependencyCycle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DependencyCycleMember",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "QueryPlan",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "QueryPlanNode",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "QueryPlanMetric",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DiffViewer",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "DiffLine",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StackTrace",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "StackFrame",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
     "TerminalTopology": {
       "fields": [
         {
@@ -2119,6 +4597,120 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "Token": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Ground",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Surface",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Raised",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Line",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Text",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TextDim",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "TextFaint",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Accent",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Positive",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Warning",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Danger",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Info",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Tone": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Neutral",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Accent",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Positive",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Warning",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Danger",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
     },
     "Topic": {
       "kind": "enum",
@@ -2199,6 +4791,141 @@
           }
         }
       ]
+    },
+    "Trigger": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Invoke",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Change",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Submit",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Select",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Activate",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Toggle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Expand",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Scroll",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Close",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Context",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Key",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Focus",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Pointer",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Drag",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Drop",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Variant": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Plain",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Filled",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Outline",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Ghost",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "Version": {
+      "kind": "newtype",
+      "of": {
+        "bits": 64,
+        "kind": "integer",
+        "signed": false
+      },
+      "serde": {}
     },
     "VolumeSummary": {
       "fields": [
@@ -2378,6 +5105,224 @@
       "kind": "struct",
       "serde": {}
     },
+    "WorkspaceEvent": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case",
+        "tag": "event"
+      },
+      "variants": [
+        {
+          "name": "key",
+          "payload": {
+            "fields": [
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "modifiers",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "pressed",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "generation",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 64,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "focus",
+          "payload": {
+            "fields": [
+              {
+                "name": "active",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "generation",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 64,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "pointer",
+          "payload": {
+            "fields": [
+              {
+                "name": "phase",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PointerPhase"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "signed": false
+                }
+              },
+              {
+                "name": "x",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              },
+              {
+                "name": "y",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "float"
+                }
+              },
+              {
+                "name": "button",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 32,
+                    "kind": "integer",
+                    "signed": false
+                  }
+                }
+              },
+              {
+                "name": "modifiers",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "delta_x",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 64,
+                    "kind": "float"
+                  }
+                }
+              },
+              {
+                "name": "delta_y",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "bits": 64,
+                    "kind": "float"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
+    "WorkspaceEventBatch": {
+      "fields": [
+        {
+          "name": "events",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEvent"
+            }
+          }
+        },
+        {
+          "name": "dropped",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "WorkspaceInfo": {
       "fields": [
         {
@@ -2399,6 +5344,89 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceLifecycleAction": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "update",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "start",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "stop",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "restart",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "WorkspaceLifecycleChange": {
+      "fields": [
+        {
+          "name": "workspace",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "action",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "WorkspaceLifecycleAction"
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
+          }
+        },
+        {
+          "name": "coalesced",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "signed": false
           }
         }
       ],
@@ -2705,556 +5733,358 @@
         {
           "name": "workspace",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "WorkspaceInfo"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceInfo"
+            }
           }
         },
         {
           "name": "workspace_configuration",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "WorkspaceConfiguration"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceConfiguration"
+            }
           }
         },
         {
           "name": "workspaces",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "WorkspaceState"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "WorkspaceState"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "extensions",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "ExtensionSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ExtensionSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "extension",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ExtensionSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionSummary"
+            }
           }
         },
         {
           "name": "extension_acquisition_job",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ExtensionAcquisitionJob"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionAcquisitionJob"
+            }
           }
         },
         {
           "name": "extension_acquisition",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ExtensionAcquisitionStatus"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionAcquisitionStatus"
+            }
           }
         },
         {
           "name": "containers",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "ContainerSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ContainerSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "container",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ContainerSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerSummary"
+            }
           }
         },
         {
           "name": "processes",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ProcessList"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ProcessList"
+            }
           }
         },
         {
           "name": "logs",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ContainerOutput"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerOutput"
+            }
           }
         },
         {
           "name": "execution",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ExecutionSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionSummary"
+            }
           }
         },
         {
           "name": "executions",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ExecutionList"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionList"
+            }
           }
         },
         {
           "name": "images",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "ImageSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ImageSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "image",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ImageSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSummary"
+            }
           }
         },
         {
           "name": "image_pull_job",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ImagePullJob"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImagePullJob"
+            }
           }
         },
         {
           "name": "image_pull",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ImagePullStatus"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImagePullStatus"
+            }
           }
         },
         {
           "name": "image_details",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ImageDetails"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImageDetails"
+            }
           }
         },
         {
           "name": "image_prune",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "ImagePruneResult"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImagePruneResult"
+            }
           }
         },
         {
           "name": "volumes",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "VolumeSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "VolumeSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "volume",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "VolumeSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "VolumeSummary"
+            }
           }
         },
         {
           "name": "networks",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "NetworkSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "NetworkSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "network",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "NetworkSummary"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "NetworkSummary"
+            }
           }
         },
         {
           "name": "tabs",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "TabSummary"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "TabSummary"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "topology",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "TerminalTopology"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "TerminalTopology"
+            }
           }
         },
         {
           "name": "panes",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "PaneInventory"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "PaneInventory"
+            }
           }
         },
         {
           "name": "text",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "PaneText"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "PaneText"
+            }
           }
         },
         {
           "name": "semantics",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "PaneSemanticTree"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "PaneSemanticTree"
+            }
           }
         },
         {
           "name": "entries",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "kind": "ref",
-                    "name": "Entry"
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "Entry"
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "entry",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "Entry"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
           }
         },
         {
           "name": "contents",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "array",
-                  "of": {
-                    "bits": 8,
-                    "kind": "integer",
-                    "signed": false
-                  }
-                }
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "bits": 8,
+                "kind": "integer",
+                "signed": false
               }
-            ],
-            "kind": "tuple"
+            }
           }
         },
         {
           "name": "file_range",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "FileRange"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "FileRange"
+            }
           }
         },
         {
           "name": "identity",
           "payload": {
-            "fields": [
-              {
-                "name": "0",
-                "optional": false,
-                "schema": {
-                  "kind": "string"
-                }
-              }
-            ],
-            "kind": "tuple"
+            "kind": "newtype",
+            "of": {
+              "kind": "string"
+            }
           }
         },
         {
@@ -5372,56 +8202,216 @@
           }
         }
       ]
+    },
+    "snapshot": {
+      "kind": "enum",
+      "serde": {
+        "content": "of",
+        "rename_all": "snake_case",
+        "tag": "snapshot"
+      },
+      "variants": [
+        {
+          "name": "containers",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ContainerSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "executions",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionList"
+            }
+          }
+        },
+        {
+          "name": "images",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ImageSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "image_pulls",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ImagePullChange"
+            }
+          }
+        },
+        {
+          "name": "volumes",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "VolumeSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "networks",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "NetworkSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "terminal",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "TabSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "pane_changes",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "PaneChange"
+            }
+          }
+        },
+        {
+          "name": "extensions",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "ExtensionSummary"
+              }
+            }
+          }
+        },
+        {
+          "name": "extension_acquisitions",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionAcquisitionChange"
+            }
+          }
+        },
+        {
+          "name": "workspace_lifecycle",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceLifecycleChange"
+            }
+          }
+        },
+        {
+          "name": "workspace_events",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEventBatch"
+            }
+          }
+        }
+      ]
     }
   },
   "specification_version": 1,
   "topics": [
     {
       "capability": "container-read",
+      "snapshot": "containers",
       "wire": "containers"
     },
     {
       "capability": "container-read",
+      "snapshot": "executions",
       "wire": "executions"
     },
     {
       "capability": "image-read",
+      "snapshot": "images",
       "wire": "images"
     },
     {
       "capability": "image-write",
+      "snapshot": "image_pulls",
       "wire": "image-pulls"
     },
     {
       "capability": "volume-read",
+      "snapshot": "volumes",
       "wire": "volumes"
     },
     {
       "capability": "network-read",
+      "snapshot": "networks",
       "wire": "networks"
     },
     {
       "capability": "terminal-read",
+      "snapshot": "terminal",
       "wire": "terminal"
     },
     {
       "capability": "pane-observe",
+      "snapshot": "pane_changes",
       "wire": "pane-changes"
     },
     {
       "capability": "extension-read",
+      "snapshot": "extensions",
       "wire": "extensions"
     },
     {
       "capability": "extension-install",
+      "snapshot": "extension_acquisitions",
       "wire": "extension-acquisitions"
     },
     {
       "capability": "workspace-read",
+      "snapshot": "workspace_lifecycle",
       "wire": "workspace-lifecycle"
     },
     {
       "capability": "workspace-events",
+      "snapshot": "workspace_events",
       "wire": "workspace-events"
     }
   ]

@@ -14,9 +14,10 @@ optionals, sequences, maps, tuples and exact integer widths. Requests and
 replies retain their actual adjacent JSON tags (`call`/`reply`) and content key
 (`with`) in each root's `serde` object.
 
-The only definitions whose `kind` is `external_ref` identify both the owning
-Rust package and type. A generator must resolve those names from that package's
-versioned schema and fail closed when it cannot; it must not guess their shape.
+The graph is closed: `Frame`, `SourceMutation`, and all of their `hl-gui` wire
+types are included in `definitions`, and no `external_ref` is permitted. Rust
+newtype structs and one-field enum variants use `kind: "newtype"` with their
+wire value in `of`; they are not JSON objects or one-element arrays.
 Capabilities and topics carry exact wire spellings, and topic entries include
 their required capability. Framing integer endianness, channel parity, kind
 codes, flags, and hard payload limit are normative.
