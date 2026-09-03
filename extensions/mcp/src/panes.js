@@ -7,8 +7,15 @@ const DEPTH_LIMIT = 32;
 const TEXT_LIMIT = 256;
 const SECRET = /(password|secret|token|credential|private.?key)/i;
 const bytes = (text) => new TextEncoder().encode(text).byteLength;
-const escape = (value) => String(value)
-  .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/g, '\uFFFD')
+const boundedText = (value, limit = TEXT_LIMIT) => {
+  const characters = Array.from(String(value));
+  return { value: characters.slice(0, limit).join(''), truncated: characters.length > limit };
+};
+const escape = (value) => Array.from(String(value), (character) => {
+  const point = character.codePointAt(0);
+  return point <= 0x1f && point !== 0x09 && point !== 0x0a && point !== 0x0d
+    || (point >= 0x7f && point <= 0x9f) || (point >= 0xd800 && point <= 0xdfff) ? '\uFFFD' : character;
+}).join('')
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&apos;')
   .replaceAll('\t', '&#x9;').replaceAll('\n', '&#xA;').replaceAll('\r', '&#xD;');
@@ -28,18 +35,20 @@ export function semanticXml(tree) {
     if (used + size + reserve > XML_LIMIT) { cut = true; return false; }
     output += text; used += size; return true;
   };
-  const attr = (value) => escape(String(value).slice(0, TEXT_LIMIT));
-const text = (value) => escape(String(value).slice(0, TEXT_LIMIT));
+  const attr = (value) => escape(boundedText(value).value);
   const node = (entry, depth, reserve) => {
     if (!entry || typeof entry !== 'object' || nodes >= NODE_LIMIT || depth >= DEPTH_LIMIT) { cut = true; return; }
     nodes += 1;
-    const actions = Array.isArray(entry.actions) ? entry.actions.slice(0, 16).map(attr).join(',') : '';
+    const actionValues = Array.isArray(entry.actions) ? entry.actions : [];
+    const actions = actionValues.slice(0, 16).map(attr).join(',');
+    const id = boundedText(entry.id ?? ''); const role = boundedText(entry.role ?? '');
     const close = '</node>';
-    if (!append(`<node id="${attr(entry.id ?? '')}" role="${attr(entry.role ?? '')}" disabled="${entry.disabled === true}" destructive="${entry.destructive === true}" actions="${actions}">`, reserve + bytes(close) + 14)) return;
-    if (entry.label != null) append(`<label>${text(entry.label)}</label>`, reserve + bytes(close) + 14);
+    if (!append(`<node id="${escape(id.value)}"${id.truncated ? ' id-truncated="true"' : ''} role="${escape(role.value)}"${role.truncated ? ' role-truncated="true"' : ''} disabled="${entry.disabled === true}" destructive="${entry.destructive === true}" actions="${actions}"${actionValues.length > 16 ? ' actions-truncated="true"' : ''}>`, reserve + bytes(close) + 14)) return;
+    if (entry.label != null) { const label = boundedText(entry.label); append(`<label${label.truncated ? ' truncated="true"' : ''}>${escape(label.value)}</label>`, reserve + bytes(close) + 14); }
     if (entry.value != null) {
       const value = SECRET.test(`${entry.role ?? ''} ${entry.label ?? ''}`) ? '[redacted]' : entry.value;
-      append(`<value>${text(value)}</value>`, reserve + bytes(close) + 14);
+      const field = boundedText(value);
+      append(`<value${field.truncated ? ' truncated="true"' : ''}>${escape(field.value)}</value>`, reserve + bytes(close) + 14);
     }
     for (const child of Array.isArray(entry.children) ? entry.children : []) {
       if (cut) break;
@@ -105,7 +114,8 @@ export async function paneXml(terminal, slot, lines = 200) {
   append(`<terminal tab="${escape(leaf.tab?.id ?? '')}" title="${escape(String(leaf.tab?.title ?? '').slice(0, TEXT_LIMIT))}" active="${active}" focused="${leaf.focused === true}" columns="${escape(leaf.grid?.columns ?? '')}" rows="${escape(leaf.grid?.rows ?? '')}" cursor-column="${escape(screen?.cursor_column ?? '')}" cursor-row="${escape(screen?.cursor_row ?? '')}" cwd="${metadata(leaf.pane.working_directory)}" command="${metadata(leaf.pane.command)}" truncated="${screen?.truncated === true}">`, bytes('</terminal>') + bytes(close));
   let index = 0;
   for (const line of Array.isArray(screen?.lines) ? screen.lines.slice(0, 500) : []) {
-    if (!append(`<line index="${index}">${escape(String(line).slice(0, 4096))}</line>`, bytes('</terminal>') + bytes(close) + 14)) break;
+    const field = boundedText(line, 4096);
+    if (!append(`<line index="${index}"${field.truncated ? ' truncated="true"' : ''}>${escape(field.value)}</line>`, bytes('</terminal>') + bytes(close) + 14)) break;
     index += 1;
   }
   if (cut || (screen?.lines?.length ?? 0) > 500) append('<truncated/>', bytes('</terminal>') + bytes(close));

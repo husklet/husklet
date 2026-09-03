@@ -917,6 +917,22 @@ test('semantic XML escapes every XML metacharacter and remains structurally boun
   assert.match(waterfall, /role="NetworkWaterfall"/); assert.match(waterfall, /a=&amp;b=&lt;/); assert.match(waterfall, /detail=&quot;ok&quot;/); assert.equal((waterfall.match(/<node /g) ?? []).length, 3);
 });
 
+test('semantic and terminal XML identify every field-local clipping boundary', async () => {
+  const long = '🧪'.repeat(257);
+  const xml = semanticXml({ slot: 's', generation: 1, revision: 1, truncated: false, root: {
+    id: long, role: long, label: long, value: long, disabled: false, destructive: false,
+    actions: Array.from({ length: 17 }, (_, index) => `action-${index}`), children: [],
+  } });
+  assert.match(xml, /id-truncated="true"/); assert.match(xml, /role-truncated="true"/);
+  assert.match(xml, /actions-truncated="true"/); assert.match(xml, /<label truncated="true">/);
+  assert.match(xml, /<value truncated="true">/); assert(!xml.includes('\uFFFD'));
+  const terminal = { panes: async () => ({ panes: [{ slot: 't', kind: 'terminal', generation: 1, revision: 1 }] }),
+    topology: async () => ({ active_tab: 'tab', tabs: [{ id: 'tab', title: 'T', root: { kind: 'pane', pane: { slot: 't' }, grid: null, focused: false } }] }),
+    read: async () => ({ lines: ['🧪'.repeat(4097)], truncated: false }) };
+  const pane = await paneXml(terminal, 't');
+  assert.match(pane, /<line index="0" truncated="true">/); assert(!pane.includes('\uFFFD'));
+});
+
 test('a real MCP client lists strict tools and calls through the React session contract', async () => {
   const calls = [];
   const events = new Set();
