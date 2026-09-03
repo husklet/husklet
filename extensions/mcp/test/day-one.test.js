@@ -76,6 +76,11 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
               { id: containerId, name: 'day-one', image: 'alpine:3.21', state: 'exited', created: 41 },
             ] } })));
           });
+          if (call === 'event_subscribe' && argument.topic === 'executions') setImmediate(() => {
+            const summary = { id: 'execution-day-one', container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' };
+            socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [summary], truncated: false } } }));
+            setImmediate(() => socket.write(encode({ channel: eventChannel++, kind: KIND.event, payload: { snapshot: 'executions', of: { executions: [{ ...summary, running: false, exit_code: 0, pid: 0 }], truncated: false } } })));
+          });
           if (call === 'event_subscribe' && argument.topic === 'pane-changes') setImmediate(() => {
             changed('terminal-1', 'terminal', 1, 0);
             changed('surface-1', 'surface', 7, 7);
@@ -83,6 +88,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
           if (call === 'terminal_write_pane') changed('terminal-1', 'terminal', 2);
           if (call === 'pane_semantic_action') changed('surface-1', 'surface', 8, 0);
         } else if (call === 'container_exec') answer(frame, 'identity', 'execution-day-one');
+        else if (call === 'execution_inspect') answer(frame, 'execution', { id: argument.id, container_id: containerId, running: true, exit_code: 0, pid: 17, command: ['/usr/bin/worker', '--once'], user: 'app' });
         else if (call === 'container_processes') answer(frame, 'processes', [{ pid: 7, command: 'worker', user: 'app' }]);
         else if (call === 'pane_list') answer(frame, 'panes', { panes: [
           { slot: 'terminal-1', generation: 1, revision: 0, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true },
@@ -131,6 +137,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(result.container.imagePull.state, 'complete');
   assert.deepEqual(result.container.created, { id: containerId });
   assert.equal(result.container.execution.id, 'execution-day-one');
+  assert.equal(result.container.executionChanged.execution.running, false);
   assert.equal(result.terminal.changed.changed, true);
   assert.equal(result.terminal.changed.change.generation, 2);
   assert.equal(result.terminal.changed.change.revision, 2);
@@ -145,7 +152,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
     'workspace_update', 'container_create', 'container_start',
-    'container_exec', 'container_processes', 'pane_list', 'pane_list', 'terminal_topology', 'terminal_read_pane',
+    'container_exec', 'execution_inspect', 'event_subscribe', 'event_unsubscribe', 'container_processes', 'pane_list', 'pane_list', 'terminal_topology', 'terminal_read_pane',
     'event_subscribe', 'terminal_write_pane', 'event_unsubscribe', 'pane_semantic_read',
     'event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'event_unsubscribe',
     'pane_semantic_read', 'container_stop', 'container_remove', 'workspace_update',

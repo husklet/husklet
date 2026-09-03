@@ -67,6 +67,19 @@ export async function runAgentDayOne(client, {
     });
     await call(client, 'husklet_container_start', { id: container.id });
     const execution = await json(client, 'husklet_container_exec', { id: container.id, command });
+    const executionBefore = await json(client, 'husklet_container_execution', { id: execution.id });
+    const executionChanged = await json(client, 'husklet_execution_change_wait', {
+      id: execution.id,
+      after: {
+        container_id: executionBefore.container_id,
+        running: executionBefore.running,
+        exit_code: executionBefore.exit_code,
+        pid: executionBefore.pid,
+        command: executionBefore.command,
+        user: executionBefore.user,
+      },
+      timeout_ms: waitMs,
+    });
     const processes = await json(client, 'husklet_container_processes', { id: container.id });
 
     const inventory = await json(client, 'husklet_pane_list');
@@ -98,7 +111,7 @@ export async function runAgentDayOne(client, {
       ? await call(client, 'husklet_pane_snapshot', { slot: semantic.slot }) : null;
     return {
       workspace: { before: original, applied: updatedConfiguration },
-      container: { imagePull, created: container, execution, processes },
+      container: { imagePull, created: container, execution, executionBefore, executionChanged, processes },
       terminal: { slot: terminal.slot, before: terminalBefore, changed: terminalChanged },
       semantic: { slot: semantic.slot, revision, node, before: semanticBefore, changed: semanticChanged, after: semanticAfter },
     };

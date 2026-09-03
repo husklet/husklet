@@ -119,6 +119,12 @@ last observed for its immutable container ID. Supplying that cursor prevents the
 subscription's unchanged initial catalogue from completing the wait; a state
 transition, disappearance, or changed creation identity completes it.
 
+`husklet_execution_change_wait` accepts the complete state and immutable
+descriptor returned by execution inspect/catalogue as `after`. It ignores the
+subscription's unchanged initial catalogue, reports state transitions, and
+returns `replaced: true` if a host ever reuses an execution ID with a different
+container, command, or user. The day-one workflow supplies this cursor.
+
 Administrative clients should use `husklet_workspace_mutate_wait` for workspace
 create/start/stop/delete workflows. It waits for the host subscription
 acknowledgement before invoking control authority, ignores unrelated changes,

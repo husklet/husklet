@@ -75,6 +75,14 @@ const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, 
   const bytes = argv.reduce((total, argument) => total + utf8Bytes(argument), 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
+const executionCursor = z.object({
+  container_id: containerIdentity,
+  running: z.boolean(),
+  exit_code: z.number().int().safe(),
+  pid: z.number().int().safe(),
+  command,
+  user: containerUser,
+}).strict();
 const optionalCommand = z.array(z.string().max(4096)).max(64);
 const containerCreate = z.object({
   image: imageReference,
@@ -323,9 +331,9 @@ export function tools(api) {
   ));
   if (typeof api.watchExecutions === 'function') definitions.push(define(
     'husklet_execution_change_wait',
-    'Wait for a bounded execution catalogue change matching one immutable exec identity.',
-    z.object({ id, running: z.boolean().optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
-    ({ id: wanted, running, timeout_ms: timeout }) => new Promise((resolve, reject) => {
+    'Wait for a bounded execution catalogue change newer than an optional exact observed cursor.',
+    z.object({ id, after: executionCursor.optional(), running: z.boolean().optional(), timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(),
+    ({ id: wanted, after, running, timeout_ms: timeout }) => new Promise((resolve, reject) => {
       let stop; let settled = false;
       const finish = (value, error) => {
         if (settled) return; settled = true; clearTimeout(timer);
@@ -334,8 +342,14 @@ export function tools(api) {
       const timer = setTimeout(() => finish({ changed: false }), timeout);
       api.watchExecutions((catalogue) => {
         const execution = catalogue.executions.find(({ id: candidate }) => candidate === wanted);
-        if (execution && (running == null || execution.running === running)) {
-          finish({ changed: true, execution, truncated: catalogue.truncated });
+        if (!execution) return;
+        const replaced = after != null && (execution.container_id !== after.container_id
+          || execution.user !== after.user
+          || JSON.stringify(execution.command) !== JSON.stringify(after.command));
+        const unchanged = after != null && !replaced && execution.running === after.running
+          && execution.exit_code === after.exit_code && execution.pid === after.pid;
+        if (replaced || (!unchanged && (running == null || execution.running === running))) {
+          finish({ changed: true, ...(after == null ? {} : { replaced }), execution, truncated: catalogue.truncated });
         }
       }).then((dispose) => { stop = dispose; if (settled) void dispose(); }, (error) => finish(undefined, error));
     }),

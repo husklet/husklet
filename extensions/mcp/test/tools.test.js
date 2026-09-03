@@ -713,20 +713,39 @@ test('workspace composite mutation disposes on authority failure and observation
   assert.equal(disposed, 2);
 });
 
-test('execution change wait filters immutable identity and returns subscription credit', async () => {
+test('execution change wait ignores its unchanged initial cursor and returns subscription credit', async () => {
   const { api } = fake();
   let listener; let disposed = 0;
   api.watchExecutions = async (next) => { listener = next; return async () => { disposed += 1; }; };
   const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
-  const pending = wait.run({ id: 'e2', running: false, timeout_ms: 1000 });
+  const after = { container_id: 'a'.repeat(64), running: true, exit_code: 0, pid: 17, command: ['/bin/job'], user: 'app' };
+  assert.equal(wait.inputSchema.safeParse({ id: 'e2', after: { ...after, pid: 1.5 } }).success, false);
+  const pending = wait.run({ id: 'e2', after, running: false, timeout_ms: 1000 });
   await new Promise((resolve) => setImmediate(resolve));
-  listener({ executions: [{ id: 'e1', running: false }], truncated: false });
-  listener({ executions: [{ id: 'e2', running: true }], truncated: false });
-  listener({ executions: [{ id: 'e2', running: false, exit_code: 9 }], truncated: true });
+  listener({ executions: [{ id: 'e1', ...after }, { id: 'e2', ...after }], truncated: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, 0, 'the unchanged initial catalogue must not settle the wait');
+  listener({ executions: [{ id: 'e2', ...after, running: false, exit_code: 9, pid: 0 }], truncated: true });
   assert.deepEqual(JSON.parse((await pending).content[0].text), {
-    changed: true, execution: { id: 'e2', running: false, exit_code: 9 }, truncated: true,
+    changed: true, replaced: false, execution: { id: 'e2', ...after, running: false, exit_code: 9, pid: 0 }, truncated: true,
   });
   assert.equal(disposed, 1);
+});
+
+test('execution waits detect impossible same-id replacement and dispose concurrent cursors independently', async () => {
+  const { api } = fake(); const listeners = new Set(); let disposed = 0;
+  api.watchExecutions = async (next) => { listeners.add(next); return async () => { if (listeners.delete(next)) disposed += 1; }; };
+  const wait = tools(api).find(({ name }) => name === 'husklet_execution_change_wait');
+  const after = { container_id: 'a'.repeat(64), running: true, exit_code: 0, pid: 17, command: ['/bin/job'], user: 'app' };
+  const replacement = wait.run({ id: 'e2', after, running: false, timeout_ms: 1000 });
+  const transition = wait.run({ id: 'e2', after: { ...after, container_id: 'b'.repeat(64) }, running: false, timeout_ms: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const listener of [...listeners]) listener({ executions: [{ id: 'e2', ...after, container_id: 'b'.repeat(64) }], truncated: false });
+  assert.equal(JSON.parse((await replacement).content[0].text).replaced, true);
+  assert.equal(disposed, 1);
+  for (const listener of [...listeners]) listener({ executions: [{ id: 'e2', ...after, container_id: 'b'.repeat(64), running: false, pid: 0 }], truncated: false });
+  assert.equal(JSON.parse((await transition).content[0].text).replaced, false);
+  assert.equal(disposed, 2);
 });
 
 test('container change wait rejects its unchanged initial cursor and disposes after a transition', async () => {
