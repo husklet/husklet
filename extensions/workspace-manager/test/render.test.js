@@ -408,6 +408,18 @@ test('container creation retains exact identity and retries only start after a p
   ], 'retry never creates a duplicate container');
 });
 
+test('container removal authority is available only for a stopped inventory record', () => {
+  const id = 'c'.repeat(32);
+  const api = { containers: {} };
+  const stage = host();
+  const inventory = (state) => ({ data: [{ id, name: 'worker', image: 'alpine', state }], loading: false, error: null, reload: async () => {} });
+  stage.render(h(Containers, { api, resource: inventory('running') }));
+  assert.equal(isEnabled(stage, 'Remove'), false, 'a running container cannot be removed');
+
+  stage.render(h(Containers, { api, resource: inventory('stopped') }));
+  assert.equal(isEnabled(stage, 'Remove'), true, 'the authoritative stopped state enables removal consent');
+});
+
 test('container execution preserves argv and exposes the exact inspectable identity', async () => {
   const calls = [];
   const controlled = { containers: {

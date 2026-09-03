@@ -137,6 +137,8 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
   const [creationNotice, setCreationNotice] = useState('');
+  const currentContainers = useRef(new Map());
+  currentContainers.current = new Map((resource.data ?? []).map((container) => [container.id, container.state]));
   const act = async (verb, id, ...args) => {
     setBusy(`${verb}:${id}`);
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
@@ -184,6 +186,20 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
   };
+  const remove = async (item) => {
+    if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
+      throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
+    }
+    setBusy(`remove:${item.id}`);
+    try {
+      await api.containers.remove(item.id);
+      inspectionRevision.current += 1;
+      setSelected(null);
+      setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+      await detailsSource.replace(null);
+      await resource.reload();
+    } finally { setBusy(''); }
+  };
   const view = bounded(resource.data);
   const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return h(Page, { title: 'Containers', subtitle: 'Lifecycle, process inspection, logs, and execution.' },
@@ -214,7 +230,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(ContainerRename, { api, container: item, reload: resource.reload, blocked: busy !== '' })),
       h(CardActions, { gap: 1 },
         h(Button, { label: selected === item.id ? 'Hide details' : 'Details', onInvoke: () => toggleDetails(item) }),
-        ...containerActions(item, busy, act)),
+        ...containerActions(item, busy, act, remove)),
       selected === item.id ? h(ContainerDetail, { api, container: item, act, inspection, onRetry: () => inspect(item), onOpenExecution }) : null)),
     h(Omitted, { count: view.omitted })));
 }
@@ -266,7 +282,7 @@ function ContainerRename({ api, container, reload, blocked }) {
     }) : null);
 }
 
-function containerActions(item, busy, act) {
+function containerActions(item, busy, act, remove) {
   const blocked = busy !== '';
   const running = item.state === 'running';
   return [
@@ -277,6 +293,12 @@ function containerActions(item, busy, act) {
       authorityKey: `container:${item.id}:stop`,
       question: `Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && running,
       onConfirm: () => act('stop', item.id),
+    }),
+    h(ConfirmAction, {
+      key: 'remove', label: 'Remove', confirmLabel: 'Confirm remove', pendingLabel: 'Confirm remove',
+      authorityKey: `container:${item.id}:remove`,
+      question: `Remove stopped container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`, enabled: !blocked && item.state === 'stopped',
+      onConfirm: () => remove(item),
     }),
   ];
 }

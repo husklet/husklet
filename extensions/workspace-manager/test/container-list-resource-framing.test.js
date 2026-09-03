@@ -15,6 +15,8 @@ test('container catalogue removes stale authority across framed loading, failure
   const socketPath = join(directory, 'host.sock');
   const id = 'c'.repeat(32);
   let attempts = 0;
+  let removed = false;
+  const removals = [];
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
@@ -32,10 +34,13 @@ test('container catalogue removes stale authority across framed loading, failure
             flags = 3;
             payload = { error: 'failed', detail: 'container inventory unavailable' };
           } else {
-            payload = { reply: 'containers', with: attempts === 3 ? [] : [
+            payload = { reply: 'containers', with: attempts === 3 || removed ? [] : [
               { id, name: attempts === 1 ? 'stale-worker' : 'current-worker', image: 'alpine:3.20', state: 'stopped', created: 0 },
             ] };
           }
+        } else if (call === 'container_remove') {
+          removals.push(frame.payload.with);
+          removed = true;
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
         setTimeout(() => socket.write(response), call === 'container_list' ? 20 : 0);
@@ -58,6 +63,8 @@ test('container catalogue removes stale authority across framed loading, failure
     await until(() => labelled(stage, 'Reading containers…'));
     await until(() => labelled(stage, 'stale-worker'));
     assert.ok(labelled(stage, 'Start'));
+    invoke(stage, 'Remove');
+    assert.ok(labelled(stage, `Remove stopped container stale-worker with immutable ID ${id}?`));
 
     const refreshStart = stage.frames.length;
     invoke(stage, 'Refresh');
@@ -68,6 +75,9 @@ test('container catalogue removes stale authority across framed loading, failure
     assert.equal(stage.frames.slice(refreshStart).flatMap((frame) => frame.patches).some((patch) =>
       patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Start'), false,
     'failed refresh does not render replacement stale lifecycle authority');
+    assert.equal(stage.frames.slice(refreshStart).flatMap((frame) => frame.patches).some((patch) =>
+      patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Confirm remove'), false,
+    'failed refresh cannot retain stale removal consent');
 
     invoke(stage, 'Retry containers');
     await until(() => labelled(stage, 'No containers'));
@@ -77,6 +87,11 @@ test('container catalogue removes stale authority across framed loading, failure
     await until(() => labelled(stage, 'current-worker'));
     assert.equal(attempts, 4);
     assert.ok(labelled(stage, 'Start'), 'ready state restores lifecycle controls for current inventory');
+    invoke(stage, 'Remove');
+    assert.ok(labelled(stage, `Remove stopped container current-worker with immutable ID ${id}?`));
+    invoke(stage, 'Confirm remove');
+    await until(() => removals.length === 1 && labelled(stage, 'No containers'));
+    assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');
   } finally {
     stage?.render(null);
     await new Promise((resolve) => setTimeout(resolve, 30));
