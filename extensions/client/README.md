@@ -95,6 +95,13 @@ a digest-pinned Node image and runs the extension as the non-root `node` user.
 The image label points at the included manifest; the host validates that
 manifest when installing the image.
 
+There is no separate published client-only Husklet base image. The published
+`extension-react-base` contains both SDK packages; this framework-neutral
+starter stays smaller by using pinned Node and copying the exact client from
+`npm install`. Its image build performs no npm registry resolution, but a fully
+offline OCI build still requires the pinned Node base to be present in the
+builder's cache.
+
 The client normally allows 30 seconds for the host's opening handshake. Set
 `HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS` to a positive millisecond value when a
 development or test environment needs a shorter, explicit startup deadline.

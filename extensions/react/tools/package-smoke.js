@@ -283,6 +283,10 @@ try {
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
+  assert.match(readme, /one published Husklet SDK base image/);
+  assert.match(readme, /pin that argument to a\s+registry digest/);
+  assert.match(readme, /offline OCI build still requires.*base image to\s+already exist/s);
+  assert(!readme.includes('immutable base-image tag'), 'a mutable version tag must not be documented as immutable');
   assert.match(readme, /examples\/starter/);
   assert.match(readme, /render\(React\.createElement\(App\), session/);
   assert(!readme.includes('```jsx'), 'Node-only starter documentation must not require a JSX transform');

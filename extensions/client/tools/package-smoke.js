@@ -354,6 +354,10 @@ try {
 
   const installedClient = path.join(consumer, 'node_modules/@husklet/client');
   const apiReference = fs.readFileSync(path.join(installedClient, 'API.md'), 'utf8');
+  const packedReadme = fs.readFileSync(path.join(installedClient, 'README.md'), 'utf8');
+  assert.match(packedReadme, /no separate published client-only Husklet base image/);
+  assert.match(packedReadme, /image build performs no npm registry resolution/);
+  assert.match(packedReadme, /offline OCI build still requires the pinned Node base/);
   const examples = [...apiReference.matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]);
   assert(examples.length >= 2, 'packed API reference must carry short JavaScript examples');
   for (const [index, example] of examples.entries()) {
