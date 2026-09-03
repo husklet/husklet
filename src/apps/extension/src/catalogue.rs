@@ -135,6 +135,7 @@ mod tests {
     fn container(name: &str, state: &str) -> ContainerSummary {
         ContainerSummary {
             id: format!("id-{name}"),
+            generation: 0,
             name: name.into(),
             image: "alpine:3.20".into(),
             state: state.into(),
