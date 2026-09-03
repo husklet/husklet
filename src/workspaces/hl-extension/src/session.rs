@@ -203,6 +203,7 @@ impl Session {
             | Request::TerminalWritePane { .. }
             | Request::TerminalResizeGrid { .. }
             | Request::TerminalClosePane { .. }
+            | Request::TerminalClosePaneObserved { .. }
             | Request::TerminalFocusPane { .. }
             | Request::TerminalRetitlePane { .. }
             | Request::TerminalRatio { .. }
@@ -612,6 +613,9 @@ impl Session {
                 .map_err(Failure::from)
             }
             Request::TerminalClosePane { slot } => port.close(slot).map(|()| Reply::Done).map_err(Failure::from),
+            Request::TerminalClosePaneObserved { slot, .. } => {
+                port.close(slot).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalRetitlePane { slot, title } => {
                 validate_pane_title(title)?;

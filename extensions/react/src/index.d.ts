@@ -5700,6 +5700,7 @@ export interface WorkspaceApi {
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
+    closeObserved(slot: string, generation: number, revision: number): Promise<void>;
     focus(slot: string): Promise<void>;
     retitle(slot: string, title: string): Promise<void>;
     ratio(slot: string, ratio: number): Promise<void>;

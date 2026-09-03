@@ -250,6 +250,12 @@ pub enum Request {
     TerminalClosePane {
         slot: String,
     },
+    /// Closes only the exact pane occupant snapshot the caller observed.
+    TerminalClosePaneObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+    },
     TerminalFocusPane {
         slot: String,
     },
@@ -387,6 +393,7 @@ impl Request {
             | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
             | Self::TerminalClosePane { .. }
+            | Self::TerminalClosePaneObserved { .. }
             | Self::TerminalFocusPane { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRatio { .. }
@@ -692,6 +699,7 @@ mod tests {
         );
         for request in [
             Request::TerminalClosePane { slot: "1".into() },
+            Request::TerminalClosePaneObserved { slot: "1".into(), generation: 2, revision: 3 },
             Request::TerminalFocusPane { slot: "1".into() },
             Request::TerminalRetitlePane {
                 slot: "1".into(),

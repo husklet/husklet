@@ -47,6 +47,8 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'extension', with: { name: 'terminal-agent', image_digest: 'sha256:abc', status: 'standby' } }
             : frame.payload.call === 'terminal_open_tab'
               ? { reply: 'identity', with: 'terminal-default' }
+            : frame.payload.call === 'terminal_close_pane_observed'
+              ? { reply: 'done' }
             : frame.payload.call === 'network_connect'
               ? { reply: 'done' }
             : frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe'
@@ -132,6 +134,9 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   assert.equal(JSON.parse(installed.content[0].text).name, 'terminal-agent');
   const opened = await client.callTool({ name: 'husklet_terminal_open', arguments: {} });
   assert.equal(JSON.parse(opened.content[0].text), 'terminal-default');
+  await client.callTool({ name: 'husklet_terminal_close', arguments: {
+    slot: 'pane-observed', generation: 9, revision: 12, confirm: true,
+  } });
   const network = 'c'.repeat(32);
   const aliases = Array.from({ length: 64 }, (_, index) => index === 0 ? 'x'.repeat(253) : `alias-${index}`);
   await client.callTool({ name: 'husklet_network_connect', arguments: { reference: network, container: id, aliases } });
@@ -140,6 +145,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
     { call: 'container_attach_terminal', with: { id, command: ['printf', 'é'] } },
     { call: 'extension_install', with: { job: 'terminal-agent-job', revision: 4, granted: ['interface', 'container-attach'] } },
     { call: 'terminal_open_tab', with: { title: 'Terminal' } },
+    { call: 'terminal_close_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12 } },
     { call: 'network_connect', with: { reference: network, container: id, aliases } },
   ]);
   assert.equal(diagnostics, '');

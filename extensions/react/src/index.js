@@ -300,6 +300,12 @@ export function workspace(session) {
         return done('terminal_resize_grid', { slot, columns, rows });
       },
       close: (slot) => done('terminal_close_pane', { slot }),
+      closeObserved: (slot, generation, revision) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+          throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
+        }
+        return done('terminal_close_pane_observed', { slot, generation, revision });
+      },
       focus: (slot) => done('terminal_focus_pane', { slot }),
       retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
@@ -540,7 +546,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'focus', 'retitle', 'ratio', 'switchOccupant'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'spawn', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'switchOccupant'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

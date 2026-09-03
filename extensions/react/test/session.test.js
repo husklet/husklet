@@ -575,6 +575,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
   const resizing = terminal.resizeGrid('s1', 120, 40);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
+  const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_spawn', with: { slot: 's1', command: ['printf', '%s\n', 'ready'] },
@@ -588,19 +589,24 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.deepEqual((await next()).payload, {
     call: 'terminal_retitle_pane', with: { slot: 's1', title: ' Build 🧪 ' },
   });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_close_pane_observed', with: { slot: 's1', generation: 4, revision: 7 },
+  });
   const tree = { active_tab: 't1', tabs: [] };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
-  await Promise.all([spawning, writing, resizing, retitling]);
+  await Promise.all([spawning, writing, resizing, retitling, closing]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);
   assert.throws(() => terminal.writeInput('s1', 4, 7, new Uint8Array(65_537)), /65536 byte limit/);
   assert.throws(() => terminal.writeInput('s1', -1, 7, 'x'), /generation and revision/);
+  assert.throws(() => terminal.closeObserved('s1', 4, -1), /generation and revision/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
   for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
     assert.throws(() => terminal.retitle('s1', title), /pane title must/);

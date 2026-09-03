@@ -155,7 +155,9 @@ Terminal control is pane-addressed and promise-based as well. `terminal.read`
 returns at most 2,000 lines with the cursor and grid dimensions from the same
 authoritative screen snapshot; `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
-through 1,000. `terminal.topology()` returns the current nested tab/split tree;
+through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
+the exact pane snapshot returned by inventory/read; legacy `close(slot)` remains
+for compatibility. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.
 
 `protocolCoverage` is the machine-readable inventory of what this protocol

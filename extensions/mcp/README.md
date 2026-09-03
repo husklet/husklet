@@ -52,6 +52,12 @@ Pane semantic tools appear only when the installed
 `@husklet/react` exposes the host-backed `terminal.semantics` and `terminal.act`
 methods.
 
+`husklet_terminal_close` requires the `generation` and `revision` returned by
+pane inventory or snapshot XML. The host compares both immediately before
+closing, so confirmation for a removed or replaced pane cannot close its
+successor. The React `closeObserved` method exposes the same safe path while
+the legacy `close(slot)` call remains available for source compatibility.
+
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one
 unit of host credit, accumulates dropped/coalesced counts across batches skipped
