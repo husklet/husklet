@@ -163,6 +163,7 @@ static uint64_t translit_jcc_fall_decode_refused;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_jcc_fall_executed;
 static _Atomic uint64_t translit_jcc_link_admitted;
+static _Atomic uint64_t translit_jcc_live_forward_admitted;
 static _Atomic uint64_t translit_jcc_link_taken;
 static _Atomic uint64_t translit_jcc_link_irq_fallback;
 static _Atomic uint64_t translit_jcc_link_dispatcher;
@@ -1860,6 +1861,31 @@ static void translit_jcc_link_own_page(uint64_t source, uint64_t *lo, uint64_t *
 // the target code's instruction provenance rather than a premature architectural store.
 static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_block, uint64_t source,
                                    uint64_t target) {
+    /* x86 has no flag-neutral conditional branch and no spare register here: all sixteen GPRs, RSP and
+       EFLAGS are guest state.  That makes the ordinary irq poll require the full spill/reload below.
+       A forward edge confined to this 4K source page cannot form an in-cache cycle, however.  Keep its
+       architectural image live exactly as the aarch64 frontend does: a bare JMP preserves every guest
+       register and flag, and the first backward/cross-page/dispatcher edge remains the bounded irq/STW/
+       checkpoint boundary.  The target was already restricted to the source page and current immutable
+       generation by translit_jcc_link_target(); fault/signal capture reconstructs live state from the
+       host ucontext and the target body's provenance map.
+
+       Persistent-cache metadata still needs a dispatcher fallback it can select if the saved target is
+       unavailable after restore.  Emit that cold stub after the non-fallthrough JMP; it costs code bytes,
+       never hot-path instructions. */
+    if (target > source) {
+        uint8_t *chain = a->cursor;
+        hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
+        if (__builtin_expect(g_pcache, 0)) {
+            uint8_t *fallback = a->cursor;
+            translit_emit_exit_const(a, target, R_BRANCH);
+            translit_chain_site_note(chain, fallback, source, target);
+        }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        (void)__atomic_fetch_add(&translit_jcc_live_forward_admitted, 1, __ATOMIC_RELAXED);
+#endif
+        return;
+    }
     translit_emit_spill(a);
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5); // JNE: dispatcher fallback
@@ -1882,6 +1908,26 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     translit_emit_return(a, R_BRANCH);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_jcc_live_forward_shape_test(void) {
+    uint8_t emitted[1024] = {0};
+    struct interp_block *target_block = (struct interp_block *)(void *)(emitted + 512);
+    target_block->host_entry_off = 128;
+    hl_x64_asm output = {emitted, emitted + 384, 0};
+    int saved_pcache = g_pcache;
+    g_pcache = 0;
+    uint64_t before = __atomic_load_n(&translit_jcc_live_forward_admitted, __ATOMIC_RELAXED);
+    translit_emit_jcc_link(&output, target_block, UINT64_C(0x1100), UINT64_C(0x1200));
+    g_pcache = saved_pcache;
+    if (output.overflow || output.cursor != emitted + 5 || emitted[0] != 0xe9 ||
+        __atomic_load_n(&translit_jcc_live_forward_admitted, __ATOMIC_RELAXED) != before + 1)
+        return 0;
+    int32_t displacement;
+    memcpy(&displacement, emitted + 1, sizeof displacement);
+    return emitted + 5 + displacement == (uint8_t *)target_block + target_block->host_entry_off;
+}
+#endif
 
 static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
     translit_emit_spill(a);
@@ -3477,6 +3523,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 226) return translit_control_mem_signal_stage_test(1) ? 0 : 226;
     if (scenario == 223) return translit_movsd_far_fixture_test();
     if (scenario == 219) return translit_movsd_memory_fixture_test();
+    if (scenario == 218) return translit_jcc_live_forward_shape_test() ? 0 : 218;
     if (scenario == 217) return translit_jitdump_lifecycle_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
     if (scenario == 148) {
@@ -8489,17 +8536,26 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         translit_test_pcache_ordinals = 1;
         translit_test_pcache_next = 0;
         translit_pcache_census_count[0] = translit_pcache_census_count[1] = 0;
+        uint64_t forward_before =
+            __atomic_load_n(&translit_jcc_live_forward_admitted, __ATOMIC_RELAXED);
         struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
         translit_test_pcache_ordinals = 0;
         struct cpu cpu = {0};
         cpu.rip = source;
+        for (unsigned reg = 0; reg < 16; reg++) cpu.r[reg] = UINT64_C(0x1020304050607000) + reg;
         cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        cpu.df = 1;
         cpu.ibtc_base = (uint64_t)g_ibtc;
         run_block(context, &cpu, source_block);
-        result = target_block->host_entry_off != 0 && source_block->host_entry_off != 0 && cpu.r[0] == 42 &&
-                         cpu.rip == target + 5 &&
+        int registers_exact = cpu.r[0] == 42 && cpu.r[4] == (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        for (unsigned reg = 1; reg < 16; reg++)
+            if (reg != 4 && cpu.r[reg] != UINT64_C(0x1020304050607000) + reg) registers_exact = 0;
+        result = target_block->host_entry_off != 0 && source_block->host_entry_off != 0 && registers_exact &&
+                         cpu.df == 1 && cpu.rip == target + 5 &&
                          translit_pcache_census_count[0] == 1 && translit_pcache_census_count[1] == 1 &&
+                         __atomic_load_n(&translit_jcc_live_forward_admitted, __ATOMIC_RELAXED) ==
+                             forward_before + 1 &&
                          __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) == emitted_before
                      ? 0
                      : 137;
