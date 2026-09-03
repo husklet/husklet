@@ -4348,6 +4348,7 @@ mod panes {
         readable(&gallery, "postgres");
         gallery.ready("postgres", old_generation);
         PaneChooser::populate(&bench.window, &chooser);
+        let stale_popover = chooser.popover().expect("old provider popover");
         let stale = chooser
             .popover()
             .into_iter()
@@ -4374,8 +4375,9 @@ mod panes {
         stale.emit_clicked();
         assert_eq!(selected.get(), 0, "an old popover cannot command the replacement");
         assert_eq!(Panes::at(&bench.window, &slot).unwrap().occupant, Occupant::Terminal);
-
-        PaneChooser::populate(&bench.window, &chooser);
+        let recovered = chooser.popover().expect("stale selection rebuilds the chooser");
+        assert_ne!(recovered, stale_popover, "the obsolete popover is retired");
+        assert!(until(|| recovered.is_visible()), "the live replacement choices remain open");
         let current = chooser
             .popover()
             .into_iter()
