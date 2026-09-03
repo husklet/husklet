@@ -401,8 +401,15 @@ impl Catalogue {
                     .borrow_mut()
                     .commit_update(update, &consent, moment());
                 if let Err(refusal) = recorded {
+                    // The prepared update is generation-bound. Once it loses
+                    // that race, repeating consent can never make it current;
+                    // withdraw the stale authority and require a fresh image
+                    // inspection against the installed winner.
+                    self.forget();
+                    self.inspect.set_label("Read manifest again");
+                    self.offer_retry();
                     self.say(&format!(
-                        "update failed; the installed extension is unchanged: {refusal}"
+                        "update failed; the installed extension is unchanged: {refusal}. Read the manifest again before consenting"
                     ));
                     return;
                 }

@@ -51,7 +51,7 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
         registry_references_are_explained_and_validated_before_acquisition();
         an_image_is_read_before_anybody_is_asked();
         an_existing_name_is_an_explicit_update_with_a_capability_delta();
-        a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried();
+        a_stale_update_failure_invalidates_consent_and_requires_reinspection();
         remote_image_progress_precedes_the_consent_prompt();
         cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry();
         closing_the_catalogue_cancels_its_exact_acquisition_before_reentry();
@@ -1349,12 +1349,19 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     );
 }
 
-fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
+fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     let fixture = Fixture::new(&[("sample", true)]);
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
+    let proposed = fixture.view.semantic_snapshot();
+    let consent = proposed
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("reviewed update exposes exact consent authority");
     let old_surface = fixture.shelf.content().child_by_name("sample").expect("old surface");
     capability_choice(&page, Capability::ContainerControl).set_active(true);
 
@@ -1382,11 +1389,29 @@ fn a_stale_update_failure_keeps_the_installed_extension_and_can_be_retried() {
         "a refused replacement does not rebuild the running surface"
     );
     assert!(
-        descendants(page.widget().upcast_ref())
+        !descendants(page.widget().upcast_ref())
             .iter()
             .any(|widget| widget.has_css_class(directory::CONSENT)),
-        "the accepted proposal remains available for an explicit retry"
+        "the stale consent authority is withdrawn rather than offered as a retry"
     );
+    assert!(page.notice().contains("Read the manifest again"));
+    assert_eq!(inspect_action(&page).label().as_deref(), Some("Read manifest again"));
+    let refreshed = fixture.view.semantic_snapshot();
+    assert!(refreshed.root.children.iter().all(|node| node.label.as_deref() != Some("Accept update")));
+    assert!(refreshed.root.children.iter().any(|node| {
+        node.label.as_deref() == Some("Read manifest")
+            && node.value.as_deref() == Some("Retry acquisition")
+            && !node.disabled
+    }));
+    assert!(matches!(
+        fixture.view.semantic_action(&super::super::semantic::Action {
+            revision: proposed.revision,
+            node: consent.id,
+            action: super::super::semantic::ActionKind::Invoke,
+            value: None,
+        }),
+        Err(super::super::semantic::Refusal::Stale { .. })
+    ));
     assert_eq!(
         fixture
             .roster
