@@ -80,6 +80,8 @@ for extension in storybook workspace-manager; do
   expect_literal "$dockerfile" 'FROM ${HUSKLET_REACT_IMAGE}'
   expect_literal "$dockerfile" 'ARG HUSKLET_EXTENSION_VERSION'
   expect_literal "$dockerfile" 'ARG HUSKLET_REACT_VERSION'
+  expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/client/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
+  expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/react/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" 'LABEL husklet.extension.manifest="/etc/husklet/extension.toml"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"'
