@@ -20,6 +20,6 @@ fn memory_movsd_translates_with_exact_load_store_and_rip_relative_semantics() {
     assert_eq!(
         hl_native::x86_64_translit_displaced_test(223),
         0,
-        "far RIP-relative MOVSD load/store must preserve R11, retire exactly, and leave adjacent memory untouched"
+        "far RIP-relative MOVSD and vector stores must preserve R11, flags, alignment faults, and exact memory"
     );
 }

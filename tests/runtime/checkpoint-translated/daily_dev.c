@@ -94,6 +94,9 @@ extern double checkpoint_far_movsd(void);
 extern long checkpoint_addr32_call(long);
 extern long checkpoint_call_mem(long);
 extern uint32_t checkpoint_pand_memory(const unsigned char *, const unsigned char *);
+extern void checkpoint_riprel_vector_stores(void);
+unsigned char checkpoint_movups_destination[16] __attribute__((aligned(16)));
+unsigned char checkpoint_movaps_destination[16] __attribute__((aligned(16)));
 __asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
         ".balign 4096\n"
         ".global checkpoint_link_target\n.type checkpoint_link_target,@function\n"
@@ -145,6 +148,17 @@ __asm__(".pushsection .rodata.checkpoint_movsd,\"a\",@progbits\n"
         "addsd %xmm1,%xmm0\n"
         "ret\n"
         ".size checkpoint_far_movsd,.-checkpoint_far_movsd\n");
+
+__asm__(".text\n"
+        ".global checkpoint_riprel_vector_stores\n.type checkpoint_riprel_vector_stores,@function\n"
+        "checkpoint_riprel_vector_stores:\n"
+        "pxor %xmm0,%xmm0\n"
+        "pxor %xmm3,%xmm3\n"
+        "movups %xmm0,checkpoint_movups_destination(%rip)\n"
+        "movaps %xmm0,checkpoint_movaps_destination(%rip)\n"
+        "movaps %xmm3,checkpoint_movaps_destination(%rip)\n"
+        "ret\n"
+        ".size checkpoint_riprel_vector_stores,.-checkpoint_riprel_vector_stores\n");
 
 __asm__(".text\n"
         ".global checkpoint_addr32_target\n.type checkpoint_addr32_target,@function\n"
@@ -207,6 +221,16 @@ static double checkpoint_movsd_check(void) {
     return total / 32;
 }
 
+static long checkpoint_riprel_vector_store_check(int phase) {
+    memset(checkpoint_movups_destination, 0xa5, sizeof checkpoint_movups_destination);
+    memset(checkpoint_movaps_destination, 0xa5, sizeof checkpoint_movaps_destination);
+    for (int iteration = 0; iteration < 32; ++iteration) checkpoint_riprel_vector_stores();
+    for (size_t index = 0; index < sizeof checkpoint_movups_destination; ++index) {
+        if (checkpoint_movups_destination[index] != 0 || checkpoint_movaps_destination[index] != 0) return -1;
+    }
+    return 42 + phase;
+}
+
 static long checkpoint_addr32_call_check(int phase) {
     long value = 0;
     for (int iteration = 0; iteration < 256; ++iteration) value = checkpoint_addr32_call(phase);
@@ -242,6 +266,9 @@ static long checkpoint_capacity_check(int phase) {
 
 static double checkpoint_movsd_check(void) {
     return 42.0;
+}
+static long checkpoint_riprel_vector_store_check(int phase) {
+    return 42 + phase;
 }
 static long checkpoint_addr32_call_check(int phase) {
     return 42 + phase;
@@ -325,16 +352,19 @@ int main(int argc, char **argv) {
     long initial_mixed = checkpoint_mixed_check(0);
     long initial_capacity = checkpoint_capacity_check(0);
     double initial_movsd = checkpoint_movsd_check();
+    long initial_vector_stores = checkpoint_riprel_vector_store_check(0);
     long initial_addr32_call = checkpoint_addr32_call_check(0);
     long initial_call_mem = checkpoint_call_mem_check(0);
     long initial_pand_memory = checkpoint_pand_memory_check(0);
     if (initial_link != 42 || initial_mixed != 42 || initial_capacity != 42 || initial_movsd != 42.0 ||
+        initial_vector_stores != 42 ||
         initial_addr32_call != 42 || initial_call_mem != 42 || initial_pand_memory != 240)
         return 16;
     dprintf(STDOUT_FILENO, "JCC-LINK phase=0 value=%ld\n", initial_link);
     dprintf(STDOUT_FILENO, "MIXED-SSE phase=0 value=%ld\n", initial_mixed);
     dprintf(STDOUT_FILENO, "CAPACITY-PREFIX phase=0 value=%ld\n", initial_capacity);
     dprintf(STDOUT_FILENO, "FAR-MOVSD phase=0 value=%.0f\n", initial_movsd);
+    dprintf(STDOUT_FILENO, "RIPREL-VECTOR-STORES phase=0 value=%ld\n", initial_vector_stores);
     dprintf(STDOUT_FILENO, "ADDR32-CALL phase=0 value=%ld\n", initial_addr32_call);
     dprintf(STDOUT_FILENO, "CALL-MEM phase=0 value=%ld\n", initial_call_mem);
     dprintf(STDOUT_FILENO, "PAND-MEMORY phase=0 value=%ld\n", initial_pand_memory);
@@ -366,11 +396,13 @@ int main(int argc, char **argv) {
         long restored_mixed = checkpoint_mixed_check(next_cycle);
         long restored_capacity = checkpoint_capacity_check(next_cycle);
         double restored_movsd = checkpoint_movsd_check();
+        long restored_vector_stores = checkpoint_riprel_vector_store_check(next_cycle);
         long restored_addr32_call = checkpoint_addr32_call_check(next_cycle);
         long restored_call_mem = checkpoint_call_mem_check(next_cycle);
         long restored_pand_memory = checkpoint_pand_memory_check(next_cycle);
         if (restored_link != 42 + next_cycle || restored_mixed != 42 + next_cycle ||
             restored_capacity != 42 + next_cycle || restored_movsd != 42.0 ||
+            restored_vector_stores != 42 + next_cycle ||
             restored_addr32_call != 42 + next_cycle || restored_call_mem != 42 + next_cycle ||
             restored_pand_memory != 240 + next_cycle)
             return 17;
@@ -378,6 +410,7 @@ int main(int argc, char **argv) {
         dprintf(STDOUT_FILENO, "MIXED-SSE phase=%d value=%ld\n", next_cycle, restored_mixed);
         dprintf(STDOUT_FILENO, "CAPACITY-PREFIX phase=%d value=%ld\n", next_cycle, restored_capacity);
         dprintf(STDOUT_FILENO, "FAR-MOVSD phase=%d value=%.0f\n", next_cycle, restored_movsd);
+        dprintf(STDOUT_FILENO, "RIPREL-VECTOR-STORES phase=%d value=%ld\n", next_cycle, restored_vector_stores);
         dprintf(STDOUT_FILENO, "ADDR32-CALL phase=%d value=%ld\n", next_cycle, restored_addr32_call);
         dprintf(STDOUT_FILENO, "CALL-MEM phase=%d value=%ld\n", next_cycle, restored_call_mem);
         dprintf(STDOUT_FILENO, "PAND-MEMORY phase=%d value=%ld\n", next_cycle, restored_pand_memory);

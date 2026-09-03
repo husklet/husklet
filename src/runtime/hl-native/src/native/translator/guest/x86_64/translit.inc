@@ -2769,6 +2769,8 @@ static uint8_t *translit_test_jmp_mem_instruction_start;
 static uint8_t *translit_test_natural_load_start;
 static uint8_t *translit_test_natural_load_address_end;
 static uint8_t *translit_test_natural_load_op_end;
+static uint8_t *translit_test_sse_riprel_rex;
+static uint8_t *translit_test_sse_riprel_preserve_start;
 static uint8_t *translit_test_jmp_mem_borrow_start;
 static uint8_t *translit_test_jmp_mem_rip_end;
 static uint8_t *translit_test_jmp_mem_r11_end;
@@ -3515,17 +3517,21 @@ static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct ins
     return 1;
 }
 
-// A copied RIP-relative MOVSD can only retain its original disp32 while the code arena is within
-// reach of the guest datum.  Materialise the exact storage address through R11 when it is not.  R11
-// is first made canonical in cpu->r[] and is restored only after a load destination has committed,
-// so the caller can describe the source/next boundary and the borrowed-register interval exactly.
-static int translit_lower_movsd_riprel(hl_x64_asm *a, const struct insn *insn,
-                                       const uint8_t *bytes, uint64_t storage_target,
-                                       uint8_t **save_end, uint8_t **op_end) {
-    if (!insn->two || insn->op < 0x10 || insn->op > 0x11 || !insn->repne || insn->rep ||
-        insn->p66 || insn->lock || insn->addr32 || insn->seg || insn->vex || insn->evex ||
-        insn->map3 || !insn->has_modrm || !insn->is_mem || !insn->rip_rel ||
-        insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != 0)
+// A copied RIP-relative SSE memory operation can retain its disp32 only while the code arena is
+// within reach of the guest datum. Materialise the exact storage address through R11 otherwise.
+// The original MOVAPS/MOVUPS opcode performs the store, preserving their distinct alignment-fault
+// contracts; the surrounding MOV/GS operations are flags-neutral. Store admission remains behind
+// translit_image_ok(), so executable/shared aliases still use the mediated interpreter path.
+static int translit_lower_sse_riprel(hl_x64_asm *a, const struct insn *insn,
+                                     const uint8_t *bytes, uint64_t storage_target,
+                                     uint8_t **save_end, uint8_t **op_end) {
+    int movsd = insn->repne && !insn->rep && !insn->p66 &&
+                (insn->op == 0x10 || insn->op == 0x11);
+    int vector_store = !insn->repne && !insn->rep && !insn->p66 &&
+                       (insn->op == 0x11 || insn->op == 0x29);
+    if (!insn->two || (!movsd && !vector_store) || insn->lock || insn->addr32 || insn->seg ||
+        insn->vex || insn->evex || insn->map3 || !insn->has_modrm || !insn->is_mem ||
+        !insn->rip_rel || insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != 0)
         return 0;
     int modrm_offset = insn->len - 5;
     if (modrm_offset < 2 || modrm_offset + 5 != insn->len) return 0;
@@ -3542,6 +3548,9 @@ static int translit_lower_movsd_riprel(hl_x64_asm *a, const struct insn *insn,
     int rex_offset = legacy_end < modrm_offset && (bytes[legacy_end] & 0xF0) == 0x40
                          ? legacy_end
                          : -1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (vector_store) translit_test_sse_riprel_rex = a->cursor;
+#endif
     if (rex_offset < 0) {
         for (int i = 0; i < legacy_end; ++i) hl_x64_u8(a, bytes[i]);
         hl_x64_u8(a, 0x41); // REX.B selects R11 as the replacement memory base.
@@ -5675,8 +5684,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                                                  g_nonpie_lo, g_nonpie_hi,
                                                                  g_nonpie_bias);
                 movsd_borrow_start = a->cursor;
-                if (!translit_lower_movsd_riprel(a, &insn, bytes, storage_target,
-                                                 &movsd_save_end, &movsd_op_end)) {
+                if (!translit_lower_sse_riprel(a, &insn, bytes, storage_target,
+                                               &movsd_save_end, &movsd_op_end)) {
                     a->cursor = instruction_start;
                     fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -5697,12 +5706,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             int movsd_ranges_exact = movsd_borrow_start == NULL ||
                                      (movsd_borrow_start < movsd_save_end && movsd_save_end < movsd_op_end &&
                                       movsd_op_end <= semantic_end && semantic_end < commit_end);
+            uint8_t *movsd_preserve_start = movsd_save_end;
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (movsd_borrow_start != NULL)
+                translit_test_sse_riprel_preserve_start = movsd_preserve_start;
+#endif
             int owner_ok = movsd_borrow_start == NULL
                                ? translit_owner_append(owners, &owner_count, instruction_start,
                                                        commit_end, pc, 0)
                                : translit_owner_append(owners, &owner_count, instruction_start,
                                                        movsd_save_end, pc, 0) &&
-                                     translit_owner_append(owners, &owner_count, movsd_save_end,
+                                     translit_owner_append(owners, &owner_count, movsd_preserve_start,
                                                            semantic_end, pc,
                                                            translit_preserve_mask(HL_X64_R11)) &&
                                      translit_owner_append(owners, &owner_count, semantic_end,
@@ -5714,7 +5728,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                : translit_owner_append(instruction_ranges, &instruction_range_count,
                                                        instruction_start, movsd_save_end, pc, 0) &&
                                      translit_owner_append(instruction_ranges, &instruction_range_count,
-                                                           movsd_save_end, semantic_end, pc,
+                                                           movsd_preserve_start, semantic_end, pc,
                                                            translit_preserve_mask(HL_X64_R11)) &&
                                      translit_owner_append(instruction_ranges, &instruction_range_count,
                                                            semantic_end, commit_end, next,
@@ -7136,7 +7150,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     static const uint8_t tl_no[] = {0x90, 0x0f, 0x0b};
     static const uint8_t sse_to_tl_no[] = {0x66, 0x0f, 0xef, 0xc0, 0x0f, 0x0b};
     static const uint8_t sse_riprel_movdqa[] = {0x90, 0x66, 0x0f, 0x6f, 0x05, 0, 0, 0, 0};
-    static const uint8_t sse_riprel_movups[] = {0x90, 0x0f, 0x10, 0x05, 0, 0, 0, 0};
+    static const uint8_t sse_riprel_movdqa_xmm1[] = {0x90, 0x66, 0x0f, 0x6f, 0x0d, 0, 0, 0, 0};
     uint8_t cap[TL_MAX_INSNS + 1];
     memset(cap, 0x90, TL_MAX_INSNS);
     cap[TL_MAX_INSNS] = 0x0f;
@@ -7156,7 +7170,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     case 80: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
     case 227: bytes = sse_riprel_movdqa; length = sizeof sse_riprel_movdqa;
               expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
-    case 228: bytes = sse_riprel_movups; length = sizeof sse_riprel_movups;
+    case 228: bytes = sse_riprel_movdqa_xmm1; length = sizeof sse_riprel_movdqa_xmm1;
               expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
     default: return 90;
     }
@@ -7489,6 +7503,112 @@ static int translit_movsd_far_fixture_test(void) {
                      stored == UINT64_C(0x0123456789abcdef) && guard == store_guard
                  ? 0
                  : 136;
+
+    // Far RIP-relative vector stores use the same borrowed-address lowering, while retaining the
+    // opcode's own alignment contract. Cover both dominant ModRM register spellings and a page-edge
+    // unaligned MOVUPS target; then require MOVAPS at that address to surface a guest alignment fault.
+    if (result == 0) {
+        static const struct {
+            uint8_t opcode, modrm;
+            uint16_t target_offset;
+            int alignment_fault;
+        } stores[] = {
+            {0x11, 0x05, 4095, 0}, // movups %xmm0, unaligned and crossing a page
+            {0x29, 0x05, 4096, 0}, // movaps %xmm0, aligned
+            {0x29, 0x1d, 4096, 0}, // movaps %xmm3, aligned
+            {0x29, 0x05, 4095, 1}, // movaps %xmm0, same unaligned page edge: #GP
+        };
+        for (unsigned index = 0; result == 0 && index < sizeof stores / sizeof stores[0]; ++index) {
+            memset(guest, 0, guest_size);
+            uint8_t operation[] = {0x0f, stores[index].opcode, stores[index].modrm, 0, 0, 0, 0,
+                                   0x0f, 0x0b};
+            int32_t displacement = (int32_t)stores[index].target_offset - 7;
+            memcpy(operation + 3, &displacement, sizeof displacement);
+            memcpy(guest, operation, sizeof operation);
+            memset(arena, 0, arena_size);
+            g_cp = arena + sizeof(struct interp_block);
+            g_cache_gen = UINT64_MAX - 0x700 - index;
+            map_clear();
+            if (jit_body_owner_set_for(g_cache_gen, 1) == NULL) { result = 137; break; }
+            block = (struct interp_block *)arena;
+            body = translit_build(context, block, (uint64_t)(uintptr_t)guest, NULL);
+            block->magic = INTERP_BLOCK_MAGIC;
+            block->gpc = (uint64_t)(uintptr_t)guest;
+            struct cpu stored_cpu = {0};
+            stored_cpu.rip = (uint64_t)(uintptr_t)guest;
+            stored_cpu.r[HL_X64_R11] = UINT64_C(0x8877665544332211);
+            unsigned reg = stores[index].modrm >> 3;
+            stored_cpu.v[reg * 2] = UINT64_C(0x0123456789abcdef);
+            stored_cpu.v[reg * 2 + 1] = UINT64_C(0xfedcba9876543210);
+            uint64_t flags_before = UINT64_C(0x202);
+            translit_flags_out(&stored_cpu, flags_before);
+            memset(guest + stores[index].target_offset, 0xa5, 16);
+            if (body != NULL && !stores[index].alignment_fault)
+                run_block(context, &stored_cpu, block);
+            uint64_t low = 0, high = 0;
+            memcpy(&low, guest + stores[index].target_offset, 8);
+            memcpy(&high, guest + stores[index].target_offset + 8, 8);
+            int exact = body != NULL && block->profile_insns == 1;
+            if (!stores[index].alignment_fault) {
+                exact = exact && stored_cpu.r[HL_X64_R11] == UINT64_C(0x8877665544332211) &&
+                        (translit_flags_in(&stored_cpu) & UINT64_C(0x8d5)) ==
+                            (flags_before & UINT64_C(0x8d5)) && stored_cpu.sync_signal == 0 &&
+                        stored_cpu.rip == (uint64_t)(uintptr_t)guest + 7 &&
+                        low == UINT64_C(0x0123456789abcdef) &&
+                        high == UINT64_C(0xfedcba9876543210);
+            }
+            uint8_t *emitted_rex = translit_test_sse_riprel_rex;
+            exact = exact && emitted_rex != NULL && emitted_rex >= (uint8_t *)body &&
+                    emitted_rex + 3 <= (uint8_t *)body + block->host_len &&
+                    emitted_rex[0] == 0x41 && emitted_rex[1] == 0x0f &&
+                    emitted_rex[2] == stores[index].opcode;
+            exact = exact && translit_test_sse_riprel_preserve_start != NULL &&
+                    translit_test_sse_riprel_preserve_start <= emitted_rex;
+            if (exact && stores[index].alignment_fault) {
+                pid_t translated_child = fork();
+                if (translated_child == 0) {
+                    run_block(context, &stored_cpu, block);
+                    _exit(0);
+                }
+                int translated_status = 0;
+                exact = translated_child > 0 && waitpid(translated_child, &translated_status, 0) == translated_child &&
+                        WIFSIGNALED(translated_status) && WTERMSIG(translated_status) == SIGSEGV;
+                pid_t native_child = exact ? fork() : -1;
+                if (native_child == 0) {
+                    void *unaligned = guest + stores[index].target_offset;
+                    __asm__ volatile("pxor %%xmm0,%%xmm0\n\tmovaps %%xmm0,(%0)"
+                                     : : "r"(unaligned) : "xmm0", "memory");
+                    _exit(0);
+                }
+                int native_status = 0;
+                exact = native_child > 0 && waitpid(native_child, &native_status, 0) == native_child &&
+                        WIFSIGNALED(native_status) && WTERMSIG(native_status) == SIGSEGV;
+            }
+            if (exact && stores[index].opcode == 0x29) {
+                struct cpu faulted = {0};
+                faulted.rip = (uint64_t)(uintptr_t)guest;
+                faulted.r[HL_X64_R11] = UINT64_C(0x8877665544332211);
+                ucontext_t native = {0};
+                /* Fault capture may stop at the inserted REX prefix, before the original 0F byte.
+                   That byte must already belong to the borrowed-R11 owner interval. */
+                HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)emitted_rex;
+                HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] =
+                    (greg_t)(uintptr_t)(guest + stores[index].target_offset);
+                int saved_selected = translit_selected; translit_selected = 1;
+                (void)hl_option_set("HL_TRANSLIT_PROVENANCE_FALLBACK", "1", 1);
+                int delivered = translit_test_deliver_guest_fault(
+                    &faulted, &native, (uint64_t)(uintptr_t)(guest + stores[index].target_offset + 1));
+                (void)hl_option_unset("HL_TRANSLIT_PROVENANCE_FALLBACK");
+                translit_selected = saved_selected;
+                exact = delivered && faulted.sync_signal == SIGSEGV &&
+                        faulted.rip == (uint64_t)(uintptr_t)guest &&
+                        faulted.r[HL_X64_R11] == UINT64_C(0x8877665544332211);
+            }
+            if (!exact) result = 138 + (int)index;
+            jit_body_owner_drop_generation(g_cache_gen);
+            map_clear();
+        }
+    }
 
 done:
     map_clear();
