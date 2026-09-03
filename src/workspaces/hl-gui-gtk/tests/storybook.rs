@@ -127,6 +127,16 @@ mod unix {
             }
         }
         let root = surface.widget().clone().upcast::<gtk::Widget>();
+        // A ColumnView realizes and recycles list-item children through a live
+        // native root. Manually allocating it while unrooted exercises no valid
+        // GTK lifecycle and leaves its factories measuring stale children.
+        let _realized_window = (story == "DataTable").then(|| {
+            let window = gtk::Window::new();
+            window.set_child(Some(&root));
+            window.present();
+            settle_toolkit();
+            window
+        });
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
