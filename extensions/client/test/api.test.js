@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import test from 'node:test';
 
-import { ExtensionError, Session, protocolCoverage, protocolSurface, requestCapability, workspace } from '../src/index.js';
+import { ExtensionError, PROTOCOL_CAPABILITIES, Session, protocolCoverage, protocolSurface, requestCapability, workspace } from '../src/index.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
@@ -18,7 +18,7 @@ async function pair(options) {
     socket.once('connect', () => resolve(socket));
   });
   const [host, extension] = await Promise.all([accepted, connecting]);
-  host.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'test', granted: [] } }));
+  host.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'test', granted: PROTOCOL_CAPABILITIES.map(({ wire }) => wire) } }));
   const session = new Session(extension, options);
   await session.ready;
   return { host, session, server };

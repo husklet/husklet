@@ -29,6 +29,14 @@ assert(Array.isArray(schema.request_to_reply), 'Rust protocol schema lacks reque
 assert.deepEqual(schema.request_to_reply.map(({ request }) => request), requestVariants, 'request_to_reply must cover Request exactly in declaration order');
 const expectedReplies = Object.fromEntries(schema.request_to_reply.map(({ request, reply }) => [request, reply]));
 for (const [call, reply] of Object.entries(expectedReplies)) assert(replyVariants.has(reply), `${call} expects absent reply ${reply}`);
+assert(Array.isArray(schema.request_to_capability), 'Rust protocol schema lacks request_to_capability');
+assert.deepEqual(schema.request_to_capability.map(({ request }) => request), requestVariants, 'request_to_capability must cover Request exactly in declaration order');
+const requestCapabilities = Object.fromEntries(schema.request_to_capability.map(({ request, capability }) => [request, capability]));
+const capabilities = new Set(schema.capabilities.map(({ wire }) => wire));
+for (const [call, capability] of Object.entries(requestCapabilities)) {
+  if (capability === null) assert(['event_subscribe', 'event_unsubscribe'].includes(call), `${call} has no fixed capability`);
+  else assert(capabilities.has(capability), `${call} requires absent capability ${capability}`);
+}
 const runtime = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
 export const PROTOCOL_SPECIFICATION_VERSION = ${schema.specification_version};
 export const PROTOCOL_VERSION = ${schema.protocol_version};
@@ -36,6 +44,7 @@ export const PROTOCOL_BOUNDS = Object.freeze(${JSON.stringify(schema.bounds, nul
 export const PROTOCOL_CAPABILITIES = Object.freeze(${JSON.stringify(schema.capabilities, null, 2)});
 export const PROTOCOL_TOPICS = Object.freeze(${JSON.stringify(schema.topics, null, 2)});
 export const PROTOCOL_REPLIES = Object.freeze(${JSON.stringify(expectedReplies, null, 2)});
+export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze(${JSON.stringify(requestCapabilities, null, 2)});
 const definitions = ${JSON.stringify(schema.definitions, null, 2)};
 const roots = ${JSON.stringify(schema.roots, null, 2)};
 
@@ -146,6 +155,7 @@ export type WireReply = ${type(schema.roots.reply)};
 export type WireFailure = ${type(schema.roots.failure)};
 export type WireSnapshot = ${type(schema.roots.snapshot)};
 export const PROTOCOL_REPLIES: Readonly<Record<WireRequest['call'], WireReply['reply']>>;
+export const PROTOCOL_REQUEST_CAPABILITIES: Readonly<Record<WireRequest['call'], ExtensionCapability | null>>;
 export function validateRequest(value: unknown): WireRequest;
 export function validateReply(value: unknown): WireReply;
 export function validateReplyFor(call: WireRequest['call'], value: unknown): WireReply;

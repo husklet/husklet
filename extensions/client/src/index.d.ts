@@ -163,6 +163,7 @@ export class Session {
   static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
+  readonly grantedCapabilities: readonly ExtensionCapability[];
   call(method: string, params?: unknown): Promise<unknown>;
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
@@ -175,6 +176,7 @@ export function connect(options?: ConnectOptions): Promise<Session>;
 
 export interface WorkspaceApi {
   readonly granted: readonly string[];
+  readonly grantedCapabilities: readonly ExtensionCapability[];
   info(): Promise<WorkspaceInfo>;
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;

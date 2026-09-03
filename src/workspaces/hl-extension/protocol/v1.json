@@ -5936,6 +5936,420 @@
     "payload_limit_bytes": 1048576
   },
   "protocol_version": 1,
+  "request_to_capability": [
+    {
+      "capability": "workspace-read",
+      "request": "workspace_info"
+    },
+    {
+      "capability": "workspace-read",
+      "request": "workspace_list"
+    },
+    {
+      "capability": "workspace-read",
+      "request": "workspace_inspect"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_create"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_adopt"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_update"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_delete"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_start"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_stop"
+    },
+    {
+      "capability": "workspace-control",
+      "request": "workspace_restart"
+    },
+    {
+      "capability": "extension-read",
+      "request": "extension_list"
+    },
+    {
+      "capability": "extension-read",
+      "request": "extension_inspect"
+    },
+    {
+      "capability": "extension-control",
+      "request": "extension_enable"
+    },
+    {
+      "capability": "extension-control",
+      "request": "extension_disable"
+    },
+    {
+      "capability": "extension-control",
+      "request": "extension_remove"
+    },
+    {
+      "capability": "extension-install",
+      "request": "extension_acquisition_start"
+    },
+    {
+      "capability": "extension-install",
+      "request": "extension_acquisition_status"
+    },
+    {
+      "capability": "extension-install",
+      "request": "extension_acquisition_cancel"
+    },
+    {
+      "capability": "extension-install",
+      "request": "extension_install"
+    },
+    {
+      "capability": "extension-install",
+      "request": "extension_update"
+    },
+    {
+      "capability": "container-read",
+      "request": "container_list"
+    },
+    {
+      "capability": "container-read",
+      "request": "container_inspect"
+    },
+    {
+      "capability": "container-read",
+      "request": "container_processes"
+    },
+    {
+      "capability": "container-read",
+      "request": "container_logs"
+    },
+    {
+      "capability": "container-read",
+      "request": "execution_inspect"
+    },
+    {
+      "capability": "container-read",
+      "request": "execution_list"
+    },
+    {
+      "capability": "container-read",
+      "request": "execution_logs"
+    },
+    {
+      "capability": "container-read",
+      "request": "execution_wait"
+    },
+    {
+      "capability": "container-control",
+      "request": "execution_kill"
+    },
+    {
+      "capability": "container-control",
+      "request": "execution_remove"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_create"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_start"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_stop"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_remove"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_pause"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_unpause"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_restart"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_rename"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_kill"
+    },
+    {
+      "capability": "container-control",
+      "request": "container_exec"
+    },
+    {
+      "capability": "container-attach",
+      "request": "container_attach_terminal"
+    },
+    {
+      "capability": "image-read",
+      "request": "image_list"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_pull"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_pull_start"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_pull_status"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_pull_cancel"
+    },
+    {
+      "capability": "image-read",
+      "request": "image_inspect"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_remove"
+    },
+    {
+      "capability": "image-write",
+      "request": "image_prune"
+    },
+    {
+      "capability": "volume-read",
+      "request": "volume_list"
+    },
+    {
+      "capability": "volume-read",
+      "request": "volume_inspect"
+    },
+    {
+      "capability": "volume-write",
+      "request": "volume_create"
+    },
+    {
+      "capability": "volume-write",
+      "request": "volume_remove"
+    },
+    {
+      "capability": "network-read",
+      "request": "network_list"
+    },
+    {
+      "capability": "network-read",
+      "request": "network_inspect"
+    },
+    {
+      "capability": "network-write",
+      "request": "network_create"
+    },
+    {
+      "capability": "network-write",
+      "request": "network_remove"
+    },
+    {
+      "capability": "network-write",
+      "request": "network_connect"
+    },
+    {
+      "capability": "network-write",
+      "request": "network_disconnect"
+    },
+    {
+      "capability": "terminal-read",
+      "request": "terminal_tabs"
+    },
+    {
+      "capability": "terminal-read",
+      "request": "terminal_topology"
+    },
+    {
+      "capability": "pane-observe",
+      "request": "pane_list"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_open_tab"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_split"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_split_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_spawn"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_spawn_observed"
+    },
+    {
+      "capability": "terminal-output",
+      "request": "terminal_read_pane"
+    },
+    {
+      "capability": "pane-semantic-read",
+      "request": "pane_semantic_read"
+    },
+    {
+      "capability": "pane-semantic-control",
+      "request": "pane_semantic_action"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_write_pane"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_resize_grid"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_resize_grid_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_close_pane"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_close_pane_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_focus_pane"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_focus_pane_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_retitle_pane"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_retitle_pane_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_ratio"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_ratio_observed"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_switch_occupant"
+    },
+    {
+      "capability": "terminal-control",
+      "request": "terminal_switch_occupant_observed"
+    },
+    {
+      "capability": "filesystem-read",
+      "request": "filesystem_list"
+    },
+    {
+      "capability": "filesystem-read",
+      "request": "filesystem_read"
+    },
+    {
+      "capability": "filesystem-read",
+      "request": "filesystem_read_range"
+    },
+    {
+      "capability": "filesystem-read",
+      "request": "filesystem_stat"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_write"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_create_observed"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_mkdir"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_rename"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_rename_observed"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_remove"
+    },
+    {
+      "capability": "filesystem-write",
+      "request": "filesystem_remove_observed"
+    },
+    {
+      "capability": "interface",
+      "request": "interface_open_tab"
+    },
+    {
+      "capability": "interface",
+      "request": "interface_split"
+    },
+    {
+      "capability": "interface",
+      "request": "interface_withdraw"
+    },
+    {
+      "capability": "interface",
+      "request": "interface_render"
+    },
+    {
+      "capability": "interface",
+      "request": "interface_render_at"
+    },
+    {
+      "capability": "interface",
+      "request": "source_resize"
+    },
+    {
+      "capability": "interface",
+      "request": "source_resize_at"
+    },
+    {
+      "capability": null,
+      "request": "event_subscribe"
+    },
+    {
+      "capability": null,
+      "request": "event_unsubscribe"
+    }
+  ],
   "request_to_reply": [
     {
       "reply": "workspace",
@@ -9140,7 +9554,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:a48a819b2bd5b7ec",
+  "source_fingerprint": "fnv1a64:0593d10c3e8ee9dd",
   "specification_version": 1,
   "topics": [
     {

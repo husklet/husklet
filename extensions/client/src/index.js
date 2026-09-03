@@ -1,12 +1,12 @@
 export { ExtensionError, Session, SOCKET, PROTOCOL, validateUiEvent } from './session.js';
 export {
   PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS,
-  PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, encodeRequest,
+  PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest,
   validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot,
 } from './generated-protocol.js';
 export { semanticXml } from './semantic.js';
 import { Session } from './session.js';
-import { PROTOCOL_REPLIES, PROTOCOL_TOPICS } from './generated-protocol.js';
+import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from './generated-protocol.js';
 
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
@@ -116,7 +116,8 @@ export function workspace(session) {
     await operation;
   };
   const api = {
-    get granted() { return session.granted; },
+    get granted() { return session.grantedCapabilities ?? session.granted; },
+    get grantedCapabilities() { return session.grantedCapabilities ?? session.granted; },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
@@ -487,29 +488,9 @@ export function workspace(session) {
 
 /** Mirrors Rust Request::capability for every fixed wire call used by this public facade. */
 export function requestCapability(call) {
-  if (['workspace_info', 'workspace_list', 'workspace_inspect'].includes(call)) return 'workspace-read';
-  if (call.startsWith('workspace_')) return 'workspace-control';
-  if (['extension_list', 'extension_inspect', 'extension_provider_list'].includes(call)) return 'extension-read';
-  if (['extension_enable', 'extension_disable', 'extension_remove'].includes(call)) return 'extension-control';
-  if (call.startsWith('extension_')) return 'extension-install';
-  if (call === 'container_attach_terminal') return 'container-attach';
-  if (['container_list', 'container_inspect', 'container_processes', 'container_logs', 'execution_inspect', 'execution_list', 'execution_logs', 'execution_wait'].includes(call)) return 'container-read';
-  if (call.startsWith('container_') || call.startsWith('execution_')) return 'container-control';
-  if (['image_list', 'image_inspect'].includes(call)) return 'image-read';
-  if (call.startsWith('image_')) return 'image-write';
-  if (['volume_list', 'volume_inspect'].includes(call)) return 'volume-read';
-  if (call.startsWith('volume_')) return 'volume-write';
-  if (['network_list', 'network_inspect'].includes(call)) return 'network-read';
-  if (call.startsWith('network_')) return 'network-write';
-  if (['terminal_tabs', 'terminal_topology'].includes(call)) return 'terminal-read';
-  if (call === 'terminal_read_pane') return 'terminal-output';
-  if (call === 'pane_list') return 'pane-observe';
-  if (call === 'pane_semantic_read') return 'pane-semantic-read';
-  if (call === 'pane_semantic_action') return 'pane-semantic-control';
-  if (call.startsWith('terminal_')) return 'terminal-control';
-  if (['filesystem_list', 'filesystem_read', 'filesystem_read_range', 'filesystem_stat'].includes(call)) return 'filesystem-read';
-  if (call.startsWith('filesystem_')) return 'filesystem-write';
-  if (call.startsWith('interface_') || call.startsWith('source_')) return 'interface';
+  const capability = PROTOCOL_REQUEST_CAPABILITIES[call];
+  if (capability !== undefined && capability !== null) return capability;
+  if (capability === null) throw new RangeError(`extension request ${call} has topic-selected capability`);
   throw new RangeError(`unclassified extension request ${call}`);
 }
 

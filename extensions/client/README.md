@@ -27,6 +27,12 @@ manifest; the host validates that manifest when installing the image.
 
 The transport is a persistent, full-duplex, length-prefixed Unix stream. Calls are correlated while bounded host events can arrive independently with explicit subscription credit. This is WebSocket-like interaction, but it is **not a WebSocket**. The handshake returns workspace identity and negotiated capability grants. All methods remain constrained to that authority.
 
+After `connect()` resolves, `session.grantedCapabilities` is an immutable array
+of the exact Rust capability wire names. Calls and subscriptions lacking one of
+those negotiated grants reject locally without writing a request frame. The host
+still checks every request authoritatively, including changes in authority after
+the handshake.
+
 `@husklet/react` consumes and re-exports this client for compatibility.
 
 `protocolSurface` is the machine-readable public-surface inventory derived from

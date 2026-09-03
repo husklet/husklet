@@ -3,7 +3,7 @@
 import net from 'node:net';
 import { CONTROL, FLAG_END, KIND, Reader, encode } from './wire.js';
 import {
-  encodeRequest, PROTOCOL_TOPICS, PROTOCOL_VERSION,
+  encodeRequest, PROTOCOL_CAPABILITIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_VERSION,
   validateFailure, validateReplyFor, validateSnapshot,
 } from './generated-protocol.js';
 
@@ -19,6 +19,8 @@ const ERROR = 2;
 const COALESCED = 4;
 const CLOSE_TIMEOUT = 1_000;
 const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [snapshot, wire]));
+const TOPIC_CAPABILITIES = new Map(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
+const CAPABILITIES = new Set(PROTOCOL_CAPABILITIES.map(({ wire }) => wire));
 
 function requiredObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
@@ -137,6 +139,11 @@ export class Session {
     return this.#granted;
   }
 
+  /** Immutable exact wire capabilities negotiated with the host. */
+  get grantedCapabilities() {
+    return this.#granted;
+  }
+
   /** Resolves when the handshake is complete and calls may be sent. */
   get ready() {
     return this.#greeted;
@@ -182,6 +189,17 @@ export class Session {
   /** Sends one call and resolves with the tagged host reply. */
   call(name, argument) {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
+    if (!this.#welcomed) return Promise.reject(new Error('extension host handshake is not complete'));
+    const capability = name === 'event_subscribe' || name === 'event_unsubscribe'
+      ? TOPIC_CAPABILITIES.get(argument?.topic)
+      : PROTOCOL_REQUEST_CAPABILITIES[name];
+    if (capability === undefined) return Promise.reject(new RangeError(`unclassified extension request ${name}`));
+    if (!this.#granted.includes(capability)) {
+      return Promise.reject(new ExtensionError({
+        error: 'denied', capability,
+        detail: `extension lacks negotiated capability ${capability}`,
+      }));
+    }
     if (this.#pending.length >= this.#limit) {
       return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
     }
@@ -395,7 +413,10 @@ export class Session {
     if (welcome.protocol !== PROTOCOL) {
       throw new Error(`host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`);
     }
-    this.#granted = welcome.granted ?? [];
+    if (!Array.isArray(welcome.granted) || welcome.granted.some((capability) => typeof capability !== 'string' || !CAPABILITIES.has(capability))) {
+      throw new TypeError('host greeting contains an unknown capability');
+    }
+    this.#granted = Object.freeze([...new Set(welcome.granted)]);
     this.#write(
       {
         channel: CONTROL,

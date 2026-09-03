@@ -32,13 +32,13 @@ test('real Unix stream negotiates grants, correlates a call, and returns event c
         }
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspace-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspace-read', 'container-read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     let pushed;
     const session = await connect({ path: socketPath, onEvent: (event) => { pushed = event; } });
-    assert.deepEqual(session.granted, ['workspace-read']);
+    assert.deepEqual(session.granted, ['workspace-read', 'container-read']);
     await session.call('event_subscribe', { topic: 'containers' });
     assert.equal((await workspace(session).info()).name, 'demo');
     await credit;
@@ -46,6 +46,48 @@ test('real Unix stream negotiates grants, correlates a call, and returns event c
     assert(observed.some((frame) => frame.channel === CONTROL && frame.kind === KIND.response));
     assert(observed.some((frame) => frame.channel === 7 && frame.kind === KIND.credit && frame.payload === 1));
     session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('negotiated grants are immutable and deny calls and topics before any socket write', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-grants-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: {
+          reply: 'workspace', with: { name: 'demo', image: 'alpine', architecture: 'amd64' },
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'grants', granted: ['workspace-read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(session.grantedCapabilities, ['workspace-read']);
+    assert(Object.isFrozen(session.grantedCapabilities));
+    assert.throws(() => session.grantedCapabilities.push('container-read'), TypeError);
+    await assert.rejects(session.call('container_list'), (error) => error instanceof Error
+      && error.name === 'ExtensionError' && error.kind === 'denied' && error.capability === 'container-read');
+    await assert.rejects(session.call('event_subscribe', { topic: 'containers' }), /container-read/);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [], 'locally denied authority writes no request frame');
+    assert.equal((await session.call('workspace_info')).reply, 'workspace');
+    assert.deepEqual(calls, [{ call: 'workspace_info' }], 'a negotiated authority still reaches the host');
+    await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
     await new Promise((resolve) => server.close(resolve));
@@ -67,7 +109,7 @@ test('real Unix control frames ping both directions and close every pending oper
         if (frame.kind === KIND.ping) socket.write(encode({ channel: frame.channel, kind: KIND.pong, payload: frame.payload }));
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'control', granted: [] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'control', granted: ['workspace-read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -129,7 +171,7 @@ test('real socket write backpressure admits no further calls until drain', async
   await new Promise((resolve, reject) => { client.once('connect', resolve); client.once('error', reject); });
   const host = await accepted;
   const baselineListeners = Object.fromEntries(['data', 'end', 'drain'].map((event) => [event, client.listenerCount(event)]));
-  host.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'pressure', granted: [] } }));
+  host.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'pressure', granted: ['workspace-read'] } }));
   const session = new Session(client, { timeout: 1_000 });
   await bounded(session.ready, 'greeting');
   const write = client.write.bind(client);
@@ -155,7 +197,7 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
   let peer;
   const server = net.createServer((socket) => {
     peer = socket;
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'channel', granted: [] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'channel', granted: ['workspace-read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {

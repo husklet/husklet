@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  PROTOCOL_CAPABILITIES, PROTOCOL_REPLIES, PROTOCOL_TOPICS, encodeRequest,
+  PROTOCOL_CAPABILITIES, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, encodeRequest,
   validateFailure, validateReply, validateReplyFor, validateRequest, validateSnapshot,
 } from '../src/index.js';
 
@@ -24,6 +24,8 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
   assert.throws(() => validateSnapshot({ snapshot: 'containers', of: [{}] }), /id must be present/);
   assert(PROTOCOL_CAPABILITIES.length >= 20);
   assert.equal(PROTOCOL_REPLIES.event_subscribe, 'done');
+  assert.equal(PROTOCOL_REQUEST_CAPABILITIES.container_attach_terminal, 'container-attach');
+  assert.equal(PROTOCOL_REQUEST_CAPABILITIES.event_subscribe, null);
   assert.equal(PROTOCOL_TOPICS.find(({ wire }) => wire === 'pane-changes').snapshot, 'pane_changes');
 });
 

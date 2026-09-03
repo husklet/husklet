@@ -100,6 +100,7 @@ export type WireReply = { reply: "workspace"; with: WorkspaceInfo } | { reply: "
 export type WireFailure = { error: "denied" } & { "capability": string; "detail": string } | { error: "absent" } & { "detail": string } | { error: "conflict" } & { "detail": string } | { error: "failed" } & { "detail": string } | { error: "unsupported" } & { "call": string };
 export type WireSnapshot = { snapshot: "containers"; of: Array<ContainerSummary> } | { snapshot: "executions"; of: ExecutionList } | { snapshot: "images"; of: Array<ImageSummary> } | { snapshot: "image_pulls"; of: ImagePullChange } | { snapshot: "volumes"; of: Array<VolumeSummary> } | { snapshot: "networks"; of: Array<NetworkSummary> } | { snapshot: "terminal"; of: Array<TabSummary> } | { snapshot: "pane_changes"; of: PaneChange } | { snapshot: "extensions"; of: Array<ExtensionSummary> } | { snapshot: "extension_acquisitions"; of: ExtensionAcquisitionChange } | { snapshot: "workspace_lifecycle"; of: WorkspaceLifecycleChange } | { snapshot: "workspace_events"; of: WorkspaceEventBatch };
 export const PROTOCOL_REPLIES: Readonly<Record<WireRequest['call'], WireReply['reply']>>;
+export const PROTOCOL_REQUEST_CAPABILITIES: Readonly<Record<WireRequest['call'], ExtensionCapability | null>>;
 export function validateRequest(value: unknown): WireRequest;
 export function validateReply(value: unknown): WireReply;
 export function validateReplyFor(call: WireRequest['call'], value: unknown): WireReply;

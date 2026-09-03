@@ -59,6 +59,38 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("interface_open_tab", "identity"), ("interface_split", "identity"), ("interface_withdraw", "done"), ("interface_render", "done"), ("interface_render_at", "done"), ("source_resize", "done"), ("source_resize_at", "done"), ("event_subscribe", "done"), ("event_unsubscribe", "done"),
 ];
 
+/// Required grant for each fixed request wire tag. Event authority is selected
+/// by its topic instead. Completeness is checked against `Request` below.
+fn request_capability(request: &str) -> Capability {
+    match request {
+        "workspace_info" | "workspace_list" | "workspace_inspect" => Capability::WorkspaceRead,
+        "workspace_create" | "workspace_adopt" | "workspace_update" | "workspace_delete" | "workspace_start" | "workspace_stop" | "workspace_restart" => Capability::WorkspaceControl,
+        "extension_list" | "extension_inspect" => Capability::ExtensionRead,
+        "extension_enable" | "extension_disable" | "extension_remove" => Capability::ExtensionControl,
+        "extension_acquisition_start" | "extension_acquisition_status" | "extension_acquisition_cancel" | "extension_install" | "extension_update" => Capability::ExtensionInstall,
+        "container_list" | "container_inspect" | "container_processes" | "container_logs" | "execution_inspect" | "execution_list" | "execution_logs" | "execution_wait" => Capability::ContainerRead,
+        "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause" | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec" | "execution_kill" | "execution_remove" => Capability::ContainerControl,
+        "container_attach_terminal" => Capability::ContainerAttach,
+        "image_list" | "image_inspect" => Capability::ImageRead,
+        "image_pull" | "image_pull_start" | "image_pull_status" | "image_pull_cancel" | "image_remove" | "image_prune" => Capability::ImageWrite,
+        "volume_list" | "volume_inspect" => Capability::VolumeRead,
+        "volume_create" | "volume_remove" => Capability::VolumeWrite,
+        "network_list" | "network_inspect" => Capability::NetworkRead,
+        "network_create" | "network_remove" | "network_connect" | "network_disconnect" => Capability::NetworkWrite,
+        "terminal_tabs" | "terminal_topology" => Capability::TerminalRead,
+        "pane_list" => Capability::PaneObserve,
+        "terminal_read_pane" => Capability::TerminalOutput,
+        "pane_semantic_read" => Capability::PaneSemanticRead,
+        "pane_semantic_action" => Capability::PaneSemanticControl,
+        "terminal_open_tab" | "terminal_split" | "terminal_split_observed" | "terminal_spawn" | "terminal_spawn_observed" | "terminal_write_pane" | "terminal_resize_grid" | "terminal_resize_grid_observed" | "terminal_close_pane" | "terminal_close_pane_observed" | "terminal_focus_pane" | "terminal_focus_pane_observed" | "terminal_retitle_pane" | "terminal_retitle_pane_observed" | "terminal_ratio" | "terminal_ratio_observed" | "terminal_switch_occupant" | "terminal_switch_occupant_observed" => Capability::TerminalControl,
+        "filesystem_list" | "filesystem_read" | "filesystem_read_range" | "filesystem_stat" => Capability::FilesystemRead,
+        "filesystem_write" | "filesystem_create_observed" | "filesystem_mkdir" | "filesystem_rename" | "filesystem_rename_observed" | "filesystem_remove" | "filesystem_remove_observed" => Capability::FilesystemWrite,
+        "interface_open_tab" | "interface_split" | "interface_withdraw" | "interface_render" | "interface_render_at" | "source_resize" | "source_resize_at" => Capability::Interface,
+        "event_subscribe" | "event_unsubscribe" => panic!("event capability is selected by topic"),
+        _ => panic!("unclassified Request wire tag {request}"),
+    }
+}
+
 /// Canonical pretty-printed protocol specification, terminated by one newline.
 /// Panics rather than emitting a partial document when syntax is unsupported or
 /// a named local wire type cannot be resolved.
@@ -134,6 +166,7 @@ pub fn document() -> String {
         "capabilities":Capability::ALL.iter().map(|c|json!({"wire":c.as_str(),"mutates":c.mutates(),"executes":c.executes()})).collect::<Vec<_>>(),
         "topics":Topic::ALL.iter().zip(snapshot_variants).map(|(t,snapshot)|json!({"wire":serde_json::to_value(t).unwrap(),"capability":t.capability().as_str(),"snapshot":snapshot})).collect::<Vec<_>>(),
         "request_to_reply":REQUEST_TO_REPLY.iter().map(|(request,reply)|json!({"request":request,"reply":reply})).collect::<Vec<_>>(),
+        "request_to_capability":REQUEST_TO_REPLY.iter().map(|(request,_)|json!({"request":request,"capability":if matches!(*request,"event_subscribe"|"event_unsubscribe"){serde_json::Value::Null}else{json!(request_capability(request).as_str())}})).collect::<Vec<_>>(),
         "bounds":{
             "semantic_nodes":crate::port::SEMANTIC_NODE_LIMIT,"semantic_depth":crate::port::SEMANTIC_DEPTH_LIMIT,
             "semantic_text_bytes":crate::port::SEMANTIC_TEXT_LIMIT,"semantic_action_value_bytes":crate::port::SEMANTIC_ACTION_VALUE_LIMIT,
