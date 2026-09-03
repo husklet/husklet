@@ -68,11 +68,13 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
         else if (call === 'workspace_update') answer(frame, 'workspace_configuration', argument.configuration);
         else if (call === 'container_create') answer(frame, 'identity', containerId);
         else if (call === 'container_start' || call === 'container_rename' || call === 'container_stop' || call === 'container_remove'
-          || call === 'terminal_retitle_pane'
+          || call === 'terminal_retitle_pane_observed'
           || call === 'terminal_write_pane' || call === 'pane_semantic_action'
           || call === 'event_subscribe' || call === 'event_unsubscribe') {
           answer(frame, 'done');
-          if (call === 'terminal_retitle_pane') {
+          if (call === 'terminal_retitle_pane_observed') {
+            assert.equal(argument.generation, paneGeneration);
+            assert.equal(argument.revision, paneRevision);
             paneTitle = argument.title;
             paneGeneration += 1;
             paneRevision += 1;
@@ -161,7 +163,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   const originalInventory = await client.callTool({ name: 'husklet_pane_list', arguments: {} });
   const originalPane = JSON.parse(originalInventory.content[0].text).panes.find(({ slot }) => slot === 'terminal-1');
   await client.callTool({ name: 'husklet_terminal_retitle', arguments: {
-    slot: 'terminal-1', title: 'Build 🧪',
+    slot: 'terminal-1', generation: originalPane.generation, revision: originalPane.revision, title: 'Build 🧪',
   } });
   const renamedInventory = await client.callTool({ name: 'husklet_pane_list', arguments: {} });
   const renamedPane = JSON.parse(renamedInventory.content[0].text).panes.find(({ slot }) => slot === 'terminal-1');
@@ -208,7 +210,7 @@ test('day-one agent drives exact framed host requests and confirmed cleanup thro
   assert.equal(diagnostics, '');
 
   assert.deepEqual(calls.map(({ call }) => call), [
-    'workspace_info', 'container_rename', 'pane_list', 'terminal_retitle_pane', 'pane_list', 'extension_list', 'event_subscribe', 'event_unsubscribe',
+    'workspace_info', 'container_rename', 'pane_list', 'terminal_retitle_pane_observed', 'pane_list', 'extension_list', 'event_subscribe', 'event_unsubscribe',
     'event_subscribe', 'event_unsubscribe', 'event_subscribe', 'event_unsubscribe',
     'workspace_inspect', 'image_pull_start', 'image_pull_status',
     'event_subscribe', 'image_pull_status', 'event_unsubscribe',
