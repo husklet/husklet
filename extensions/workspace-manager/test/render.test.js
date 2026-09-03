@@ -638,7 +638,7 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
   invoke(stage, 'Connect'); await settled();
   assert.deepEqual(calls, [], 'invalid immutable identity and aliases never reach control authority');
-  assert.ok(labelled(stage, 'Enter the complete 64-character lowercase hexadecimal container ID.'));
+  assert.ok(labelled(stage, 'Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.'));
 
   change(stage, 'Complete container ID', 'b'.repeat(64));
   invoke(stage, 'Connect'); await settled();

@@ -30,7 +30,7 @@ export function endpointAliases(value) {
 }
 
 export function immutableContainerId(value) {
-  return /^[0-9a-f]{64}$/.test(value);
+  return /^(?:[0-9a-f]{32}|[0-9a-f]{64})$/.test(value);
 }
 
 export function boundedMessage(value, limit = 512) {

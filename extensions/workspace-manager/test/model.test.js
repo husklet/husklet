@@ -23,6 +23,7 @@ test('endpoint aliases and immutable container identity mirror native boundaries
     assert.throws(() => endpointAliases(invalid), /at most 64 unique/);
   }
   assert.equal(endpointAliases(Array.from({ length: 64 }, (_, index) => `alias-${index}`).join(',')).length, 64);
+  assert.equal(immutableContainerId('a'.repeat(32)), true);
   assert.equal(immutableContainerId('a'.repeat(64)), true);
   assert.equal(immutableContainerId('A'.repeat(64)), false);
   assert.equal(immutableContainerId('a'.repeat(63)), false);

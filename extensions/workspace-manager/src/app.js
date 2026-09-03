@@ -592,7 +592,7 @@ export function Networks({ api, resource, networkDetails }) {
   };
   const request = (network, verb) => {
     const containerId = container.trim();
-    if (!immutableContainerId(containerId)) throw new TypeError('Enter the complete 64-character lowercase hexadecimal container ID.');
+    if (!immutableContainerId(containerId)) throw new TypeError('Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.');
     return { verb, network: resourceReference(network), container: containerId, aliases: verb === 'connect' ? endpointAliases(aliases) : [] };
   };
   const attach = async (next) => {
