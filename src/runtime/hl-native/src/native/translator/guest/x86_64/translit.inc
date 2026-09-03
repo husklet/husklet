@@ -1914,7 +1914,7 @@ static int translit_jcc_live_forward_shape_test(void) {
     uint8_t emitted[1024] = {0};
     struct interp_block *target_block = (struct interp_block *)(void *)(emitted + 512);
     target_block->host_entry_off = 128;
-    hl_x64_asm output = {emitted, emitted + 384, 0};
+    hl_x64_asm output = {emitted, emitted + 512, 0};
     int saved_pcache = g_pcache;
     g_pcache = 0;
     uint64_t before = __atomic_load_n(&translit_jcc_live_forward_admitted, __ATOMIC_RELAXED);
@@ -1925,7 +1925,12 @@ static int translit_jcc_live_forward_shape_test(void) {
         return 0;
     int32_t displacement;
     memcpy(&displacement, emitted + 1, sizeof displacement);
-    return emitted + 5 + displacement == (uint8_t *)target_block + target_block->host_entry_off;
+    if (emitted + 5 + displacement != (uint8_t *)target_block + target_block->host_entry_off) return 0;
+
+    memset(emitted, 0, 512);
+    output = (hl_x64_asm){emitted, emitted + 512, 0};
+    translit_emit_jcc_link(&output, target_block, UINT64_C(0x1200), UINT64_C(0x1100));
+    return !output.overflow && output.cursor > emitted + 5 && emitted[0] != 0xe9;
 }
 #endif
 
