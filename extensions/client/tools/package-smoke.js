@@ -273,6 +273,57 @@ async function runPackedGreetingTimeout(starter) {
   }
 }
 
+async function runPackedMalformedReply(starter, installedClient) {
+  const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
+  const socket = path.join(starter, 'host-malformed-reply.sock');
+  let requested = false;
+  let peer;
+  const server = net.createServer((stream) => {
+    peer = stream;
+    const reader = new wire.Reader();
+    stream.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2 || frame.kind !== wire.KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'workspace_info' });
+        requested = true;
+        stream.end(wire.encode({
+          channel: 2,
+          kind: wire.KIND.response,
+          payload: Buffer.from('{', 'utf8'),
+        }));
+      }
+    });
+    stream.write(wire.encode({
+      channel: 0,
+      kind: wire.KIND.open,
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+    }));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  const child = spawn(process.execPath, ['main.js'], {
+    cwd: starter,
+    env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = ''; let stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not reject a malformed reply')), 2_000)),
+    ]);
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.equal(requested, true, 'packed starter must cross the handshake and issue its exact workspace request');
+    assert.equal(stdout, '', 'malformed reply must not become invented workspace output');
+    assert.match(stderr, /^client-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/);
+  } finally {
+    peer?.destroy();
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 try {
   const packed = JSON.parse(execFileSync('npm', [
     'pack', '--json', '--ignore-scripts', '--pack-destination', scratch,
@@ -347,6 +398,7 @@ try {
   await runPackedOversizedGreeting(starter, starterClient);
   await runPackedIllegalHeader(starter, starterClient);
   await runPackedGreetingTimeout(starter);
+  await runPackedMalformedReply(starter, starterClient);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
