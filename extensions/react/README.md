@@ -118,6 +118,18 @@ await host.stop('backend');
 await host.update('backend', configuration.generation, { ...configuration, memory_mb: 4096 });
 await host.start('backend');
 const containers = await host.containers.list();
+const created = await host.containers.create({
+  image: 'alpine:3.20',
+  name: 'worker',
+  command: ['sleep', '300'],
+  environment: [['MODE', 'development']],
+  mounts: [{ volume: 'build-cache', target: '/cache', read_only: false }],
+  ports: [{ container: 8080, host: null, protocol: 'tcp' }],
+  memory_mb: 512,
+  cpus: 2,
+  pids_limit: 128,
+});
+await host.containers.start(created);
 await host.containers.stop(containers[0].id);
 const pane = await host.containers.attachTerminal(containers[0].id, ['sh', '-i']);
 const processes = await host.containers.processes(containers[0].id);
@@ -149,8 +161,9 @@ pane disconnects.
 Volume removal takes both its canonical name and the 32-hex `generation` returned
 by inventory or inspection. The host compares that generation atomically, so a
 removed and recreated same-name volume needs fresh consent.
-The host currently publishes changed full snapshots for `containers`,
-`images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
+The host publishes bounded change feeds for container and execution inventories,
+image pulls, panes, extensions and their acquisitions, workspace lifecycle and
+input events, plus the legacy image, volume, network, and terminal snapshots. Start and stop those credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`. An acknowledged final
 unsubscribe retires the host channel and discards any coalesced snapshot, so
