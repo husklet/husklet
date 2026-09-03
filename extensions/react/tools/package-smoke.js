@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, starter, signal, hostEof = false) {
-  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}.sock`);
+async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false) {
+  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
@@ -24,7 +24,9 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false) {
         stream.write(wire.encode({
           channel: frame.channel,
           kind: wire.KIND.response,
-          payload: frame.payload.call === 'interface_open_tab'
+          payload: malformedRender && frame.payload.call === 'interface_render_at'
+            ? Buffer.from('{', 'utf8')
+            : frame.payload.call === 'interface_open_tab'
             ? { reply: 'identity', with: 'packed-starter' }
             : { reply: 'done' },
         }), () => {
@@ -62,10 +64,10 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false) {
     assert.equal(rendered.with.slot, 'packed-starter');
     assert.equal(rendered.with.frame.sequence, 1);
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
-    if (hostEof) {
-      exit = await Promise.race([
+    if (hostEof || malformedRender) {
+      exit = child.exitCode !== null ? { code: child.exitCode, signal: child.signalCode } : await Promise.race([
         new Promise((resolve) => child.once('exit', (code, receivedSignal) => resolve({ code, signal: receivedSignal }))),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('packed React starter did not stop after host EOF')), 2_000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`packed React starter did not stop after host failure; stderr=${stderr}`)), 2_000)),
       ]);
     } else {
       assert.equal(stderr, '');
@@ -78,11 +80,15 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false) {
     peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
   }
-  assert.deepEqual(exit, hostEof ? { code: 1, signal: null } : { code: 0, signal: null },
+  assert.deepEqual(exit, hostEof || malformedRender ? { code: 1, signal: null } : { code: 0, signal: null },
     `packed React starter did not stop cleanly; stderr=${stderr}`);
-  assert.equal(stderr, hostEof
-    ? 'react-starter: host connection ended: extension host connection closed\n'
-    : '');
+  if (malformedRender) {
+    assert.match(stderr, /^react-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/);
+  } else {
+    assert.equal(stderr, hostEof
+      ? 'react-starter: host connection ended: extension host connection closed\n'
+      : '');
+  }
 }
 
 async function runPackedStarterDenied(consumer, starter) {
@@ -226,6 +232,7 @@ try {
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM');
   await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', true);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, true);
   await runPackedStarterDenied(consumer, standaloneStarter);
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
