@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-client-pack-'));
 
-async function runPackedStarter(starter, installedClient, architecture, signal) {
+async function runPackedStarter(starter, installedClient, architecture, signal, hostEof = false) {
   const wire = await import(new URL('src/wire.js', `file://${installedClient}/`));
-  const socket = path.join(starter, `host-${architecture}-${signal}.sock`);
+  const socket = path.join(starter, `host-${architecture}-${signal}${hostEof ? '-eof' : ''}.sock`);
   let peer;
   let observed = false;
   const server = net.createServer((stream) => {
@@ -26,7 +26,7 @@ async function runPackedStarter(starter, installedClient, architecture, signal) 
           channel: 2,
           kind: wire.KIND.response,
           payload: { reply: 'workspace', with: { name: 'project', architecture, image: 'alpine:3.20' } },
-        }));
+        }), () => { if (hostEof) stream.end(); });
       }
     });
     stream.write(wire.encode({
@@ -51,14 +51,16 @@ async function runPackedStarter(starter, installedClient, architecture, signal) 
     }
     assert(observed, `packed client starter did not call the real socket; stderr=${stderr}`);
     assert(stdout.endsWith('\n'), `packed client starter did not report workspace information; stderr=${stderr}`);
-    child.kill(signal);
-    const exit = await Promise.race([
-      new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
+    if (!hostEof) child.kill(signal);
+    const exit = child.exitCode !== null ? { code: child.exitCode, signal: child.signalCode } : await Promise.race([
+      new Promise((resolve) => child.once('exit', (code, receivedSignal) => resolve({ code, signal: receivedSignal }))),
       new Promise((_, reject) => setTimeout(() => reject(new Error('packed client starter did not stop')), 2_000)),
     ]);
-    assert.deepEqual(exit, { code: 0, signal: null });
+    assert.deepEqual(exit, hostEof ? { code: 1, signal: null } : { code: 0, signal: null });
     assert.equal(stdout, `${JSON.stringify({ name: 'project', architecture, image: 'alpine:3.20' })}\n`);
-    assert.equal(stderr, '');
+    assert.equal(stderr, hostEof
+      ? 'client-starter: host connection ended: extension host connection closed\n'
+      : '');
   } finally {
     peer?.destroy();
     if (child.exitCode === null) child.kill('SIGKILL');
@@ -134,6 +136,7 @@ try {
     await runPackedStarter(starter, starterClient, architecture, 'SIGTERM');
     await runPackedStarter(starter, starterClient, architecture, 'SIGINT');
   }
+  await runPackedStarter(starter, starterClient, 'x86_64', 'SIGTERM', true);
 
   execFileSync(process.execPath, ['--input-type=module', '--eval', `
     import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
