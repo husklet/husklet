@@ -256,7 +256,15 @@ impl CheckpointJourney {
         window: &Rc<TermWin>,
         terminals: &[vte4::Terminal; 3],
     ) -> Result<(), String> {
-        let tab_count = window.entries.borrow().iter().filter(|entry| entry.persisted).count();
+        // The first entry is the non-closable workspace overview. Session persistence
+        // deliberately skips it, so the journey's tab count must use the same domain.
+        let tab_count = window
+            .entries
+            .borrow()
+            .iter()
+            .skip(1)
+            .filter(|entry| entry.persisted)
+            .count();
         if tab_count != 2 || parent.width() != 913 || parent.height() != 617 {
             return Err(format!(
                 "tabs={tab_count} geometry={}x{}",
