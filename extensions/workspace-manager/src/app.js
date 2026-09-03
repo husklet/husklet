@@ -121,6 +121,8 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState('');
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
+  const inspectionRevision = useRef(0);
+  const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({ image: '', name: '' });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -130,16 +132,26 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
   };
   const inspect = async (item) => {
+    const revision = ++inspectionRevision.current;
     setSelected(item.id);
     setInspection({ id: item.id, state: 'loading', count: 0, detail: null, error: null });
     try {
       const detail = await api.containers.inspect(item.id);
+      if (revision !== inspectionRevision.current) return;
       const count = await detailsSource.replace(detail);
+      if (revision !== inspectionRevision.current) return;
       setInspection({ id: item.id, state: 'ready', count, detail, error: null });
     } catch (cause) {
-      setInspection({ id: item.id, state: 'error', count: 0, detail: null, error: cause });
+      if (revision === inspectionRevision.current) setInspection({ id: item.id, state: 'error', count: 0, detail: null, error: cause });
     }
   };
+  useEffect(() => {
+    if (inventoryRevision.current === resource.data) return;
+    inventoryRevision.current = resource.data;
+    inspectionRevision.current += 1;
+    setSelected(null);
+    setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
+  }, [resource.data]);
   const toggleDetails = (item) => {
     if (selected === item.id && inspection.state !== 'error') {
       setSelected(null);
