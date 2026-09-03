@@ -425,6 +425,7 @@ fn the_sidebar_is_fixed_independent_of_what_the_workspace_recorded() {
 
 fn selecting_an_extension_shows_the_surface_it_draws() {
     let fixture = Fixture::new(&[("alpha", true)]);
+    fixture.view.select_name(Page::Extensions.title());
 
     assert!(fixture.shelf.open(&named("alpha")));
 
@@ -932,15 +933,28 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
 
 fn removing_an_extension_takes_its_pages_with_it() {
     let fixture = Fixture::new(&[("alpha", true)]);
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(&fixture.view.widget).build();
+    window.present();
 
     fixture.act("alpha", settings::REMOVE);
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert_eq!(
         fixture.stage("alpha"),
         Stage::Duty,
         "asking for confirmation changes nothing"
     );
-    fixture.act("alpha", settings::CONFIRM_REMOVE);
+    let confirm = fixture.extension_tagged("alpha", settings::CONFIRM_REMOVE)
+        .and_downcast::<gtk::Button>().expect("confirmation button");
+    assert!(confirm.grab_focus());
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(confirm.has_focus(), "confirmation owns keyboard focus before activation");
+    confirm.emit_clicked();
     assert!(until_gui(|| fixture.stage("alpha") == Stage::Vacancy));
+    while gtk::glib::MainContext::default().iteration(false) {}
+    let focus = gtk::prelude::RootExt::focus(&window).expect("removal leaves a focused control");
+    assert!(std::iter::successors(Some(focus), gtk::Widget::parent)
+        .any(|widget| widget.has_css_class(directory::REFERENCE)),
+        "successful keyboard removal returns focus to extension acquisition");
 
     assert_eq!(fixture.stage("alpha"), Stage::Vacancy, "the record is forgotten");
     assert!(
@@ -955,6 +969,7 @@ fn removing_an_extension_takes_its_pages_with_it() {
         !fixture.view.entries().contains(&"alpha".to_owned()),
         "and its sidebar entry is gone"
     );
+    window.close();
 }
 
 fn failed_removal_keeps_a_disabled_record_and_offers_retry() {

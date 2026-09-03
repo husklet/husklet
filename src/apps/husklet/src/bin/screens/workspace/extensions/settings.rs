@@ -336,6 +336,10 @@ fn focus_replacement(shelf: &Shelf, deed: Deed) {
         Deed::Enable | Deed::Retry => DISABLE,
         Deed::Disable => ENABLE,
     };
+    focus_class(shelf, class);
+}
+
+fn focus_class(shelf: &Shelf, class: &str) {
     let Some(page) = shelf.view().and_then(|view| view.page(super::super::Page::Extensions.title())) else {
         return;
     };
@@ -491,6 +495,7 @@ fn removal(
         let status_path = status_path.clone();
         let notice_path = notice_path.clone();
         confirm.clone().connect_clicked(move |_| {
+            let restore_focus = confirm.has_focus();
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);
             let unchanged = shelf
@@ -581,6 +586,12 @@ fn removal(
                         );
                     } else {
                         shelf.refresh(&name);
+                        if restore_focus {
+                            let shelf = Rc::clone(&shelf);
+                            gtk::glib::idle_add_local_once(move || {
+                                focus_class(&shelf, super::directory::REFERENCE);
+                            });
+                        }
                     }
                     gtk::glib::ControlFlow::Break
                 }
