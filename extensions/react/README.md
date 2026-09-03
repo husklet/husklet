@@ -142,7 +142,9 @@ removed and recreated same-name volume needs fresh consent.
 The host currently publishes changed full snapshots for `containers`,
 `images`, `volumes`, `networks`, and `terminal`. Start and stop those bounded, credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
-through `connect({ onEvent })` or `session.onEvent()`.
+through `connect({ onEvent })` or `session.onEvent()`. An acknowledged final
+unsubscribe retires the host channel and discards any coalesced snapshot, so
+later subscriptions start with fresh credit and state.
 
 Terminal control is pane-addressed and promise-based as well. `terminal.read`
 returns at most 2,000 lines with the cursor and grid dimensions from the same

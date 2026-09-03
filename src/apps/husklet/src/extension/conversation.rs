@@ -695,6 +695,15 @@ impl Conversation {
                     topic: Topic::WorkspaceLifecycle,
                 } => {
                     self.workspace_lifecycle_revision = None;
+                    self.subscriptions
+                        .close(Topic::WorkspaceLifecycle, &mut self.channels, &mut self.outbox);
+                }
+                hl_extension::Request::EventUnsubscribe { topic } => {
+                    // `Session::unfollow` stops publication authority; retire
+                    // the transport route as part of the same acknowledged
+                    // call so repeated topic use cannot leak channel budget or
+                    // retain a coalesced snapshot after disposal.
+                    self.subscriptions.close(*topic, &mut self.channels, &mut self.outbox);
                 }
                 _ => {}
             }
@@ -1482,6 +1491,74 @@ mod tests {
         let released = peer.receive().expect("latest event released");
         let latest: Snapshot = serde_json::from_slice(&released.payload).expect("snapshot");
         assert!(matches!(latest, Snapshot::Containers(containers) if containers[0].created == 99));
+    }
+
+    #[test]
+    fn framed_unsubscribe_retires_the_topic_channel_and_queued_snapshot() {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        theirs
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .expect("peer deadline");
+        let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+        let ports = services(&host);
+        let topic = hl_extension::Topic::Containers;
+        let snapshot = Snapshot::Containers(vec![ContainerSummary {
+            id: "c1".into(),
+            name: "api".into(),
+            image: "image".into(),
+            state: "running".into(),
+            created: 1,
+        }]);
+        let mut peer = Wire::new(theirs);
+
+        let subscribe = codec::request(&Request::EventSubscribe { topic }).expect("subscribe request");
+        conversation.exchange(&subscribe, &ports).expect("subscribe");
+        assert_eq!(
+            codec::read_reply(&peer.receive().expect("subscribe reply")).unwrap(),
+            Reply::Done
+        );
+        conversation.publish(&snapshot).expect("first snapshot");
+        let first = peer.receive().expect("first event");
+        assert_eq!(first.kind, Kind::Event);
+        let channel = first.channel;
+
+        // Exhaust this route and leave a newer snapshot coalesced behind it.
+        for created in 2..=hl_extension::Channels::CREDIT {
+            let mut next = snapshot.clone();
+            if let Snapshot::Containers(containers) = &mut next {
+                containers[0].created = i64::from(created);
+            }
+            conversation.publish(&next).expect("credited snapshot");
+            peer.receive().expect("credited event");
+        }
+        assert_eq!(conversation.publish(&snapshot), Ok(Emission::Superseded));
+        assert_eq!(conversation.outbox.depth(channel), 1);
+
+        let unsubscribe = codec::request(&Request::EventUnsubscribe { topic }).expect("unsubscribe request");
+        conversation.exchange(&unsubscribe, &ports).expect("unsubscribe");
+        assert_eq!(
+            codec::read_reply(&peer.receive().expect("unsubscribe reply")).unwrap(),
+            Reply::Done
+        );
+        assert_eq!(conversation.subscriptions.channel(topic), None);
+        assert_eq!(
+            conversation.channels.credit(channel),
+            None,
+            "channel budget is returned"
+        );
+        assert_eq!(
+            conversation.outbox.depth(channel),
+            0,
+            "stale coalesced state is discarded"
+        );
+
+        let stale_credit = Frame::new(channel, Kind::Credit, serde_json::to_vec(&1_u32).unwrap());
+        conversation
+            .exchange(&stale_credit, &ports)
+            .expect("stale credit ignored");
     }
 
     #[test]
