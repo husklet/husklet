@@ -319,6 +319,11 @@ export function workspace(session) {
         }
         return done('terminal_resize_grid', { slot, columns, rows });
       },
+      resizeGridObserved: (slot, generation, revision, columns, rows) => {
+        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal resize requires nonnegative safe integer generation and revision');
+        if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
+        return done('terminal_resize_grid_observed', { slot, generation, revision, columns, rows });
+      },
       close: (slot) => done('terminal_close_pane', { slot }),
       closeObserved: (slot, generation, revision) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
@@ -580,7 +585,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'retitle', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'stat', 'read', 'write', 'mkdir', 'rename', 'remove'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer'],

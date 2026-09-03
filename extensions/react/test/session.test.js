@@ -578,7 +578,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const splitting = terminal.splitObserved('s1', 4, 7, 'below');
   const spawning = terminal.spawnObserved('s1', 4, 7, ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
-  const resizing = terminal.resizeGrid('s1', 120, 40);
+  const resizing = terminal.resizeGridObserved('s1', 4, 7, 120, 40);
   const ratio = terminal.ratioObserved('s1', 4, 7, 0.6);
   const retitling = terminal.retitle('s1', ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
@@ -593,7 +593,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     call: 'terminal_write_pane', with: { slot: 's1', generation: 4, revision: 7, contents: [...new TextEncoder().encode('echo hello\n')] },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_resize_grid', with: { slot: 's1', columns: 120, rows: 40 },
+    call: 'terminal_resize_grid_observed', with: { slot: 's1', generation: 4, revision: 7, columns: 120, rows: 40 },
   });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_ratio_observed', with: { slot: 's1', generation: 4, revision: 7, ratio: 0.6 },
@@ -626,6 +626,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.throws(() => terminal.splitObserved('s1', 4, -1, 'below'), /generation and revision/);
   assert.throws(() => terminal.ratioObserved('s1', 4, -1, 0.6), /generation and revision/);
   assert.throws(() => terminal.resizeGrid('s1', 0, 24), /1\.\.=1000/);
+  assert.throws(() => terminal.resizeGridObserved('s1', 4, -1, 80, 24), /generation and revision/);
   for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
     assert.throws(() => terminal.retitle('s1', title), /pane title must/);
   }

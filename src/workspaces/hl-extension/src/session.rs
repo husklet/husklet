@@ -204,6 +204,7 @@ impl Session {
             | Request::TerminalReadPane { .. }
             | Request::TerminalWritePane { .. }
             | Request::TerminalResizeGrid { .. }
+            | Request::TerminalResizeGridObserved { .. }
             | Request::TerminalClosePane { .. }
             | Request::TerminalClosePaneObserved { .. }
             | Request::TerminalFocusPane { .. }
@@ -607,7 +608,8 @@ impl Session {
                 }
                 port.write(slot, *generation, *revision, contents).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::TerminalResizeGrid { slot, columns, rows } => {
+            Request::TerminalResizeGrid { slot, columns, rows }
+            | Request::TerminalResizeGridObserved { slot, columns, rows, .. } => {
                 if *columns == 0 || *rows == 0 || *columns > PANE_GRID_EDGE || *rows > PANE_GRID_EDGE {
                     return Err(Failure::Conflict {
                         detail: format!("terminal grid must be within 1..={PANE_GRID_EDGE} rows and columns"),

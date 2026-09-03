@@ -177,6 +177,8 @@ splits only that exact snapshot (the legacy `split` remains for compatibility);
 stale slot from running argv in a replacement terminal (legacy `spawn` remains);
 `terminal.ratioObserved` binds layout resizing to the same cursor while legacy
 `ratio` remains available;
+`terminal.resizeGridObserved` binds PTY resizing to the same cursor while legacy
+`resizeGrid` remains available;
 `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
 through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only

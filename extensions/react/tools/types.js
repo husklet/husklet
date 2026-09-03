@@ -512,6 +512,7 @@ export interface WorkspaceApi {
     act(slot: string, action: PaneSemanticAction): Promise<void>;
     writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
+    resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
     focus(slot: string): Promise<void>;

@@ -261,6 +261,13 @@ pub enum Request {
         columns: u16,
         rows: u16,
     },
+    TerminalResizeGridObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        columns: u16,
+        rows: u16,
+    },
     TerminalClosePane {
         slot: String,
     },
@@ -422,6 +429,7 @@ impl Request {
             | Self::TerminalSpawnObserved { .. }
             | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
+            | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
             | Self::TerminalClosePaneObserved { .. }
             | Self::TerminalFocusPane { .. }

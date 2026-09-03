@@ -55,6 +55,8 @@ async function fakeHost(context, { greet = true } = {}) {
               ? { reply: 'done' }
             : frame.payload.call === 'terminal_ratio_observed'
               ? { reply: 'done' }
+            : frame.payload.call === 'terminal_resize_grid_observed'
+              ? { reply: 'done' }
             : frame.payload.call === 'terminal_close_pane_observed'
               ? { reply: 'done' }
             : frame.payload.call === 'network_connect'
@@ -155,6 +157,9 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
   await client.callTool({ name: 'husklet_terminal_ratio', arguments: {
     slot: 'pane-observed', generation: 9, revision: 12, ratio: 0.6,
   } });
+  await client.callTool({ name: 'husklet_terminal_resize', arguments: {
+    slot: 'pane-observed', generation: 9, revision: 12, columns: 120, rows: 40,
+  } });
   await client.callTool({ name: 'husklet_terminal_close', arguments: {
     slot: 'pane-observed', generation: 9, revision: 12, confirm: true,
   } });
@@ -170,6 +175,7 @@ test('spawned packaged CLI initializes stdio MCP and lists tools through a real 
     { call: 'terminal_switch_occupant_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, target: { kind: 'terminal' } } },
     { call: 'terminal_spawn_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, command: ['printf', '%s', 'ready'] } },
     { call: 'terminal_ratio_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, ratio: 0.6 } },
+    { call: 'terminal_resize_grid_observed', with: { slot: 'pane-observed', generation: 9, revision: 12, columns: 120, rows: 40 } },
     { call: 'terminal_close_pane_observed', with: { slot: 'pane-observed', generation: 9, revision: 12 } },
     { call: 'network_connect', with: { reference: network, container: id, aliases } },
   ]);
