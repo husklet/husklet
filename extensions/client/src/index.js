@@ -9,9 +9,20 @@ export { semanticXml };
 import { Session } from './session.js';
 import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from './generated-protocol.js';
 
+/** A post-creation execution failure whose immutable identity remains recoverable. */
+export class ExecutionOperationError extends Error {
+  constructor(executionId, phase, cause) {
+    super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ExecutionOperationError';
+    this.executionId = executionId;
+    this.phase = phase;
+    this.cause = cause;
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
 function immutableIdentity(id, widths, noun) {
   if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
@@ -47,6 +58,14 @@ function exactPaneTitle(title) {
   throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
 }
 
+function exactOccupantTarget(target) {
+  const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
+  const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
+  const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
+  if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
+  return { ...target };
+}
+
 function exactSemanticAction(action) {
   if (!Number.isSafeInteger(action?.generation) || action.generation < 0
     || !Number.isSafeInteger(action?.revision) || action.revision < 0
@@ -67,6 +86,16 @@ function exactCommand(command) {
     throw new TypeError('command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
   }
   return command;
+}
+
+function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new RangeError('execution wait timeout must be an integer from 1 through 30000 milliseconds');
+  }
+  if (typeof stdout !== 'boolean' || typeof stderr !== 'boolean' || (!stdout && !stderr)) {
+    throw new TypeError('execution output requires at least one boolean stdout or stderr stream');
+  }
+  return { timeoutMs, stdout, stderr };
 }
 
 function immutableDigest(value, noun) {
@@ -156,6 +185,7 @@ export function workspace(session, { signal } = {}) {
       inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
       enable: (name, imageDigest) => done('extension_enable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       disable: (name, imageDigest) => done('extension_disable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
+      retry: (name, imageDigest) => done('extension_retry', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       remove: (name, imageDigest) => done('extension_remove', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
@@ -214,6 +244,21 @@ export function workspace(session, { signal } = {}) {
           user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
+      execAndWait: async (id, { command, user, workingDirectory, ...waitOptions } = {}) => {
+        const containerId = immutableIdentity(id, [32, 64], 'container');
+        const argv = exactCommand(command);
+        const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
+        const executionId = await api.containers.exec(containerId, { command: argv, user, workingDirectory });
+        let phase = 'wait';
+        try {
+          const execution = await api.containers.waitExecution(executionId, { timeoutMs });
+          phase = 'logs';
+          const output = await api.containers.executionLogs(executionId, { stdout, stderr });
+          return { execution, output };
+        } catch (cause) {
+          throw new ExecutionOperationError(executionId, phase, cause);
+        }
+      },
       attachTerminal: (id, command) => session.call('container_attach_terminal', {
         id: immutableIdentity(id, [32, 64], 'container'), command: exactCommand(command),
       }).then((reply) => expect(reply, 'identity')),
@@ -350,19 +395,11 @@ export function workspace(session, { signal } = {}) {
       },
       switchOccupant: (slot, generation, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
-        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
-        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
-        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
-        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
-        return done('terminal_switch_occupant', { slot, generation, target: { ...target } });
+        return done('terminal_switch_occupant', { slot, generation, target: exactOccupantTarget(target) });
       },
       switchOccupantObserved: (slot, generation, revision, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
-        const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
-        const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
-        const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
-        if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
-        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: { ...target } });
+        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: exactOccupantTarget(target) });
       },
     },
     files: {
@@ -446,6 +483,109 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
+  api.watchContainerInventory = (listener) => watch('container-inventory', 'container_inventory', listener, 'container inventory');
+  api.containers.startAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('container start wait timeout must be between 1 and 30000ms');
+    }
+    let sequence = 0; let baseline = 0; let started = false; let observed; let timer;
+    const running = new Promise((resolve) => {
+      observed = (containers) => {
+        sequence += 1;
+        if (!started || sequence <= baseline) return;
+        const current = containers.find((container) => container.id === identity);
+        if (current?.state === 'running') resolve(current);
+      };
+    });
+    const stop = await api.watchContainers(observed);
+    baseline = sequence;
+    try {
+      started = true;
+      await api.containers.start(identity);
+      const container = await Promise.race([
+        running,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return container === null ? { changed: false, id: identity, state: 'running' } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.containers.stopAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('container stop wait timeout must be between 1 and 30000ms');
+    }
+    let sequence = 0; let baseline = 0; let stopped = false; let observed; let timer;
+    const exited = new Promise((resolve) => {
+      observed = (containers) => {
+        sequence += 1;
+        if (!stopped || sequence <= baseline) return;
+        const current = containers.find((container) => container.id === identity);
+        if (current?.state === 'exited') resolve(current);
+      };
+    });
+    const stopWatching = await api.watchContainers(observed);
+    baseline = sequence;
+    try {
+      stopped = true;
+      await api.containers.stop(identity);
+      const container = await Promise.race([
+        exited,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return container === null ? { changed: false, id: identity, state: 'exited' } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
+  api.containers.removeAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container remove wait timeout must be between 1 and 30000ms');
+    let sequence = 0; let baseline = 0; let removing = false; let observed; let timer;
+    const absent = new Promise((resolve) => {
+      observed = (inventory) => {
+        sequence += 1;
+        if (!removing || sequence <= baseline || !inventory.complete) return;
+        if (!inventory.containers.some((container) => container.id === identity)) resolve();
+      };
+    });
+    const stopWatching = await api.watchContainerInventory(observed);
+    baseline = sequence;
+    try {
+      removing = true;
+      await api.containers.remove(identity);
+      const removed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      return { changed: removed, id: identity };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
+  api.containers.restartAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('container restart wait requires an observed nonnegative safe generation');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container restart wait timeout must be between 1 and 30000ms');
+    let observed; let timer;
+    const restarted = new Promise((resolve) => {
+      observed = (containers) => {
+        const current = containers.find((container) => container.id === identity);
+        if (current?.state === 'running' && current.generation > generation) resolve(current);
+      };
+    });
+    const stopWatching = await api.watchContainers(observed);
+    try {
+      await api.containers.restart(identity);
+      const container = await Promise.race([restarted, new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); })]);
+      return container === null ? { changed: false, id: identity, generation } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
   api.watchImages = (listener) => watch('images', 'images', listener, 'image');
   api.watchVolumes = (listener) => watch('volumes', 'volumes', listener, 'volume');
   api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');
@@ -523,6 +663,41 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
+    }
+    const wanted = exactOccupantTarget(target);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('pane occupant switch wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.switchOccupantObserved(slot, generation, revision, wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, target: wanted, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated ? 'switched pane cannot be verified from a truncated inventory' : 'switched pane disappeared');
+      const matches = wanted.kind === 'terminal'
+        ? pane.kind === 'terminal'
+        : pane.kind === 'surface' && pane.provider?.extension === wanted.extension && pane.provider?.provider === wanted.provider;
+      if (!matches) throw new Error('pane changed without installing the requested occupant');
+      return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
     const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
     if (!providerName(extension) || !providerName(provider)) throw new TypeError('provider wait requires exact bounded extension and provider names');
@@ -565,7 +740,177 @@ export function workspace(session, { signal } = {}) {
   api.watchExecutions = (listener) => watch('executions', 'executions', listener, 'execution');
   api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
   api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
+  api.extensions.enableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension enable wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (current && current.image_digest !== digest) {
+          reject(new Error(`extension ${name} was replaced while enabling`));
+        } else if (current?.enabled) {
+          resolve(current);
+        }
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.enable(name, digest);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.extensions.disableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension disable wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current) reject(new Error(`extension ${name} disappeared while disabling`));
+        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while disabling`));
+        else if (!current.enabled) resolve(current);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.disable(name, digest);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.extensions.retryAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension retry wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current) reject(new Error(`extension ${name} disappeared while retrying`));
+        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while retrying`));
+        else if (current.enabled && current.status === 'duty') resolve(current);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.retry(name, digest);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.extensions.removeAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(imageDigest, 'extension image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('extension remove wait timeout must be between 1 and 30000ms');
+    }
+    let observed;
+    const inventory = new Promise((resolve) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === name);
+        if (!current || current.image_digest !== digest) resolve(current ?? null);
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      await api.extensions.remove(name, digest);
+      const replacement = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+      ]);
+      return replacement === undefined
+        ? { changed: false, name, image_digest: digest }
+        : { changed: true, removed: { name, image_digest: digest }, replacement };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
+  const commitAcquisitionAndWait = async (operation, job, revision, granted, { timeoutMs = 30_000 } = {}) => {
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError(`extension ${operation} wait requires a nonnegative safe integer revision`);
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError(`extension ${operation} wait timeout must be between 1 and 30000ms`);
+    }
+    const status = await api.extensions.acquisition(job);
+    if (status.job !== job || status.revision !== revision || status.state !== 'ready' || !status.candidate) {
+      throw new Error(`extension ${operation} requires the exact ready acquisition revision`);
+    }
+    const candidate = status.candidate;
+    const digest = immutableDigest(candidate.image_digest, 'extension candidate image');
+    if ((operation === 'install') !== (candidate.installed_image_digest == null)) {
+      throw new Error(`extension candidate is not eligible for ${operation}`);
+    }
+    let observed;
+    let authorityReturned = false;
+    let latest;
+    const inventory = new Promise((resolve, reject) => {
+      observed = (extensions) => {
+        const current = extensions.find((extension) => extension.name === candidate.name);
+        if (!authorityReturned) { latest = current ?? null; return; }
+        if (current?.image_digest === digest) resolve(current);
+        else reject(new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`));
+      };
+    });
+    const stop = await api.watchExtensions(observed);
+    let timer;
+    try {
+      const committed = await api.extensions[operation](job, revision, granted);
+      if (committed.name !== candidate.name || committed.image_digest !== digest) {
+        throw new Error(`extension ${operation} returned a different candidate identity`);
+      }
+      authorityReturned = true;
+      if (latest !== undefined) observed(latest === null ? [] : [latest]);
+      const extension = await Promise.race([
+        inventory,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      return extension === null
+        ? { changed: false, name: candidate.name, image_digest: digest, revision }
+        : { changed: true, extension };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.extensions.installAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('install', job, revision, granted, options);
+  api.extensions.updateAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('update', job, revision, granted, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {
       throw new TypeError('extension acquisition wait requires a 1..128 byte job identity');
@@ -681,13 +1026,13 @@ export const protocolSurface = Object.freeze({
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'attachTerminal'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
-    extensions: ['list', 'inspect', 'enable', 'disable', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
+    extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,

@@ -738,6 +738,10 @@ impl ExtensionStore for Host {
         self.ledger.note("extensions.disable");
         Ok(())
     }
+    fn retry(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
+        self.ledger.note("extensions.retry");
+        Ok(())
+    }
     fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         self.ledger.note("extensions.remove");
         Ok(())
@@ -893,6 +897,13 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ExtensionDisable {
+                name: "sample".into(),
+                image_digest: format!("sha256:{}", "a".repeat(64)),
+            },
+            Capability::ExtensionControl,
+        ),
+        (
+            Request::ExtensionRetry {
                 name: "sample".into(),
                 image_digest: format!("sha256:{}", "a".repeat(64)),
             },
@@ -1394,6 +1405,10 @@ fn extension_controls_refuse_partial_digests_before_host_authority() {
         Request::ExtensionDisable {
             name: "sample".into(),
             image_digest: String::new(),
+        },
+        Request::ExtensionRetry {
+            name: "sample".into(),
+            image_digest: "sha256:abc".into(),
         },
         Request::ExtensionRemove {
             name: "sample".into(),

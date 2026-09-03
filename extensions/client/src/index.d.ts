@@ -1,6 +1,6 @@
 import type { WireUiEvent } from './generated-protocol.js';
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionPaneProvider { id: string; title: string; icon: string | null }
@@ -44,7 +44,8 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   execution_lifetime: 'persisted' | 'live' | 'ephemeral';
   terminal: WorkspaceTerminal;
 }
-export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number; generation?: number }
+export interface ContainerInventory { containers: ContainerSummary[]; complete: boolean }
 export interface ContainerVolumeMount { volume: string; target: string; read_only?: boolean }
 export interface ContainerPort { container: number; host?: number | null; protocol: 'tcp' | 'udp' }
 export interface ContainerCreateSpec {
@@ -137,6 +138,12 @@ export class ExtensionError extends Error {
   readonly capability?: string;
 }
 
+export class ExecutionOperationError extends Error {
+  readonly executionId: string;
+  readonly phase: 'wait' | 'logs';
+  readonly cause: unknown;
+}
+
 export interface ConnectOptions {
   path?: string;
   pendingLimit?: number;
@@ -192,8 +199,29 @@ export interface WorkspaceApi {
     list(): Promise<ExtensionSummary[]>;
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */
+    enableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
     disable(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory observation, disable this exact digest, then verify its durable standby state. */
+    disableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
+    retry(name: string, imageDigest: string): Promise<void>;
+    /** Arm inventory, retry this exact faulted digest, then verify durable duty. */
+    retryAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string }
+    >;
     remove(name: string, generation: string): Promise<void>;
+    /** Arm inventory, remove this exact digest, then prove that digest is durably absent. */
+    removeAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; removed: { name: string; image_digest: string }; replacement: ExtensionSummary | null }
+      | { changed: false; name: string; image_digest: string }
+    >;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     /** Wait for this exact acquisition job revision to advance, then return its authoritative status. */
@@ -203,7 +231,17 @@ export interface WorkspaceApi {
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
     install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
+    installAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string; revision: number }
+    >;
     update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
+    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+      | { changed: true; extension: ExtensionSummary }
+      | { changed: false; name: string; image_digest: string; revision: number }
+    >;
     /** Enabled manifest declarations, independent of whether a provider currently occupies a pane. */
     providers(): Promise<ExtensionProviderCatalogue>;
     /** Wait for the extension lifecycle cursor to change, then return its enabled provider catalogue. */
@@ -224,17 +262,39 @@ export interface WorkspaceApi {
     executions(): Promise<ExecutionList>;
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
+    /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
+    execAndWait(id: string, options: {
+      command: string[]; user?: string; workingDirectory?: string; timeoutMs?: number;
+      stdout?: boolean; stderr?: boolean;
+    }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
     removeExecution(id: string): Promise<void>;
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */
     create(image: string, name?: string): Promise<string>;
     start(id: string): Promise<void>;
+    /** Arm bounded inventory, start an immutable ID, then accept only a later running snapshot. */
+    startAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; state: 'running' }
+    >;
     stop(id: string): Promise<void>;
+    /** Arm bounded inventory, stop an immutable ID, then accept only a later exited snapshot. */
+    stopAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; state: 'exited' }
+    >;
     remove(id: string): Promise<void>;
+    /** Remove an immutable ID and accept absence only from a later complete bounded inventory. */
+    removeAndWait(id: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
     pause(id: string): Promise<void>;
     unpause(id: string): Promise<void>;
     restart(id: string): Promise<void>;
+    /** Restart only after observing a generation; resolves on the same ID running at a newer generation. */
+    restartAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
+      | { changed: true; container: ContainerSummary }
+      | { changed: false; id: string; generation: number }
+    >;
     rename(id: string, name: string): Promise<void>;
     kill(id: string, signal: string): Promise<void>;
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
@@ -292,6 +352,13 @@ export interface WorkspaceApi {
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
     switchOccupantObserved(slot: string, generation: number, revision: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
+    /** Arm observation, perform an observed switch, and verify the exact resulting occupant. */
+    switchOccupantAndWait(slot: string, generation: number, revision: number,
+      target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string },
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; pane: InspectablePane }
+        | { changed: false; target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }; after: { generation: number; revision: number } }
+      >;
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
@@ -310,6 +377,7 @@ export interface WorkspaceApi {
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
+  watchContainerInventory(listener: (inventory: ContainerInventory) => void): Promise<() => Promise<void>>;
   watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;
   watchVolumes(listener: (volumes: VolumeSummary[]) => void): Promise<() => Promise<void>>;
   watchNetworks(listener: (networks: NetworkSummary[]) => void): Promise<() => Promise<void>>;

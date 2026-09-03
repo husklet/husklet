@@ -5,7 +5,7 @@
 //! gives records a grant. There is no path on this page from an image's request
 //! to a recorded grant that skips the middle step.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -31,7 +31,9 @@ pub const PROGRESS: &str = "hl-extension-progress";
 pub const CANCEL_ACQUISITION: &str = "hl-extension-cancel-acquisition";
 /// Style class on the block describing a candidate image.
 pub const PROPOSAL: &str = "hl-extension-proposal";
+pub const PROPOSAL_CAPABILITIES: &str = "hl-extension-proposal-capabilities";
 pub const UPDATE_DELTA: &str = "hl-extension-update-delta";
+pub const UPDATE_CAPABILITIES: &str = "hl-extension-update-capabilities";
 pub const CAPABILITY_CHOICE: &str = "hl-extension-capability-choice";
 
 type Selection = Rc<RefCell<BTreeSet<Capability>>>;
@@ -73,6 +75,7 @@ pub struct Catalogue {
     pending: RefCell<Option<PendingInspection>>,
     /// What the last inspection found, waiting for an answer.
     candidate: RefCell<Option<Proposal>>,
+    consent_focus: Cell<bool>,
     semantics: super::super::semantic::Registry,
 }
 
@@ -129,6 +132,7 @@ impl Catalogue {
             cancel,
             pending: RefCell::new(None),
             candidate: RefCell::new(None),
+            consent_focus: Cell::new(false),
             semantics,
         });
         page.assemble();
@@ -258,6 +262,7 @@ impl Catalogue {
             }
         };
         self.reference.set_text(&reference);
+        self.consent_focus.set(self.inspect.has_focus());
         self.say(&format!("reading {reference}"));
         self.reference.set_sensitive(false);
         self.inspect.set_sensitive(false);
@@ -338,6 +343,9 @@ impl Catalogue {
                 } else {
                     self.propose_install(candidate);
                 }
+                if self.consent_focus.replace(false) {
+                    self.proposal.child_focus(gtk::DirectionType::TabForward);
+                }
             }
             Acquisition::Failed(reason) => {
                 *self.pending.borrow_mut() = None;
@@ -374,6 +382,10 @@ impl Catalogue {
     /// The consent recorded is exactly what was shown, and the roster narrows
     /// it again to what the manifest declares.
     pub fn consent(self: &Rc<Self>) {
+        self.consent_with_focus(false);
+    }
+
+    fn consent_with_focus(self: &Rc<Self>, restore_focus: bool) {
         let Some(proposal) = self.candidate.borrow().clone() else {
             self.say("there is nothing to install");
             return;
@@ -387,7 +399,9 @@ impl Catalogue {
                     &consent,
                     moment(),
                 );
-                self.settle(&candidate, recorded);
+                if self.settle(&candidate, recorded) && restore_focus {
+                    self.focus_installed_action(super::settings::ENABLE);
+                }
             }
             Proposal::Update {
                 candidate,
@@ -411,6 +425,9 @@ impl Catalogue {
                     self.say(&format!(
                         "update failed; the installed extension is unchanged: {refusal}. Read the manifest again before consenting"
                     ));
+                    if restore_focus {
+                        self.inspect.grab_focus();
+                    }
                     return;
                 }
                 self.shelf.refresh(&candidate.manifest.name);
@@ -420,21 +437,33 @@ impl Catalogue {
                     "{} was updated from {} at {}",
                     candidate.manifest.name, candidate.reference, candidate.digest
                 ));
+                if restore_focus {
+                    self.focus_installed_action(super::settings::UPDATE);
+                }
             }
         }
     }
 
     /// Walks away from the candidate, recording nothing.
     pub fn decline(self: &Rc<Self>) {
+        self.decline_with_focus(false);
+    }
+
+    /// Walks away from a keyboard-focused candidate without dropping focus
+    /// along with the controls that represented it.
+    fn decline_with_focus(self: &Rc<Self>, restore_focus: bool) {
         self.forget();
         self.say("nothing changed");
+        if restore_focus {
+            self.inspect.grab_focus();
+        }
     }
 
     /// Puts the candidate on the shelf, or says why it could not go there.
-    fn settle(self: &Rc<Self>, candidate: &Candidate, recorded: Result<(), hl::extension::Refusal>) {
+    fn settle(self: &Rc<Self>, candidate: &Candidate, recorded: Result<(), hl::extension::Refusal>) -> bool {
         if let Err(refusal) = recorded {
             self.say(&refusal.to_string());
-            return;
+            return false;
         }
         let entry = self
             .shelf
@@ -455,6 +484,22 @@ impl Catalogue {
             "{} is installed and disabled from {} at {}. Choose Enable to start it",
             candidate.manifest.name, candidate.reference, candidate.digest
         ));
+        true
+    }
+
+    fn focus_installed_action(&self, class: &str) {
+        let mut pending = vec![self.listing.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = pending.pop() {
+            if widget.has_css_class(class) {
+                widget.grab_focus();
+                return;
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
     }
 
     /// Shows what an image asks for, and asks.
@@ -473,10 +518,16 @@ impl Catalogue {
             self.proposal.append(&text(Summary::EXECUTION_NOTICE, "fhint"));
         }
         let selected = self.selection(manifest, manifest.capabilities.iter());
+        let capabilities = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        capabilities.add_css_class(PROPOSAL_CAPABILITIES);
+        capabilities.set_accessible_role(gtk::AccessibleRole::List);
         for capability in manifest.capabilities.iter() {
-            self.proposal
-                .append(&self.capability_choice(manifest, capability, &selected));
+            let item = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            item.set_accessible_role(gtk::AccessibleRole::ListItem);
+            item.append(&self.capability_choice(manifest, capability, &selected));
+            capabilities.append(&item);
         }
+        self.proposal.append(&capabilities);
         self.selected_semantics("Selected capabilities", &selected);
         self.proposal.append(&self.answer("Install"));
         self.proposal.set_visible(true);
@@ -528,12 +579,17 @@ impl Catalogue {
             self.proposal.append(&text("capabilities unchanged", UPDATE_DELTA));
         }
         let selected = self.selection(&candidate.manifest, update.additional.iter().copied());
+        let added = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        added.add_css_class(UPDATE_CAPABILITIES);
+        added.set_accessible_role(gtk::AccessibleRole::List);
         for capability in &update.additional {
-            self.proposal
-                .append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
-            self.proposal
-                .append(&self.capability_choice(&candidate.manifest, *capability, &selected));
+            let item = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            item.set_accessible_role(gtk::AccessibleRole::ListItem);
+            item.append(&text(&format!("+ {}", capability.as_str()), UPDATE_DELTA));
+            item.append(&self.capability_choice(&candidate.manifest, *capability, &selected));
+            added.append(&item);
         }
+        self.proposal.append(&added);
         self.selected_semantics("Selected additional capabilities", &selected);
         for capability in &update.removed {
             self.proposal
@@ -681,17 +737,19 @@ impl Catalogue {
         let install = gtk::Button::with_label(accept);
         install.add_css_class(CONSENT);
         let page = Rc::downgrade(self);
+        let native_install = install.clone();
         install.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
-                page.consent();
+                page.consent_with_focus(native_install.has_focus());
             }
         });
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class(DECLINE);
         let page = Rc::downgrade(self);
+        let native_cancel = cancel.clone();
         cancel.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
-                page.decline();
+                page.decline_with_focus(native_cancel.has_focus());
             }
         });
         let page = Rc::downgrade(self);
@@ -705,7 +763,7 @@ impl Catalogue {
             Rc::new(move |action, _| match action {
                 ActionKind::Invoke => {
                     if let Some(page) = page.upgrade() {
-                        page.consent();
+                        page.consent_with_focus(semantic_install.has_focus());
                     }
                 }
                 ActionKind::Focus => {
@@ -725,7 +783,7 @@ impl Catalogue {
             Rc::new(move |action, _| match action {
                 ActionKind::Invoke => {
                     if let Some(page) = page.upgrade() {
-                        page.decline();
+                        page.decline_with_focus(semantic_cancel.has_focus());
                     }
                 }
                 ActionKind::Focus => {

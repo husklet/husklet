@@ -42,6 +42,13 @@ pub struct ExtensionAcquisitionChange {
     pub coalesced: u64,
 }
 
+/// A bounded container catalogue whose `complete` bit makes absence authoritative.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerInventory {
+    pub containers: Vec<ContainerSummary>,
+    pub complete: bool,
+}
+
 /// One successful workspace mutation. Revisions are monotonically increasing
 /// within the host process and let consumers discard stale/coalesced notices.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -138,6 +145,7 @@ pub type Subscriptions = hl_rpc::Subscriptions<Topic>;
 #[serde(tag = "snapshot", content = "of", rename_all = "snake_case")]
 pub enum Snapshot {
     Containers(Vec<ContainerSummary>),
+    ContainerInventory(ContainerInventory),
     Executions(ExecutionList),
     Images(Vec<ImageSummary>),
     ImagePulls(ImagePullChange),
@@ -159,6 +167,7 @@ impl Snapshot {
     pub const fn topic(&self) -> Topic {
         match self {
             Self::Containers(_) => Topic::Containers,
+            Self::ContainerInventory(_) => Topic::ContainerInventory,
             Self::Executions(_) => Topic::Executions,
             Self::Images(_) => Topic::Images,
             Self::ImagePulls(_) => Topic::ImagePulls,

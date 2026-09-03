@@ -36,10 +36,10 @@ try {
     },
   });
   connected = true;
-  const surface = render(React.createElement(App), session, { title: 'React starter' });
-  await surface.ready;
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  const surface = render(React.createElement(App), session, { title: 'React starter' });
+  await surface.ready;
 } catch (error) {
   if (!stopping) {
     stopping = true;

@@ -214,6 +214,7 @@ impl From<hl_container::Container> for InspectContainer {
                     id: value.id.to_string(),
                     image,
                     mounts: Vec::new(),
+                    generation: value.generation,
                 },
                 size_rw: None,
                 size_root_fs: None,

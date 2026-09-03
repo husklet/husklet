@@ -81,6 +81,7 @@ impl Overview<'_> {
     fn header(&self) -> gtk::Box {
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         let title = gtk::Label::new(Some("Settings"));
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
         title.add_css_class("dashtitle");
         title.set_xalign(0.0);
         title.set_hexpand(true);
@@ -678,6 +679,16 @@ mod tests {
                 text.iter()
                     .any(|line| line.contains("Running tabs keep their current settings")),
                 "apply timing is explained before saving"
+            );
+            let page_heading = widgets
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Label>())
+                .find(|label| label.text() == "Settings")
+                .expect("visible Settings page title");
+            assert_eq!(
+                page_heading.accessible_role(),
+                gtk::AccessibleRole::Heading,
+                "the page title must anchor assistive heading navigation"
             );
             assert_eq!(
                 text.iter()

@@ -39,6 +39,56 @@ const next = await host.extensions.waitForAcquisition(job, current.revision);
 if (next.changed) console.log(next.status.state, next.status.progress);
 ```
 
+Enable an installed digest and observe its durable roster state without racing
+the inventory subscription:
+
+```js
+const enabled = await host.extensions.enableAndWait(extension.name, extension.image_digest);
+if (enabled.changed) console.log(enabled.extension.status);
+
+const disabled = await host.extensions.disableAndWait(extension.name, extension.image_digest);
+
+// Retry a faulted installation. Inventory is armed before authority is invoked.
+const retried = await host.extensions.retryAndWait(extension.name, extension.image_digest);
+if (disabled.changed) console.log(disabled.extension.status); // durable standby; provider withdrawal is observed separately
+
+const removed = await host.extensions.removeAndWait(extension.name, extension.image_digest);
+
+// Consent is bound to this ready revision. Inventory is armed before commit.
+const installed = await host.extensions.installAndWait(status.job, status.revision, status.candidate.requested);
+
+// Arm observation before starting; an unchanged initial snapshot cannot settle this.
+const running = await host.containers.startAndWait(containerId);
+const exited = await host.containers.stopAndWait(containerId);
+const removed = await host.containers.removeAndWait(containerId); // absence requires complete inventory
+const restarted = await host.containers.restartAndWait(container.id, container.generation);
+if (removed.changed) console.log(removed.replacement); // null, or a newly installed digest under the same name
+```
+
+Execute without a shell string, wait for completion, and fetch selected bounded
+output streams in one ordered composition:
+
+```js
+const { execution, output } = await host.containers.execAndWait(container.id, {
+  command: ['printf', 'ok'], timeoutMs: 10_000, stdout: true, stderr: false,
+});
+```
+
+All options are validated before creation. A wait or log failure throws
+`ExecutionOperationError` with the retained `executionId` and failing `phase`;
+the client never removes that execution automatically.
+
+Pane occupant changes can likewise be armed and verified without racing a raw
+subscription against the mutation:
+
+```js
+const switched = await host.terminal.switchOccupantAndWait(
+  pane.slot, pane.generation, pane.revision,
+  { kind: 'surface', extension: 'workspace-manager', provider: 'main' },
+);
+if (switched.changed) console.log(switched.pane.provider);
+```
+
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:
 
@@ -57,6 +107,17 @@ dependency-free client instead of resolving npm again during the build. It uses
 a digest-pinned Node image and runs the extension as the non-root `node` user.
 The image label points at the included manifest; the host validates that
 manifest when installing the image.
+
+There is no separate published client-only Husklet base image. The published
+`extension-react-base` contains both SDK packages; this framework-neutral
+starter stays smaller by using pinned Node and copying the exact client from
+`npm install`. Its image build performs no npm registry resolution, but a fully
+offline OCI build still requires the pinned Node base to be present in the
+builder's cache.
+
+The client normally allows 30 seconds for the host's opening handshake. Set
+`HUSKLET_EXTENSION_CONNECT_TIMEOUT_MS` to a positive millisecond value when a
+development or test environment needs a shorter, explicit startup deadline.
 
 The transport is a persistent, full-duplex, length-prefixed Unix stream. Calls are correlated while bounded host events can arrive independently with explicit subscription credit. This is WebSocket-like interaction, but it is **not a WebSocket**. The handshake returns workspace identity and negotiated capability grants. All methods remain constrained to that authority.
 

@@ -31,9 +31,23 @@ docker build -t my-extension .
 is bound to the same version as the package that supplied the starter. The manifest
 label names the file inside the image—the host
 does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
-base image's non-root runtime. The starter defaults to the immutable base-image
-tag released with this SDK; override `HUSKLET_REACT_IMAGE` deliberately when
-testing against another runtime.
+base image's non-root runtime. The starter defaults to the version-matched
+base-image tag released with this SDK; override `HUSKLET_REACT_IMAGE`
+deliberately when testing against another runtime, or pin that argument to a
+registry digest when the extension build itself must be immutable.
+
+This is the one published Husklet SDK base image. It contains both
+`@husklet/client` and `@husklet/react`; the framework-neutral client starter
+instead builds directly from pinned Node and copies its locally installed
+client package. Neither Dockerfile resolves npm during its final image build.
+An offline OCI build still requires the selected Node or React base image to
+already exist in the builder's cache.
+
+The repository's `extensions/react/Dockerfile` is release infrastructure, not
+a standalone file in the npm tarball: its build context deliberately requires
+the sibling client and React source trees. The npm package instead ships the
+complete `examples/starter` Docker context, which consumes the published base
+image without depending on monorepo-private files.
 
 `npm start` reports missing sockets, handshake failures, and unexpected host EOF
 on stderr and exits nonzero. `SIGINT` and `SIGTERM` close an established session

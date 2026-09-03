@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-pack-'));
 
-async function runPackedStarter(consumer, starter) {
-  const socket = path.join(consumer, 'starter.sock');
+async function runPackedStarter(consumer, starter, signal) {
+  const socket = path.join(consumer, `starter-${signal}.sock`);
   const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
@@ -46,6 +46,7 @@ async function runPackedStarter(consumer, starter) {
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
+  let exit;
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => (stderr += chunk));
   try {
@@ -61,11 +62,14 @@ async function runPackedStarter(consumer, starter) {
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
     assert.equal(stderr, '');
   } finally {
+    if (child.exitCode === null) child.kill(signal);
+    exit = child.exitCode === null
+      ? await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
+      : { code: child.exitCode, signal: child.signalCode };
     peer?.destroy();
-    if (child.exitCode === null) child.kill('SIGTERM');
-    if (child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve));
     await new Promise((resolve) => server.close(resolve));
   }
+  assert.deepEqual(exit, { code: 0, signal: null }, `packed React starter did not stop cleanly; stderr=${stderr}`);
 }
 
 function packageStageFiles(dockerfile, destination) {
@@ -95,6 +99,7 @@ try {
   ]) {
     assert(names.has(required), `npm package omits ${required}`);
   }
+  assert(!names.has('Dockerfile'), 'context-dependent base Dockerfile must not masquerade as a standalone npm artifact');
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')), 'developer-only files leaked into package');
 
   const tarball = execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
@@ -162,7 +167,8 @@ try {
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
   assert.equal(starterLock.packages['node_modules/@husklet/client'].version, manifest.version);
   assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
-  await runPackedStarter(consumer, standaloneStarter);
+  await runPackedStarter(consumer, standaloneStarter, 'SIGTERM');
+  await runPackedStarter(consumer, standaloneStarter, 'SIGINT');
   assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
   assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
   assert.match(starterManifest, /^name = "react-starter"$/m);
@@ -278,6 +284,12 @@ try {
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
+  assert.match(readme, /one published Husklet SDK base image/);
+  assert.match(readme, /repository's `extensions\/react\/Dockerfile` is release infrastructure/);
+  assert.match(readme, /complete `examples\/starter` Docker context/);
+  assert.match(readme, /pin that argument to a\s+registry digest/);
+  assert.match(readme, /offline OCI build still requires.*base image to\s+already exist/s);
+  assert(!readme.includes('immutable base-image tag'), 'a mutable version tag must not be documented as immutable');
   assert.match(readme, /examples\/starter/);
   assert.match(readme, /render\(React\.createElement\(App\), session/);
   assert(!readme.includes('```jsx'), 'Node-only starter documentation must not require a JSX transform');

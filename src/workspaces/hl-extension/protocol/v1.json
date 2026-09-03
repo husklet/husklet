@@ -678,6 +678,30 @@
       "kind": "struct",
       "serde": {}
     },
+    "ContainerInventory": {
+      "fields": [
+        {
+          "name": "containers",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerSummary"
+            }
+          }
+        },
+        {
+          "name": "complete",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ContainerOutput": {
       "fields": [
         {
@@ -817,6 +841,17 @@
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "signed": true
+          }
+        },
+        {
+          "name": "generation",
+          "optional": true,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
           }
         }
       ],
@@ -5014,6 +5049,12 @@
           }
         },
         {
+          "name": "container-inventory",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "executions",
           "payload": {
             "kind": "unit"
@@ -6113,6 +6154,10 @@
     },
     {
       "capability": "extension-control",
+      "request": "extension_retry"
+    },
+    {
+      "capability": "extension-control",
       "request": "extension_remove"
     },
     {
@@ -6524,6 +6569,10 @@
     {
       "reply": "done",
       "request": "extension_disable"
+    },
+    {
+      "reply": "done",
+      "request": "extension_retry"
     },
     {
       "reply": "done",
@@ -7559,6 +7608,28 @@
         },
         {
           "name": "extension_disable",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "extension_retry",
           "payload": {
             "fields": [
               {
@@ -9545,6 +9616,16 @@
           }
         },
         {
+          "name": "container_inventory",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerInventory"
+            }
+          }
+        },
+        {
           "name": "executions",
           "payload": {
             "kind": "newtype",
@@ -10550,13 +10631,18 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:5ee42f69016b4a73",
+  "source_fingerprint": "fnv1a64:d7a4de0551067f62",
   "specification_version": 1,
   "topics": [
     {
       "capability": "container-read",
       "snapshot": "containers",
       "wire": "containers"
+    },
+    {
+      "capability": "container-read",
+      "snapshot": "container_inventory",
+      "wire": "container-inventory"
     },
     {
       "capability": "container-read",

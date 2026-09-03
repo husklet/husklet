@@ -141,6 +141,7 @@ impl Session {
             | Request::ExtensionInspect { .. }
             | Request::ExtensionEnable { .. }
             | Request::ExtensionDisable { .. }
+            | Request::ExtensionRetry { .. }
             | Request::ExtensionRemove { .. }
             | Request::ExtensionAcquisitionStart { .. }
             | Request::ExtensionAcquisitionStatus { .. }
@@ -532,6 +533,12 @@ impl Session {
             Request::ExtensionDisable { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
                 port.disable(name, image_digest)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ExtensionRetry { name, image_digest } => {
+                immutable_digest(image_digest, "extension image")?;
+                port.retry(name, image_digest)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }

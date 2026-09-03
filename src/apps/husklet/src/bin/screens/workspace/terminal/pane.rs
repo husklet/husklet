@@ -167,7 +167,7 @@ impl PaneChooser {
             let chooser = button.clone();
             terminal.connect_clicked(move |_| {
                 if Self::terminal_in(&window, target.as_deref()) {
-                    chooser.set_icon_name(Self::TERMINAL_ICON);
+                    Self::populate(&window, &chooser);
                     Self::dismiss(&window, &chooser);
                 }
             });
@@ -223,11 +223,10 @@ impl PaneChooser {
                 let extension = provider.extension;
                 let generation = provider.generation;
                 let id = provider.id;
-                let icon = provider.icon.unwrap_or_else(|| Self::PROVIDER_ICON.to_owned());
                 let chooser = button.clone();
                 choice.connect_clicked(move |_| {
                     if Self::provider_generation_in(&window, target.as_deref(), &extension, generation, &id) {
-                        chooser.set_icon_name(&icon);
+                        Self::populate(&window, &chooser);
                         Self::dismiss(&window, &chooser);
                     }
                 });

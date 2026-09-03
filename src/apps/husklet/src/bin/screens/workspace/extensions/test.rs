@@ -158,6 +158,31 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .value
         .as_deref()
         .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
+    let native_grants = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .filter(|label| matches!(label.text().as_str(), "interface" | "container-read"))
+        .collect::<Vec<_>>();
+    assert_eq!(native_grants.len(), 2, "both consented grants are visibly rendered");
+    assert!(native_grants.iter().all(|grant| {
+        grant.accessible_role() == gtk::AccessibleRole::ListItem
+            && grant.parent().is_some_and(|parent| parent.accessible_role() == gtk::AccessibleRole::List)
+    }), "native capability labels must retain the list structure exposed semantically");
+    let mut execution = fixture.roster.borrow().entries()[0].clone();
+    execution.granted = Grant::new([Capability::TerminalControl]);
+    let execution_grants = settings::capabilities(&execution);
+    let direct = execution_grants.observe_children();
+    assert_eq!(direct.n_items(), 2, "execution warning stays separate from the grant list");
+    let warning = direct.item(0).and_downcast::<gtk::Label>().expect("execution warning");
+    assert_eq!(warning.text(), hl_extension::Summary::EXECUTION_NOTICE);
+    assert_ne!(warning.accessible_role(), gtk::AccessibleRole::ListItem);
+    let list = direct.item(1).and_downcast::<gtk::Box>().expect("grant list");
+    assert_eq!(list.accessible_role(), gtk::AccessibleRole::List);
+    assert!(list
+        .observe_children()
+        .item(0)
+        .and_downcast::<gtk::Label>()
+        .is_some_and(|grant| grant.accessible_role() == gtk::AccessibleRole::ListItem));
     let enable = snapshot
         .root
         .children
@@ -867,6 +892,41 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         Some("Remove".into()),
         "cancelling returns keyboard focus to the restored Remove control"
     );
+
+    fixture.shelf.fault(&named("alpha"), 3);
+    let faulted = fixture.view.semantic_snapshot();
+    let retry = faulted
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Retry"))
+        .expect("faulted extension exposes Retry");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: faulted.revision,
+            node: retry.id,
+            action: ActionKind::Focus,
+            value: None,
+        })
+        .expect("screen-reader focus reaches Retry");
+    fixture
+        .view
+        .semantic_action(&Action {
+            revision: faulted.revision,
+            node: retry.id,
+            action: ActionKind::Invoke,
+            value: None,
+        })
+        .expect("screen-reader activation retries the fault");
+    assert_eq!(fixture.stage("alpha"), Stage::Duty);
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Disable".into()),
+        "semantic Retry keeps keyboard focus on its truthful replacement"
+    );
     window.close();
 }
 
@@ -1205,6 +1265,12 @@ fn update_candidate(digest: &str, version: &str) -> Candidate {
 fn an_image_is_read_before_anybody_is_asked() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
     typed(&page, "sample:1");
 
     page.inspect();
@@ -1261,7 +1327,23 @@ fn an_image_is_read_before_anybody_is_asked() {
             && node.value.as_deref() == Some("container-read, interface")
     }));
 
-    page.consent();
+    let proposal = fixture.view.semantic_snapshot();
+    let install = proposal.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Install"))
+        .expect("proposal exposes Install");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: install.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("Install can receive keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: install.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused Install remains invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(gtk::prelude::RootExt::focus(&window)
+        .is_some_and(|widget| widget.has_css_class(super::settings::ENABLE)),
+        "installing from the focused confirmation hands focus to Enable");
 
     let entries = fixture.roster.borrow().entries();
     assert_eq!(entries.len(), 1, "consent is what records the grant");
@@ -1278,6 +1360,8 @@ fn an_image_is_read_before_anybody_is_asked() {
         "a disabled install stays in the recoverable catalogue"
     );
     assert!(!fixture.view.entries().iter().any(|entry| entry.ends_with(" settings")));
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert!(
         descendants(page.widget().upcast_ref())
             .iter()
@@ -1303,6 +1387,8 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         .child_by_name("sample")
         .expect("installed surface");
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     let before = fixture.view.semantic_snapshot();
     let update = before
         .root
@@ -1354,6 +1440,16 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         labels.iter().any(|line| line == "− container-read"),
         "authority the candidate dropped is called out explicitly: {labels:?}"
     );
+    let added = proposal
+        .iter()
+        .find(|widget| widget.has_css_class(directory::UPDATE_CAPABILITIES))
+        .expect("added update authority is one native list");
+    assert_eq!(added.accessible_role(), gtk::AccessibleRole::List);
+    let items = added.observe_children();
+    assert_eq!(items.n_items(), 1);
+    let item = items.item(0).and_downcast::<gtk::Widget>().expect("added capability item");
+    assert_eq!(item.accessible_role(), gtk::AccessibleRole::ListItem);
+    assert!(descendants(&item).iter().any(|child| child.is::<gtk::CheckButton>()));
     let semantic = fixture.view.semantic_snapshot();
     assert!(semantic.root.children.iter().any(|node| {
         node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("container-control")
@@ -1373,7 +1469,23 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     }));
     container_control.set_active(true);
 
-    page.consent();
+    let consent = fixture.view.semantic_snapshot();
+    let accept = consent.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("reviewed update exposes consent");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: consent.revision, node: accept.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("update consent receives focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: consent.revision, node: accept.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused update consent is invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(gtk::prelude::RootExt::focus(&window)
+        .is_some_and(|widget| widget.has_css_class(super::settings::UPDATE)),
+        "accepted update hands focus to the next Update action");
     let entry = fixture
         .roster
         .borrow()
@@ -1394,11 +1506,15 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         }),
         "the lifecycle card identifies the active version"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     let fixture = Fixture::new(&[("sample", true)]);
     let page = catalogue(&fixture, Ok(update_candidate("sha256:cccc", "2.0.0")));
+    let window = gtk::Window::builder().default_width(400).default_height(600).child(page.viewport()).build();
+    window.present();
     typed(&page, "sample:2");
     page.inspect();
     assert!(page.poll());
@@ -1424,7 +1540,20 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
         .commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2)
         .expect("competing update commits");
 
-    page.consent();
+    let actionable = fixture.view.semantic_snapshot();
+    let actionable_consent = actionable.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Accept update"))
+        .expect("consent remains current until the attempted commit");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: actionable.revision, node: actionable_consent.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("stale update consent can first receive keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: actionable.revision, node: actionable_consent.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused stale update reaches its truthful refusal");
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert!(
         page.notice().contains("unchanged"),
         "failure is visible: {}",
@@ -1443,6 +1572,10 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
     );
     assert!(page.notice().contains("Read the manifest again"));
     assert_eq!(inspect_action(&page).label().as_deref(), Some("Read manifest again"));
+    assert_eq!(gtk::prelude::RootExt::focus(&window)
+        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+        .and_then(|button| button.label()), Some("Read manifest again".into()),
+        "stale consent refusal hands focus to the required reinspection action");
     let refreshed = fixture.view.semantic_snapshot();
     assert!(refreshed.root.children.iter().all(|node| node.label.as_deref() != Some("Accept update")));
     assert!(refreshed.root.children.iter().any(|node| {
@@ -1470,27 +1603,52 @@ fn a_stale_update_failure_invalidates_consent_and_requires_reinspection() {
             .image_digest,
         "sha256:dddd"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn a_declined_image_records_nothing() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
     typed(&page, "sample:1");
     page.inspect();
     assert!(page.poll(), "the inspection came back");
 
-    page.decline();
+    let proposal = fixture.view.semantic_snapshot();
+    let cancel = proposal.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Cancel"))
+        .expect("the reviewed image exposes its cancel action");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: cancel.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("keyboard and semantic clients can focus Cancel");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert_eq!(gtk::prelude::RootExt::focus(&window).and_then(|widget| widget.downcast::<gtk::Button>().ok()).and_then(|button| button.label()), Some("Cancel".into()));
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: cancel.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused Cancel remains invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
 
     assert!(fixture.roster.borrow().entries().is_empty(), "nothing was recorded");
     assert!(
         fixture.shelf.content().child_by_name("sample").is_none(),
         "and no surface was mounted"
     );
+    assert_eq!(gtk::prelude::RootExt::focus(&window).and_then(|widget| widget.downcast::<gtk::Button>().ok()).and_then(|button| button.label()), Some("Read another image".into()), "removing the focused consent controls returns focus to the stable acquisition action");
     page.consent();
     assert!(
         fixture.roster.borrow().entries().is_empty(),
         "a declined candidate cannot be installed afterwards"
     );
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
 }
 
 fn remote_image_progress_precedes_the_consent_prompt() {
@@ -1516,8 +1674,21 @@ fn remote_image_progress_precedes_the_consent_prompt() {
         PendingInspection::detached(received)
     });
     let page = Catalogue::new(&fixture.shelf, inspection);
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
+    while gtk::glib::MainContext::default().iteration(false) {}
     typed(&page, "team/tool:latest");
-    page.inspect();
+    let inspect = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::INSPECT))
+        .and_downcast::<gtk::Button>()
+        .expect("manifest inspection action");
+    assert!(inspect.grab_focus());
+    inspect.emit_clicked();
 
     assert!(page.poll());
     assert_eq!(page.notice(), "checking local images");
@@ -1548,6 +1719,23 @@ fn remote_image_progress_precedes_the_consent_prompt() {
     assert_eq!(page.notice(), "reading extension manifest");
     assert!(page.poll());
     assert!(page.notice().contains("asks for"));
+    assert!(
+        gtk::prelude::RootExt::focus(&window).is_some_and(|focused| focused.is::<gtk::CheckButton>()),
+        "keyboard inspection hands focus to the first revealed consent choice"
+    );
+    let capabilities = descendants(page.widget().upcast_ref())
+        .into_iter()
+        .find(|widget| widget.has_css_class(directory::PROPOSAL_CAPABILITIES))
+        .expect("ready proposal exposes requested capabilities as one region");
+    assert_eq!(capabilities.accessible_role(), gtk::AccessibleRole::List);
+    let items = capabilities.observe_children();
+    assert_eq!(items.n_items(), 2);
+    assert!((0..items.n_items()).all(|index| {
+        items.item(index).and_downcast::<gtk::Widget>().is_some_and(|item| {
+            item.accessible_role() == gtk::AccessibleRole::ListItem
+                && descendants(&item).iter().any(|child| child.is::<gtk::CheckButton>())
+        })
+    }), "requested grants must be list items without losing their native checkbox controls");
     let ready = fixture.view.semantic_snapshot();
     assert!(!ready
         .root
@@ -1558,6 +1746,7 @@ fn remote_image_progress_precedes_the_consent_prompt() {
         fixture.roster.borrow().entries().is_empty(),
         "a ready image still awaits consent"
     );
+    window.close();
 }
 
 fn cancelling_an_acquisition_rejects_a_late_ready_result_and_offers_retry() {
@@ -3982,6 +4171,11 @@ mod panes {
         postgres.emit_clicked();
         assert!(until(|| !provider_popover.is_visible()), "a successful provider selection dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("database-symbolic"));
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Postgres · postgres"),
+            "provider selection immediately updates the chooser's visible and accessible state"
+        );
 
         assert_eq!(
             Panes::at(&bench.window, &first_slot)
@@ -4015,6 +4209,11 @@ mod panes {
         terminal.emit_clicked();
         assert!(until(|| !terminal_popover.is_visible()), "returning to the terminal dismisses the chooser");
         assert_eq!(chooser.icon_name().as_deref(), Some("utilities-terminal-symbolic"));
+        assert_eq!(
+            chooser.tooltip_text().as_deref(),
+            Some("Choose pane content; currently showing Terminal"),
+            "terminal restoration immediately clears stale provider accessibility copy"
+        );
         assert_eq!(
             Panes::at(&bench.window, &second_slot)
                 .expect("restored second pane")
@@ -4184,7 +4383,10 @@ mod panes {
         let fixture = Fixture::new(&[("postgres", true)]);
         let bench = Bench::new();
         let (first, first_slot) = bench.shell();
-        let (_second, second_slot) = bench.beside(&first);
+        let (second, second_slot) = bench.beside(&first);
+        let host = bench.page.root().and_downcast::<gtk::Window>().expect("terminal window");
+        host.set_default_size(400, 600);
+        host.present();
         let gallery = Gallery::new();
         let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -4213,6 +4415,7 @@ mod panes {
             Panes::focus(&bench.window, &second_slot),
             "a different split leaf is selected"
         );
+        assert!(until(|| second.has_focus()), "the unrelated terminal owns keyboard focus");
 
         let window = Rc::downgrade(&bench.window);
         let withdrawn = gallery.clone();
@@ -4246,6 +4449,10 @@ mod panes {
         );
         assert_eq!(interface.parent().as_ref(), Some(home.upcast_ref::<gtk::Widget>()));
         assert!(
+            until(|| second.has_focus()),
+            "lifecycle withdrawal must not steal focus from an unrelated pane"
+        );
+        assert!(
             Slots::new(&bench.window).surface(&restored.content).is_none(),
             "withdrawal retires provider identity before layout persistence"
         );
@@ -4276,6 +4483,7 @@ mod panes {
             gallery.ready("postgres", generation);
             gallery.withdraw("postgres");
         }
+        host.close();
     }
 
     pub(super) fn disabling_an_extension_restores_its_surface_pane_terminal() {

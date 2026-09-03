@@ -144,6 +144,11 @@ export const PROTOCOL_TOPICS = Object.freeze([
   },
   {
     "capability": "container-read",
+    "snapshot": "container_inventory",
+    "wire": "container-inventory"
+  },
+  {
+    "capability": "container-read",
     "snapshot": "executions",
     "wire": "executions"
   },
@@ -213,6 +218,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "extension_inspect": "extension",
   "extension_enable": "done",
   "extension_disable": "done",
+  "extension_retry": "done",
   "extension_remove": "done",
   "extension_acquisition_start": "extension_acquisition_job",
   "extension_acquisition_status": "extension_acquisition",
@@ -318,6 +324,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_inspect": "extension-read",
   "extension_enable": "extension-control",
   "extension_disable": "extension-control",
+  "extension_retry": "extension-control",
   "extension_remove": "extension-control",
   "extension_acquisition_start": "extension-install",
   "extension_acquisition_status": "extension-install",
@@ -952,6 +959,30 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ContainerInventory": {
+    "fields": [
+      {
+        "name": "containers",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerSummary"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "ContainerOutput": {
     "fields": [
       {
@@ -1091,6 +1122,17 @@ const definitions = {
           "maximum": 9007199254740991,
           "minimum": -9007199254740991,
           "signed": true
+        }
+      },
+      {
+        "name": "generation",
+        "optional": true,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
         }
       }
     ],
@@ -5288,6 +5330,12 @@ const definitions = {
         }
       },
       {
+        "name": "container-inventory",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "executions",
         "payload": {
           "kind": "unit"
@@ -6945,6 +6993,28 @@ const roots = {
       },
       {
         "name": "extension_disable",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "extension_retry",
         "payload": {
           "fields": [
             {
@@ -8927,6 +8997,16 @@ const roots = {
               "kind": "ref",
               "name": "ContainerSummary"
             }
+          }
+        }
+      },
+      {
+        "name": "container_inventory",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerInventory"
           }
         }
       },

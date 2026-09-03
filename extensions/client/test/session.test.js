@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, Session, workspace } from '../src/index.js';
+import { connect, ExecutionOperationError, Session, workspace } from '../src/index.js';
 import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
@@ -151,6 +151,168 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
     for (const connection of connections) connection.destroy();
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix occupant switch arms before CAS and verifies provider inventory', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-switch-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+        if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'terminal_switch_occupant_observed') {
+          socket.write(encode({ channel: 13, kind: KIND.event, payload: { snapshot: 'pane_changes', of: {
+            slot: 'pane-1', kind: 'surface', generation: 8, revision: 12, coalesced: 0,
+          } } }));
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'pane_list') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [{
+            slot: 'pane-1', generation: 8, revision: 12, kind: 'surface',
+            provider: { extension: 'manager', provider: 'main' }, tab: 'tab', title: 'Manager', focused: true,
+          }], truncated: false } } }));
+        }
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'switch-wait', granted: ['pane-observe', 'terminal-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).terminal.switchOccupantAndWait('pane-1', 7, 11, {
+      kind: 'surface', extension: 'manager', provider: 'main',
+    });
+    assert.equal(result.changed, true); assert.equal(result.pane.provider.extension, 'manager');
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_switch_occupant_observed', 'pane_list', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix extension enable arms inventory before digest-bound authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-enable-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        if (frame.payload.call === 'extension_enable') socket.write(encode({ channel: 14, kind: KIND.event, payload: {
+          snapshot: 'extensions', of: [{ name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [] }],
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'enable-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.enableAndWait('manager', digest);
+    assert.equal(result.changed, true); assert.deepEqual(calls, ['event_subscribe', 'extension_enable', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix extension disable arms inventory before digest-bound authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-disable-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'extension_disable') socket.write(encode({ channel: 15, kind: KIND.event, payload: {
+        snapshot: 'extensions', of: [{ name: 'manager', image_digest: digest, version: '1', status: 'standby', enabled: false, pane_providers: [] }],
+      } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'disable-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.disableAndWait('manager', digest);
+    assert.equal(result.changed, true); assert.deepEqual(calls, ['event_subscribe', 'extension_disable', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix extension remove arms inventory before authority and observes absence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-remove-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'e'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'extension_remove') socket.write(encode({ channel: 16, kind: KIND.event, payload: {
+        snapshot: 'extensions', of: [],
+      } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'remove-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.removeAndWait('manager', digest);
+    assert.deepEqual(result, { changed: true, removed: { name: 'manager', image_digest: digest }, replacement: null });
+    assert.deepEqual(calls, ['event_subscribe', 'extension_remove', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix extension retry arms inventory before digest-bound authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-retry-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'f'.repeat(64)}`;
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'extension_retry') socket.write(encode({ channel: 17, kind: KIND.event, payload: {
+        snapshot: 'extensions', of: [{ name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [] }],
+      } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'retry-wait', granted: ['extension-read', 'extension-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.retryAndWait('manager', digest);
+    assert.equal(result.changed, true); assert.deepEqual(calls, ['event_subscribe', 'extension_retry', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -369,5 +531,250 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
     peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix install wait inspects revision, arms inventory, then commits exact candidate', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const candidate = { name: 'sample', version: '1', image_digest: digest, requested: ['extension-read'], installed_image_digest: null };
+  const summary = { name: 'sample', image_digest: digest, version: '1', status: 'standby', enabled: false, pane_providers: [] };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'extension_acquisition_status') socket.write(encode({ channel: 2, kind: KIND.response, payload: {
+        reply: 'extension_acquisition', with: { job: 'job-1', reference: 'sample:1', revision: 7, state: 'ready', progress: null, candidate, error: null },
+      } }));
+      else if (frame.payload.call === 'extension_install') {
+        socket.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'extensions', of: [summary] } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
+      } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'install-wait', granted: ['extension-read', 'extension-install'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).extensions.installAndWait('job-1', 7, ['extension-read']);
+    assert.equal(result.changed, true);
+    assert.deepEqual(calls, ['extension_acquisition_status', 'event_subscribe', 'extension_install', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix container start wait arms first and ignores unchanged initial state', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-start-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const id = 'a'.repeat(32);
+  const summary = (state) => ({ id, name: 'agent', image: 'alpine:3.20', state, created: 1 });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        setImmediate(() => socket.write(encode({ channel: 31, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('created')] } })));
+      } else if (frame.payload.call === 'container_start') {
+        socket.write(encode({ channel: 32, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('created')] } }));
+        socket.write(encode({ channel: 33, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running')] } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'container-start-wait', granted: ['container-read', 'container-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).containers.startAndWait(id);
+    assert.equal(result.changed, true); assert.equal(result.container.state, 'running');
+    assert.deepEqual(calls, ['event_subscribe', 'container_start', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix container stop wait arms first and ignores unchanged running state', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-stop-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const id = 'b'.repeat(64);
+  const summary = (state) => ({ id, name: 'agent', image: 'alpine:3.20', state, created: 1 });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        setImmediate(() => socket.write(encode({ channel: 34, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running')] } })));
+      } else if (frame.payload.call === 'container_stop') {
+        socket.write(encode({ channel: 35, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running')] } }));
+        socket.write(encode({ channel: 36, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('exited')] } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'container-stop-wait', granted: ['container-read', 'container-control'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).containers.stopAndWait(id);
+    assert.equal(result.changed, true); assert.equal(result.container.state, 'exited');
+    assert.deepEqual(calls, ['event_subscribe', 'container_stop', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix container remove wait rejects incomplete absence then accepts complete absence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-remove-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let completeAbsenceSent = false;
+  const id = 'c'.repeat(64); const summary = { id, name: 'agent', image: 'alpine', state: 'exited', created: 1 };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'container_remove') {
+        setImmediate(() => {
+          socket.write(encode({ channel: 40, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [], complete: false } } }));
+          setImmediate(() => {
+            socket.write(encode({ channel: 41, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [summary], complete: true } } }));
+            setTimeout(() => {
+              completeAbsenceSent = true;
+              socket.write(encode({ channel: 42, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [], complete: true } } }));
+            }, 20);
+          });
+        });
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'remove-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(await workspace(session).containers.removeAndWait(id), { changed: true, id });
+    assert.equal(completeAbsenceSent, true, 'incomplete absence cannot settle removal');
+    assert.deepEqual(calls, ['event_subscribe', 'container_remove', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix restart wait requires the same container at a newer running generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-restart-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); const id = 'd'.repeat(64);
+  const summary = (state, generation) => ({ id, name: 'agent', image: 'alpine', state, created: 1, generation });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'container_restart') {
+        socket.write(encode({ channel: 45, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running', 7)] } }));
+        socket.write(encode({ channel: 46, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('exited', 8)] } }));
+        socket.write(encode({ channel: 47, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running', 8)] } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'restart-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).containers.restartAndWait(id, 7);
+    assert.equal(result.changed, true); assert.equal(result.container.generation, 8); assert.equal(result.container.state, 'running');
+    assert.deepEqual(calls, ['event_subscribe', 'container_restart', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'c'.repeat(64); const executionId = 'e'.repeat(32);
+  const execution = { id: executionId, container_id: containerId, running: false, exit_code: 0, pid: 22, command: ['printf', 'ok'], user: 'root' };
+  const output = { stdout: [111, 107], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue;
+      calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        assert.deepEqual(frame.payload.with, { id: containerId, command: ['printf', 'ok'], user: 'root', working_directory: '/tmp' });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        assert.deepEqual(frame.payload.with, { id: executionId, timeout_ms: 321 });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: execution } }));
+      } else if (frame.payload.call === 'execution_logs') {
+        assert.deepEqual(frame.payload.with, { id: executionId, stdout: true, stderr: false });
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'logs', with: output } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const containers = workspace(session).containers;
+    await assert.rejects(containers.execAndWait(containerId, { command: ['true'], timeoutMs: 0 }), /timeout/);
+    await assert.rejects(containers.execAndWait(containerId, { command: ['true'], stdout: false, stderr: false }), /at least one/);
+    assert.deepEqual(calls, [], 'invalid later-stage options must not create an execution');
+    assert.deepEqual(await containers.execAndWait(containerId, {
+      command: ['printf', 'ok'], user: 'root', workingDirectory: '/tmp', timeoutMs: 321, stderr: false,
+    }), { execution, output });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait', 'execution_logs']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix execAndWait preserves execution identity when waiting fails and never removes it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-wait-failure-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'a'.repeat(32); const executionId = 'b'.repeat(32);
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'wait timed out' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait-failure', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).containers.execAndWait(containerId, { command: ['sleep', '1'], timeoutMs: 1 }), (error) => {
+      assert(error instanceof ExecutionOperationError); assert.equal(error.executionId, executionId);
+      assert.equal(error.phase, 'wait'); assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait']);
+    assert(!calls.includes('execution_remove'));
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });

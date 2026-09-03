@@ -165,20 +165,30 @@ fn standing(stage: Stage) -> gtk::Label {
 }
 
 /// What the person agreed to, and the sentence a grant that runs code owes them.
-fn capabilities(entry: &Entry) -> gtk::Box {
+pub(super) fn capabilities(entry: &Entry) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let summary = Summary::of(&entry.granted);
     if summary.execution {
         column.append(&line(Summary::EXECUTION_NOTICE, "fhint"));
     }
+    let grants = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    grants.set_accessible_role(gtk::AccessibleRole::List);
     if entry.granted.is_empty() {
-        column.append(&line("granted nothing", "fhint"));
+        grants.append(&capability("granted nothing"));
+        column.append(&grants);
         return column;
     }
-    for capability in entry.granted.iter() {
-        column.append(&line(capability.as_str(), "fhint"));
+    for granted in entry.granted.iter() {
+        grants.append(&capability(granted.as_str()));
     }
+    column.append(&grants);
     column
+}
+
+fn capability(text: &str) -> gtk::Label {
+    let item = line(text, "fhint");
+    item.set_accessible_role(gtk::AccessibleRole::ListItem);
+    item
 }
 
 /// The actions the current stage allows.
@@ -292,7 +302,10 @@ fn action(
         ],
         Rc::new(move |action, _| match action {
             super::super::semantic::ActionKind::Invoke => {
-                let _ = commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal);
+                let restore_focus = semantic_button.has_focus();
+                if commit(&semantic_shelf, &name, &image_digest, deed, &semantic_refusal) && restore_focus {
+                    focus_replacement(&semantic_shelf, deed);
+                }
             }
             super::super::semantic::ActionKind::Focus => {
                 semantic_button.grab_focus();

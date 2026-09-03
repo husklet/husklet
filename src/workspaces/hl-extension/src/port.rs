@@ -41,6 +41,8 @@ pub struct ContainerSummary {
     pub image: String,
     pub state: String,
     pub created: i64,
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// The process table reported by a running container.
@@ -628,6 +630,9 @@ pub trait ExtensionStore {
     }
     fn disable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension disable is unavailable".into()))
+    }
+    fn retry(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension retry is unavailable".into()))
     }
     fn remove(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension removal is unavailable".into()))
