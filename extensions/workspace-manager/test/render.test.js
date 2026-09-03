@@ -563,6 +563,47 @@ test('container creation validates bounded published ports and retains them unti
   assert.equal(fieldValue(stage, placeholder), '');
 });
 
+test('container creation validates runtime identity and retains it until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('identity temporarily unavailable');
+      return 'identity-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'identity');
+  const hostnameError = 'Hostname must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 253 bytes.';
+  for (const invalid of ['-worker', 'worker name', 'wørker', `a${'b'.repeat(253)}`]) {
+    change(stage, 'Hostname (optional)', invalid);
+    assert.ok(labelled(stage, hostnameError));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, 'Hostname (optional)', `a${'b'.repeat(252)}`);
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 253-byte hostname boundary is accepted');
+  change(stage, 'Hostname (optional)', 'build-worker_1.local');
+  change(stage, 'Run as user (optional)', `u${'é'.repeat(128)}`);
+  assert.ok(labelled(stage, 'Run as user must be a nonempty, NUL-free value of at most 256 bytes.'));
+  assert.equal(isEnabled(stage, 'Create and start'), false, 'UTF-8 byte length, not character count, enforces the user bound');
+  const exactUser = `u${'é'.repeat(127)}x`;
+  change(stage, 'Run as user (optional)', exactUser);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'identity temporarily unavailable'));
+  assert.equal(fieldValue(stage, 'Hostname (optional)'), 'build-worker_1.local');
+  assert.equal(fieldValue(stage, 'Run as user (optional)'), exactUser);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'identity', hostname: 'build-worker_1.local', user: exactUser };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'identity-container'], ['reload']]);
+  assert.equal(fieldValue(stage, 'Hostname (optional)'), '');
+  assert.equal(fieldValue(stage, 'Run as user (optional)'), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
