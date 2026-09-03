@@ -789,7 +789,10 @@ typedef struct translit_profile_execution_options {
     int enabled, symbolize;
 } translit_profile_execution_options;
 static translit_profile_execution_options translit_profile_options;
-static int translit_jcc_ibtc_disabled_cached;
+typedef struct translit_hot_execution_options {
+    uint8_t jcc_ibtc_disabled, jcc_link_disabled, direct_jmp_ibtc_disabled, mixed_sse_disabled;
+} translit_hot_execution_options;
+static translit_hot_execution_options translit_hot_options;
 
 /* Launch options are immutable while an execution is live. Snapshot hot execution controls at that
    boundary: helper probes, block publication and JCC refills run often enough that resolving their
@@ -798,7 +801,14 @@ static void translit_profile_options_refresh(void) {
     const char *directory = hl_option_get("HL_TRANSLIT_PERF_MAP");
     size_t length = directory == NULL ? 0 : strnlen(directory, sizeof translit_profile_options.directory);
     translit_profile_options.symbolize = hl_option_get("HL_TRANSLIT_SYMBOLIZE") != NULL;
-    translit_jcc_ibtc_disabled_cached = hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
+    translit_hot_options.jcc_ibtc_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
+    translit_hot_options.jcc_link_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_JCC_LINK_DISABLE", 0);
+    translit_hot_options.direct_jmp_ibtc_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0);
+    translit_hot_options.mixed_sse_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
     translit_profile_options.enabled =
         (g_prof || translit_profile_options.symbolize) && length != 0 &&
         length < sizeof translit_profile_options.directory;
@@ -809,13 +819,19 @@ static void translit_profile_options_refresh(void) {
 }
 
 static int translit_jcc_ibtc_disabled(void) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-    /* Lifecycle fixtures deliberately toggle this launch option after initialization. Keep those
-       mutations observable without putting the production option-table lookup back on every fill. */
-    return hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
-#else
-    return translit_jcc_ibtc_disabled_cached;
-#endif
+    return translit_hot_options.jcc_ibtc_disabled;
+}
+
+static int translit_jcc_link_disabled(void) {
+    return translit_hot_options.jcc_link_disabled;
+}
+
+static int translit_direct_jmp_ibtc_disabled(void) {
+    return translit_hot_options.direct_jmp_ibtc_disabled;
+}
+
+static int translit_mixed_sse_disabled(void) {
+    return translit_hot_options.mixed_sse_disabled;
 }
 
 static int translit_profile_publication_enabled(void) {
@@ -1707,7 +1723,7 @@ static void translit_emit_reload(hl_x64_asm *a) {
 // so any SMC/invalidation that can stale the bypassed target also removes the source link.
 static struct interp_block *translit_jcc_link_target(uint64_t source, uint64_t target) {
 #if defined(HL_NATIVE_TEST_HOOKS)
-    if (hl_option_flag_value("HL_TRANSLIT_JCC_LINK_DISABLE", 0)) return NULL;
+    if (translit_jcc_link_disabled()) return NULL;
 #endif
     uint64_t page = source & ~UINT64_C(0xfff);
     if (page > UINT64_MAX - UINT64_C(0x1000) || (target & ~UINT64_C(0xfff)) != page) return NULL;
@@ -2669,9 +2685,10 @@ static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_co
     }
     int direct_jmp = miss_kind == TL_DIRECT_JMP_IBTC_MISS;
     int direct_call = miss_kind == TL_DIRECT_CALL_IBTC_MISS;
-    int disabled = actual_miss && (fallthrough ? 0
-                                             : direct_jmp ? hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)
-                                             : direct_call || indirect ? 0 : translit_jcc_ibtc_disabled());
+    int disabled = actual_miss &&
+                   (fallthrough ? 0
+                                : direct_jmp ? translit_direct_jmp_ibtc_disabled()
+                                : direct_call || indirect ? 0 : translit_jcc_ibtc_disabled());
     if (disabled) {
         if (direct_jmp)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_SUPPRESSED, 1);
@@ -4856,17 +4873,31 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (child < 0) return 98;
         if (child == 0) {
             (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
+            (void)hl_option_unset("HL_TRANSLIT_JCC_LINK_DISABLE");
+            (void)hl_option_unset("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
+            (void)hl_option_unset("HL_TRANSLIT_MIXED_SSE_DISABLE");
             translit_profile_options_refresh();
-            int enabled = !translit_jcc_ibtc_disabled_cached;
-            int set = hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) == 0;
-            int stable_before_refresh = !translit_jcc_ibtc_disabled_cached;
+            int enabled = !translit_jcc_ibtc_disabled() && !translit_jcc_link_disabled() &&
+                          !translit_direct_jmp_ibtc_disabled() && !translit_mixed_sse_disabled();
+            int set = hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) == 0 &&
+                      hl_option_set("HL_TRANSLIT_JCC_LINK_DISABLE", "1", 1) == 0 &&
+                      hl_option_set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "1", 1) == 0 &&
+                      hl_option_set("HL_TRANSLIT_MIXED_SSE_DISABLE", "1", 1) == 0;
+            int stable_before_refresh = !translit_jcc_ibtc_disabled() && !translit_jcc_link_disabled() &&
+                                        !translit_direct_jmp_ibtc_disabled() && !translit_mixed_sse_disabled();
             translit_profile_options_refresh();
-            int disabled = translit_jcc_ibtc_disabled_cached;
+            int disabled = translit_jcc_ibtc_disabled() && translit_jcc_link_disabled() &&
+                           translit_direct_jmp_ibtc_disabled() && translit_mixed_sse_disabled();
             (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
-            int stable_after_unset = translit_jcc_ibtc_disabled_cached;
+            (void)hl_option_unset("HL_TRANSLIT_JCC_LINK_DISABLE");
+            (void)hl_option_unset("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
+            (void)hl_option_unset("HL_TRANSLIT_MIXED_SSE_DISABLE");
+            int stable_after_unset = translit_jcc_ibtc_disabled() && translit_jcc_link_disabled() &&
+                                     translit_direct_jmp_ibtc_disabled() && translit_mixed_sse_disabled();
             translit_profile_options_refresh();
             _exit(enabled && set && stable_before_refresh && disabled && stable_after_unset &&
-                          !translit_jcc_ibtc_disabled_cached
+                          !translit_jcc_ibtc_disabled() && !translit_jcc_link_disabled() &&
+                          !translit_direct_jmp_ibtc_disabled() && !translit_mixed_sse_disabled()
                       ? 0
                       : 180);
         }
@@ -4979,7 +5010,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
 #endif
     int fs_run = first_kind == TL_FS_MEM;
     int fs_load_bridged = 0;
-    int mixed_sse_enabled = !hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
+    int mixed_sse_enabled = !translit_mixed_sse_disabled();
     // Direct host memory is correct only in the identity mapping mode.  The soft/logical and bus-ledger
     // paths require an authoritative guard that this deliberately tiny same-ISA lowering does not fake.
     int direct_data_authority =
@@ -5598,8 +5629,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_DIRECT_JUMP, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
-            if (translit_direct_jmp_ibtc_stub_entry != NULL &&
-                !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0)) {
+            if (translit_direct_jmp_ibtc_stub_entry != NULL && !translit_direct_jmp_ibtc_disabled()) {
                 ibtc_site = translit_emit_direct_jmp_ibtc(a, next + (uint64_t)insn.imm);
                 direct_jmp_ibtc_sites++;
             } else {
@@ -7481,6 +7511,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
         (void)hl_option_unset("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
     else
         (void)hl_option_set("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", "0", 1);
+    translit_profile_options_refresh();
     map_clear();
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
@@ -7769,6 +7800,7 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
 
 done_direct_ibtc:
     (void)hl_option_unset("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE");
+    translit_profile_options_refresh();
     translit_test_direct_jmp_ibtc_stub_fail = 0;
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
@@ -8493,8 +8525,10 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
 
     if (scenario == 96) {
         if (hl_option_set("HL_TRANSLIT_JCC_IBTC_DISABLE", "1", 1) != 0) goto done_ibtc;
+        translit_profile_options_refresh();
         translit_jcc_ibtc_fill(&cpu, target_block, 0);
         (void)hl_option_unset("HL_TRANSLIT_JCC_IBTC_DISABLE");
+        translit_profile_options_refresh();
         ibtc_ent empty = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
         result = empty.target == 0 && empty.body == NULL &&
                          __atomic_load_n(&translit_jcc_ibtc_suppressed, __ATOMIC_RELAXED) == suppressed_before + 1
