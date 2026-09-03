@@ -158,6 +158,16 @@ fn native_extension_cards_are_semantic_and_actionable() {
         .value
         .as_deref()
         .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
+    let native_grants = descendants(fixture._catalogue.widget().upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .filter(|label| matches!(label.text().as_str(), "interface" | "container-read"))
+        .collect::<Vec<_>>();
+    assert_eq!(native_grants.len(), 2, "both consented grants are visibly rendered");
+    assert!(native_grants.iter().all(|grant| {
+        grant.accessible_role() == gtk::AccessibleRole::ListItem
+            && grant.parent().is_some_and(|parent| parent.accessible_role() == gtk::AccessibleRole::List)
+    }), "native capability labels must retain the list structure exposed semantically");
     let enable = snapshot
         .root
         .children
