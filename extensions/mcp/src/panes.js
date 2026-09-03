@@ -178,6 +178,44 @@ export async function observePaneMutation(watchPaneChanges, { slot, generation, 
   }
 }
 
+/** Arm first, retain only bounded invalidations, then bind the wait to the mutation result. */
+export async function observePaneMutationResult(watchPaneChanges, cursor, mutate, target) {
+  const pending = [];
+  let dropped = 0;
+  let resolveChange;
+  const changed = new Promise((resolve) => { resolveChange = resolve; });
+  let settled = false;
+  let wanted;
+  const accept = (change) => {
+    if (!wanted || change.slot !== wanted.slot) return false;
+    return wanted.generation == null
+      || change.generation > wanted.generation
+      || (change.generation === wanted.generation && change.revision > wanted.revision);
+  };
+  const dispose = await watchPaneChanges((change) => {
+    if (settled) return;
+    if (wanted && accept(change)) { settled = true; resolveChange({ changed: true, change, dropped }); return; }
+    if (!wanted) {
+      if (pending.length === 64) { pending.shift(); dropped += 1; }
+      pending.push(change);
+    }
+  });
+  const timer = setTimeout(() => {
+    if (!settled) { settled = true; resolveChange({ changed: false, dropped }); }
+  }, cursor.timeout);
+  try {
+    const mutation = await mutate();
+    wanted = target(mutation, cursor);
+    const buffered = pending.find(accept);
+    if (buffered) { settled = true; resolveChange({ changed: true, change: buffered, dropped }); }
+    return { mutation, observation: await changed };
+  } finally {
+    settled = true;
+    clearTimeout(timer);
+    await dispose();
+  }
+}
+
 export async function performSemanticAction(terminal, { slot, confirm, ...action }) {
   const tree = await terminal.semantics(slot);
   const node = findNode(tree.root, action.node);

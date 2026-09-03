@@ -69,6 +69,15 @@ resizing a replacement pane's split.
 `husklet_terminal_resize` also requires the cursor before changing PTY geometry.
 Every MCP mutation addressed to an existing pane requires both cursor fields;
 only terminal observation and opening a new unaddressed tab are cursorless.
+For an agent that must observe the result, `husklet_terminal_mutate_wait` is the
+race-free entrypoint for `open`, `split`, `switch`, `close`, `focus`, `retitle`,
+`resize`, `ratio`, and `spawn`. It awaits the pane-change subscription
+acknowledgement before invoking authority, retains at most 64 early metadata
+events while a newly-created slot is learned, and always unsubscribes on
+success, host failure, or its bounded timeout. Close still requires literal
+`confirm: true`; every existing-slot variant still requires generation and
+revision. The direct mutation tools remain for clients that do not need to
+wait.
 
 `husklet_workspace_event_wait` observes one bounded keyboard, focus, or pointer
 event batch under the distinct `WorkspaceEvents` grant. It subscribes with one

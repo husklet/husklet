@@ -112,7 +112,7 @@ test('every MCP slot-targeted terminal mutation requires the complete pane curso
   const terminal = listed.filter(({ name }) => name.startsWith('husklet_terminal_'));
   const intentionallyCursorless = new Set([
     'husklet_terminal_tabs', 'husklet_terminal_topology', 'husklet_terminal_read',
-    'husklet_terminal_open',
+    'husklet_terminal_open', 'husklet_terminal_mutate_wait',
   ]);
   assert.deepEqual(
     terminal.map(({ name }) => name).filter((name) => !intentionallyCursorless.has(name)).sort(),
@@ -131,6 +131,10 @@ test('every MCP slot-targeted terminal mutation requires the complete pane curso
     assert.ok(schema.shape.generation, `${name} lacks generation`);
     assert.ok(schema.shape.revision, `${name} lacks revision`);
   }
+  const composite = tools(withObservation).find((tool) => tool.name === 'husklet_terminal_mutate_wait');
+  assert.equal(composite.inputSchema.safeParse({ action: 'close', slot: 'p', generation: 1, revision: 2, timeout_ms: 10 }).success, false);
+  assert.equal(composite.inputSchema.safeParse({ action: 'close', slot: 'p', generation: 1, revision: 2, confirm: true, timeout_ms: 10 }).success, true);
+  assert.equal(composite.inputSchema.safeParse({ action: 'open', generation: 1, timeout_ms: 10 }).success, false);
 });
 
 test('workspace create and confirmed update preserve the complete typed configuration', async () => {
@@ -914,6 +918,48 @@ test('composite terminal and semantic mutations subscribe before authority and a
   })).content[0].text);
   assert.deepEqual(calls.slice(2, 4).map(([name]) => name), ['watch.armed', 'terminal.act']);
   assert.equal(actionResult.observation.change.revision, 8);
+  assert.equal(disposed, 2);
+});
+
+test('one discriminated pane composite arms every layout mutation before authority and binds its result', async () => {
+  const cases = [
+    ['open', 'openTab', { title: 'Build' }, ['Build'], 'opened'],
+    ['split', 'splitObserved', { slot: 'pane', generation: 3, revision: 7, division: 'below' }, ['pane', 3, 7, 'below'], 'split'],
+    ['switch', 'switchOccupantObserved', { slot: 'pane', generation: 3, revision: 7, target: { kind: 'terminal' } }, ['pane', 3, 7, { kind: 'terminal' }], 'pane'],
+    ['close', 'closeObserved', { slot: 'pane', generation: 3, revision: 7, confirm: true }, ['pane', 3, 7], 'pane'],
+    ['focus', 'focusObserved', { slot: 'pane', generation: 3, revision: 7 }, ['pane', 3, 7], 'pane'],
+    ['retitle', 'retitleObserved', { slot: 'pane', generation: 3, revision: 7, title: 'Build' }, ['pane', 3, 7, 'Build'], 'pane'],
+    ['resize', 'resizeGridObserved', { slot: 'pane', generation: 3, revision: 7, columns: 100, rows: 30 }, ['pane', 3, 7, 100, 30], 'pane'],
+    ['ratio', 'ratioObserved', { slot: 'pane', generation: 3, revision: 7, ratio: 0.6 }, ['pane', 3, 7, 0.6], 'pane'],
+    ['spawn', 'spawnObserved', { slot: 'pane', generation: 3, revision: 7, command: ['printf', 'ok'] }, ['pane', 3, 7, ['printf', 'ok']], 'pane'],
+  ];
+  for (const [action, method, fields, expected, changedSlot] of cases) {
+    const { api, calls } = fake(); let listener; let disposed = 0;
+    api.watchPaneChanges = async (next) => { calls.push(['watch.armed']); listener = next; return async () => { disposed += 1; }; };
+    api.terminal[method] = async (...args) => {
+      calls.push([method, ...args]);
+      queueMicrotask(() => listener({ slot: changedSlot, kind: 'terminal', generation: 3, revision: 8, coalesced: 0 }));
+      return action === 'open' || action === 'split' ? changedSlot : undefined;
+    };
+    const composite = tools(api).find(({ name }) => name === 'husklet_terminal_mutate_wait');
+    const answer = JSON.parse((await composite.run({ action, ...fields, timeout_ms: 1000 })).content[0].text);
+    assert.deepEqual(calls.map(([name]) => name), ['watch.armed', method], `${action} mutated before subscription acknowledgement`);
+    assert.deepEqual(calls[1].slice(1), expected, `${action} lost bounded mutation fields`);
+    assert.equal(answer.observation.change.slot, changedSlot);
+    assert.equal(disposed, 1);
+  }
+});
+
+test('pane mutation composite disposes on authority failure and timeout', async () => {
+  const { api } = fake(); let disposed = 0;
+  api.watchPaneChanges = async () => async () => { disposed += 1; };
+  api.terminal.focusObserved = async () => { throw new Error('stale pane'); };
+  const composite = tools(api).find(({ name }) => name === 'husklet_terminal_mutate_wait');
+  await assert.rejects(() => composite.run({ action: 'focus', slot: 'p', generation: 1, revision: 2, timeout_ms: 10 }), /stale pane/);
+  assert.equal(disposed, 1);
+  api.terminal.focusObserved = async () => {};
+  const timed = JSON.parse((await composite.run({ action: 'focus', slot: 'p', generation: 1, revision: 2, timeout_ms: 1 })).content[0].text);
+  assert.equal(timed.observation.changed, false);
   assert.equal(disposed, 2);
 });
 

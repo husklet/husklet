@@ -10,6 +10,14 @@ const call = async (client, name, args = {}) => text(
   await client.callTool({ name, arguments: args }), name,
 );
 
+/** Arm pane-change credit before one layout mutation; never race a separate wait against it. */
+export async function mutatePaneAndObserve(client, mutation, waitMs = 5_000) {
+  if (!mutation || typeof mutation !== 'object') throw new TypeError('mutation must be an object');
+  return JSON.parse(await call(client, 'husklet_terminal_mutate_wait', {
+    ...mutation, timeout_ms: waitMs,
+  }));
+}
+
 const attribute = (xml, name) => {
   const match = xml.match(new RegExp(`(?:<husklet-pane|<pane|<node)[^>]*\\b${name}="(\\d+)"`));
   if (!match) throw new Error(`semantic snapshot has no numeric ${name}`);

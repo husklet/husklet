@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { workspace } from '@husklet/react';
 import { FILE_BYTES_LIMIT, detailResult, fileRangeResult, fileResult, inventoryResult, logResult, publicError, result } from './bounds.js';
-import { observePaneMutation, paneTools } from './panes.js';
+import { observePaneMutation, observePaneMutationResult, paneTools } from './panes.js';
 export { paneXml, semanticXml } from './panes.js';
 
 const id = z.string().min(1).max(256);
@@ -102,6 +102,46 @@ const command = z.array(z.string().max(4096)).min(1).max(64).superRefine((argv, 
   const bytes = argv.reduce((total, argument) => total + utf8Bytes(argument), 0);
   if (bytes > 32 * 1024) context.addIssue({ code: z.ZodIssueCode.custom, message: 'command exceeds 32768 bytes' });
 });
+const paneCursor = { slot: id, generation: acquisitionRevision, revision: acquisitionRevision };
+const paneTimeout = z.number().int().min(1).max(30_000).default(30_000);
+const paneMutation = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('open'), title: z.string().max(256).default('Terminal'), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('split'), ...paneCursor, division: z.enum(['beside', 'below']), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('switch'), ...paneCursor, target: z.union([z.object({ kind: z.literal('terminal') }).strict(), z.object({ kind: z.literal('surface'), extension: extensionName, provider: extensionName }).strict()]), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('close'), ...paneCursor, confirm: z.literal(true), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('focus'), ...paneCursor, timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('retitle'), ...paneCursor, title: paneTitle, timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('resize'), ...paneCursor, columns: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('ratio'), ...paneCursor, ratio: z.number().min(0.05).max(0.95), timeout_ms: paneTimeout }).strict(),
+  z.object({ action: z.literal('spawn'), ...paneCursor, command, timeout_ms: paneTimeout }).strict(),
+]);
+
+async function mutatePaneAndWait(api, input) {
+  const cursor = { slot: input.slot, generation: input.generation, revision: input.revision, timeout: input.timeout_ms };
+  const mutate = async () => {
+    switch (input.action) {
+      case 'open': return { slot: await api.terminal.openTab(input.title) };
+      case 'split': return { slot: await api.terminal.splitObserved(input.slot, input.generation, input.revision, input.division) };
+      case 'switch': await api.terminal.switchOccupantObserved(input.slot, input.generation, input.revision, input.target); break;
+      case 'close': await api.terminal.closeObserved(input.slot, input.generation, input.revision); break;
+      case 'focus': await api.terminal.focusObserved(input.slot, input.generation, input.revision); break;
+      case 'retitle': await api.terminal.retitleObserved(input.slot, input.generation, input.revision, input.title); break;
+      case 'resize': await api.terminal.resizeGridObserved(input.slot, input.generation, input.revision, input.columns, input.rows); break;
+      case 'ratio': await api.terminal.ratioObserved(input.slot, input.generation, input.revision, input.ratio); break;
+      case 'spawn': await api.terminal.spawnObserved(input.slot, input.generation, input.revision, input.command); break;
+      default: throw new TypeError(`unsupported pane mutation ${input.action}`);
+    }
+    return { done: true, slot: input.slot, generation: input.generation, revision: input.revision };
+  };
+  return observePaneMutationResult(
+    api.watchPaneChanges.bind(api),
+    cursor,
+    mutate,
+    (mutation) => input.action === 'open' || input.action === 'split'
+      ? { slot: mutation.slot }
+      : cursor,
+  );
+}
 const executionCursor = z.object({
   container_id: containerIdentity,
   running: z.boolean(),
@@ -375,6 +415,7 @@ export function tools(api) {
   if (typeof api.watchPaneChanges === 'function') definitions.push(
     define('husklet_terminal_write_wait', 'Atomically arm pane observation, write UTF-8 input to one exact terminal cursor, and return the matching change.', z.object({ slot: id, generation: acquisitionRevision, revision: acquisitionRevision, input: terminalText, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ slot: value, generation, revision, input, timeout_ms: timeout }) => observePaneMutation(api.watchPaneChanges.bind(api), { slot: value, generation, revision, timeout }, async () => { await api.terminal.writeInput(value, generation, revision, input); return { done: true }; })),
     define('husklet_terminal_write_bytes_wait', 'Atomically arm pane observation, write canonical-base64 bytes to one exact terminal cursor, and return the matching change.', terminalBytes.extend({ generation: acquisitionRevision, revision: acquisitionRevision, timeout_ms: z.number().int().min(1).max(30_000).default(30_000) }).strict(), ({ slot: value, generation, revision, input_base64: encoded, timeout_ms: timeout }) => observePaneMutation(api.watchPaneChanges.bind(api), { slot: value, generation, revision, timeout }, async () => { await api.terminal.writeInput(value, generation, revision, decodeTerminalBytes(encoded)); return { done: true }; })),
+    define('husklet_terminal_mutate_wait', 'Arm bounded pane observation before one strict layout, occupant, focus, title, grid, ratio, or process mutation; then return both mutation and matching change.', paneMutation, (input) => mutatePaneAndWait(api, input)),
   );
   if (typeof api.watchWorkspaceEvents === 'function') definitions.push(define(
     'husklet_workspace_event_wait',
