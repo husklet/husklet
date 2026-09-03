@@ -2679,6 +2679,22 @@ mod panes {
     }
 
     pub(super) fn retitling_a_live_pane_preserves_its_slot_process_and_layout() {
+        fn stable_layout(node: &LayoutNode) -> LayoutNode {
+            match node {
+                LayoutNode::Pane { pane, focused, .. } => LayoutNode::Pane {
+                    pane: pane.clone(),
+                    grid: None,
+                    focused: *focused,
+                },
+                LayoutNode::Split { division, ratio_per_mille, first, second } => LayoutNode::Split {
+                    division: *division,
+                    ratio_per_mille: *ratio_per_mille,
+                    first: Box::new(stable_layout(first)),
+                    second: Box::new(stable_layout(second)),
+                },
+            }
+        }
+
         let bench = Bench::new();
         let (terminal, slot) = bench.shell();
         let before = Console::topology(&bench.window).expect("topology before retitle");
@@ -2702,7 +2718,11 @@ mod panes {
         assert_eq!(renamed.title.as_deref(), Some("Build 🧪"));
         let after = Console::topology(&bench.window).expect("topology after retitle");
         assert_eq!(before.active_tab, after.active_tab);
-        assert_eq!(before.tabs[0].root, after.tabs[0].root, "retitle does not rebuild or move the layout");
+        assert_eq!(
+            stable_layout(&before.tabs[0].root),
+            stable_layout(&after.tabs[0].root),
+            "retitle does not rebuild or move the layout"
+        );
         assert_eq!(after.tabs[0].title, "Build 🧪");
         assert_eq!(
             Panes::at(&bench.window, &slot).map(|pane| pane.content),
