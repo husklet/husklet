@@ -347,7 +347,10 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::ExecutionRemove { id } => port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from),
+            Request::ExecutionRemove { id } => {
+                immutable_identity(id, &[32], "execution")?;
+                port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from)
+            }
             Request::ContainerExec {
                 id,
                 command,

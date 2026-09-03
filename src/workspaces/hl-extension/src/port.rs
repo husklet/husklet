@@ -764,7 +764,8 @@ pub trait ContainerControl {
         ))
     }
 
-    /// Removes one stopped execution record and its captured output.
+    /// Removes one stopped execution record selected by its complete immutable
+    /// execution identity, and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "execution removal is unsupported by this host".into(),

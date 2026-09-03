@@ -1566,6 +1566,26 @@ fn execution_signals_are_bounded_before_the_container_port_is_reached() {
 }
 
 #[test]
+fn execution_removal_refuses_aliases_before_control_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    for id in ["friendly".to_owned(), "e1".to_owned(), "a".repeat(12)] {
+        assert!(matches!(
+            session.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+
+    let id = "e".repeat(32);
+    assert_eq!(
+        session.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
+        Ok(Reply::Done)
+    );
+    assert_eq!(host.ledger.reached(), ["executions.remove"]);
+}
+
+#[test]
 fn signals_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);

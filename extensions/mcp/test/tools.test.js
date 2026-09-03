@@ -417,10 +417,13 @@ test('execution signaling targets an execution with a strict bounded signal', as
 test('execution removal requires literal confirmation', async () => {
   const { api, calls } = fake();
   const remove = tools(api).find(({ name }) => name === 'husklet_execution_remove');
+  const immutable = 'e'.repeat(32);
   assert.equal(remove.inputSchema.safeParse({ id: 'e1' }).success, false);
   assert.equal(remove.inputSchema.safeParse({ id: 'e1', confirm: false }).success, false);
-  await remove.run({ id: 'e1', confirm: true });
-  assert.deepEqual(calls, [['containers.removeExecution', 'e1']]);
+  assert.equal(remove.inputSchema.safeParse({ id: 'e1', confirm: true }).success, false);
+  assert.equal(remove.inputSchema.safeParse({ id: immutable, confirm: false }).success, false);
+  await remove.run({ id: immutable, confirm: true });
+  assert.deepEqual(calls, [['containers.removeExecution', immutable]]);
 });
 
 test('terminal layout tools use the host wire vocabulary and bounded destructive controls', async () => {

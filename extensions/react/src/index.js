@@ -187,7 +187,9 @@ export function workspace(session) {
         await session.call('execution_wait', { id, timeout_ms: timeoutMs }), 'execution',
       ),
       signalExecution: (id, signal) => done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
-      removeExecution: (id) => done('execution_remove', { id }),
+      removeExecution: (id) => done('execution_remove', {
+        id: immutableIdentity(id, [32], 'execution'),
+      }),
       create: async (configuration, legacyName) => {
         const spec = typeof configuration === 'string' ? {
           image: configuration, name: legacyName, hostname: null, entrypoint: null, command: [], environment: [],
