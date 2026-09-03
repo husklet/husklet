@@ -391,6 +391,7 @@ fn removal(
             remove.set_visible(false);
             confirm.set_visible(true);
             cancel.set_visible(true);
+            confirm.grab_focus();
             semantics.set_disabled(&remove_path, true);
             semantics.set_disabled(&confirm_path, false);
             semantics.set_disabled(&cancel_path, false);
@@ -412,6 +413,7 @@ fn removal(
             remove.set_visible(true);
             confirm.set_visible(false);
             cancel.set_visible(false);
+            remove.grab_focus();
             semantics.set_disabled(&remove_path, false);
             semantics.set_disabled(&confirm_path, true);
             semantics.set_disabled(&cancel_path, true);

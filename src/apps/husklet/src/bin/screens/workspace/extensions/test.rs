@@ -708,6 +708,13 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
             value: None,
         })
         .unwrap();
+    assert_eq!(
+        gtk::prelude::RootExt::focus(&window)
+            .and_downcast::<gtk::Button>()
+            .and_then(|button| button.label()),
+        Some("Confirm removal".into()),
+        "revealing confirmation moves keyboard focus off the hidden Remove control"
+    );
     let asking = fixture.view.semantic_snapshot();
     let confirm = asking
         .root
@@ -726,12 +733,18 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         remove.disabled,
         "the hidden first-step action cannot bypass confirmation state"
     );
+    let cancel = asking
+        .root
+        .children
+        .iter()
+        .find(|node| node.label.as_deref() == Some("Cancel removal"))
+        .unwrap();
     fixture
         .view
         .semantic_action(&Action {
             revision: asking.revision,
-            node: confirm.id,
-            action: ActionKind::Focus,
+            node: cancel.id,
+            action: ActionKind::Invoke,
             value: None,
         })
         .unwrap();
@@ -739,8 +752,8 @@ fn lifecycle_actions_share_keyboard_and_semantic_focus() {
         gtk::prelude::RootExt::focus(&window)
             .and_downcast::<gtk::Button>()
             .and_then(|button| button.label()),
-        Some("Confirm removal".into()),
-        "semantic Focus follows the currently visible confirmation"
+        Some("Remove".into()),
+        "cancelling returns keyboard focus to the restored Remove control"
     );
     window.close();
 }
