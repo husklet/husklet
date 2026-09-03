@@ -175,6 +175,22 @@ function containerCreateOptions(draft) {
     }
     mounts = mounts.map(({ volume, target, read_only = false }) => ({ volume, target, read_only }));
   }
+  const portsText = draft.ports.trim();
+  let ports;
+  if (portsText) {
+    try { ports = JSON.parse(portsText); } catch { throw new Error('Ports must be valid JSON, such as [{"container":8080,"host":18080,"protocol":"tcp"}].'); }
+    const allowed = new Set(['container', 'host', 'protocol']);
+    const validPort = (value) => Number.isInteger(value) && value >= 1 && value <= 65_535;
+    if (!Array.isArray(ports) || ports.length > 64
+      || ports.some((port) => !port || typeof port !== 'object' || Array.isArray(port)
+        || Object.keys(port).some((key) => !allowed.has(key))
+        || !validPort(port.container) || (port.host !== undefined && port.host !== null && !validPort(port.host))
+        || !['tcp', 'udp'].includes(port.protocol))
+      || new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length) {
+      throw new Error('Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.');
+    }
+    ports = ports.map(({ container, host = null, protocol }) => ({ container, host, protocol }));
+  }
   return {
     ...(command ? { command } : {}),
     ...(environment ? { environment } : {}),
@@ -183,6 +199,7 @@ function containerCreateOptions(draft) {
     ...(cpus === null ? {} : { cpus }),
     ...(pidsLimit === null ? {} : { pids_limit: pidsLimit }),
     ...(mounts ? { mounts } : {}),
+    ...(ports ? { ports } : {}),
   };
 }
 
@@ -206,7 +223,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const [draft, setDraft] = useState({
-    image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '',
+    image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
   });
   const [created, setCreated] = useState(null);
   const [creationError, setCreationError] = useState(null);
@@ -259,7 +276,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
       await api.containers.start(target.id);
       setCreationNotice(`Created and started ${target.name}.`);
       setCreated(null); setDraft({
-        image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '',
+        image: '', name: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
       });
       await resource.reload();
     } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
@@ -294,7 +311,8 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         h(Entry, { value: draft.memoryMb, placeholder: 'Memory limit MiB (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, memoryMb: String(event.value ?? '') })) }),
         h(Entry, { value: draft.cpus, placeholder: 'CPU limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, cpus: String(event.value ?? '') })) }),
         h(Entry, { value: draft.pidsLimit, placeholder: 'PID limit (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') })) }),
-        h(Entry, { value: draft.mounts, placeholder: 'Named volume mounts JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, mounts: String(event.value ?? '') })) }))),
+        h(Entry, { value: draft.mounts, placeholder: 'Named volume mounts JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, mounts: String(event.value ?? '') })) }),
+        h(Entry, { value: draft.ports, placeholder: 'Published ports JSON (optional)', enabled: !created && busy !== 'create', onChange: (event) => setDraft((value) => ({ ...value, ports: String(event.value ?? '') })) }))),
       h(CardActions, {}, busy === 'create' ? h(Spinner) : null, h(Button, {
         label: created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start',
         enabled: busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError)),

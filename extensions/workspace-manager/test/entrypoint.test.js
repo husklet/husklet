@@ -160,6 +160,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     peer.write(encode({ channel: 47, kind: KIND.event, payload: changeInvocation(requests, 'CPU limit (optional)', '2') }));
     peer.write(encode({ channel: 48, kind: KIND.event, payload: changeInvocation(requests, 'PID limit (optional)', '128') }));
     peer.write(encode({ channel: 49, kind: KIND.event, payload: changeInvocation(requests, 'Named volume mounts JSON (optional)', '[{"volume":"cache","target":"/cache","read_only":true},{"volume":"data","target":"/srv/data"}]') }));
+    peer.write(encode({ channel: 50, kind: KIND.event, payload: changeInvocation(requests, 'Published ports JSON (optional)', '[{"container":8080,"host":18080,"protocol":"tcp"},{"container":53,"protocol":"udp"}]') }));
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'worker')));
     peer.write(encode({ channel: 28, kind: KIND.event, payload: invocation(requests, 'Create and start') }));
@@ -169,7 +170,10 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       hostname: null, user: null, labels: [], mounts: [
         { volume: 'cache', target: '/cache', read_only: true },
         { volume: 'data', target: '/srv/data', read_only: false },
-      ], network: null, ports: [], memory_mb: 512, cpus: 2, pids_limit: 128,
+      ], network: null, ports: [
+        { container: 8080, host: 18080, protocol: 'tcp' },
+        { container: 53, host: null, protocol: 'udp' },
+      ], memory_mb: 512, cpus: 2, pids_limit: 128,
     });
     assert.deepEqual(requests.find((request) => request.call === 'container_start').with, { id: createdContainerId });
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }));

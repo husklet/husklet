@@ -514,6 +514,55 @@ test('container creation accepts only bounded named-volume mounts and retains th
   assert.equal(fieldValue(stage, placeholder), '');
 });
 
+test('container creation validates bounded published ports and retains them until success', async () => {
+  const calls = [];
+  let creates = 0;
+  const controlled = { containers: {
+    create: async (spec) => {
+      calls.push(['create', spec]); creates += 1;
+      if (creates === 1) throw new Error('port publication temporarily unavailable');
+      return 'published-container';
+    },
+    start: async (id) => calls.push(['start', id]),
+  } };
+  const resource = { data: [], loading: false, error: null, reload: async () => calls.push(['reload']) };
+  const stage = host();
+  stage.render(h(Containers, { api: controlled, resource }));
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'published');
+  const placeholder = 'Published ports JSON (optional)';
+  const error = 'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.';
+  for (const invalid of [
+    '[{"container":0,"protocol":"tcp"}]',
+    '[{"container":65536,"protocol":"tcp"}]',
+    '[{"container":80,"host":0,"protocol":"tcp"}]',
+    '[{"container":80,"host":"127.0.0.1:8080","protocol":"tcp"}]',
+    '[{"container":80,"protocol":"sctp"}]',
+    '[{"container":80,"protocol":"tcp"},{"container":80,"host":8080,"protocol":"tcp"}]',
+    '[{"container":80,"protocol":"tcp","address":"127.0.0.1"}]',
+    JSON.stringify(Array.from({ length: 65 }, (_, index) => ({ container: index + 1, protocol: 'tcp' }))),
+  ]) {
+    change(stage, placeholder, invalid);
+    assert.ok(labelled(stage, error));
+    assert.equal(isEnabled(stage, 'Create and start'), false);
+  }
+  change(stage, placeholder, JSON.stringify(Array.from({ length: 64 }, (_, index) => ({ container: index + 1, protocol: 'tcp' }))));
+  assert.equal(isEnabled(stage, 'Create and start'), true, 'the exact 64-port boundary is accepted');
+  const requested = '[{"container":8080,"host":18080,"protocol":"tcp"},{"container":53,"protocol":"udp"},{"container":53,"protocol":"tcp"}]';
+  change(stage, placeholder, requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'port publication temporarily unavailable'));
+  assert.equal(fieldValue(stage, placeholder), requested);
+  invoke(stage, 'Create and start'); await settled(); await settled();
+  const spec = { image: 'alpine:3.20', name: 'published', ports: [
+    { container: 8080, host: 18080, protocol: 'tcp' },
+    { container: 53, host: null, protocol: 'udp' },
+    { container: 53, host: null, protocol: 'tcp' },
+  ] };
+  assert.deepEqual(calls, [['create', spec], ['create', spec], ['start', 'published-container'], ['reload']]);
+  assert.equal(fieldValue(stage, placeholder), '');
+});
+
 test('container removal authority is available only for a stopped inventory record', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
