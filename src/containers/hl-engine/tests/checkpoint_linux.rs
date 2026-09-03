@@ -5717,6 +5717,62 @@ fn a_post_descriptor_dump_refusal_never_advertises_a_resumed_tree_on_both_isas()
     }
 }
 
+#[test]
+fn irreversible_transport_failure_precedes_pipe_consumption_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, refusal_resume_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let port = Arc::new(TestTerminal::default());
+        let capture = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(
+                    &executable,
+                    &release,
+                    &final_release,
+                    &["HL_CHECKPOINT", "HL_CKPT_TEST_BREAK_IRREVERSIBLE_TRANSPORT"],
+                ),
+                StandardStreams::default().with_terminal(Terminal::new(port.clone(), 24, 80).unwrap()),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        capture.start().unwrap();
+        port.wait_output(b"REFUSAL-MEMBER-ZOMBIE");
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a broken irreversible-state transport produced a checkpoint");
+        port.input(b"\n");
+        let resumed = wait_result_bounded(&capture, "irreversible transport failure")
+            .unwrap_or_else(|error| panic!("{isa:?} intact tree did not resume: {error:?}: {}", port.output()));
+        assert_eq!(resumed.guest_status, 0, "{isa:?}: {}", port.output());
+        assert!(
+            port.output().contains("REFUSAL-MEMBER-REAPED") && port.output().contains("REFUSAL-COORDINATOR-RESUMED"),
+            "{isa:?} did not prove the unconsumed pipe tree resumed intact: {}",
+            port.output()
+        );
+        let stored = store.0.lock().unwrap();
+        assert!(
+            !stored.keys().any(|name| name.starts_with("pipe.")),
+            "{isa:?} consumed and staged a pipe after its irreversible mark transport failed"
+        );
+        assert!(
+            !stored.contains_key("MANIFEST"),
+            "{isa:?} published after mark transport failure"
+        );
+    }
+}
+
 /// A child exit status the capture's own reap destroys survives into the restored tree.
 ///
 /// The coordinator reaps with `waitpid(-1, WNOHANG)` from inside the container init, which IS a guest

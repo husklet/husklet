@@ -69,8 +69,15 @@ static int ckpt_stream_settle_refusal(void) {
                : -1;
 }
 
-static void ckpt_stream_mark_irreversible(void) {
-    (void)ckpt_stream_call(HL_CKPT_OP_MARK_IRREVERSIBLE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0);
+static int ckpt_stream_mark_irreversible(void) {
+    if (hl_option_get("HL_CKPT_TEST_BREAK_IRREVERSIBLE_TRANSPORT") != NULL) {
+        int descriptor = hl_ckpt_channel_acquire();
+        if (descriptor >= 0) (void)close(descriptor);
+    }
+    return ckpt_stream_call(HL_CKPT_OP_MARK_IRREVERSIBLE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
+                   HL_CKPT_STATUS_OK
+               ? 0
+               : -1;
 }
 
 // Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture

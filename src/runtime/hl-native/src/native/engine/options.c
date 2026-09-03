@@ -70,6 +70,9 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INJECTION_OPTION("HL_CKPT_TEST_IGNORE_LOCAL_DESTRUCTIVE",
                         "test-only disable the member-local terminal guard to isolate the broker's tree-wide guard",
                         HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_BREAK_IRREVERSIBLE_TRANSPORT",
+                        "test-only close the live broker channel immediately before irreversible admission",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
                         "test-only capture peer that works for far longer than the rendezvous stall window "
                         "before committing its group",

@@ -60,6 +60,9 @@ int main(void) {
         write_all("REFUSAL-MEMBER-ZOMBIE\n");
         while (!released) pause();
 
+        char preserved = 0;
+        if (read(shared_pipe[0], &preserved, 1) != 1 || preserved != payload) _exit(83);
+
         int status = 0;
         if (waitpid(child, &status, 0) != child) _exit(74);
         if (!WIFEXITED(status) || WEXITSTATUS(status) != CHILD_STATUS) _exit(75);

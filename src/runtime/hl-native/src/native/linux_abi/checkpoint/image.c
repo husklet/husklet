@@ -2225,11 +2225,21 @@ static void ckpt_record_reaped_child(const struct ckpt_phase_ledger *phases, pid
  * is released. */
 static void ckpt_reap_and_record(const struct ckpt_phase_ledger *phases) {
     for (;;) {
+        siginfo_t pending;
+        memset(&pending, 0, sizeof pending);
+        if (waitid(P_ALL, 0, &pending, WEXITED | WNOHANG | WNOWAIT) != 0 || pending.si_pid <= 0) break;
+        if (ckpt_stream_mark_irreversible() != 0)
+            ckpt_coordinator_refuse(phases, CKPT_REFUSAL_PEER_QUIESCENCE,
+                                    "the broker did not acknowledge an irreversible child-status reap");
         int status = 0;
-        pid_t child = waitpid(-1, &status, WNOHANG);
-        if (child <= 0) break;
+        pid_t child;
+        do
+            child = waitpid(pending.si_pid, &status, WNOHANG);
+        while (child < 0 && errno == EINTR);
+        if (child <= 0)
+            ckpt_coordinator_refuse(phases, CKPT_REFUSAL_PEER_QUIESCENCE,
+                                    "an observed child status disappeared before it could be recorded");
         g_ckpt_capture_destructive = 1;
-        ckpt_stream_mark_irreversible();
         ckpt_record_reaped_child(phases, child, status);
     }
 }

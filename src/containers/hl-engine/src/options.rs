@@ -243,6 +243,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_BREAK_IRREVERSIBLE_TRANSPORT",
+        "test-only close the live broker channel immediately before irreversible admission",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
         "test-only capture peer that works far longer than the rendezvous stall window before committing",
         Flag
@@ -353,7 +358,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only occupy the reusable fixed-image address",
         Flag
     ),
-    internal!("HL_PCACHE_OBSERVE", "emit structured persistent-cache diagnostics", Flag),
+    internal!(
+        "HL_PCACHE_OBSERVE",
+        "emit structured persistent-cache diagnostics",
+        Flag
+    ),
     internal!(
         "HL_PCACHE_EXEC_AUTHORITY",
         "snapshot-authenticated executable content identities",
