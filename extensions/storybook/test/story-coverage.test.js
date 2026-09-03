@@ -29,6 +29,7 @@ import { NetworkWaterfallStory, boundedRequests, REQUEST_LIMIT, PHASE_LIMIT } fr
 import { DependencyGraphStory, boundedGraph, NODE_LIMIT } from '../src/dependency-graph.js';
 import { JsonTreeStory } from '../src/json-tree.js';
 import { ConfirmationStory } from '../src/confirmation.js';
+import { ContainerOperationsStory, boundedContainers, CONTAINER_LIMIT, PROCESS_LIMIT, LOG_LIMIT } from '../src/container-operations.js';
 import { host } from './host.js';
 
 function difference(expected, actual) {
@@ -60,6 +61,7 @@ test('every catalogue contract has a meaningful selectable state and family cove
 test('every composed story has a readable root and a bounded initial wire frame', () => {
   const stories = [
     ['safe destructive confirmation', h(ConfirmationStory)],
+    ['container operations', h(ContainerOperationsStory)],
     ['bounded JSON tree', h(JsonTreeStory)],
     ['acquisition', h(AcquisitionProgressStory)],
     ['validated form', h(ValidatedSettingsFormStory)],
@@ -93,6 +95,21 @@ test('every composed story has a readable root and a bounded initial wire frame'
     assert(labels.some((label) => typeof label === 'string' && label.trim().length > 0), `${name} has no readable label`);
     assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
   }
+});
+
+test('container operations bounds and sanitizes every host-sized projection', () => {
+  const containers = Array.from({ length: CONTAINER_LIMIT + 3 }, (_, index) => ({
+    id: `immutable-${index}`, name: `container-${index}\nunsafe`, image: 'x'.repeat(140), state: 'invented',
+    logs: 'l'.repeat(LOG_LIMIT + 20),
+    processes: Array.from({ length: PROCESS_LIMIT + 4 }, (_, pid) => ({ pid, user: 'user', command: 'c'.repeat(200) })),
+  }));
+  const bounded = boundedContainers(containers);
+  assert.equal(bounded.length, CONTAINER_LIMIT);
+  assert.equal(bounded[0].processes.length, PROCESS_LIMIT);
+  assert.equal(bounded[0].logs.length, LOG_LIMIT);
+  assert.equal(bounded[0].state, 'unknown');
+  assert(!bounded[0].name.includes('\n'));
+  assert.equal(bounded[0].processes[0].command.length, 160);
 });
 test('dependency graph bounds and interactively filters issues',()=>{const graph=boundedGraph({nodes:Array.from({length:NODE_LIMIT+2},(_,i)=>({id:`n${i}`,label:`n${i}`,version:'1',state:i?'resolved':'conflict',detail:'x'})),edges:[],cycles:[],totals:{nodes:99,edges:0,cycles:0}});assert.equal(graph.nodes.length,NODE_LIMIT);const stage=host();const first=stage.render(h(DependencyGraphStory));const filter=node(first.patches,'Button','Show issues only');const before=stage.frames.length;assert(stage.surface.dispatch({trigger:'Invoke',node:filter,id:`${filter}:Invoke`}));const changed=stage.since(before);assert(changed.some(p=>p.Remove));assert(changed.some(p=>p.SetProp?.value?.Text==='Show all'))});
 

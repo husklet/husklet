@@ -12,6 +12,16 @@ import { grouped, tags } from '../src/catalogue.js';
 
 const { KIND, Reader, encode } = await import(new URL('src/wire.js', `file://${PACKAGE}`));
 
+function node(patches, tag, label) {
+  let candidate = null;
+  for (const patch of patches) {
+    if (patch.Create?.tag === tag) candidate = patch.Create.id;
+    if (candidate !== null && patch.SetProp?.id === candidate && patch.SetProp.prop === 'Label'
+      && patch.SetProp.value.Text === label) return candidate;
+  }
+  return null;
+}
+
 async function until(condition, message) {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     const value = condition();
@@ -94,6 +104,31 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.ok(
     rendered.with.frame.patches.some((patch) => patch.Create?.tag === 'Scroll'),
     'the live playground did not render its scrolling browser',
+  );
+  const story = node(rendered.with.frame.patches, 'ListItemButton', 'Container operations console');
+  assert.ok(story, 'container operations is not selectable from the live sidebar');
+  accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
+    slot: 'storybook-main', event: 'Invoke', id: `${story}:Invoke`, node: story,
+  } }));
+  const storyFrame = await until(
+    () => calls.filter((call) => call.call === 'interface_render_at')[1],
+    `container operations never crossed the socket; stderr=${stderr}`,
+  );
+  const inspect = node(storyFrame.with.frame.patches, 'Button', 'Inspect processes and logs');
+  assert.ok(inspect, 'container operations has no inspection action');
+  accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
+    slot: 'storybook-main', event: 'Invoke', id: `${inspect}:Invoke`, node: inspect,
+  } }));
+  const inspection = await until(
+    () => calls.filter((call) => call.call === 'interface_render_at').slice(2)
+      .find((call) => call.with.frame.patches.some((patch) => patch.Create?.tag === 'LogView')),
+    `container inspection never crossed the socket; stderr=${stderr}`,
+  );
+  assert.ok(inspection.with.frame.patches.some((patch) => patch.Create?.tag === 'LogView'));
+  await until(
+    () => calls.filter((call) => call.call === 'interface_render_at').slice(2)
+      .find((call) => call.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Loaded 2 bounded processes for api.')),
+    `container inspection status never crossed the socket; stderr=${stderr}`,
   );
   assert.equal(stderr, '');
 });
