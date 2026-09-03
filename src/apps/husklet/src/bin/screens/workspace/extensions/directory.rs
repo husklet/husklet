@@ -382,6 +382,10 @@ impl Catalogue {
     /// The consent recorded is exactly what was shown, and the roster narrows
     /// it again to what the manifest declares.
     pub fn consent(self: &Rc<Self>) {
+        self.consent_with_focus(false);
+    }
+
+    fn consent_with_focus(self: &Rc<Self>, restore_focus: bool) {
         let Some(proposal) = self.candidate.borrow().clone() else {
             self.say("there is nothing to install");
             return;
@@ -395,7 +399,9 @@ impl Catalogue {
                     &consent,
                     moment(),
                 );
-                self.settle(&candidate, recorded);
+                if self.settle(&candidate, recorded) && restore_focus {
+                    self.focus_installed_action(super::settings::ENABLE);
+                }
             }
             Proposal::Update {
                 candidate,
@@ -448,10 +454,10 @@ impl Catalogue {
     }
 
     /// Puts the candidate on the shelf, or says why it could not go there.
-    fn settle(self: &Rc<Self>, candidate: &Candidate, recorded: Result<(), hl::extension::Refusal>) {
+    fn settle(self: &Rc<Self>, candidate: &Candidate, recorded: Result<(), hl::extension::Refusal>) -> bool {
         if let Err(refusal) = recorded {
             self.say(&refusal.to_string());
-            return;
+            return false;
         }
         let entry = self
             .shelf
@@ -472,6 +478,22 @@ impl Catalogue {
             "{} is installed and disabled from {} at {}. Choose Enable to start it",
             candidate.manifest.name, candidate.reference, candidate.digest
         ));
+        true
+    }
+
+    fn focus_installed_action(&self, class: &str) {
+        let mut pending = vec![self.listing.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = pending.pop() {
+            if widget.has_css_class(class) {
+                widget.grab_focus();
+                return;
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
     }
 
     /// Shows what an image asks for, and asks.
@@ -709,9 +731,10 @@ impl Catalogue {
         let install = gtk::Button::with_label(accept);
         install.add_css_class(CONSENT);
         let page = Rc::downgrade(self);
+        let native_install = install.clone();
         install.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
-                page.consent();
+                page.consent_with_focus(native_install.has_focus());
             }
         });
         let cancel = gtk::Button::with_label("Cancel");
@@ -734,7 +757,7 @@ impl Catalogue {
             Rc::new(move |action, _| match action {
                 ActionKind::Invoke => {
                     if let Some(page) = page.upgrade() {
-                        page.consent();
+                        page.consent_with_focus(semantic_install.has_focus());
                     }
                 }
                 ActionKind::Focus => {

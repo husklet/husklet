@@ -1265,6 +1265,12 @@ fn update_candidate(digest: &str, version: &str) -> Candidate {
 fn an_image_is_read_before_anybody_is_asked() {
     let fixture = Fixture::new(&[]);
     let page = catalogue(&fixture, Ok(candidate()));
+    let window = gtk::Window::builder()
+        .default_width(400)
+        .default_height(600)
+        .child(page.viewport())
+        .build();
+    window.present();
     typed(&page, "sample:1");
 
     page.inspect();
@@ -1321,7 +1327,23 @@ fn an_image_is_read_before_anybody_is_asked() {
             && node.value.as_deref() == Some("container-read, interface")
     }));
 
-    page.consent();
+    let proposal = fixture.view.semantic_snapshot();
+    let install = proposal.root.children.iter()
+        .find(|node| node.label.as_deref() == Some("Install"))
+        .expect("proposal exposes Install");
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: install.id,
+        action: super::super::semantic::ActionKind::Focus, value: None,
+    }).expect("Install can receive keyboard focus");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    fixture.view.semantic_action(&super::super::semantic::Action {
+        revision: proposal.revision, node: install.id,
+        action: super::super::semantic::ActionKind::Invoke, value: None,
+    }).expect("focused Install remains invokable");
+    while gtk::glib::MainContext::default().iteration(false) {}
+    assert!(gtk::prelude::RootExt::focus(&window)
+        .is_some_and(|widget| widget.has_css_class(super::settings::ENABLE)),
+        "installing from the focused confirmation hands focus to Enable");
 
     let entries = fixture.roster.borrow().entries();
     assert_eq!(entries.len(), 1, "consent is what records the grant");
@@ -1338,6 +1360,8 @@ fn an_image_is_read_before_anybody_is_asked() {
         "a disabled install stays in the recoverable catalogue"
     );
     assert!(!fixture.view.entries().iter().any(|entry| entry.ends_with(" settings")));
+    window.close();
+    while gtk::glib::MainContext::default().iteration(false) {}
     assert!(
         descendants(page.widget().upcast_ref())
             .iter()
