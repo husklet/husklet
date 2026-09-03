@@ -7193,7 +7193,7 @@ static int translit_fall_fixture_test(unsigned scenario) {
     case 80: bytes = normal_to_sse; length = sizeof normal_to_sse; expected = HL_BACKEND_FALL_OTHER; break;
     case 227: bytes = sse_riprel_movdqa; length = sizeof sse_riprel_movdqa;
               expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
-    case 228: bytes = sse_riprel_movdqa_xmm1; length = sizeof sse_riprel_movdqa_xmm1;
+    case 234: bytes = sse_riprel_movdqa_xmm1; length = sizeof sse_riprel_movdqa_xmm1;
               expected = HL_BACKEND_FALL_SSE_RIPREL_LOWER; break;
     default: return 90;
     }
@@ -8976,6 +8976,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     g_rw2rx = 0;
     g_cache_gen = UINT64_MAX - requested_scenario;
     map_clear();
+    translit_shared_ibtc_stubs_reset();
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
     translit_fall_fixture_length = sizeof guest_bytes;
@@ -9327,6 +9328,7 @@ done_ibtc:
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen);
+    translit_shared_ibtc_stubs_reset();
     munmap(arena, arena_size);
     return result;
 }
@@ -9356,6 +9358,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     g_rw2rx = 0;
     g_cache_gen = UINT64_MAX - scenario;
     map_clear();
+    translit_shared_ibtc_stubs_reset();
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest_bytes;
     translit_fall_fixture_length = sizeof guest_bytes;
@@ -9621,6 +9624,7 @@ done_call_ibtc:
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen);
+    translit_shared_ibtc_stubs_reset();
     munmap(arena, arena_size);
     return result;
 }
