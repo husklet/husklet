@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 
 use hl_extension::port::{
-    ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
+    ContainerControl, ContainerCreateSpec, ContainerInventory, ContainerSummary, ContainerVolumeMount, Division, Entry, HostError, ImageStore, ImageSummary,
     PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
@@ -788,6 +788,33 @@ fn a_whole_interface_is_rendered_from_a_socket() {
         journal.patches >= composed.expected.len(),
         "every node reached the adapter"
     );
+}
+
+#[test]
+fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("containers").expect("name"),
+        Grant::new([Capability::ContainerControl, Capability::VolumeWrite]),
+        Vec::new(),
+    ));
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    let request = Request::ContainerCreate { spec: ContainerCreateSpec {
+        image: "alpine:3.20".into(), name: "worker".into(), entrypoint: None, command: Vec::new(),
+        environment: vec![("é".repeat(128), "value".into())], working_directory: None, user: None,
+        labels: Vec::new(), mounts: vec![ContainerVolumeMount {
+            volume: "v".repeat(255), target: "/data".into(), read_only: false,
+        }], network: None, ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
+    }};
+    sender.send(&codec::request(&request).expect("request encodes")).expect("request crosses socket");
+    let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");
+    assert_eq!(decoded, request);
+    assert!(matches!(
+        session.dispatch(&decoded, &services(&host)),
+        Err(Failure::Unsupported { call }) if call == "configured container creation is unavailable"
+    ));
 }
 
 #[test]

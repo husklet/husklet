@@ -1291,6 +1291,33 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     );
     assert_eq!(host.ledger.reached(), ["containers.create_spec"]);
 
+    let mut boundary = spec.clone();
+    boundary.environment = vec![("é".repeat(128), "value".into()), ("release-name".into(), "value".into())];
+    boundary.mounts[0].volume = "v".repeat(255);
+    assert_eq!(
+        authorized.dispatch(&Request::ContainerCreate { spec: boundary.clone() }, &services(&host)),
+        Ok(Reply::Identity("id-worker".into()))
+    );
+
+    let mut oversized_environment_name = boundary;
+    oversized_environment_name.environment[0].0.push('é');
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: oversized_environment_name }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    let mut invalid_name = spec.clone();
+    invalid_name.environment = vec![("BAD=NAME".into(), "value".into())];
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: invalid_name }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+    let mut oversized_volume = spec.clone();
+    oversized_volume.mounts[0].volume = "v".repeat(256);
+    assert!(matches!(
+        authorized.dispatch(&Request::ContainerCreate { spec: oversized_volume }, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
+
     let mut insufficient = session(&[Capability::ContainerControl], &[]);
     assert!(matches!(
         insufficient.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
@@ -1305,7 +1332,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     ));
     assert_eq!(
         host.ledger.reached(),
-        ["containers.create_spec"],
+        ["containers.create_spec", "containers.create_spec"],
         "invalid mounts never reach control"
     );
 }

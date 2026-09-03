@@ -837,13 +837,14 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
     };
     let unique =
         |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
-    let environment_name = |value: &str| {
-        value.len() <= 256
+    let environment_name =
+        |value: &str| !value.is_empty() && value.len() <= 256 && !value.contains(['=', '\0']);
+    let resource_name = |value: &str| {
+        value.len() <= 255
             && value
-                .as_bytes()
-                .first()
-                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
-            && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
     };
     let valid = identifier(&spec.name, 128)
         && !spec.image.is_empty()
@@ -885,7 +886,7 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
         && spec
             .mounts
             .iter()
-            .all(|mount| identifier(&mount.volume, 128) && absolute(&mount.target))
+            .all(|mount| resource_name(&mount.volume) && absolute(&mount.target))
         && spec.network.as_ref().is_none_or(|network| identifier(network, 256))
         && spec.ports.len() <= 64
         && spec
