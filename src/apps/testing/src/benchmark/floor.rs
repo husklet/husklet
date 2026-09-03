@@ -146,6 +146,15 @@ impl Samples {
 }
 
 pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
+    run_with_acquire(options, |quiet_seconds, lock_timeout, max_load| {
+        Measurement::acquire(quiet_seconds, lock_timeout, max_load)
+    })
+}
+
+fn run_with_acquire<Lease>(
+    options: FloorOptions,
+    acquire: impl FnOnce(u64, u64, f64) -> Result<Lease, Error>,
+) -> Result<(), Error> {
     if options.results.exists() {
         return Err(format!(
             "floor benchmark refuses to reuse {}: give every run a fresh results path",
@@ -155,7 +164,7 @@ pub(crate) fn run(options: FloorOptions) -> Result<(), Error> {
     }
 
     with_required_measurement(
-        || Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load),
+        || acquire(options.quiet_seconds, options.lock_timeout, options.max_load),
         |_held| run_locked(&options),
     )
 }
@@ -417,7 +426,25 @@ fn report(options: &FloorOptions, samples: &Samples, identity: &str, lock: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::{Arm, phase_micros, schedule, with_required_measurement};
+    use super::{Arm, Error, FloorOptions, phase_micros, run_with_acquire, schedule, with_required_measurement};
+
+    fn inert_options(results: std::path::PathBuf) -> FloorOptions {
+        FloorOptions {
+            results,
+            engine: "unused-engine".into(),
+            engine_candidate: None,
+            dynamic_victim: None,
+            guest: "unused-guest".into(),
+            rootfs: "unused-rootfs".into(),
+            execs: 1,
+            syscalls: 1,
+            spin: 1,
+            rounds: 2,
+            quiet_seconds: 0,
+            lock_timeout: 0,
+            max_load: 1.5,
+        }
+    }
 
     #[test]
     fn lock_failure_cannot_enter_the_measured_body() {
@@ -434,6 +461,21 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "floor benchmark requires the exclusive measurement lock: box is busy"
+        );
+    }
+
+    #[test]
+    fn runner_lock_failure_produces_no_results_directory_or_report() {
+        let temporary = tempfile::tempdir().unwrap();
+        let results = temporary.path().join("results");
+        let result = run_with_acquire(inert_options(results.clone()), |_, _, _| {
+            Err::<(), Error>("exclusive lock refused".to_owned().into())
+        });
+
+        assert!(result.is_err());
+        assert!(
+            !results.exists(),
+            "lock failure created a path where samples or a report could be mistaken for evidence"
         );
     }
 
