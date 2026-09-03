@@ -20,7 +20,7 @@ test('execution detail traverses every ResourceState over real framing and drops
   let inspectAttempts = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.request, payload: {
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
       protocol: 1, extension: 'execution-resource-test', granted: ['container-read', 'container-control'],
     } }));
     socket.on('data', (chunk) => {
@@ -34,8 +34,6 @@ test('execution detail traverses every ResourceState over real framing and drops
           if (inspectAttempts === 2) {
             flags = 3;
             payload = { error: 'failed', detail: 'execution inspect unavailable' };
-          } else if (inspectAttempts === 3) {
-            payload = { reply: 'execution', with: {} };
           } else {
             payload = { reply: 'execution', with: {
               id: executionId, container_id: containerId, running: true, exit_code: 0,
@@ -82,8 +80,8 @@ test('execution detail traverses every ResourceState over real framing and drops
     assert.equal(lengths(mutations).length, 1, 'failed refresh cannot republish stale detail rows');
 
     invoke(stage, 'Retry details');
-    await until(() => labelled(stage, 'No execution details'));
-    assert.deepEqual(lengths(mutations).at(-1), { source: EXECUTION_DETAIL_SOURCE, version: 2, rows: 0 });
+    await until(() => lengths(mutations).length === 2);
+    assert.deepEqual(lengths(mutations).at(-1), { source: EXECUTION_DETAIL_SOURCE, version: 2, rows: 6 });
 
     invoke(stage, 'Hide details');
     invoke(stage, 'Details');

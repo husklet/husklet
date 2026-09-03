@@ -17,7 +17,7 @@ test('process snapshots remove stale PID and scope claims across framed refresh 
   let attempts = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.request, payload: {
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
       protocol: 1, extension: 'process-resource-test', granted: ['container-read'],
     } }));
     socket.on('data', (chunk) => {

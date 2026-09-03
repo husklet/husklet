@@ -18,12 +18,12 @@ test('same-name volume generation replacement invalidates detail authority', { t
   let lists = 0; let inspections = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.request, payload: { protocol: 1, extension: 'volume-detail-lifecycle-test', granted: ['volume-read', 'volume-write'] } }));
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'volume-detail-lifecycle-test', granted: ['volume-read', 'volume-write'] } }));
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       const call = frame.payload?.call; if (!call) continue;
       let payload = { reply: 'done' };
       if (call === 'volume_list') { lists += 1; payload = { reply: 'volumes', with: [{ name, driver: 'local', generation: lists === 1 ? oldGeneration : newGeneration }] }; }
-      else if (call === 'volume_inspect') { inspections += 1; payload = { reply: 'volume', with: { name, driver: inspections === 1 ? 'old-driver' : 'new-driver' } }; }
+      else if (call === 'volume_inspect') { inspections += 1; payload = { reply: 'volume', with: { name, driver: inspections === 1 ? 'old-driver' : 'new-driver', generation: inspections === 1 ? oldGeneration : newGeneration } }; }
       const delay = call === 'volume_inspect' && inspections === 1 ? 150 : 20;
       setTimeout(() => socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload })), delay);
     } });

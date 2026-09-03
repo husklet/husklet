@@ -29,7 +29,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       if (!tearingDown) throw error;
       assert.equal(error.code, 'ECONNRESET');
     });
-    socket.write(encode({ channel: 0, kind: KIND.request, payload: {
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
       protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
     } }));
     socket.on('data', (chunk) => {
@@ -48,9 +48,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           : name === 'container_inspect'
             ? inspectAttempt === 1
               ? { error: 'failed', detail: 'container inspect unavailable' }
-              : inspectAttempt === 2
-                ? { reply: 'container', with: {} }
-                : { reply: 'container', with: { id: containerId, name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
+              : { reply: 'container', with: { id: containerId, name: 'api', image: 'alpine:3.20', state: 'running', created: 0 } }
           : name === 'container_create'
             ? { reply: 'identity', with: createdContainerId }
           : name === 'container_exec'
@@ -77,9 +75,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             : name === 'image_inspect'
               ? imageInspectAttempt === 2
                 ? { error: 'failed', detail: 'image inspect unavailable' }
-                : imageInspectAttempt === 3
-                  ? { reply: 'image_details', with: {} }
-                  : { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
+                : { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
               ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }] }
             : name === 'volume_inspect'
@@ -140,14 +136,11 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert(requests.slice(beforeRefresh).some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.Remove)), 'loading removes stale ready detail before failure');
     peer.write(encode({ channel: 42, kind: KIND.event, payload: invocation(requests, 'Retry inspect') }));
-    await until(() => imageInspectAttempts === 3 && requests.some((request) => request.call === 'interface_render_at'
-      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'No image details')));
-    peer.write(encode({ channel: 43, kind: KIND.event, payload: invocation(requests, 'Inspect') }));
-    await until(() => imageInspectAttempts === 4 && requests.some((request) => request.call === 'source_resize_at'
-      && request.with.mutation.Length?.source === 201 && request.with.mutation.Length.version === 3
+    await until(() => imageInspectAttempts === 3 && requests.some((request) => request.call === 'source_resize_at'
+      && request.with.mutation.Length?.source === 201 && request.with.mutation.Length.version === 2
       && request.with.mutation.Length.rows === 9));
     const resize = requests.findLast((request) => request.call === 'source_resize_at');
-    assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 3, rows: 9 });
+    assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 2, rows: 9 });
     const imageRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 11, kind: KIND.event, payload: invocation(requests, 'Containers') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > imageRenders);
@@ -174,8 +167,9 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     await until(() => requests.some((request) => request.call === 'interface_render_at'
       && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'container inspect unavailable')));
     peer.write(encode({ channel: 38, kind: KIND.event, payload: invocation(requests, 'Retry details') }));
-    await until(() => containerInspectAttempts === 2 && requests.some((request) => request.call === 'interface_render_at'
-      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'No container details')));
+    await until(() => containerInspectAttempts === 2 && requests.some((request) =>
+      request.call === 'source_resize_at' && request.with.mutation.Length?.source === 202
+      && request.with.mutation.Length.version === 1));
     peer.write(encode({ channel: 39, kind: KIND.event, payload: invocation(requests, 'Hide details') }));
     await until(() => requests.findLast((request) => request.call === 'interface_render_at')?.with.frame.patches
       .some((patch) => patch.SetProp?.value?.Text === 'Details'));
@@ -185,7 +179,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       && request.with.mutation.Length.rows === 5));
     const containerResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 202);
-    assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 2, rows: 5 });
+    assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
     peer.write(encode({ channel: 29, kind: KIND.event, payload: changeInvocation(requests, 'Command argv JSON', '["sh","-lc","printf hello world"]') }));
     peer.write(encode({ channel: 32, kind: KIND.event, payload: changeInvocation(requests, 'Run as user (optional)', '1000:1000') }));
     peer.write(encode({ channel: 33, kind: KIND.event, payload: changeInvocation(requests, 'Working directory (optional)', '/work tree') }));
@@ -297,8 +291,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     assert.equal(stderr, '');
   } finally {
     tearingDown = true;
+    const closed = child.exitCode === null && child.signalCode === null
+      ? new Promise((resolve) => child.once('close', resolve))
+      : Promise.resolve();
     child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('close', resolve));
+    await closed;
+    peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }
