@@ -701,6 +701,17 @@ mod tests {
 
     #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    fn buffered_sampling_jitdump_distinguishes_reused_generation_addresses() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: selector 217 owns its temporary directory and runs the lifecycle fixture in a child.
+        assert_eq!(unsafe { hook(217) }, 0, "buffered jitdump scenario 217");
+    }
+
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     fn jcc_shared_guard_preserves_cache_lifecycle_and_signal_contracts() {
         let _serial = engine_test_lock();
         let hook = crate::loader::tests()
