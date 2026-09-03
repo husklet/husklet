@@ -1753,6 +1753,7 @@ fn entry_record(entry: &hl::extension::Entry, manifest: &Manifest) -> Record {
         enabled: false,
         installed_at: 1,
         pane_providers: manifest.pane_providers.clone(),
+        declaration: Some(manifest.clone()),
     }
 }
 
@@ -1842,6 +1843,7 @@ impl hl::extension::Supply for Bench {
             enabled: true,
             installed_at: 1,
             pane_providers: manifest.pane_providers.clone(),
+            declaration: Some(manifest.clone()),
         };
         let image = hl::extension::Image {
             reference: "extension:1".to_owned(),

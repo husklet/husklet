@@ -41,6 +41,11 @@ pub struct Record {
     /// Pane-provider catalogue consented to with this exact image digest.
     #[serde(default)]
     pub pane_providers: Vec<crate::manifest::PaneProvider>,
+    /// Complete declaration accepted for this digest. Records written before
+    /// this field existed reopen with the historical conservative defaults.
+    /// Identity and authority remain the separate fields above.
+    #[serde(default)]
+    pub declaration: Option<Manifest>,
 }
 
 /// Where an extension stands right now.
@@ -281,6 +286,7 @@ impl Installation {
                 enabled: false,
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
+                declaration: Some(manifest.clone()),
             },
             restarts: Restarts::default(),
         });
@@ -359,7 +365,8 @@ impl Installation {
             granted,
             enabled: entry.record.enabled,
             installed_at: at,
-            pane_providers: update.manifest.pane_providers,
+            pane_providers: update.manifest.pane_providers.clone(),
+            declaration: Some(update.manifest),
         };
         replace(&entry.record, &next).map_err(UpdateFailure::Replacement)?;
         entry.record = next;

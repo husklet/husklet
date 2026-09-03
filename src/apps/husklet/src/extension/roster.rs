@@ -341,13 +341,13 @@ impl<S> std::fmt::Debug for Roster<S> {
 
 /// The manifest a record stands for.
 ///
-/// A record is what a person wrote down; a manifest is what an image declares.
-/// Until the two are stored together the manifest is rebuilt from the record
-/// alone, which is the conservative direction: it declares exactly what was
-/// consented to and nothing an image might have started asking for since.
+/// New records retain the accepted declaration so launch and presentation
+/// policy survives a host restart. Legacy records are rebuilt conservatively.
+/// In both cases the record's separate identity and grant overwrite the nested
+/// declaration, so persistence can never turn a request into authority.
 #[must_use]
 pub fn described(record: &Record) -> Manifest {
-    Manifest {
+    let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: record.version.clone(),
@@ -359,7 +359,15 @@ pub fn described(record: &Record) -> Manifest {
         pane_providers: record.pane_providers.clone(),
         resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::new(),
-    }
+    });
+    // These duplicated fields are the durable consent boundary. A nested
+    // declaration can describe launch and presentation, never widen authority.
+    manifest.name.clone_from(&record.name);
+    manifest.version.clone_from(&record.version);
+    manifest.protocol = hl_extension::PROTOCOL;
+    manifest.capabilities.clone_from(&record.granted);
+    manifest.pane_providers.clone_from(&record.pane_providers);
+    manifest
 }
 
 /// Puts one stored record under the policy, in the state it was stored in.
@@ -378,7 +386,7 @@ fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objecti
 
 #[cfg(test)]
 mod tests {
-    use super::{Refusal, Roster};
+    use super::{described, Refusal, Roster};
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Stage};
     use hl_ws::storage::{Directory, Key, Storage};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -464,6 +472,34 @@ mod tests {
             "only what was consented to is recorded"
         );
         assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
+    }
+
+    #[test]
+    fn launch_declaration_survives_reopen_without_widening_consent() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let mut asked = manifest("sample", &[Capability::ContainerRead, Capability::Interface]);
+        asked.entrypoint = Some(vec!["/opt/sample/bin/serve".to_owned(), "--socket".to_owned()]);
+        asked.resources = hl_extension::Resources {
+            memory_mb: 384,
+            cpus: 2,
+            process_count: 41,
+        };
+        let mut roster = opened(temporary.path());
+        roster
+            .register(&asked, "sha256:aaaa", &Grant::new([Capability::Interface]), 7)
+            .expect("registered");
+
+        let reopened = opened(temporary.path());
+        let record = reopened.installation.record(&asked.name).expect("reopened record");
+        let restored = described(record);
+
+        assert_eq!(restored.entrypoint, asked.entrypoint);
+        assert_eq!(restored.resources, asked.resources);
+        assert!(restored.capabilities.holds(Capability::Interface));
+        assert!(
+            !restored.capabilities.holds(Capability::ContainerRead),
+            "persisted requested capabilities cannot widen the recorded grant"
+        );
     }
 
     #[test]

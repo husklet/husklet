@@ -1101,6 +1101,7 @@ mod tests {
             enabled: true,
             installed_at: 1,
             pane_providers: Vec::new(),
+            declaration: Some(manifest.clone()),
         };
         let spec = SidecarSpec::new(
             &manifest,

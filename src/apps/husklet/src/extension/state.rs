@@ -220,6 +220,7 @@ mod tests {
             enabled: true,
             installed_at: 1_700_000_000,
             pane_providers: Vec::new(),
+            declaration: Some(manifest(&[Capability::ContainerRead, Capability::Interface])),
         };
 
         records.save(&record).expect("saved");
@@ -241,6 +242,7 @@ mod tests {
                 enabled: false,
                 installed_at: 1,
                 pane_providers: Vec::new(),
+                declaration: None,
             })
             .expect("saved");
 
