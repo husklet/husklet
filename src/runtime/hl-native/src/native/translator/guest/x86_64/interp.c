@@ -3702,9 +3702,6 @@ static void pcache_launch_only_disable(void) {
         g_x64_pc_activated_maps = 0;
         g_x64_pc_lib_count = 0;
         g_x64_pc_library_unsupported = 0;
-        if (g_coldprof)
-            fprintf(stderr, "[pcache-v1] nested_exec=disabled rwx_guest=%d alias=%d\n",
-                    g_rwx_guest, jit86_store_alias_observation_active());
         g_pcache = 0;
         g_x64_pc_launch_only_reset_bus = 1;
     }
@@ -3726,6 +3723,9 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     if (g_x64_pc_launch_only_reset_bus) {
         g_x64_pc_launch_only_reset_bus = 0;
         jit_guest_bus_reset_after_rewind(hl_linux_bus_generation(), hl_linux_bus_active());
+        if (g_coldprof)
+            fprintf(stderr, "[pcache-v1] nested_exec=disabled bus_active=%d rwx_guest=%d alias=%d\n",
+                    jit_guest_bus_active(), g_rwx_guest, jit86_store_alias_observation_active());
     }
     if (!g_pcache) return;
     g_x64_pc_observe_library_ns = 0;

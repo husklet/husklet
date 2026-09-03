@@ -30,6 +30,10 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
     };
     let cold = run("cold");
     assert!(
+        cold.contains("[pcache-v1] nested_exec=disabled bus_active=0"),
+        "nested developer exec retained persistence's guarded-code mode: {cold}"
+    );
+    assert!(
         cache.path().read_dir().unwrap().next().is_some(),
         "cold run published no cache artifact: {cold}"
     );
@@ -47,6 +51,10 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
     assert!(
         warm.contains("[pcache] HIT (translation skipped)"),
         "warm run did not reuse translated code: {warm}"
+    );
+    assert!(
+        warm.contains("[pcache-v1] nested_exec=disabled bus_active=0"),
+        "warm nested exec retained persistence's guarded-code mode: {warm}"
     );
     assert_eq!(artifacts(), 1, "warm nested execs expanded the authenticated cache surface");
 }
