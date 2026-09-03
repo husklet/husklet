@@ -36,6 +36,7 @@ groups.get('Extensions').push(
   '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, arm inventory before commit, and verify the returned and published name/digest; requires `extension-install` and `extension-read`.',
   '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `container-read` and `container-control`.',
   '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `container-read` and `container-control`.',
+  '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `container-read` and `container-control`.',
 );
 
 const topicCapability = Object.fromEntries(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));

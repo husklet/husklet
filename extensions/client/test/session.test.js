@@ -638,3 +638,40 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
     await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('real Unix container remove wait rejects incomplete absence then accepts complete absence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-remove-wait-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let completeAbsenceSent = false;
+  const id = 'c'.repeat(64); const summary = { id, name: 'agent', image: 'alpine', state: 'exited', created: 1 };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      if (frame.payload.call === 'container_remove') {
+        setImmediate(() => {
+          socket.write(encode({ channel: 40, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [], complete: false } } }));
+          setImmediate(() => {
+            socket.write(encode({ channel: 41, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [summary], complete: true } } }));
+            setTimeout(() => {
+              completeAbsenceSent = true;
+              socket.write(encode({ channel: 42, kind: KIND.event, payload: { snapshot: 'container_inventory', of: { containers: [], complete: true } } }));
+            }, 20);
+          });
+        });
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'remove-wait', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(await workspace(session).containers.removeAndWait(id), { changed: true, id });
+    assert.equal(completeAbsenceSent, true, 'incomplete absence cannot settle removal');
+    assert.deepEqual(calls, ['event_subscribe', 'container_remove', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});

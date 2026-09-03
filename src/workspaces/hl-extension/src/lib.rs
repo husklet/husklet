@@ -54,7 +54,7 @@ pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceM
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{
-    ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
+    ContainerInventory, ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
     WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
 pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow};

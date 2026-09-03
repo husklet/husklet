@@ -678,6 +678,30 @@
       "kind": "struct",
       "serde": {}
     },
+    "ContainerInventory": {
+      "fields": [
+        {
+          "name": "containers",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerSummary"
+            }
+          }
+        },
+        {
+          "name": "complete",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ContainerOutput": {
       "fields": [
         {
@@ -5009,6 +5033,12 @@
       "variants": [
         {
           "name": "containers",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "container-inventory",
           "payload": {
             "kind": "unit"
           }
@@ -9575,6 +9605,16 @@
           }
         },
         {
+          "name": "container_inventory",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerInventory"
+            }
+          }
+        },
+        {
           "name": "executions",
           "payload": {
             "kind": "newtype",
@@ -10580,13 +10620,18 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:08a8e87118fc8ccf",
+  "source_fingerprint": "fnv1a64:a78b71b0d83ff02b",
   "specification_version": 1,
   "topics": [
     {
       "capability": "container-read",
       "snapshot": "containers",
       "wire": "containers"
+    },
+    {
+      "capability": "container-read",
+      "snapshot": "container_inventory",
+      "wire": "container-inventory"
     },
     {
       "capability": "container-read",

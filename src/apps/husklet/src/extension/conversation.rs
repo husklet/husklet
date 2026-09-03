@@ -350,6 +350,17 @@ impl Conversation {
                 snapshots.push(Snapshot::Containers(containers));
             }
         }
+        if self.may_observe(Topic::ContainerInventory) {
+            if let Ok(mut containers) = services.containers.list() {
+                const LIMIT: usize = 256;
+                let complete = containers.len() <= LIMIT;
+                containers.truncate(LIMIT);
+                snapshots.push(Snapshot::ContainerInventory(hl_extension::ContainerInventory {
+                    containers,
+                    complete,
+                }));
+            }
+        }
         if self.may_observe(Topic::Executions) {
             if let Ok(executions) = services.containers.executions() {
                 snapshots.push(Snapshot::Executions(executions));

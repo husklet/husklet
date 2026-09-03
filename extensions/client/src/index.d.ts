@@ -1,6 +1,6 @@
 import type { WireUiEvent } from './generated-protocol.js';
 
-export type Topic = 'containers' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionPaneProvider { id: string; title: string; icon: string | null }
@@ -45,6 +45,7 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   terminal: WorkspaceTerminal;
 }
 export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number }
+export interface ContainerInventory { containers: ContainerSummary[]; complete: boolean }
 export interface ContainerVolumeMount { volume: string; target: string; read_only?: boolean }
 export interface ContainerPort { container: number; host?: number | null; protocol: 'tcp' | 'udp' }
 export interface ContainerCreateSpec {
@@ -273,6 +274,8 @@ export interface WorkspaceApi {
       | { changed: false; id: string; state: 'exited' }
     >;
     remove(id: string): Promise<void>;
+    /** Remove an immutable ID and accept absence only from a later complete bounded inventory. */
+    removeAndWait(id: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
     pause(id: string): Promise<void>;
     unpause(id: string): Promise<void>;
     restart(id: string): Promise<void>;
@@ -358,6 +361,7 @@ export interface WorkspaceApi {
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
+  watchContainerInventory(listener: (inventory: ContainerInventory) => void): Promise<() => Promise<void>>;
   watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;
   watchVolumes(listener: (volumes: VolumeSummary[]) => void): Promise<() => Promise<void>>;
   watchNetworks(listener: (networks: NetworkSummary[]) => void): Promise<() => Promise<void>>;

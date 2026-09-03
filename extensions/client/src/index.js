@@ -11,7 +11,7 @@ import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from
 
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+const SNAPSHOT_TOPICS = Object.freeze(['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
 
 function immutableIdentity(id, widths, noun) {
   if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
@@ -447,6 +447,7 @@ export function workspace(session, { signal } = {}) {
     });
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
+  api.watchContainerInventory = (listener) => watch('container-inventory', 'container_inventory', listener, 'container inventory');
   api.containers.startAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
@@ -500,6 +501,29 @@ export function workspace(session, { signal } = {}) {
         new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
       ]);
       return container === null ? { changed: false, id: identity, state: 'exited' } : { changed: true, container };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
+  api.containers.removeAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(id, [32, 64], 'container');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container remove wait timeout must be between 1 and 30000ms');
+    let sequence = 0; let baseline = 0; let removing = false; let observed; let timer;
+    const absent = new Promise((resolve) => {
+      observed = (inventory) => {
+        sequence += 1;
+        if (!removing || sequence <= baseline || !inventory.complete) return;
+        if (!inventory.containers.some((container) => container.id === identity)) resolve();
+      };
+    });
+    const stopWatching = await api.watchContainerInventory(observed);
+    baseline = sequence;
+    try {
+      removing = true;
+      await api.containers.remove(identity);
+      const removed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      return { changed: removed, id: identity };
     } finally {
       clearTimeout(timer);
       await stopWatching();

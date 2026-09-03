@@ -144,6 +144,11 @@ export const PROTOCOL_TOPICS = Object.freeze([
   },
   {
     "capability": "container-read",
+    "snapshot": "container_inventory",
+    "wire": "container-inventory"
+  },
+  {
+    "capability": "container-read",
     "snapshot": "executions",
     "wire": "executions"
   },
@@ -948,6 +953,30 @@ const definitions = {
             "minimum": 0,
             "signed": false
           }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ContainerInventory": {
+    "fields": [
+      {
+        "name": "containers",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerSummary"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
         }
       }
     ],
@@ -5290,6 +5319,12 @@ const definitions = {
         }
       },
       {
+        "name": "container-inventory",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "executions",
         "payload": {
           "kind": "unit"
@@ -8951,6 +8986,16 @@ const roots = {
               "kind": "ref",
               "name": "ContainerSummary"
             }
+          }
+        }
+      },
+      {
+        "name": "container_inventory",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerInventory"
           }
         }
       },
