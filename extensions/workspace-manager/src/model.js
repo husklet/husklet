@@ -145,11 +145,11 @@ export class ExecutionDetailsSource {
     const values = [
       ['Execution ID', details?.id],
       ['Container ID', details?.container_id],
-      ['State', details ? details.running ? 'running' : 'exited' : null],
-      ['Exit code', details && !details.running ? String(details.exit_code) : null],
+      ['State', details && 'running' in details ? details.running ? 'running' : 'exited' : null],
+      ['Exit code', details && 'exit_code' in details && !details.running ? String(details.exit_code) : null],
       ['Process ID', details?.pid > 0 ? String(details.pid) : null],
       ['Command', details?.command?.join(' ')],
-      ['User', details?.user || 'default user'],
+      ['User', details && 'user' in details ? details.user || 'default user' : null],
     ];
     this.rows = values.filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
       .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));

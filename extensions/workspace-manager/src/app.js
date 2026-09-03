@@ -406,13 +406,15 @@ export function Executions({ api, resource, executionDetails, truncated = false,
     ...view.records.map((item) => h(Card, { key: item.id, variant: selected === item.id ? 'filled' : 'outline' },
       h(CardHeader, { label: item.command?.join(' ') || shortId(item.id), detail: `container ${shortId(item.container_id)}` }),
       h(CardContent, {}, h(Badge, { label: item.running ? 'running' : `exited ${item.exit_code}`, tone: item.running ? 'positive' : 'neutral' }),
-        selected !== item.id ? null : inspection.state === 'loading'
-          ? h(Row, { gap: 1, align: 'center' }, h(Spinner), h(Text, { label: 'Reading execution details…' }))
-          : inspection.state === 'error'
-            ? h(Text, { label: inspection.error?.message ?? String(inspection.error), color: 'danger', wrap: true })
-            : inspection.count === 0
-              ? h(EmptyState, { label: 'No execution details', detail: 'The host returned no inspectable fields.' })
-              : h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } }),
+        selected !== item.id ? null : h(ResourceState, {
+          state: inspection.state === 'idle' ? 'loading' : inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state,
+          loadingLabel: 'Reading execution details…',
+          emptyLabel: 'No execution details',
+          emptyDetail: 'The host returned no inspectable fields.',
+          error: inspection.error?.message ?? String(inspection.error ?? ''),
+          retryLabel: 'Retry details',
+          onRetry: () => inspect(item.id),
+        }, h(KeyValueTable, { source: EXECUTION_DETAIL_SOURCE, schema: IMAGE_DETAIL_SCHEMA, height: { minimum: { step: 10 }, maximum: { step: 28 } } })),
         selected === item.id && output ? h(Column, { gap: 1 },
           h(Heading, { label: 'Standard output', scale: 'caption' }), h(LogView, { key: `stdout-${output.revision}`, value: output.stdout || (output.eof ? 'No stdout captured (EOF).' : 'No stdout captured yet; execution is still running.'), monospace: true }),
           output.stdoutTruncated ? h(Text, { label: 'Standard output was truncated to its configured bound.', color: 'warning' }) : null,
@@ -423,7 +425,7 @@ export function Executions({ api, resource, executionDetails, truncated = false,
           output.truncated && !output.stdoutTruncated && !output.stderrTruncated
             ? h(Text, { label: 'Host output was truncated to its configured bound.', color: 'warning' }) : null) : null),
       h(CardActions, { gap: 1 },
-        h(Button, { label: selected === item.id && inspection.state === 'error' ? 'Retry details' : selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id && inspection.state !== 'error' ? setSelected('') : void inspect(item.id) }),
+        h(Button, { label: selected === item.id ? 'Hide details' : 'Details', enabled: !busy, onInvoke: () => selected === item.id ? setSelected('') : void inspect(item.id) }),
         h(Button, { label: busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output', enabled: !busy, onInvoke: () => void logs(item.id) }),
         h(Button, { label: busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s', enabled: !busy && item.running, onInvoke: () => void wait(item.id) }),
         h(ConfirmAction, { authorityKey: `execution:${item.id}:SIGTERM`, label: 'Terminate', confirmLabel: 'Confirm SIGTERM', pendingLabel: 'Confirm SIGTERM', question: `Send SIGTERM to execution ${item.id}?`, enabled: !busy && item.running, onConfirm: () => terminate(item.id) }),
