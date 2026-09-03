@@ -2967,8 +2967,8 @@ mod panes {
         let guest = std::thread::spawn(move || {
             let expected = b"agent-status\n";
             let mut received = vec![0_u8; expected.len()];
-            guest_side.read_exact(&mut received).expect("read MCP terminal input");
-            assert_eq!(received, expected, "MCP input reached the guest verbatim");
+            guest_side.read_exact(&mut received).expect("read client terminal input");
+            assert_eq!(received, expected, "client input reached the guest verbatim");
             let answer = b"agent-received:agent-status\r\n";
             guest_side.write_all(answer).expect("write guest response");
         });
@@ -3109,7 +3109,7 @@ mod panes {
             gtk::glib::MainContext::default().iteration(false);
             std::thread::sleep(Duration::from_millis(5));
         }
-        let output = child.wait_with_output().expect("MCP child output");
+        let output = child.wait_with_output().expect("client child output");
         assert!(
             output.status.success(),
             "client bridge failed: {}",
