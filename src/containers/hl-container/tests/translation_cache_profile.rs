@@ -340,7 +340,7 @@ int main(void) {
         let host_binary = owned.path().join("pcache_smc");
         fs::write(&host_source, SOURCE)?;
         let built = std::process::Command::new("cc")
-            .args(["-O2", "-static", "-Wl,--build-id=none", "-o"])
+            .args(["-O2", "-Wl,--build-id=none", "-o"])
             .arg(&host_binary)
             .arg(&host_source)
             .status()?;
@@ -351,6 +351,24 @@ int main(void) {
         header.set_size(binary.len() as u64);
         header.set_cksum();
         archive.append_data(&mut header, "work/pcache-smc", binary.as_slice())?;
+        let linked = std::process::Command::new("ldd").arg(&host_binary).output()?;
+        require(linked.status.success(), "host linker census failed for SMC fixture")?;
+        let mut dependencies = String::from_utf8(linked.stdout)?
+            .split_whitespace()
+            .filter(|field| field.starts_with('/') && Path::new(field).is_file())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        dependencies.sort();
+        dependencies.dedup();
+        require(!dependencies.is_empty(), "SMC fixture reported no dynamic dependencies")?;
+        for dependency in dependencies {
+            let bytes = fs::read(&dependency)?;
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o755);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            archive.append_data(&mut header, dependency.trim_start_matches('/'), bytes.as_slice())?;
+        }
     }
     archive.finish()?;
     drop(archive);
@@ -941,8 +959,8 @@ int main(void) {
             .collect::<Vec<_>>();
         names.sort();
         require(
-            names.len() >= 4,
-            "cold toolchain did not publish distinct driver/compiler/assembler/linker keys",
+            names.len() == 2,
+            "cold toolchain did not publish exactly its two cacheable leaf-tool keys",
         )?;
         Some(names)
     } else {
@@ -1144,7 +1162,7 @@ int main(void) {
                 )?;
             }
             Mode::CacheNestedToolchain => require(
-                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() >= 4),
+                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() == 2),
                 "nested toolchain did not retain its cold authenticated key census",
             )?,
             Mode::CacheNestedToolchainUpper => require(
