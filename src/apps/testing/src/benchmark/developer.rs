@@ -23,7 +23,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v4";
+const SCHEMA: &str = "husklet-developer-benchmark-v5";
 const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
@@ -188,6 +188,7 @@ struct Row {
     null_counters: Counters,
     phase_ns: Vec<(String, u128)>,
     stdout_sha256: String,
+    stderr_sha256: String,
     semantic_sha256: String,
     portable_semantic_sha256: String,
     backend_receipt: String,
@@ -618,9 +619,12 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         .map_err(|_| "stderr reader remained shared")?
         .into_inner()?;
     let phase_ns = validate_phases(&marks, elapsed)?;
-    let receipt = backend_receipt(backend, guest_isa, &String::from_utf8(stderr)?)?;
+    let stderr = String::from_utf8(stderr)?;
+    let receipt = backend_receipt(backend, guest_isa, &stderr)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
+    let stderr_sha256 = hex(Sha256::digest(stderr.as_bytes()));
     atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
+    atomic_bytes(&stderr_path(&options.results, sample, position, mode), stderr.as_bytes())?;
     Ok(Row {
         sample,
         position,
@@ -633,6 +637,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         null_counters,
         phase_ns,
         stdout_sha256,
+        stderr_sha256,
         semantic_sha256: semantic_sha256(&output),
         portable_semantic_sha256: portable_semantic_sha256(&output),
         backend_receipt: receipt,
@@ -906,6 +911,10 @@ fn output_path(directory: &Path, sample: u32, position: usize, mode: Mode) -> Pa
     directory.join(format!("stdout-{sample}-{position}-{mode:?}.txt"))
 }
 
+fn stderr_path(directory: &Path, sample: u32, position: usize, mode: Mode) -> PathBuf {
+    directory.join(format!("stderr-{sample}-{position}-{mode:?}.txt"))
+}
+
 fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
     let mut file = File::create(&temporary)?;
@@ -961,6 +970,12 @@ fn verify_output(directory: &Path, row: &Row) -> Result<(), Error> {
             path.display()
         )
         .into());
+    }
+    let path = stderr_path(directory, row.sample, row.position, row.mode);
+    let stderr = fs::read(&path)
+        .map_err(|error| format!("cannot reopen completed stderr artifact {}: {error}", path.display()))?;
+    if hex(Sha256::digest(stderr)) != row.stderr_sha256 {
+        return Err(format!("completed stderr artifact {} does not match its ledger row", path.display()).into());
     }
     Ok(())
 }
@@ -1306,6 +1321,7 @@ mod tests {
             },
             phase_ns: Vec::new(),
             stdout_sha256: output.into(),
+            stderr_sha256: String::new(),
             semantic_sha256: output.into(),
             portable_semantic_sha256: portable.into(),
             backend_receipt: String::new(),
@@ -1352,6 +1368,7 @@ mod tests {
     fn completed_rows_require_their_exact_durable_output_artifact() {
         let directory = tempfile::tempdir().unwrap();
         let output = b"abc\n";
+        let stderr = b"diagnostic\n";
         let row = Row {
             sample: 0,
             position: 0,
@@ -1376,6 +1393,7 @@ mod tests {
             },
             phase_ns: Vec::new(),
             stdout_sha256: hex(Sha256::digest(output)),
+            stderr_sha256: hex(Sha256::digest(stderr)),
             semantic_sha256: semantic_sha256(output),
             portable_semantic_sha256: portable_semantic_sha256(output),
             backend_receipt: "host-native".into(),
@@ -1389,6 +1407,12 @@ mod tests {
             .contains("cannot reopen"));
 
         atomic_bytes(&output_path(directory.path(), 0, 0, Mode::Native), output).unwrap();
+        assert!(read_ledger(&ledger, 3)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("stderr artifact"));
+        atomic_bytes(&stderr_path(directory.path(), 0, 0, Mode::Native), stderr).unwrap();
         assert_eq!(read_ledger(&ledger, 3).unwrap().len(), 1);
         fs::write(output_path(directory.path(), 0, 0, Mode::Native), b"tampered\n").unwrap();
         assert!(read_ledger(&ledger, 3)
@@ -1396,18 +1420,36 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("does not match"));
+        atomic_bytes(&output_path(directory.path(), 0, 0, Mode::Native), output).unwrap();
+        fs::write(stderr_path(directory.path(), 0, 0, Mode::Native), b"tampered\n").unwrap();
+        assert!(read_ledger(&ledger, 3)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("stderr artifact"));
     }
 
     #[test]
     fn wall_clock_stops_before_host_evidence_io_and_output_is_durable_before_publication() {
         let source = include_str!("developer.rs");
-        let completed = source.find("reader.join().map_err").unwrap();
-        let elapsed = source.find("let elapsed = start.elapsed().as_nanos();").unwrap();
-        let perf_read = source.find("parse_perf(&fs::read_to_string(&perf_path)?").unwrap();
+        let production = &source[..source.find("\n#[cfg(test)]\nmod tests").unwrap()];
+        let completed = production.find("reader.join().map_err").unwrap();
+        let elapsed = production.find("let elapsed = start.elapsed().as_nanos();").unwrap();
+        let perf_read = production.find("parse_perf(&fs::read_to_string(&perf_path)?").unwrap();
         assert!(completed < elapsed && elapsed < perf_read);
 
-        let atomic = source.find("fn atomic_bytes(").unwrap();
-        let atomic = &source[atomic..source.find("fn semantic_sha256(").unwrap()];
+        let stderr_write = production
+            .find("atomic_bytes(&stderr_path(&options.results, sample, position, mode), stderr.as_bytes())?")
+            .unwrap();
+        let row_return = production[stderr_write..]
+            .find("Ok(Row {")
+            .map(|offset| stderr_write + offset)
+            .unwrap();
+        assert!(stderr_write < row_return);
+        assert!(production.contains("append(&ledger_path, &result?)?"));
+
+        let atomic = production.find("fn atomic_bytes(").unwrap();
+        let atomic = &production[atomic..production.find("fn semantic_sha256(").unwrap()];
         let write = atomic.find("file.write_all(bytes)?").unwrap();
         let file_sync = atomic.find("file.sync_all()?").unwrap();
         let rename = atomic.find("fs::rename(&temporary, path)?").unwrap();
