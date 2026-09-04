@@ -16,7 +16,8 @@ fn fatal_signal_census_tail_is_atomic_only() {
         .split_once("ckpt_restored_member_exit_signal(sig);")
         .map(|(_, tail)| tail)
         .expect("existing restored-member signal publication");
-    assert!(tail.contains("hl_backend_tree_finalize(1)"), "{tail}");
+    let finalize = "hl_backend_tree_finalize_from(1, HL_BACKEND_FINALIZE_FATAL_SIGNAL)";
+    assert!(tail.contains(finalize), "{tail}");
     assert!(tail.contains("_exit(128 + sig)"), "{tail}");
     for forbidden in [
         "launch_reg_terminate_peers",
@@ -34,7 +35,7 @@ fn fatal_signal_census_tail_is_atomic_only() {
         assert!(!tail.contains(forbidden), "fatal census tail calls {forbidden}: {tail}");
     }
     assert!(
-        tail.find("hl_backend_tree_finalize(1)") < tail.find("_exit(128 + sig)"),
+        tail.find(finalize) < tail.find("_exit(128 + sig)"),
         "{tail}"
     );
 }
@@ -195,7 +196,6 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
         "fall_stop = HL_BACKEND_FALL_RIPREL_LOWER;",
         "fall_stop = HL_BACKEND_FALL_FS_TRANSACTION;",
         "fall_stop = HL_BACKEND_FALL_SSE_RIPREL_LOWER;",
-        "fall_stop = HL_BACKEND_FALL_CAP;",
     ] {
         assert_eq!(
             source.matches(assignment).count(),
@@ -206,6 +206,9 @@ fn each_real_translation_stop_site_keeps_its_exact_reason() {
     // One site is classifier refusal; the other is the explicit direct-data-authority refusal for
     // an otherwise supported FF /4 encountered after earlier instructions in the same candidate block.
     assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_TL_NO;").count(), 2);
+    // One site preserves a completed prefix after hitting the emitter's body capacity; the other stops
+    // an otherwise unterminated block at the architectural instruction-count cap.
+    assert_eq!(source.matches("fall_stop = HL_BACKEND_FALL_CAP;").count(), 2);
 }
 
 #[test]
