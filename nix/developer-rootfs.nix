@@ -238,10 +238,6 @@ let
         expected_machine=${toString manifest.machine}
         for tool in ${lib.escapeShellArgs requiredTools}; do
           path="$out/$tool"
-          test -x "$path" || { echo "developer rootfs omits executable /$tool" >&2; exit 1; }
-        done
-        for tool in ${lib.escapeShellArgs requiredTools}; do
-          path="$out/$tool"
           links=0
           while test -L "$path"; do
             target=$(readlink "$path")
@@ -257,6 +253,7 @@ let
             "$out"/*) ;;
             *) echo "developer rootfs /$tool escapes the root" >&2; exit 1 ;;
           esac
+          test -x "$path" || { echo "developer rootfs omits executable /$tool" >&2; exit 1; }
           machine=$(od -An -tu2 -j18 -N2 "$path" | tr -d ' ')
           test "$machine" = "$expected_machine" || {
             echo "developer rootfs /$tool has ELF machine $machine, expected $expected_machine (${manifest.machineName})" >&2
