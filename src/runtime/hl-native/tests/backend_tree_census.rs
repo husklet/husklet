@@ -100,6 +100,15 @@ fn host_guest_pair_reports_whether_translation_codegen_exists() {
 }
 
 #[test]
+fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 21)
+            .unwrap_or_else(|status| panic!("ISA {isa} bounded JCC-late census scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

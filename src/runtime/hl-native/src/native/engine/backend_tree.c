@@ -180,6 +180,7 @@ static void hl_backend_jcc_fill_record(_Atomic uint64_t *empty, _Atomic uint64_t
 }
 
 #define HL_BACKEND_JCC_LATE_SITES 524288u
+#define HL_BACKEND_JCC_LATE_MAX_PROBES 8u
 struct hl_backend_jcc_late_site {
     _Atomic int owner; /* 0 empty, negative host pid reserving, 1 published */
     _Atomic uint64_t owner_birth_ns;
@@ -207,7 +208,8 @@ static void hl_backend_jcc_late_record(
         return;
     }
     uint64_t hash = hl_backend_executed_form_mix(source ^ process_birth_ns ^ cache_generation);
-    for (uint32_t probe = 0; probe < site_count; ++probe) {
+    uint32_t probe_count = site_count < HL_BACKEND_JCC_LATE_MAX_PROBES ? site_count : HL_BACKEND_JCC_LATE_MAX_PROBES;
+    for (uint32_t probe = 0; probe < probe_count; ++probe) {
         struct hl_backend_jcc_late_site *site = &sites[(uint32_t)(hash + probe) & (site_count - 1)];
     retry:
         int owner = atomic_load_explicit(&site->owner, memory_order_acquire);
@@ -1775,7 +1777,10 @@ static int hl_backend_tree_wait(pid_t child, int reap_as_abnormal) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : 255;
 }
 
+static int hl_backend_tree_jcc_late_eligible_test(void);
+
 static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_services *host) {
+    if (scenario == 21) return hl_backend_tree_jcc_late_eligible_test() ? 0 : 119;
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
     if (scenario == 17) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 0 ? 0 : 110;
@@ -2336,7 +2341,7 @@ static void hl_backend_tree_jcc_late_eligible(uint64_t cache_generation, uint64_
 }
 
 struct hl_backend_jcc_late_test_shared {
-    struct hl_backend_jcc_late_site sites[2];
+    struct hl_backend_jcc_late_site sites[16];
     _Atomic uint64_t first, repeated, stable, changed, current, retired, unique, overflow, abandoned, maximum;
     _Atomic uint32_t pause_ready, pause_release, reserved_seen;
 };
@@ -2432,7 +2437,56 @@ static int hl_backend_tree_jcc_late_eligible_test(void) {
             atomic_load_explicit(&s->first, memory_order_relaxed) +
                 atomic_load_explicit(&s->repeated, memory_order_relaxed) +
                 atomic_load_explicit(&s->overflow, memory_order_relaxed) == 4;
+    if (!exact) goto fail;
+
     munmap(s, sizeof *s);
+    size_t bounded_size = sizeof *s;
+    s = mmap(NULL, bounded_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (s == MAP_FAILED) return 0;
+    memset(s, 0, bounded_size);
+    const uint32_t expected_probe_cap = 8;
+    uint64_t bounded_source = UINT64_C(0x1000);
+    uint64_t hash = hl_backend_executed_form_mix(bounded_source ^ birth ^ UINT64_C(7));
+    for (uint32_t probe = 0; probe < expected_probe_cap; ++probe) {
+        struct hl_backend_jcc_late_site *site = &s->sites[(uint32_t)(hash + probe) & 15u];
+        atomic_store_explicit(&site->owner, 1, memory_order_relaxed);
+        site->process = self;
+        site->process_birth_ns = birth;
+        site->cache_generation = 7;
+        site->source = bounded_source + probe + 1;
+    }
+    struct hl_backend_jcc_late_site *last =
+        &s->sites[(uint32_t)(hash + expected_probe_cap - 1) & 15u];
+    last->source = bounded_source;
+    last->target = UINT64_C(0x2000);
+    last->body = UINT64_C(0x3000);
+    last->target_generation = 7;
+    atomic_store_explicit(&last->appearances, 1, memory_order_relaxed);
+    hl_backend_jcc_late_record(s->sites, 16, &s->first, &s->repeated, &s->stable, &s->changed,
+                               &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                               &s->maximum, self, birth, 7, bounded_source, UINT64_C(0x2000),
+                               UINT64_C(0x3000), 7, 1, NULL, NULL, NULL);
+    memset(s->sites, 0, sizeof s->sites);
+    uint64_t beyond_source = UINT64_C(0x5000);
+    hash = hl_backend_executed_form_mix(beyond_source ^ birth ^ UINT64_C(7));
+    for (uint32_t probe = 0; probe < expected_probe_cap; ++probe) {
+        struct hl_backend_jcc_late_site *site = &s->sites[(uint32_t)(hash + probe) & 15u];
+        atomic_store_explicit(&site->owner, 1, memory_order_relaxed);
+        site->process = self;
+        site->process_birth_ns = birth;
+        site->cache_generation = 7;
+        site->source = beyond_source + probe + 1;
+    }
+    hl_backend_jcc_late_record(s->sites, 16, &s->first, &s->repeated, &s->stable, &s->changed,
+                               &s->current, &s->retired, &s->unique, &s->overflow, &s->abandoned,
+                               &s->maximum, self, birth, 7, beyond_source, UINT64_C(0x2000),
+                               UINT64_C(0x3000), 7, 1, NULL, NULL, NULL);
+    exact = atomic_load_explicit(&s->first, memory_order_relaxed) == 0 &&
+            atomic_load_explicit(&s->repeated, memory_order_relaxed) == 1 &&
+            atomic_load_explicit(&s->stable, memory_order_relaxed) == 1 &&
+            atomic_load_explicit(&s->current, memory_order_relaxed) == 1 &&
+            atomic_load_explicit(&s->overflow, memory_order_relaxed) == 1;
+    munmap(s, bounded_size);
     return exact;
 release_a:
     atomic_store_explicit(&s->pause_release, 1, memory_order_release); (void)pthread_join(a, NULL);
