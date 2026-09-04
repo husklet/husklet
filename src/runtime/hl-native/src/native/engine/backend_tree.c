@@ -2936,6 +2936,8 @@ static struct hl_backend_mixed_sse_lifecycle_summary hl_backend_mixed_sse_lifecy
     return summary;
 }
 
+#define HL_BACKEND_PRODUCT_RECORD_CAPACITY 32768u
+
 static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *census, int available,
                                         int settled, struct hl_backend_mixed_sse_lifecycle_summary lifecycle,
                                         hl_linux_abi *box) {
@@ -2943,7 +2945,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (!atomic_compare_exchange_strong_explicit(&census->reported, &expected, 1, memory_order_acq_rel,
                                                  memory_order_relaxed))
         return;
-    char record[8192];
+    char record[HL_BACKEND_PRODUCT_RECORD_CAPACITY];
     uint64_t jcc_late_candidate = 0;
     for (unsigned reason = 0; reason < HL_BACKEND_JCC_LATE_REASON_COUNT; ++reason)
         jcc_late_candidate += atomic_load_explicit(&census->jcc_late[reason], memory_order_relaxed);

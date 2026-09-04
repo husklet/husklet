@@ -1859,6 +1859,40 @@ mod tests {
     }
 
     #[test]
+    fn product_v13_worst_case_fits_the_native_atomic_record() {
+        let mut worst_case = product_v13();
+        for name in BACKEND_SHAPE_PRODUCT_V13_ORDER {
+            worst_case = set_product_field(&worst_case, name, u64::MAX);
+        }
+        for rank in 0..16 {
+            for suffix in ["key", "count"] {
+                worst_case = set_product_field(
+                    &worst_case,
+                    &format!("executed_form{rank}_{suffix}"),
+                    u64::MAX,
+                );
+            }
+        }
+        for name in [
+            "translated_entries", "total", "t_fallthrough", "t_jcc_taken", "t_jcc_fall",
+            "t_direct_jmp", "t_direct_call", "t_ret", "t_jmp_reg", "t_jmp_mem", "t_call_reg",
+            "t_call_mem", "t_syscall", "t_irq", "t_fault", "t_other",
+        ] {
+            let offset = worst_case.find(X86_EXIT_FAMILY_PREFIX).expect("exit-family fixture");
+            let tail = set_product_field(&worst_case[offset..], name, u64::MAX);
+            worst_case.replace_range(offset.., &tail);
+        }
+
+        let producer = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
+        let capacity = producer
+            .split_once("#define HL_BACKEND_PRODUCT_RECORD_CAPACITY ")
+            .and_then(|(_, tail)| tail.split_once('u'))
+            .and_then(|(digits, _)| digits.parse::<usize>().ok())
+            .expect("native product record capacity");
+        assert!(worst_case.len() + 1 < capacity, "{} >= {capacity}", worst_case.len() + 1);
+    }
+
+    #[test]
     fn product_v13_inventory_matches_the_native_producer_order() {
         let source = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
         let report = source
