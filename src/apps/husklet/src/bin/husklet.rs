@@ -1,4 +1,4 @@
-//! Husklet — a workspace manager, terminal, and host-surface composition root.
+//! Husklet — a workspace runtime, terminal, and extension-surface composition root.
 //! New-Workspace configuration window, and a per-workspace Terminal window you launch from the manager.
 //!
 //! * Native macOS title bars (real traffic lights); content — including the full-width tab strip — sits

@@ -2,7 +2,7 @@
   "name": "@husklet/top",
   "version": "0.1.0",
   "private": true,
-  "description": "Compact first-party workspace resource manager for Husklet.",
+  "description": "Compact first-party workspace control surface for Husklet.",
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",

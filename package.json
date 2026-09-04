@@ -12,6 +12,10 @@
     "extensions/top"
   ],
   "scripts": {
+    "build:extensions": "npm run build --workspace @husklet/workspace --workspace @husklet/extensions --workspace @husklet/top --workspace @husklet/storybook",
+    "test:extensions": "npm test --workspace @husklet/workspace --workspace @husklet/extensions --workspace @husklet/top --workspace @husklet/storybook",
+    "test:sdk": "npm test --workspace @husklet/client --workspace @husklet/react",
+    "test": "npm run test:sdk && npm run test:extensions",
     "prepublish:check": "node tools/npm/prepublish-check.js",
     "postpublish:check": "node tools/npm/postpublish-check.js"
   },

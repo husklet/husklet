@@ -8,7 +8,7 @@ activation = "tab"
 # pulls are separate from image reads. Resource mutation is likewise distinct
 # from inventory. Pane inventory, live terminal output, semantic UI text, and
 # revision-bound input are separate authorities, so consent describes every
-# operation this compact manager exercises.
+# operation this compact control surface exercises.
 capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "interface:render"]
 
 [interface]
