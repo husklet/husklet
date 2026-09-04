@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn sentinels_and_unsafe_fields_cannot masquerade_as_measurements() {
+    fn sentinels_and_unsafe_fields_cannot_masquerade_as_measurements() {
         use crate::journal::Schema as _;
         let mut sentinel = CampaignEvidence::unmeasured();
         sentinel.pair = "p".into();
