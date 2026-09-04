@@ -2472,6 +2472,7 @@ static int x64_pc_file(char *path, size_t size) {
 
 static int pcache_load(uint64_t entry_jump) {
     if (!X64_PC_FIXED_IMAGE_SUPPORTED) return 0;
+    if (!g_pcache || hl_identity_digest_empty(&g_pc_binid)) return 0;
     uint64_t load_generation = ++g_x64_pc_load_generation;
     g_pcache_loaded = 0;
     x64_pc_restored_clear();

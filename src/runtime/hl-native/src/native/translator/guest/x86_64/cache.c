@@ -356,6 +356,7 @@ static void pcache_relocate(uint64_t saved_block_return) {
 // Returns 1 on a cache hit (arena + maps restored, translation can be skipped). On ANY mismatch,
 // truncation, short read, or allocation failure it returns 0 (graceful MISS -> caller translates fresh).
 static int pcache_load(uint64_t entry_jump) {
+    if (!g_pcache || hl_identity_digest_empty(&g_pc_binid)) return 0;
     if (g_force_base_failed) return 0; // #210: fixed-base map fell back -> live layout != file's baked base
     // Every persisted block was translated under an armed ledger, so it carries memory guards; a restored
     // arena is only sound in a process whose ledger is armed and latched for good. The launch path does

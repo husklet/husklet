@@ -179,6 +179,7 @@ static int exec_origin_basic_matrix_child(int scenario) {
         close(open(name_placeholder, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0)
         return 2;
     hl_vfs_cursor_state_clear();
+    g_pcache = 1;
     g_nvols = 0;
     g_name_binds_count = 0;
     memset(g_vols, 0, sizeof g_vols);
@@ -414,7 +415,8 @@ static int exec_image_adopt_origin(int descriptor, const char *path, hl_vfs_curs
         exec_image_release(image);
         return capability_error;
     }
-    image->identity = hl_identity_image_digest(image->bytes.bytes, image->bytes.size);
+    image->identity = g_pcache ? hl_identity_image_digest(image->bytes.bytes, image->bytes.size)
+                               : (hl_identity_digest){0};
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
@@ -507,7 +509,8 @@ static int exec_image_authorized(const char *path, exec_image *image) {
             return -ENOEXEC;
         }
     }
-    image->identity = hl_identity_image_digest(image->bytes.bytes, image->bytes.size);
+    image->identity = g_pcache ? hl_identity_image_digest(image->bytes.bytes, image->bytes.size)
+                               : (hl_identity_digest){0};
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
