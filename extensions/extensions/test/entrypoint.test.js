@@ -39,7 +39,11 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
             ? acquisitions === 1 ? { reply: 'extension_acquisition', with: {
               job: 'job-1', reference: 'registry.example/extension:2', revision: 3, state: 'ready',
               candidate: { name: 'resources', version: '2.0.0', image_digest: `sha256:${'b'.repeat(64)}`, installed_image_digest: `sha256:${'a'.repeat(64)}`, requested: ['containers:read', 'containers:control'] },
-            } } : { reply: 'extension_acquisition', with: { job: 'job-2', reference: 'registry.example/slow:1', revision: 4, state: cancelled ? 'cancelled' : 'downloading' } }
+            } } : { reply: 'extension_acquisition', with: {
+              job: 'job-2', reference: 'registry.example/slow:1', revision: 4, state: cancelled ? 'cancelled' : 'downloading',
+              progress: cancelled ? null : { status: 'Pulling layers', id: 'layer-2', current: 1024, total: 4096 },
+              candidate: { name: 'slow', version: '1.0.0', image_digest: `sha256:${'e'.repeat(64)}`, installed_image_digest: null, requested: ['containers:read'] },
+            } }
             : call === 'extension_update'
               ? { reply: 'extension', with: { name: 'resources', image_digest: `sha256:${'b'.repeat(64)}`, status: 'running' } }
         : call === 'interface_open_tab'
@@ -96,7 +100,12 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     await until(() => calls.filter(({ call }) => call === 'interface_render_at').length > beforeSlow);
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invoke(calls, 'Inspect') }));
     await until(() => renderedLabels(calls).includes('Cancel'));
+    assert.ok(renderedLabels(calls).includes('Pulling layers · layer-2 · 1024/4096 bytes'));
+    assert.equal(enabledState(calls, 'Install extension'), false, 'candidate metadata is not commit authority before ready');
     await until(() => calls.some(({ call, with: body }) => call === 'event_subscribe' && body.topic === 'extension-acquisitions'));
+    peer.write(encode({ channel: 13, kind: KIND.event, payload: invoke(calls, 'Install extension') }));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(calls.some(({ call }) => call === 'extension_install'), false, 'a stale invoke cannot bypass ready state');
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invoke(calls, 'Cancel') }));
     await until(() => calls.some(({ call }) => call === 'extension_acquisition_cancel'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_acquisition_cancel').with, { job: 'job-2', revision: 4 });
@@ -118,6 +127,12 @@ function renderedLabels(calls) {
 
 function renderedPatches(calls) {
   return calls.filter(({ call }) => call === 'interface_render_at').flatMap(({ with: body }) => body.frame.patches);
+}
+
+function enabledState(calls, label) {
+  const patches = renderedPatches(calls);
+  const node = patches.findLast((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label).SetProp.id;
+  return patches.findLast((patch) => patch.SetProp?.id === node && patch.SetProp.prop === 'Enabled').SetProp.value.Flag;
 }
 
 function change(calls, placeholder, value) {

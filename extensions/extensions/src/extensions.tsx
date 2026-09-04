@@ -16,6 +16,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [error, setError] = React.useState('');
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
+  const candidateKey = React.useRef('');
 
   const reload = React.useCallback(async () => {
     try { setInstalled(await api.extensions.list()); setError(''); }
@@ -31,7 +32,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const inspect = async () => {
     const wanted = reference.trim();
     if (!wanted || busy) return;
-    setBusy('inspect'); setError(''); setAcquisition(null);
+    setBusy('inspect'); setError(''); setAcquisition(null); candidateKey.current = '';
     try {
       const started = await api.extensions.startAcquisition(wanted);
       cancelledJob.current = '';
@@ -39,7 +40,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       const deadline = Date.now() + 30_000;
       while (true) {
         setAcquisition(status);
-        if (status.candidate) setGranted(status.candidate.requested);
+        if (status.candidate) {
+          const key = `${status.job}:${status.candidate.image_digest}`;
+          if (candidateKey.current !== key) { candidateKey.current = key; setGranted(status.candidate.requested); }
+        }
         if (status.state === 'ready' || status.state === 'failed' || status.state === 'cancelled' || cancelledJob.current === started.job) break;
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
@@ -51,7 +55,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     finally { setBusy(''); }
   };
   const publish = async () => {
-    if (!acquisition?.candidate || busy) return;
+    if (!acquisition?.candidate || acquisition.state !== 'ready' || busy) return;
     const updating = Boolean(acquisition.candidate.installed_image_digest);
     setBusy(updating ? 'update' : 'install');
     try {
@@ -102,14 +106,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 <Text label={capability} />
               </Row>)}
               {acquisition.candidate.requested.length === 0 && <Text label="This extension requests no capabilities." />}
-              <Button label={busy === 'update' ? 'Updating…' : busy === 'install' ? 'Installing…' : acquisition.candidate.installed_image_digest ? 'Update extension' : 'Install extension'} enabled={!busy} onInvoke={publish} />
+              <Button label={busy === 'update' ? 'Updating…' : busy === 'install' ? 'Installing…' : acquisition.candidate.installed_image_digest ? 'Update extension' : 'Install extension'} enabled={!busy && acquisition.state === 'ready'} onInvoke={publish} />
             </CardContent>
           )}
-          {acquisition && !acquisition.candidate && (
+          {acquisition && acquisition.state !== 'ready' && (
             <CardContent gap={1}>
               <Row gap={2}>
                 {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
-                <Text label={acquisition.state} />
+                <Text label={acquisitionLabel(acquisition)} wrap />
                 {!['failed', 'cancelled'].includes(acquisition.state)
                   ? <Button label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'} enabled={busy !== 'cancel'} onInvoke={cancel} />
                   : <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />}
@@ -149,4 +153,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message.slice(0, 500) : String(cause).slice(0, 500);
+}
+
+function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
+  const progress = acquisition.progress;
+  if (!progress) return acquisition.state;
+  const amount = progress.current === null ? '' : progress.total === null ? ` · ${progress.current} bytes` : ` · ${progress.current}/${progress.total} bytes`;
+  return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
