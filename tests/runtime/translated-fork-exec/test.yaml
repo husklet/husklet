@@ -1,0 +1,18 @@
+targets: [amd64]
+image: alpine:3.20
+execution: { translated: true, translated_diagnostics: true }
+build:
+  compiler: { amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=gnu11]
+cases:
+  - id: runtime/translated-fork-exec/vfork-exec
+    status: active
+    compat: { class: compatibility }
+    build: { source: vfork_exec.c, output: vfork-exec }
+    artifact: { destination: /opt/husklet/vfork-exec }
+    run: []
+    timeout: 120
+    expect:
+      exit: 0
+      stdout: vfork_exec.txt
+      fork_diagnostics: { maximum_records: 0 }
