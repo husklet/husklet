@@ -448,6 +448,36 @@ mod production_tests {
     use super::{command_text, require_readelf_contract};
     use crate::platform::HostProcess;
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    use hl_engine::{
+        activation::GuestIsa,
+        composition::{StandardStream, StandardStreamPort, StandardStreams},
+        launcher::plan::RuntimePlan,
+        options::Options,
+        runtime::Engine,
+    };
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    use std::{
+        os::unix::ffi::OsStrExt,
+        sync::{Arc, Mutex},
+    };
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[derive(Default)]
+    struct CapturedDiagnostics(Mutex<Vec<u8>>);
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    impl StandardStreamPort for CapturedDiagnostics {
+        fn write(&self, stream: StandardStream, input: &[u8]) -> std::io::Result<usize> {
+            if matches!(stream, StandardStream::Stderr) {
+                self.0.lock().unwrap().extend_from_slice(input);
+            }
+            Ok(input.len())
+        }
+
+        fn close(&self) {}
+    }
+
     #[test]
     fn production_runner_compiles_only_the_production_native_exports() {
         let production = include_str!("../../../../../runtime/hl-native/src/native/bridge/exports.txt");
@@ -476,6 +506,72 @@ mod production_tests {
         .expect("inspect production native exports");
         require_readelf_contract("", &dynamic, &symbols, production)
             .expect("compiled native library must expose only production exports");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_irq_return_reconciles_with_translated_entries() {
+        let work = tempfile::tempdir().expect("temporary fixture directory");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../containers/hl-engine/tests/fixtures/translit/jcc_link.c");
+        let executable = work.path().join("jcc-link");
+        let status = HostProcess::standard("x86_64-linux-gnu-gcc")
+            .args([
+                "-static-pie",
+                "-O2",
+                "-fno-optimize-sibling-calls",
+                "-z",
+                "noexecstack",
+                "-pthread",
+                "-o",
+            ])
+            .arg(&executable)
+            .arg(&source)
+            .status()
+            .expect("compile IRQ fixture");
+        assert!(status.success(), "fixture compiler failed with {status}");
+
+        let captured = Arc::new(CapturedDiagnostics::default());
+        let mut options = Options::default();
+        options.set("HL_TRANSLIT", "1", true).expect("select transliterator");
+        options.set("HL_C_DIAGNOSTICS", "1", true).expect("enable diagnostics");
+        let plan = RuntimePlan {
+            rootfs: None,
+            executable_host: Some(executable.as_os_str().as_bytes().to_vec()),
+            arguments: vec![executable.as_os_str().as_bytes().to_vec()],
+            environment: Vec::new(),
+            result_path: None,
+            options,
+            box_policy: Default::default(),
+        };
+        let engine = Engine::with_streams(
+            GuestIsa::X86_64,
+            plan,
+            StandardStreams::default().with_output(captured.clone()),
+        )
+        .expect("launch IRQ fixture");
+        engine.start().expect("start IRQ fixture");
+        let exit = engine.wait().expect("wait for IRQ fixture");
+        engine.destroy().expect("destroy IRQ fixture");
+        assert_eq!(exit.guest_status, 0);
+
+        let diagnostics = String::from_utf8(captured.0.lock().unwrap().clone()).expect("UTF-8 diagnostics");
+        let line = diagnostics
+            .lines()
+            .find(|line| line.starts_with("[diag] x86-exit-family "))
+            .unwrap_or_else(|| panic!("missing x86 exit-family diagnostic:\n{diagnostics}"));
+        let field = |name: &str| {
+            line.split_ascii_whitespace()
+                .find_map(|word| word.strip_prefix(name))
+                .unwrap_or_else(|| panic!("missing {name} in {line}"))
+                .parse::<u64>()
+                .unwrap_or_else(|error| panic!("invalid {name} in {line}: {error}"))
+        };
+        let entries = field("translated_entries=");
+        let total = field("total=");
+        let irq = field("t_irq=");
+        assert!(irq > 0, "fixture did not interrupt a translated run: {line}");
+        assert_eq!(total, entries, "translated return families do not reconcile: {line}");
     }
 }
 

@@ -798,8 +798,10 @@ static void run_block(hl_x86_hot_context *context, struct cpu *cpu, void *code) 
                 translit_mixed_profile_completed(marker);
                 if (marker_valid && marker_kind == HL_BACKEND_SHAPE_T_DIRECT_CALL)
                     translit_call_sim_probe(cpu->rip);
-            } else if (marker_valid && marker_kind == HL_BACKEND_SHAPE_T_DIRECT_CALL) {
-                hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_IRQ);
+            } else {
+                hl_backend_tree_translated_exit_count(HL_BACKEND_SHAPE_T_IRQ);
+                if (marker_valid && marker_kind == HL_BACKEND_SHAPE_T_DIRECT_CALL)
+                    hl_backend_tree_call_sim_count(HL_BACKEND_CALL_SIM_DECLINE_IRQ);
             }
         }
         g_dispatch_census_open = 0;
