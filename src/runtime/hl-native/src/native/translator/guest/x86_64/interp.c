@@ -74,10 +74,8 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     if (g_pcache) {
         g_x64_pc_exec_poisoned = 1;
         if (g_coldprof)
-            fprintf(stderr, "[pcache] poison range=%llx-%llx invalidated=%d image=%llx-%llx interp=%llx-%llx\n",
-                    (unsigned long long)lo, (unsigned long long)hi, invalidated,
-                    (unsigned long long)g_x64_pc_image_lo, (unsigned long long)g_x64_pc_image_hi,
-                    (unsigned long long)g_x64_pc_interp_lo, (unsigned long long)g_x64_pc_interp_hi);
+            fprintf(stderr, "[pcache] poison range=%llx-%llx invalidated=%d\n",
+                    (unsigned long long)lo, (unsigned long long)hi, invalidated);
     }
     if (invalidated) {
         memset(g_ibtc, 0, sizeof g_ibtc);
