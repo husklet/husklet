@@ -256,6 +256,7 @@ test('network waterfall validates, caps, sanitizes, and exposes typed hierarchy'
   const requests = Array.from({length: REQUEST_LIMIT + 3}, (_, i) => ({method:'GET',url:`https://example.test/${i}\nunsafe`,startUs:0,durationUs:20,status:200,bytes:1,detail:'ok\t',phases}));
   requests.push({...requests[0], method:'TRACE'}); requests.push({...requests[0], phases:[{kind:'wait',offsetUs:4,durationUs:4},{kind:'dns',offsetUs:2,durationUs:3}]});
   const bounded = boundedRequests(requests, 90); assert.equal(bounded.requests.length, REQUEST_LIMIT); assert.equal(bounded.total, 90);
+  assert.deepEqual(boundedRequests([null, {...requests[0], phases: [null]}], Number.NaN), {requests: [], total: 0});
   const frame = host().render(h(NetworkWaterfallStory));
   assert.equal(frame.patches.filter((p) => p.Create?.tag === 'NetworkRequest').length, 3);
   assert(frame.patches.some((p) => p.Create?.tag === 'NetworkPhase'));
