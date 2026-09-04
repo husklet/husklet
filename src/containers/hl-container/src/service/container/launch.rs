@@ -117,7 +117,7 @@ impl Service {
         let process = self
             .runtime
             .start(ProcessConfig {
-                benchmark_measurement: container.spec.benchmark_measurement.clone(),
+                benchmark_measurement: self.measurement_requests.lock().await.remove(&container.id),
                 network_namespace: container.id.namespace(),
                 rootfs,
                 overlay,
