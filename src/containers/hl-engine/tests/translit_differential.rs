@@ -2114,7 +2114,48 @@ fn complete_integer_division_family_agrees_with_interpreter_and_native() {
 /// `%gs` republication for a cloned thread, a fork child, a vfork+execve and a raw clone.
 #[test]
 fn threads_fork_and_exec_agree_with_the_interpreter() {
-    let tree = agrees("procs");
+    const CHILD: &str = "HL_TRANSLIT_PROCS_CHILD";
+    const DIRECTORY: &str = "HL_TRANSLIT_PROCS_DIRECTORY";
+    if let Some(selected) = std::env::var_os(CHILD) {
+        let directory = PathBuf::from(std::env::var_os(DIRECTORY).expect("isolated result directory"));
+        let work = TempDir::new().unwrap();
+        let executable = fixture(work.path(), "procs");
+        let selected = selected.to_str().expect("ASCII selector");
+        let (output, status, tree) = run(&executable, selected);
+        std::fs::write(directory.join(format!("stdout-{selected}")), output).unwrap();
+        std::fs::write(directory.join(format!("status-{selected}")), status.to_string()).unwrap();
+        if selected == "0" {
+            assert_eq!(tree.line, "[prof] translit: not selected");
+            return;
+        }
+        assert!(tree.entries > 0, "translated child entered no emitted block: {}", tree.line);
+        check_threads_fork_exec_tree(&tree);
+        return;
+    }
+
+    let results = TempDir::new().unwrap();
+    for selected in ["0", "1"] {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "threads_fork_and_exec_agree_with_the_interpreter", "--nocapture"])
+            .env(CHILD, selected)
+            .env(DIRECTORY, results.path())
+            .status()
+            .expect("run isolated transliterator arm");
+        assert!(status.success(), "isolated HL_TRANSLIT={selected} arm failed: {status}");
+    }
+    assert_eq!(
+        std::fs::read(results.path().join("stdout-0")).unwrap(),
+        std::fs::read(results.path().join("stdout-1")).unwrap(),
+        "fork/exec output differs between isolated interpreter and transliterator arms"
+    );
+    assert_eq!(
+        std::fs::read_to_string(results.path().join("status-0")).unwrap(),
+        std::fs::read_to_string(results.path().join("status-1")).unwrap(),
+        "fork/exec status differs between isolated interpreter and transliterator arms"
+    );
+}
+
+fn check_threads_fork_exec_tree(tree: &Backend) {
     assert!(tree.redispatch_attempted > 0, "{}", tree.line);
     assert!(tree.redispatch_threaded > 0, "{}", tree.line);
     assert_eq!(tree.redispatch_threaded_hits, 0, "threaded guests must never fast-redispatch: {}", tree.line);
