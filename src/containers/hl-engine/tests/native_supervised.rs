@@ -213,6 +213,24 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
 }
 
 #[test]
+fn interpreted_runtime_accepts_an_executable_larger_than_sixty_four_mebibytes() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&executable)
+        .unwrap()
+        .set_len(65 * 1024 * 1024)
+        .unwrap();
+
+    let (status, stdout, stderr) = run(&executable, &["output"], false);
+
+    assert_eq!(status, 23);
+    assert_eq!(stdout, b"native-supervised");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+}
+
+#[test]
 fn retained_native_session_restarts_only_after_complete_wait() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());

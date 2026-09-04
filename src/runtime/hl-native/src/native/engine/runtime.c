@@ -564,7 +564,12 @@ fail:
 
 enum { HL_ENGINE_STRING_LIMIT = 64 * 1024 * 1024 };
 
-enum { HL_ENGINE_EXECUTABLE_LIMIT = 64 * 1024 * 1024 };
+/* Interpreted execution pins the complete initial image so a path replacement
+ * cannot change what later runs. Official Node Linux executables are already
+ * about 108 MiB, so the old 64 MiB ceiling rejected the SDK base image before
+ * its first instruction. Keep the admission bounded, but large enough for the
+ * runtimes extensions are explicitly expected to carry. */
+enum { HL_ENGINE_EXECUTABLE_LIMIT = 256 * 1024 * 1024 };
 
 static hl_status hl_engine_read_executable(hl_engine *engine, hl_host_handle handle) {
     hl_host_file_metadata before = {0}, after = {0};
