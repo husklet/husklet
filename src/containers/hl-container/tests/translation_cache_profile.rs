@@ -967,8 +967,8 @@ int main(void) {
             .collect::<Vec<_>>();
         names.sort();
         require(
-            names.len() == 2,
-            "cold toolchain did not publish exactly its two cacheable leaf-tool keys",
+            names.len() >= 4,
+            "cold toolchain did not publish distinct compiler/assembler/collector/linker keys",
         )?;
         Some(names)
     } else {
@@ -1181,7 +1181,7 @@ int main(void) {
                 )?;
             }
             Mode::CacheNestedToolchain => require(
-                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() == 2),
+                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() >= 4),
                 "nested toolchain did not retain its cold authenticated key census",
             )?,
             Mode::CacheNestedToolchainUpper => require(
