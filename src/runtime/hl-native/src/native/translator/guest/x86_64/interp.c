@@ -3164,9 +3164,13 @@ static void pcache_save(void) {
     if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
         g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 || g_x64_pc_interp_lo == 0 ||
         !jit_guest_bus_active()) {
-        if (g_coldprof) fprintf(stderr, "[pcache] save refused unsupported=%d image=%llx interp=%llx\n",
-                                g_x64_pc_library_unsupported, (unsigned long long)g_x64_pc_image_lo,
-                                (unsigned long long)g_x64_pc_interp_lo);
+        if (g_coldprof)
+            fprintf(stderr,
+                    "[pcache] save refused unsupported=%d image=%llx interp=%llx "
+                    "post_disable_census_sites=%llu\n",
+                    g_x64_pc_library_unsupported, (unsigned long long)g_x64_pc_image_lo,
+                    (unsigned long long)g_x64_pc_interp_lo,
+                    (unsigned long long)translit_pcache_census_emitted_while_disabled);
         return;
     }
     if (g_pcache_loaded && g_coldprof) {

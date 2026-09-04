@@ -46,6 +46,20 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
             nested.iter().all(|line| line.ends_with(" post_disable_census_sites=0")),
             "{label}: observation emitted census instrumentation after launch-only disable: {nested:?}"
         );
+        let refused = stderr
+            .lines()
+            .filter(|line| line.starts_with("[pcache] save refused "))
+            .collect::<Vec<_>>();
+        assert!(
+            !refused.is_empty(),
+            "{label}: fixture observed no nested process exit: {stderr}"
+        );
+        assert!(
+            refused
+                .iter()
+                .all(|line| line.ends_with(" post_disable_census_sites=0")),
+            "{label}: a nested process executed census-instrumented blocks after disable: {refused:?}"
+        );
         assert!(
             stderr.contains("[pcache-v1] outcome="),
             "{label}: disabling nested census also disabled cache outcome observation: {stderr}"
