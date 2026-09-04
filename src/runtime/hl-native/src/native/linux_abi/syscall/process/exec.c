@@ -85,8 +85,13 @@ typedef struct exec_image {
     hl_exec_file_capabilities file_capabilities;
     hl_linux_image bytes;
     int script;
+    hl_vfs_cursor_origin origin;
     char path[4200];
 } exec_image;
+
+static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *image, int lower) {
+    return image != NULL && hl_vfs_cursor_origin_is_lower(&image->origin, lower);
+}
 
 static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *capabilities) {
     unsigned char bytes[24];
@@ -127,7 +132,7 @@ static void exec_image_release(exec_image *image) {
     image->descriptor = -1;
 }
 
-static int exec_image_adopt(int descriptor, const char *path, exec_image *image) {
+static int exec_image_adopt_origin(int descriptor, const char *path, hl_vfs_cursor_origin origin, exec_image *image) {
     if (descriptor < 0 || path == NULL || image == NULL) {
         if (descriptor >= 0) close(descriptor);
         return -ENOENT;
@@ -146,6 +151,7 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
     }
 #endif
     image->descriptor = descriptor;
+    image->origin = origin;
     if (fstat(descriptor, &image->status) != 0) {
         int error = -errno;
         exec_image_release(image);
@@ -199,11 +205,60 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
     return 0;
 }
 
+static int exec_image_adopt(int descriptor, const char *path, exec_image *image) {
+    return exec_image_adopt_origin(descriptor, path, (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UNKNOWN, 0}, image);
+}
+
 static int exec_image_open(const char *path, exec_image *image) {
     if (path == NULL) return -ENOENT;
     int descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (descriptor < 0) return errno == ELOOP ? -EACCES : -errno;
     return exec_image_adopt(descriptor, path, image);
+}
+
+static int exec_image_open_guest(const char *guest, exec_image *image) {
+    if (guest == NULL) return -ENOENT;
+    if (!g_rootfs) return exec_image_open(guest, image);
+    char absolute[4200];
+    const char *resolved_guest = guest;
+    if (guest[0] != '/') {
+        abs_guest(-100, guest, absolute, sizeof absolute);
+        resolved_guest = absolute;
+    }
+    int name_bind = name_bind_pick(resolved_guest);
+    if (name_bind >= 0) {
+        int descriptor = open(g_name_binds[name_bind].hcanon, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (descriptor < 0) return errno == ELOOP ? -EACCES : -errno;
+        return exec_image_adopt_origin(descriptor, resolved_guest,
+                                       (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_NAME_BIND, name_bind}, image);
+    }
+    hl_vfs_cursor_entry entry;
+    int error = hl_vfs_cursor_resolve_at(-100, resolved_guest, 0, &entry);
+    if (error != 0) return error;
+    if (entry.kind != HL_VFS_CURSOR_FILE) {
+        hl_vfs_cursor_entry_release(&entry);
+        return -EACCES;
+    }
+    hl_vfs_cursor_origin origin = entry.file.origin;
+    int descriptor = -1;
+    if (entry.file.kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        descriptor = entry.file.value.descriptor;
+        entry.file = (hl_vfs_cursor_authority){0};
+    } else if (entry.file.kind == HL_VFS_CURSOR_AUTHORITY_HOST && entry.file.value.host.services != NULL &&
+               entry.file.value.host.services->posix_attachment != NULL) {
+        const hl_host_posix_attachment_services *attachments = entry.file.value.host.services->posix_attachment;
+        if (attachments->borrow_file != NULL && attachments->release != NULL) {
+            hl_host_result borrowed = attachments->borrow_file(entry.file.value.host.services->context,
+                                                                entry.file.value.host.handle);
+            if (borrowed.status == HL_STATUS_OK && borrowed.value <= INT_MAX)
+                descriptor = fcntl((int)borrowed.value, F_DUPFD_CLOEXEC, 0);
+            if (borrowed.status == HL_STATUS_OK) (void)attachments->release(entry.file.value.host.services->context,
+                                                                           borrowed.value);
+        }
+    }
+    hl_vfs_cursor_entry_release(&entry);
+    if (descriptor < 0) return -EACCES;
+    return exec_image_adopt_origin(descriptor, resolved_guest, origin, image);
 }
 
 static int exec_image_authorized(const char *path, exec_image *image) {
@@ -343,10 +398,8 @@ static int exec_resolve_shebang_images(char **argv, int argc, int capacity, exec
         argv[0] = stored_interpreter;
         if (stored_optional != NULL) argv[1] = stored_optional;
         argc += inserted;
-        char backing[4200];
-        const char *resolved = xresolve_overlay(stored_interpreter, backing, sizeof backing);
         exec_image next;
-        int error = exec_image_open(resolved, &next);
+        int error = exec_image_open_guest(stored_interpreter, &next);
         if (error != 0) return error;
 #if defined(HL_NATIVE_TEST_HOOKS)
         exec_pin_test_wait(HL_EXEC_PIN_TEST_SHEBANG_HOP);
@@ -458,14 +511,13 @@ static int exec_prepare_script(uint64_t path_address, exec_prepared *prepared) {
 }
 
 static int exec_prepare_interpreter(exec_prepared *prepared) {
-    char interpreter_path[256], interpreter_backing[4200];
+    char interpreter_path[256];
     prepared->program_interpreter.descriptor = -1;
     prepared->has_program_interpreter = elf_interp(prepared->main_image.path, interpreter_path, sizeof interpreter_path,
                                                    &prepared->main_image.bytes) == 0;
     if (!prepared->has_program_interpreter) return 0;
 
-    const char *resolved = xresolve_overlay(interpreter_path, interpreter_backing, sizeof interpreter_backing);
-    int error = exec_image_open(resolved, &prepared->program_interpreter);
+    int error = exec_image_open_guest(interpreter_path, &prepared->program_interpreter);
     /* Linux reports a malformed PT_INTERP target as ELIBBAD, while the same
        bytes used as the main image are ENOEXEC. */
     return error == -ENOEXEC ? -HL_LINUX_ELIBBAD : error;
@@ -490,7 +542,8 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
                                                                    path_buffer, sizeof path_buffer, 0);
     error = requested_descriptor >= 0 ? exec_image_adopt(requested_descriptor, resolved_path, &prepared->main_image)
             : self_executable         ? exec_image_authorized(resolved_path, &prepared->main_image)
-                                      : exec_image_open(resolved_path, &prepared->main_image);
+                                      : exec_image_open_guest((const char *)(uintptr_t)path_address,
+                                                              &prepared->main_image);
     if (error != 0) return error;
 #if defined(HL_NATIVE_TEST_HOOKS)
     exec_pin_test_wait(HL_EXEC_PIN_TEST_MAIN);

@@ -474,6 +474,10 @@ static int hl_vfs_cursor_origin_preservation_test(void) {
             memcmp(&clone.origin, &origins[index], sizeof origins[index]) != 0 ||
             memcmp(&child.origin, &origins[index], sizeof origins[index]) != 0)
             failure = 2;
+        if (failure == 0 &&
+            hl_vfs_cursor_origin_is_lower(&clone.origin, 3) !=
+                (origins[index].kind == HL_VFS_CURSOR_ORIGIN_LOWER && origins[index].index == 3))
+            failure = 5;
         hl_vfs_cursor_authority_close(&child);
         hl_vfs_cursor_authority_close(&clone);
     }
