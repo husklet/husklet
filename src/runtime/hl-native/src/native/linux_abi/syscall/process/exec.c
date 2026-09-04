@@ -95,9 +95,10 @@ static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *im
 
 static int exec_image_open_guest(const char *guest, exec_image *image);
 static void exec_image_release(exec_image *image);
+static int exec_image_adopt_cursor_entry(const char *guest, hl_vfs_cursor_entry *entry, exec_image *image);
 
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
-static int exec_origin_write_image(const char *path) {
+static int exec_origin_write_image(const char *path, uint8_t marker) {
     uint8_t bytes[4096] = {0};
     memcpy(bytes, "\177ELF\2\1\1", 7);
     uint16_t type = 2, machine = HL_EXEC_ELF_MACHINE, ehsize = 64, phentsize = 56, phnum = 1;
@@ -110,24 +111,61 @@ static int exec_origin_write_image(const char *path) {
     memcpy(bytes + 68, &flags, 4); memcpy(bytes + 72, &offset, 8); memcpy(bytes + 80, &address, 8);
     memcpy(bytes + 88, &address, 8); memcpy(bytes + 96, &image_size, 8); memcpy(bytes + 104, &image_size, 8);
     memcpy(bytes + 112, &alignment, 8);
+    bytes[768] = marker;
     int destination = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0700);
     ssize_t written = destination >= 0 ? write(destination, bytes, sizeof bytes) : -1;
     if (destination >= 0) close(destination);
     return written == (ssize_t)sizeof bytes ? 0 : -1;
 }
 
-static int exec_origin_basic_matrix_child(void) {
+static int exec_origin_basic_matrix_child(int scenario) {
     char root[] = "/tmp/hl-exec-origin-XXXXXX";
     if (mkdtemp(root) == NULL) return 1;
-    char upper[4200], lower[4200], upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200];
+    char upper[4200], lower[4200], volume[4200], nested[4200], name_dir[4200];
+    char upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200];
+    char upper_links[4200], lower_links[4200], upper_u2l[4200], lower_l2u[4200];
+    char upper_hidden[4200], lower_hidden[4200], opaque[4200], hidden_file[4200];
+    char upper_mnt[4200], volume_nested[4200], volume_tool[4200], nested_tool[4200];
+    char name_file[4200], upper_race[4200], race_file[4200], race_new[4200];
     snprintf(upper, sizeof upper, "%s/upper", root); snprintf(lower, sizeof lower, "%s/lower", root);
+    snprintf(volume, sizeof volume, "%s/volume", root); snprintf(nested, sizeof nested, "%s/nested", root);
+    snprintf(name_dir, sizeof name_dir, "%s/name", root);
     snprintf(upper_bin, sizeof upper_bin, "%s/bin", upper); snprintf(lower_bin, sizeof lower_bin, "%s/bin", lower);
     snprintf(upper_file, sizeof upper_file, "%s/upper", upper_bin);
     snprintf(lower_file, sizeof lower_file, "%s/lower", lower_bin);
-    if (mkdir(upper, 0700) != 0 || mkdir(lower, 0700) != 0 || mkdir(upper_bin, 0700) != 0 ||
-        mkdir(lower_bin, 0700) != 0 || exec_origin_write_image(upper_file) != 0 ||
-        exec_origin_write_image(lower_file) != 0)
+    snprintf(upper_links, sizeof upper_links, "%s/links", upper);
+    snprintf(lower_links, sizeof lower_links, "%s/links", lower);
+    snprintf(upper_u2l, sizeof upper_u2l, "%s/u2l", upper_links);
+    snprintf(lower_l2u, sizeof lower_l2u, "%s/l2u", lower_links);
+    snprintf(upper_hidden, sizeof upper_hidden, "%s/hidden", upper);
+    snprintf(lower_hidden, sizeof lower_hidden, "%s/hidden", lower);
+    snprintf(opaque, sizeof opaque, "%s/.wh..wh..opq", upper_hidden);
+    snprintf(hidden_file, sizeof hidden_file, "%s/tool", lower_hidden);
+    snprintf(upper_mnt, sizeof upper_mnt, "%s/mnt", upper);
+    snprintf(volume_nested, sizeof volume_nested, "%s/nested", volume);
+    snprintf(volume_tool, sizeof volume_tool, "%s/tool", volume);
+    snprintf(nested_tool, sizeof nested_tool, "%s/tool", nested);
+    snprintf(name_file, sizeof name_file, "%s/tool", name_dir);
+    snprintf(upper_race, sizeof upper_race, "%s/race", upper);
+    snprintf(race_file, sizeof race_file, "%s/tool", upper_race);
+    snprintf(race_new, sizeof race_new, "%s/new", upper_race);
+    if (mkdir(upper, 0700) != 0 || mkdir(lower, 0700) != 0 || mkdir(volume, 0700) != 0 ||
+        mkdir(nested, 0700) != 0 || mkdir(name_dir, 0700) != 0 || mkdir(upper_bin, 0700) != 0 ||
+        mkdir(lower_bin, 0700) != 0 || mkdir(upper_links, 0700) != 0 || mkdir(lower_links, 0700) != 0 ||
+        mkdir(upper_hidden, 0700) != 0 || mkdir(lower_hidden, 0700) != 0 || mkdir(upper_mnt, 0700) != 0 ||
+        mkdir(volume_nested, 0700) != 0 || mkdir(upper_race, 0700) != 0 ||
+        exec_origin_write_image(upper_file, 1) != 0 || exec_origin_write_image(lower_file, 2) != 0 ||
+        exec_origin_write_image(hidden_file, 3) != 0 || exec_origin_write_image(volume_tool, 4) != 0 ||
+        exec_origin_write_image(nested_tool, 5) != 0 || exec_origin_write_image(name_file, 6) != 0 ||
+        exec_origin_write_image(race_file, 7) != 0 || exec_origin_write_image(race_new, 8) != 0 ||
+        symlink("/bin/lower", upper_u2l) != 0 || symlink("/bin/upper", lower_l2u) != 0 ||
+        close(open(opaque, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0)
         return 2;
+    hl_vfs_cursor_state_clear();
+    g_nvols = 0;
+    g_name_binds_count = 0;
+    memset(g_vols, 0, sizeof g_vols);
+    memset(g_name_binds, 0, sizeof g_name_binds);
     g_rootfs = upper;
     snprintf(g_rootfs_canon, sizeof g_rootfs_canon, "%s", upper);
     g_rootfs_canon_len = strlen(g_rootfs_canon);
@@ -135,25 +173,81 @@ static int exec_origin_basic_matrix_child(void) {
     g_nlower = 0;
     add_lower(lower);
     exec_image image;
-    int upper_error = exec_image_open_guest("/bin/upper", &image);
-    int upper_exact = upper_error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER;
-    if (upper_error == 0) exec_image_release(&image);
-    int lower_error = exec_image_open_guest("/bin/lower", &image);
-    int lower_exact = lower_error == 0 && exec_image_has_lower_origin(&image, 0);
-    if (lower_error == 0) exec_image_release(&image);
+    int error = -EINVAL;
+    int exact = 0;
+    if (scenario == 0 || scenario == 1) {
+        error = exec_image_open_guest(scenario == 0 ? "/bin/upper" : "/bin/lower", &image);
+        exact = error == 0 && (scenario == 0 ? image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER
+                                             : exec_image_has_lower_origin(&image, 0));
+    } else if (scenario == 2) {
+        error = exec_image_open_guest("/hidden/tool", &image);
+        exact = error == -ENOENT;
+    } else if (scenario == 3 || scenario == 4) {
+        error = exec_image_open_guest(scenario == 3 ? "/links/u2l" : "/links/l2u", &image);
+        exact = error == 0 && (scenario == 3 ? exec_image_has_lower_origin(&image, 0)
+                                             : image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER);
+    } else if (scenario == 5 || scenario == 6) {
+        snprintf(g_vols[0].guest, sizeof g_vols[0].guest, "/mnt");
+        g_vols[0].glen = strlen(g_vols[0].guest);
+        snprintf(g_vols[0].hcanon, sizeof g_vols[0].hcanon, "%s", volume);
+        g_vols[0].hlen = strlen(g_vols[0].hcanon);
+        g_vols[0].fd = open(volume, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        g_vols[0].handle = HL_HOST_HANDLE_INVALID;
+        snprintf(g_vols[1].guest, sizeof g_vols[1].guest, "/mnt/nested");
+        g_vols[1].glen = strlen(g_vols[1].guest);
+        snprintf(g_vols[1].hcanon, sizeof g_vols[1].hcanon, "%s", nested);
+        g_vols[1].hlen = strlen(g_vols[1].hcanon);
+        g_vols[1].fd = open(nested, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        g_vols[1].handle = HL_HOST_HANDLE_INVALID;
+        g_nvols = 2;
+        error = exec_image_open_guest(scenario == 5 ? "/mnt/tool" : "/mnt/nested/tool", &image);
+        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_VOLUME &&
+                image.origin.index == (scenario == 5 ? 0 : 1);
+    } else if (scenario == 7) {
+        snprintf(g_name_binds[0].names[0], sizeof g_name_binds[0].names[0], "alias");
+        g_name_binds[0].names_count = 1;
+        snprintf(g_name_binds[0].hcanon, sizeof g_name_binds[0].hcanon, "%s", name_file);
+        g_name_binds[0].fd = open(name_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        g_name_binds_count = 1;
+        error = exec_image_open_guest("/bin/alias", &image);
+        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_NAME_BIND && image.origin.index == 0;
+    } else if (scenario == 8) {
+        hl_vfs_cursor_entry selected;
+        error = hl_vfs_cursor_resolve_at(-100, "/race/tool", 0, &selected);
+        if (error == 0 && rename(race_new, race_file) == 0)
+            error = exec_image_adopt_cursor_entry("/race/tool", &selected, &image);
+        else if (error == 0)
+            hl_vfs_cursor_entry_release(&selected);
+        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER && image.bytes.size > 768 &&
+                image.bytes.bytes[768] == 7;
+    }
+    if (error == 0) exec_image_release(&image);
+
+    if (g_name_binds_count != 0) close(g_name_binds[0].fd);
+    g_name_binds_count = 0;
+    for (int index = 0; index < g_nvols; index++) close(g_vols[index].fd);
+    g_nvols = 0;
+    hl_vfs_cursor_state_clear();
     hl_vfs_lower_state_clear();
     if (g_root_fd >= 0) close(g_root_fd);
-    unlink(upper_file); unlink(lower_file);
-    rmdir(upper_bin); rmdir(lower_bin); rmdir(upper); rmdir(lower); rmdir(root);
-    return upper_exact && lower_exact ? 0 : 3;
+    unlink(upper_file); unlink(lower_file); unlink(upper_u2l); unlink(lower_l2u); unlink(opaque); unlink(hidden_file);
+    unlink(volume_tool); unlink(nested_tool); unlink(name_file); unlink(race_file); unlink(race_new);
+    rmdir(upper_bin); rmdir(lower_bin); rmdir(upper_links); rmdir(lower_links); rmdir(upper_hidden); rmdir(lower_hidden);
+    rmdir(upper_mnt); rmdir(upper_race); rmdir(volume_nested); rmdir(volume); rmdir(nested); rmdir(name_dir);
+    rmdir(upper); rmdir(lower); rmdir(root);
+    return exact ? 0 : 3;
 }
 
 static int exec_origin_basic_matrix_test(void) {
-    pid_t child = fork();
-    if (child < 0) return 4;
-    if (child == 0) _exit(exec_origin_basic_matrix_child());
-    int status = 0;
-    return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 5;
+    for (int scenario = 0; scenario != 9; scenario++) {
+        pid_t child = fork();
+        if (child < 0) return 4;
+        if (child == 0) _exit(exec_origin_basic_matrix_child(scenario));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            return 10 + scenario;
+    }
+    return 0;
 }
 #elif defined(HL_NATIVE_TEST_HOOKS)
 static int exec_origin_basic_matrix_test(void) { return 0; }
@@ -282,6 +376,33 @@ static int exec_image_open(const char *path, exec_image *image) {
     return exec_image_adopt(descriptor, path, image);
 }
 
+static int exec_image_adopt_cursor_entry(const char *guest, hl_vfs_cursor_entry *entry, exec_image *image) {
+    if (guest == NULL || entry == NULL || entry->kind != HL_VFS_CURSOR_FILE) {
+        if (entry != NULL) hl_vfs_cursor_entry_release(entry);
+        return -EACCES;
+    }
+    hl_vfs_cursor_origin origin = entry->file.origin;
+    int descriptor = -1;
+    if (entry->file.kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        descriptor = entry->file.value.descriptor;
+        entry->file = (hl_vfs_cursor_authority){0};
+    } else if (entry->file.kind == HL_VFS_CURSOR_AUTHORITY_HOST && entry->file.value.host.services != NULL &&
+               entry->file.value.host.services->posix_attachment != NULL) {
+        const hl_host_posix_attachment_services *attachments = entry->file.value.host.services->posix_attachment;
+        if (attachments->borrow_file != NULL && attachments->release != NULL) {
+            hl_host_result borrowed =
+                attachments->borrow_file(entry->file.value.host.services->context, entry->file.value.host.handle);
+            if (borrowed.status == HL_STATUS_OK && borrowed.value <= INT_MAX)
+                descriptor = fcntl((int)borrowed.value, F_DUPFD_CLOEXEC, 0);
+            if (borrowed.status == HL_STATUS_OK)
+                (void)attachments->release(entry->file.value.host.services->context, borrowed.value);
+        }
+    }
+    hl_vfs_cursor_entry_release(entry);
+    if (descriptor < 0) return -EACCES;
+    return exec_image_adopt_origin(descriptor, guest, origin, image);
+}
+
 static int exec_image_open_guest(const char *guest, exec_image *image) {
     if (guest == NULL) return -ENOENT;
     if (!g_rootfs) return exec_image_open(guest, image);
@@ -301,30 +422,7 @@ static int exec_image_open_guest(const char *guest, exec_image *image) {
     hl_vfs_cursor_entry entry;
     int error = hl_vfs_cursor_resolve_at(-100, resolved_guest, 0, &entry);
     if (error != 0) return error;
-    if (entry.kind != HL_VFS_CURSOR_FILE) {
-        hl_vfs_cursor_entry_release(&entry);
-        return -EACCES;
-    }
-    hl_vfs_cursor_origin origin = entry.file.origin;
-    int descriptor = -1;
-    if (entry.file.kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
-        descriptor = entry.file.value.descriptor;
-        entry.file = (hl_vfs_cursor_authority){0};
-    } else if (entry.file.kind == HL_VFS_CURSOR_AUTHORITY_HOST && entry.file.value.host.services != NULL &&
-               entry.file.value.host.services->posix_attachment != NULL) {
-        const hl_host_posix_attachment_services *attachments = entry.file.value.host.services->posix_attachment;
-        if (attachments->borrow_file != NULL && attachments->release != NULL) {
-            hl_host_result borrowed = attachments->borrow_file(entry.file.value.host.services->context,
-                                                                entry.file.value.host.handle);
-            if (borrowed.status == HL_STATUS_OK && borrowed.value <= INT_MAX)
-                descriptor = fcntl((int)borrowed.value, F_DUPFD_CLOEXEC, 0);
-            if (borrowed.status == HL_STATUS_OK) (void)attachments->release(entry.file.value.host.services->context,
-                                                                           borrowed.value);
-        }
-    }
-    hl_vfs_cursor_entry_release(&entry);
-    if (descriptor < 0) return -EACCES;
-    return exec_image_adopt_origin(descriptor, resolved_guest, origin, image);
+    return exec_image_adopt_cursor_entry(resolved_guest, &entry, image);
 }
 
 static int exec_image_authorized(const char *path, exec_image *image) {
