@@ -46,6 +46,7 @@ export function Executions({
   const [inspection, setInspection] = React.useState<Inspection>({ state: 'idle', count: 0, error: null });
   const [output, setOutput] = React.useState<Output | null>(null);
   const [busy, setBusy] = React.useState('');
+  const [notice, setNotice] = React.useState<{ tone: 'positive' | 'warning' | 'danger'; label: string } | null>(null);
   const [inventoryVersion, setInventoryVersion] = React.useState(0);
   const lifecycleRevision = React.useRef(0);
   const inventoryRevision = React.useRef(resource.data);
@@ -101,10 +102,23 @@ export function Executions({
       if (revision === lifecycleRevision.current) setBusy('');
     }
   };
-  const terminate = async (id: string) => {
-    await api.containers.signalExecution(id, 'SIGTERM');
-    await resource.reload();
-    await inspect(id);
+  const terminate = async (item: ExecutionSummary) => {
+    setBusy(`terminate:${item.id}`);
+    setNotice(null);
+    try {
+      const result = await api.containers.signalExecutionAndWait(item.id, 'SIGTERM', {
+        running: item.running, exit_code: item.exit_code, pid: item.pid,
+      }, { state: 'exited' });
+      await resource.reload();
+      await inspect(item.id);
+      setNotice(result.changed
+        ? { tone: 'positive', label: `SIGTERM completed and execution ${shortId(item.id)} was observed exited.` }
+        : { tone: 'warning', label: `SIGTERM was sent, but execution ${shortId(item.id)} was not observed exited before the deadline.` });
+    } catch (error) {
+      setNotice({ tone: 'danger', label: boundedMessage(error) });
+    } finally {
+      setBusy('');
+    }
   };
   const remove = async (id: string) => {
     await api.containers.removeExecution(id);
@@ -129,6 +143,7 @@ export function Executions({
     ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   return <Page title="Executions" subtitle="Bounded exec-session catalogue, status and captured output.">
     <Toolbar loading={resource.loading} onRefresh={resource.reload} />
+    {notice ? <Text label={notice.label} color={notice.tone} wrap /> : null}
     <ResourceState state={state} loadingLabel="Reading executions…" emptyLabel="No executions"
       emptyDetail="Commands executed in containers will appear here." error={boundedMessage(resource.error)}
       retryLabel="Retry executions" onRetry={resource.reload}>
@@ -149,7 +164,7 @@ export function Executions({
             onInvoke={() => void wait(item.id)} />
           <ConfirmAction authorityKey={`execution:${item.id}:SIGTERM`} label="Terminate" confirmLabel="Confirm SIGTERM"
             pendingLabel="Confirm SIGTERM" question={`Send SIGTERM to execution ${item.id}?`}
-            enabled={!busy && item.running} onConfirm={() => terminate(item.id)} />
+            enabled={!busy && item.running} onConfirm={() => terminate(item)} />
           <ConfirmAction authorityKey={`execution:${item.id}:remove`} label="Remove record" confirmLabel="Confirm removal"
             pendingLabel="Confirm removal" question={`Remove execution record ${shortId(item.id)}?`}
             enabled={!busy && !item.running} onConfirm={() => remove(item.id)} />

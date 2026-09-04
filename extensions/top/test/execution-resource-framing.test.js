@@ -18,6 +18,11 @@ test('execution detail traverses every ResourceState over real framing and drops
   const containerId = 'c'.repeat(32);
   const requests = [];
   let inspectAttempts = 0;
+  const running = {
+    id: executionId, container_id: containerId, running: true, exit_code: 0,
+    pid: 42, command: ['sh', '-lc', 'printf ready'], user: '1000:1000',
+  };
+  const exited = { ...running, running: false, exit_code: 143, pid: 0 };
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
@@ -29,20 +34,25 @@ test('execution detail traverses every ResourceState over real framing and drops
         requests.push(frame.payload);
         let payload = { reply: 'done' };
         let flags = 1;
+        let observation = null;
         if (frame.payload.call === 'execution_inspect') {
           inspectAttempts += 1;
-          if (inspectAttempts === 2) {
+          if (inspectAttempts === 3) {
             flags = 3;
             payload = { error: 'failed', detail: 'execution inspect unavailable' };
           } else {
-            payload = { reply: 'execution', with: {
-              id: executionId, container_id: containerId, running: true, exit_code: 0,
-              pid: 42, command: ['sh', '-lc', 'printf ready'], user: '1000:1000',
-            } };
+            payload = { reply: 'execution', with: running };
           }
+        } else if (frame.payload.call === 'event_subscribe' && frame.payload.with?.topic === 'executions') {
+          observation = { executions: [running], truncated: false };
+        } else if (frame.payload.call === 'execution_kill') {
+          observation = { executions: [exited], truncated: false };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
-        setTimeout(() => socket.write(response), frame.payload.call === 'execution_inspect' ? 20 : 0);
+        setTimeout(() => {
+          socket.write(response);
+          if (observation) socket.write(encode({ channel: 98, kind: KIND.event, payload: { snapshot: 'executions', of: observation } }));
+        }, frame.payload.call === 'execution_inspect' ? 20 : 0);
       }
     });
   });
@@ -73,7 +83,7 @@ test('execution detail traverses every ResourceState over real framing and drops
     const refreshStart = stage.frames.length;
     invoke(stage, 'Confirm SIGTERM');
     await until(() => requests.some((request) => request.call === 'execution_kill'));
-    await until(() => labelled(stage, 'Reading execution details…') && inspectAttempts === 2);
+    await until(() => labelled(stage, 'Reading execution details…') && inspectAttempts === 3);
     const refreshPatches = stage.frames.slice(refreshStart).flatMap((frame) => frame.patches);
     assert.ok(refreshPatches.some((patch) => 'Remove' in patch), 'loading unmounts the prior detail table');
     await until(() => labelled(stage, 'execution inspect unavailable'));
@@ -87,7 +97,8 @@ test('execution detail traverses every ResourceState over real framing and drops
     invoke(stage, 'Details');
     await until(() => lengths(mutations).length === 3);
     assert.deepEqual(lengths(mutations).at(-1), { source: EXECUTION_DETAIL_SOURCE, version: 3, rows: 6 });
-    assert.equal(inspectAttempts, 4);
+    assert.equal(inspectAttempts, 5);
+    assert.ok(labelled(stage, `SIGTERM completed and execution ${executionId.slice(0, 12)} was observed exited.`));
   } finally {
     session?.close();
     await new Promise((resolve) => server.close(resolve));

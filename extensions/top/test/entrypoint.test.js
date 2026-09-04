@@ -15,10 +15,12 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   const received = [];
   let peer;
   let executed = false;
+  let liveTerminated = false;
   let containerInspectAttempts = 0;
   let imageInspectAttempts = 0;
   const containerId = 'a'.repeat(32);
   const executionId = 'c'.repeat(32);
+  const liveExecutionId = 'b'.repeat(32);
   const createdContainerId = 'd'.repeat(32);
   const networkId = 'b'.repeat(32);
   const server = net.createServer((socket) => {
@@ -60,10 +62,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             ? { reply: 'executions', with: { executions: [
               { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['true'], user: '' },
               ...(executed ? [{ id: executionId, container_id: containerId, running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }] : []),
+              { id: liveExecutionId, container_id: containerId, running: !liveTerminated, exit_code: liveTerminated ? 143 : 0, pid: liveTerminated ? 0 : 42, command: ['live-command'], user: 'root' },
             ], truncated: false } }
           : name === 'execution_inspect'
             ? { reply: 'execution', with: frame.payload.with.id === executionId
               ? { id: executionId, container_id: containerId, running: true, exit_code: 0, pid: 84, command: ['sh', '-lc', 'printf hello world'], user: '' }
+              : frame.payload.with.id === liveExecutionId
+                ? { id: liveExecutionId, container_id: containerId, running: !liveTerminated, exit_code: liveTerminated ? 143 : 0, pid: liveTerminated ? 0 : 42, command: ['live-command'], user: 'root' }
               : { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 0, command: ['true'], user: '' } }
           : name === 'execution_logs'
             ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
@@ -94,7 +99,16 @@ test('the production entrypoint handshakes and renders through a real Unix socke
             : { reply: 'done' };
         const response = encode({ channel: frame.channel, kind: KIND.response, flags: inspectAttempt === 1 || imageInspectAttempt === 2 ? 3 : 1, payload });
         if (name === 'container_inspect' || name === 'image_inspect') setTimeout(() => socket.write(response), 20);
-        else socket.write(response);
+        else {
+          socket.write(response);
+          if (name === 'execution_kill') {
+            liveTerminated = true;
+            socket.write(encode({ channel: 79, kind: KIND.event, payload: { snapshot: 'executions', of: {
+              executions: [{ id: liveExecutionId, container_id: containerId, running: false, exit_code: 143, pid: 0, command: ['live-command'], user: 'root' }],
+              truncated: false,
+            } } }));
+          }
+        }
       }
     });
   });

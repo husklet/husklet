@@ -1348,14 +1348,17 @@ test('finished execution cleanup requires explicit destructive confirmation', as
   assert.deepEqual(calls, [['e2']]);
 });
 
-test('running execution termination is exact-id, confirmed and refreshes its detail', async () => {
+test('running execution termination is cursor-bound, confirmed and reports observed exit', async () => {
   const calls = [];
   const item = { id: 'execution-full-identity', container_id: 'c1', running: true, exit_code: 0, pid: 42, command: ['sleep', '30'], user: '' };
   const controlled = { containers: {
     execution: async (id) => { calls.push(['inspect', id]); return item; },
     executionLogs: async () => ({ stdout: [], stderr: [], truncated: false }),
     waitExecution: async () => item,
-    signalExecution: async (...args) => calls.push(['signal', ...args]),
+    signalExecutionAndWait: async (...args) => {
+      calls.push(['signal', ...args]);
+      return { changed: true, execution: { ...item, running: false, exit_code: 143, pid: 0 } };
+    },
     removeExecution: async () => {},
   } };
   const resource = { data: [item], loading: false, error: null, reload: async () => calls.push(['reload']) };
@@ -1367,10 +1370,27 @@ test('running execution termination is exact-id, confirmed and refreshes its det
   assert.equal(isDestructive(stage, 'Confirm SIGTERM'), true);
   invoke(stage, 'Confirm SIGTERM'); await settled(); await settled();
   assert.deepEqual(calls, [
-    ['signal', 'execution-full-identity', 'SIGTERM'],
+    ['signal', 'execution-full-identity', 'SIGTERM', { running: true, exit_code: 0, pid: 42 }, { state: 'exited' }],
     ['reload'],
     ['inspect', 'execution-full-identity'],
   ]);
+  assert.ok(labelled(stage, 'SIGTERM completed and execution execution-fu was observed exited.'));
+});
+
+test('execution termination distinguishes an unobserved transition from completion', async () => {
+  const item = { id: 'e'.repeat(32), container_id: 'c'.repeat(32), running: true, exit_code: 0, pid: 7, command: ['sleep', '30'], user: '' };
+  const calls = [];
+  const stage = host();
+  stage.render(h(Executions, {
+    api: { containers: {
+      signalExecutionAndWait: async (...args) => { calls.push(args); return { changed: false, id: item.id, state: 'exited' }; },
+      execution: async () => item,
+    } },
+    resource: { data: [item], loading: false, error: null, reload: async () => {} },
+  }));
+  invoke(stage, 'Terminate'); invoke(stage, 'Confirm SIGTERM'); await settled(); await settled();
+  assert.deepEqual(calls, [[item.id, 'SIGTERM', { running: true, exit_code: 0, pid: 7 }, { state: 'exited' }]]);
+  assert.ok(labelled(stage, 'SIGTERM was sent, but execution eeeeeeeeeeee was not observed exited before the deadline.'));
 });
 
 test('empty and host-truncated execution catalogues remain explicit', async () => {
