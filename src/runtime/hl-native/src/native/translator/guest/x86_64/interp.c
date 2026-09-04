@@ -62,7 +62,6 @@ static void s1_calibrate(void) {
 // entry only forces a fresh fetch, and a truthful fault if the range is now unmapped.
 static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
-    if (g_pcache) g_x64_pc_exec_poisoned = 1;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=invalidate-range\n");
     if (__builtin_expect(g_pcache_loaded, 0)) {
@@ -71,7 +70,16 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     uint64_t range[1][2];
     range[0][0] = lo;
     range[0][1] = hi;
-    if (map_invalidate_source_ranges((const uint64_t (*)[2])range, 1)) {
+    int invalidated = map_invalidate_source_ranges((const uint64_t (*)[2])range, 1);
+    if (g_pcache) {
+        g_x64_pc_exec_poisoned = 1;
+        if (g_coldprof)
+            fprintf(stderr, "[pcache] poison range=%llx-%llx invalidated=%d image=%llx-%llx interp=%llx-%llx\n",
+                    (unsigned long long)lo, (unsigned long long)hi, invalidated,
+                    (unsigned long long)g_x64_pc_image_lo, (unsigned long long)g_x64_pc_image_hi,
+                    (unsigned long long)g_x64_pc_interp_lo, (unsigned long long)g_x64_pc_interp_hi);
+    }
+    if (invalidated) {
         memset(g_ibtc, 0, sizeof g_ibtc);
         memset(g_xibtc, 0, sizeof g_xibtc);
     }
