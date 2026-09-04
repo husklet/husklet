@@ -152,6 +152,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "(instruction & 0xFC000000u) == 0x14000000u",
         "(int64_t)(int32_t)(instruction << 6) >> 4",
         "cursor + (uint64_t)displacement",
+        "guest_pc >= UINT64_MAX - UINT64_C(0xFFF)",
         "count < 64u",
     ] {
         assert!(source.contains(contract), "missing stage-one contract {contract}");

@@ -205,6 +205,11 @@ static void hl_a64_x86_emit_return(hl_x64_asm *assembler) {
 }
 
 static void *translate_block(uint64_t guest_pc) {
+    /* map_put/txpg_mark describe one non-wrapping source interval. AArch64
+     * address arithmetic wraps, but a block spanning UINT64_MAX cannot be
+     * represented by that cache contract, so leave it to the interpreter. */
+    if (guest_pc >= UINT64_MAX - UINT64_C(0xFFF))
+        return hl_a64_interp_translate_block(guest_pc);
     uint64_t source_page = guest_pc & ~UINT64_C(0xFFF);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
     uint8_t *const begin = g_cp;
@@ -225,7 +230,7 @@ static void *translate_block(uint64_t guest_pc) {
     };
     uint64_t cursor = guest_pc;
 
-    /* A generated prefix is published only when its terminal SVC is present.
+    /* A generated prefix is published only when a supported terminal is present.
      * Otherwise rewind the arena and let the interpreter translate the
      * ORIGINAL PC; no emitted prefix has executed or retired. */
     for (unsigned count = 0; count < 64u; ++count, cursor += 4) {
