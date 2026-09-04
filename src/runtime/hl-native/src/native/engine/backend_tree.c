@@ -3422,7 +3422,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
-    {
+    if (atomic_load_explicit(&census->executed_step_form_total, memory_order_relaxed) != 0) {
         uint64_t step_keys[HL_BACKEND_EXECUTED_STEP_FORM_TOP] = {0};
         uint64_t step_counts[HL_BACKEND_EXECUTED_STEP_FORM_TOP] = {0};
         uint64_t keyed = 0, top_cumulative = 0;

@@ -52,6 +52,7 @@ fn x86_step_form_record_is_versioned_bounded_and_reconciled() {
         "executed_step_form_total",
         "executed_step_form_overflow",
         "executed_step_forms[HL_BACKEND_EXECUTED_FORM_SLOTS]",
+        "if (atomic_load_explicit(&census->executed_step_form_total, memory_order_relaxed) != 0)",
     ] {
         assert!(source.contains(contract), "missing step-form census contract: {contract}");
     }
