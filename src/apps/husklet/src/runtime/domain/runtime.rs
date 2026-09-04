@@ -159,25 +159,18 @@ impl Runtime {
             crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root).map_err(io::Error::other)?,
         );
         let root = workspace_root.join("containers");
-        // The persistent translation cache stays unselected here, and `Config::translation_cache`
-        // is the one switch that would select it. Two reasons, in order.
-        //
-        // The recorded warm-load corruption had a concrete cause and it is now fixed: the AArch64
-        // BUS guard baked an absolute arena pointer that nothing relocated, so a restored guard
-        // branched into the writing process on its first slow path (RK_BUSRESUME, PC_VERSION 14).
-        // That was one cause found by one lane on one host; it is not proof there is no second.
-        //
-        // Selecting the cache also pins the guest image and interpreter at fixed VAs
-        // (PC_IMG_BASE / PC_INTERP_BASE), which is a large guest address-layout change. Turning it
-        // on is a measurement, not a comment, and it needs macOS warm-run evidence first.
-        // This is application-selected policy, not a container workaround.
-        let containers = Containers::builder(Config::new(&root))
+        let translation_cache = Self::translation_cache(&workspace_root, workspace);
+        let containers = Containers::builder(Config::new(&root).translation_cache(translation_cache))
             .images(images)
             .checkpoints(checkpoints)
             .build()
             .await
             .map_err(io::Error::other)?;
         Ok((containers, platform))
+    }
+
+    fn translation_cache(workspace_root: &std::path::Path, workspace: &WorkspaceConfig) -> std::path::PathBuf {
+        workspace_root.join("translation-cache").join(super::RuntimeIdentity::current(workspace).as_str())
     }
 
     /// Brings a reusable container's published signatures up to date.
@@ -457,5 +450,33 @@ impl Runtime {
             Arch::Arm64 => Platform::linux_arm64(),
             Arch::Amd64 => Platform::linux_amd64(),
         }
+    }
+}
+
+#[cfg(test)]
+mod translation_cache_tests {
+    use super::Runtime;
+    use crate::config::WorkspaceConfig;
+    use hl_ws::Arch;
+    use std::path::Path;
+
+    #[test]
+    fn workspace_launches_share_only_their_runtime_cache_generation() {
+        let one = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
+        let other = WorkspaceConfig::new("two", "ubuntu:a", Arch::Amd64);
+        let path = Runtime::translation_cache(Path::new("/state/workspaces/one"), &one);
+        assert_eq!(path, Runtime::translation_cache(Path::new("/state/workspaces/one"), &one));
+        assert_ne!(path, Runtime::translation_cache(Path::new("/state/workspaces/two"), &other));
+        assert!(!path.to_string_lossy().contains("generation-"));
+    }
+
+    #[test]
+    fn isa_and_image_changes_select_new_cache_generations() {
+        let base = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
+        let isa = WorkspaceConfig::new("one", "ubuntu:a", Arch::Arm64);
+        let image = WorkspaceConfig::new("one", "ubuntu:b", Arch::Amd64);
+        let root = Path::new("/state/workspaces/one");
+        assert_ne!(Runtime::translation_cache(root, &base), Runtime::translation_cache(root, &isa));
+        assert_ne!(Runtime::translation_cache(root, &base), Runtime::translation_cache(root, &image));
     }
 }

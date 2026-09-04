@@ -152,6 +152,9 @@ struct LaunchArguments {
     /// Emit persistent-cache load/save counters without enabling general engine diagnostics.
     #[arg(long, requires = "translation_cache")]
     translation_cache_observe: bool,
+    /// Keep caching active across guest execs (benchmark/product-process-tree mode).
+    #[arg(long, requires = "translation_cache")]
+    translation_cache_process_tree: bool,
     /// Guest entry: a path inside `--rootfs`, or a host path when no rootfs is given.
     executable: PathBuf,
     /// Arguments handed to the guest unchanged.
@@ -622,9 +625,11 @@ fn rootfs_plan(
         options
             .set("HL_PCACHE_DIR", &cache.to_string_lossy(), true)
             .map_err(|error| Failure::Request(format!("cannot set the translation-cache directory: {error:?}")))?;
-        options
-            .set("HL_PCACHE_LAUNCH_ONLY", "1", true)
-            .map_err(|error| Failure::Request(format!("cannot confine translation caching to the launch image: {error:?}")))?;
+        if !launch.translation_cache_process_tree {
+            options
+                .set("HL_PCACHE_LAUNCH_ONLY", "1", true)
+                .map_err(|error| Failure::Request(format!("cannot confine translation caching to the launch image: {error:?}")))?;
+        }
     }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
@@ -1217,6 +1222,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(observed.options.get("HL_PCACHE_OBSERVE"), Some("1"));
+        let process_tree = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--translation-cache", cache.to_str().unwrap(), "--translation-cache-process-tree",
+                "--rootfs", root.path().to_str().unwrap(), "bin/program",
+            ]),
+        ).unwrap();
+        assert_eq!(process_tree.options.get("HL_PCACHE_LAUNCH_ONLY"), None);
         let refused = rootfs_plan(
             root.path(),
             &launch(&[

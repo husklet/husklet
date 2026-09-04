@@ -15,6 +15,7 @@ impl RuntimeIdentity {
         Self::field(&mut digest, env!("CARGO_PKG_VERSION").as_bytes());
         Self::field(&mut digest, env!("HUSKLET_RUNTIME_BUILD_ID").as_bytes());
         Self::field(&mut digest, workspace.arch.as_str().as_bytes());
+        Self::field(&mut digest, workspace.image.as_bytes());
         let mut identity = String::new();
         for byte in digest.finalize() {
             let _ = write!(&mut identity, "{byte:02x}");
@@ -43,5 +44,14 @@ mod tests {
         let second = RuntimeIdentity::current(&workspace);
         assert_eq!(first.as_str(), second.as_str());
         assert_eq!(first.as_str().len(), 64);
+    }
+
+    #[test]
+    fn runtime_identity_separates_guest_isa_and_image() {
+        let arm = crate::config::WorkspaceConfig::new("demo", "ubuntu:a", hl_ws::Arch::Arm64);
+        let x86 = crate::config::WorkspaceConfig::new("demo", "ubuntu:a", hl_ws::Arch::Amd64);
+        let image = crate::config::WorkspaceConfig::new("demo", "ubuntu:b", hl_ws::Arch::Arm64);
+        assert_ne!(RuntimeIdentity::current(&arm).as_str(), RuntimeIdentity::current(&x86).as_str());
+        assert_ne!(RuntimeIdentity::current(&arm).as_str(), RuntimeIdentity::current(&image).as_str());
     }
 }

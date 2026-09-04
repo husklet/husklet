@@ -86,6 +86,9 @@ pub(crate) struct Options {
     lock_timeout: u64,
     #[arg(long, default_value_t = 1.0)]
     max_load: f64,
+    /// Separate cache-safe campaign; the default cold schedule is unchanged.
+    #[arg(long)]
+    warm_translation_cache: bool,
 }
 
 fn parse_samples(value: &str) -> Result<u32, String> {
@@ -173,6 +176,8 @@ struct Identity {
     translated_backend: ExecutionBackend,
     workload_recipe: String,
     samples: u32,
+    #[serde(default)]
+    warm_translation_cache: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -213,6 +218,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         translated_backend: execution_backend(host_isa(), Mode::Translated, translated.guest_isa),
         workload_recipe: workload_recipe_identity(),
         samples: options.samples,
+        warm_translation_cache: options.warm_translation_cache,
     };
     let ledger_path = options.results.join("ledger.jsonl");
     if options.resume {
@@ -465,7 +471,7 @@ const STAGE_COMMAND: &str = "cd /work && git init -q && git config user.email be
 
 fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
     let artifacts = arm_artifacts(options, mode);
-    if artifacts.guest_isa == host_isa().guest() {
+    if artifacts.guest_isa == host_isa().guest() && !(mode == Mode::Translated && options.warm_translation_cache) {
         return [
             "chroot".into(),
             root.as_os_str().to_owned(),
@@ -475,7 +481,7 @@ fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
         ]
         .into();
     }
-    vec![
+    let mut argv: Vec<OsString> = vec![
         artifacts.engine.as_os_str().to_owned(),
         "--report-exit".into(),
         "--native-library".into(),
@@ -490,7 +496,13 @@ fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
         "bin/sh".into(),
         "-c".into(),
         STAGE_COMMAND.into(),
-    ]
+    ];
+    if mode == Mode::Translated && options.warm_translation_cache {
+        let at = argv.iter().position(|value| value == "--").unwrap();
+        argv.splice(at..at, ["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
+                            "--translation-cache-observe".into(), "--translation-cache-process-tree".into()]);
+    }
+    argv
 }
 
 fn stage_fixture(options: &Options, root: &Path, mode: Mode, script: &str) -> Result<(), Error> {
@@ -707,11 +719,14 @@ fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, argu
         Mode::Supervised | Mode::Translated => {
             let artifacts = arm_artifacts(options, mode);
             measured.push(artifacts.engine.as_os_str().to_owned());
-            measured.extend(
-                ["--loader-receipt", "--report-exit", "--diagnostics", "--native-library"]
-                    .into_iter()
-                    .map(OsString::from),
-            );
+            measured.extend(["--loader-receipt", "--report-exit"].into_iter().map(OsString::from));
+            if mode == Mode::Translated && options.warm_translation_cache {
+                measured.extend(["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
+                                 "--translation-cache-observe".into(), "--translation-cache-process-tree".into()]);
+            } else {
+                measured.push("--diagnostics".into());
+            }
+            measured.push("--native-library".into());
             measured.push(options.native_library.as_os_str().to_owned());
             measured.push("--guest-isa".into());
             measured.push(artifacts.guest_isa.as_str().into());
@@ -822,6 +837,11 @@ fn backend_receipt(
         ExecutionBackend::X86Transliterator
         | ExecutionBackend::Aarch64Transliterator
         | ExecutionBackend::Aarch64DbtWithInterpreterFallback => {
+            if measured.iter().any(|value| value == "--translation-cache") {
+                let hit = stderr.lines().find(|line| line.starts_with("[pcache] exec HIT"))
+                    .ok_or("warm translated arm did not prove a persistent-cache hit")?;
+                return Ok(format!("guest_isa={} backend={backend:?} cache=warm {hit}", guest_isa.as_str()));
+            }
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
                 .ok_or("translated arm emitted no backend-shape receipt")?;
             validate_backend_shape(backend, &shape)?;
@@ -1086,6 +1106,7 @@ mod tests {
             quiet_seconds: 30,
             lock_timeout: 900,
             max_load: 1.0,
+            warm_translation_cache: false,
         }
     }
 
@@ -1227,6 +1248,20 @@ mod tests {
                 Mode::Native
             ]
         );
+    }
+
+    #[test]
+    fn warm_cache_is_opt_in_and_does_not_change_the_cold_schedule() {
+        let cold = cross_isa_options();
+        let mut warm = cross_isa_options();
+        warm.warm_translation_cache = true;
+        let cold = measured_argv(&cold, Path::new("/root"), Mode::Translated, "bin/true", &[]);
+        let warm = measured_argv(&warm, Path::new("/root"), Mode::Translated, "bin/true", &[]);
+        assert!(cold.iter().any(|value| value == "--diagnostics"));
+        assert!(!cold.iter().any(|value| value == "--translation-cache"));
+        assert!(!warm.iter().any(|value| value == "--diagnostics"));
+        assert!(warm.iter().any(|value| value == "--translation-cache-process-tree"));
+        assert_eq!(ORDER.len(), 6);
     }
 
     #[test]
