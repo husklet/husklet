@@ -3776,12 +3776,12 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 231;
     }
-    if (scenario == 234) {
+    if (scenario == 234 || scenario == 235) {
         pid_t child = fork();
-        if (child < 0) return 234;
-        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(234));
+        if (child < 0) return (int)scenario;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
         int status = 0;
-        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 234;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : (int)scenario;
     }
     if (scenario == 232) return translit_jcc_late_eligible_census_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -9018,7 +9018,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         scenario = 94;
         translit_test_jcc_guard = 1;
     }
-    if (scenario == 234) scenario = 90;
+    if (scenario == 234 || scenario == 235) scenario = 90;
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0, 0}, a_off = {off, off + sizeof off, 0, 0};
@@ -9112,6 +9112,37 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     uint64_t suppressed_before = __atomic_load_n(&translit_jcc_ibtc_suppressed, __ATOMIC_RELAXED);
     uint64_t invalid_before = __atomic_load_n(&translit_jcc_ibtc_invalid_refusal, __ATOMIC_RELAXED);
     int result = 136;
+
+    if (requested_scenario == 235) {
+        /* This fingerprint freezes the established, unobserved shared stub.  Route
+           diagnostics are absent in ordinary launches, so resolving even one route
+           counter must change either these bytes or their length and redden the proof. */
+        if (!translit_jcc_ibtc_stub_init()) goto done_ibtc;
+        uint64_t fingerprint = UINT64_C(1469598103934665603);
+        size_t length = (size_t)(translit_jcc_ibtc_stub_end - translit_jcc_ibtc_stub_entry);
+        for (size_t offset = 0; offset < length; ++offset) {
+            uint8_t value = translit_jcc_ibtc_stub_entry[offset];
+            /* Absolute diagnostic destinations depend on the final test-binary
+               layout. Canonicalize only the imm64 payload of movabs, retaining
+               its opcode and every surrounding instruction byte. */
+            fingerprint ^= value;
+            fingerprint *= UINT64_C(1099511628211);
+            if ((value & 0xfe) == 0x48 && offset + 9 < length &&
+                (translit_jcc_ibtc_stub_entry[offset + 1] & 0xf8) == 0xb8) {
+                fingerprint ^= translit_jcc_ibtc_stub_entry[++offset];
+                fingerprint *= UINT64_C(1099511628211);
+                for (unsigned immediate = 0; immediate < 8; ++immediate) {
+                    fingerprint *= UINT64_C(1099511628211);
+                    ++offset;
+                }
+            }
+        }
+        if (length != 1145 || fingerprint != UINT64_C(0xc779936f6cc53b7b))
+            fprintf(stderr, "unobserved jcc stub length=%zu fingerprint=%016llx\n", length,
+                    (unsigned long long)fingerprint);
+        result = length == 1145 && fingerprint == UINT64_C(0xc779936f6cc53b7b) ? 0 : 235;
+        goto done_ibtc;
+    }
 
     if (scenario == 100) {
         // A failed optional-stub reservation must leave the arena untouched and

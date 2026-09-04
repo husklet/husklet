@@ -18,6 +18,12 @@ fn x86_jcc_route_partitions_every_loaded_pair_and_irq_bypass() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(234), 0);
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[test]
+fn x86_jcc_route_absence_preserves_the_established_shared_stub() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(235), 0);
+}
+
 #[test]
 fn sampling_exit_flush_joins_translation_serialization() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
