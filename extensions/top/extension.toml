@@ -6,9 +6,10 @@ activation = "tab"
 
 # Process inspection and execution are container authorities in the host. Image
 # pulls are separate from image reads. Resource mutation is likewise distinct
-# from inventory, and terminal inventory is separate from pin/focus control, so
-# the consent prompt describes every authority this compact manager exercises.
-capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "interface:render"]
+# from inventory. Pane inventory, live terminal output, semantic UI text, and
+# revision-bound input are separate authorities, so consent describes every
+# operation this compact manager exercises.
+capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "interface:render"]
 
 [interface]
 tab_title = "Top"

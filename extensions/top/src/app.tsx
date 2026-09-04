@@ -1570,6 +1570,10 @@ export function Networks({ api, resource, networkDetails }) {
 export function Terminals({ api, resource }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
+  const [selected, setSelected] = useState('');
+  const [readable, setReadable] = useState(null);
+  const [input, setInput] = useState('');
+  const paneRevision = useRef(0);
   const view = bounded(resource.data ?? []);
   const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
   const pin = async (tab) => {
@@ -1589,6 +1593,43 @@ export function Terminals({ api, resource }) {
     setBusy(tab.id); setError(null);
     try { await api.terminal.focus(slot); } catch (cause) { setError(cause); } finally { setBusy(''); }
   };
+  const inspect = async (slot) => {
+    const requested = ++paneRevision.current;
+    setBusy(`read:${slot}`); setError(null);
+    try {
+      const next = await api.terminal.toText(slot, { lines: 200 });
+      if (requested !== paneRevision.current) return;
+      setReadable(next);
+      setSelected(slot);
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
+  const sendLine = async () => {
+    if (readable?.kind !== 'terminal' || selected === '' || input === '') return;
+    const { generation, revision } = readable.snapshot;
+    const requested = ++paneRevision.current;
+    setBusy(`write:${selected}`); setError(null);
+    try {
+      const result = await api.terminal.writeAndWait(selected, generation, revision, `${input}\n`, { lines: 200 });
+      if (requested !== paneRevision.current) return;
+      if (result.changed) setReadable(result.readable ?? { kind: 'terminal', text: result.after.lines.join('\n'), snapshot: result.after });
+      setInput('');
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
+  useEffect(() => {
+    if (!selected) return;
+    const present = (resource.data ?? []).some((tab) => (tab.panes ?? []).some((pane) => pane.slot === selected));
+    if (present) return;
+    paneRevision.current += 1;
+    setSelected(''); setReadable(null); setInput('');
+  }, [resource.data, selected]);
   return (
     <Page
       title={'Terminal tabs'}
@@ -1610,10 +1651,36 @@ export function Terminals({ api, resource }) {
               <Badge label={tab.pinned ? 'Pinned' : 'Unpinned'} tone={tab.pinned ? 'positive' : 'neutral'} />
               <Text label={`${tab.panes?.length ?? 0} pane${tab.panes?.length === 1 ? '' : 's'}`} color={'text-dim'} />
             </Row>
-            {(tab.panes ?? []).map((pane) => <Text
-              key={pane.slot}
-              label={`${pane.slot} · ${pane.occupant}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
-              color={'text-dim'} />)}
+            {(tab.panes ?? []).map((pane) => <Row key={pane.slot} gap={1} align={'center'}>
+              <Text
+                label={`${pane.slot} · ${pane.occupant}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
+                color={'text-dim'} />
+              <Button
+                label={`${selected === pane.slot ? 'Refresh' : 'Inspect'} ${pane.slot}`}
+                enabled={busy === ''}
+                variant={'ghost'}
+                onInvoke={() => { void inspect(pane.slot); }} />
+            </Row>)}
+            {selected && (tab.panes ?? []).some((pane) => pane.slot === selected) && readable ? <Card variant={'filled'}>
+              <CardHeader
+                label={readable.kind === 'terminal' ? `Terminal ${selected}` : `Interface ${selected}`}
+                detail={readable.kind === 'terminal' ? 'Bounded live screen text' : 'Bounded semantic XML'} />
+              <CardContent gap={1}>
+                <LogView label={readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) || 'Pane is empty.'} />
+                {readable.kind === 'terminal' ? <Row gap={1}>
+                  <Entry
+                    value={input}
+                    placeholder={'Send a line to this terminal'}
+                    grow={true}
+                    onChange={(event) => setInput(String(event.value ?? ''))}
+                    onSubmit={() => { void sendLine(); }} />
+                  <Button
+                    label={'Send line'}
+                    enabled={busy === '' && input.length > 0}
+                    onInvoke={() => { void sendLine(); }} />
+                </Row> : null}
+              </CardContent>
+            </Card> : null}
           </CardContent>
           <CardActions gap={1}>
             {busy === tab.id ? <Spinner /> : null}

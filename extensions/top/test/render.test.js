@@ -99,6 +99,43 @@ test('terminal management exposes exact pin state and acts through immutable tab
   assert.deepEqual(calls.at(-1), ['focus', 's4']);
 });
 
+test('terminal management reads every pane as text and writes against the inspected terminal revision', async () => {
+  const calls = [];
+  const terminal = {
+    toText: async (slot) => {
+      calls.push(['read', slot]);
+      if (slot === 'pane-ui') return { kind: 'ui', text: '<pane><button label="Deploy"/></pane>', snapshot: { slot, generation: 3, revision: 4 } };
+      return { kind: 'terminal', text: '$ ready', snapshot: { slot, generation: 7, revision: 11, lines: ['$ ready'], truncated: false } };
+    },
+    writeAndWait: async (...args) => {
+      calls.push(['write', ...args]);
+      return { changed: true, after: { slot: args[0], generation: 7, revision: 12, lines: ['$ ready', 'hello'], truncated: false } };
+    },
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [
+      { slot: 'pane-1', occupant: 'terminal', provider: null },
+      { slot: 'pane-ui', occupant: 'surface', provider: { extension: 'postgres', provider: 'overview' } },
+    ] }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host();
+  stage.render(h(Terminals, { api: { terminal }, resource }));
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  assert.deepEqual(calls, [['read', 'pane-1']]);
+  assert.ok(labelled(stage, '$ ready'));
+  change(stage, 'Send a line to this terminal', 'printf hello');
+  invoke(stage, 'Send line'); await settled(); await settled();
+  assert.deepEqual(calls[1], ['write', 'pane-1', 7, 11, 'printf hello\n', { lines: 200 }]);
+  assert.ok(labelled(stage, '$ ready\nhello'));
+  assert.equal(fieldValue(stage, 'Send a line to this terminal'), '');
+  invoke(stage, 'Inspect pane-ui'); await settled(); await settled();
+  assert.ok(labelled(stage, '<pane><button label="Deploy"/></pane>'));
+  assert.ok(labelled(stage, 'Interface pane-ui'));
+  assert.deepEqual(calls.filter(([kind]) => kind === 'write').length, 1, 'reading semantic XML never writes terminal bytes');
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
