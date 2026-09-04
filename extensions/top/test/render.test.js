@@ -410,7 +410,7 @@ test('a completed image pull reports success, refreshes inventory and retains it
 });
 
 test('an image pull status older than its announced revision is ignored', async () => {
-  const statuses = []; let publish; let reloads = 0;
+  const statuses = [{ job: 'ordered', reference: 'alpine:3.20', revision: 1, state: 'pulling', status: 'Starting', layer: null, current: null, total: null, image: null, error: null }]; let publish; let reloads = 0;
   const controlled = { ...api, images: { ...api.images,
     startPull: async () => ({ job: 'ordered' }),
     pullStatus: async () => statuses.shift(),
@@ -428,6 +428,21 @@ test('an image pull status older than its announced revision is ignored', async 
   await settled(); await settled();
   assert.ok(labelled(stage, 'Pulled alpine:3.20.'));
   assert.equal(reloads, 1, 'only the accepted completion refreshes inventory');
+});
+
+test('a cached image pull completed before subscription is reconciled without an event', async () => {
+  let reloads = 0;
+  const controlled = { ...api, images: { ...api.images,
+    startPull: async () => ({ job: 'cached' }),
+    pullStatus: async () => ({ job: 'cached', reference: 'alpine:3.20', revision: 1, state: 'complete', status: 'Already present', layer: null, current: 1, total: 1, image: { id: 'cached-image' }, error: null }),
+    cancelPull: async () => {},
+  }, watchImagePulls: async () => async () => {} };
+  const stage = host();
+  stage.render(h(Images, { api: controlled, resource: { data: [], loading: false, error: null, reload: async () => { reloads += 1; } } }));
+  change(stage, 'registry/image:tag', 'alpine:3.20'); invoke(stage, 'Pull');
+  await settled(); await settled();
+  assert.ok(labelled(stage, 'Pulled alpine:3.20.'));
+  assert.equal(reloads, 1, 'reconciliation refreshes inventory exactly once');
 });
 
 test('volume and network panels render bounded real inventories and controls', () => {

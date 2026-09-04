@@ -34,6 +34,9 @@ export function Images({ api, resource, imageDetails }: {
   const currentImages = React.useRef(new Set<string>());
   currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
   const [pull, setPull] = React.useState<ImagePullStatus | null>(null);
+  const pullRevision = React.useRef(0);
+  const completedPull = React.useRef('');
+  const activePullJob = pull?.job && !TERMINAL_PULL_STATES.has(pull.state) ? pull.job : '';
   const [inspection, setInspection] = React.useState<Inspection>({ id: '', state: 'idle', count: 0, error: null });
 
   const run = async (name: string, operation: () => void | Promise<void>) => {
@@ -45,6 +48,8 @@ export function Images({ api, resource, imageDetails }: {
   const startPull = () => run('pull', async () => {
     const requested = reference.trim();
     const started = await api.images.startPull(requested);
+    pullRevision.current = 0;
+    completedPull.current = '';
     setPull({
       job: started.job, reference: requested, revision: 0, state: 'starting', status: 'Starting pull…',
       layer: null, current: null, total: null, image: null, error: null,
@@ -52,27 +57,38 @@ export function Images({ api, resource, imageDetails }: {
   });
 
   React.useEffect(() => {
-    if (!pull?.job || TERMINAL_PULL_STATES.has(pull.state)) return undefined;
+    if (!activePullJob) return undefined;
     let disposed = false;
     let stop: (() => void | Promise<void>) | null = null;
-    void api.watchImagePulls(async (change) => {
-      if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
-      const status = await api.images.pullStatus(pull.job);
-      if (disposed || status.job !== pull.job || status.revision < change.revision) return;
+    const accept = async (status: ImagePullStatus, minimumRevision = 0) => {
+      if (disposed || status.job !== activePullJob
+        || status.revision < minimumRevision || status.revision < pullRevision.current) return;
+      pullRevision.current = status.revision;
       setPull(status);
-      if (status.state === 'complete') {
+      if (status.state === 'complete' && completedPull.current !== status.job) {
+        completedPull.current = status.job;
         setNotice(`Pulled ${status.reference}.`);
         await resource.reload();
       }
-    }).then((dispose) => {
-      if (disposed) void dispose(); else stop = dispose;
+    };
+    void api.watchImagePulls(async (change) => {
+      if (disposed || change.job !== activePullJob || change.revision <= pullRevision.current) return;
+      const status = await api.images.pullStatus(activePullJob);
+      await accept(status, change.revision);
+    }).then(async (dispose) => {
+      if (disposed) { void dispose(); return; }
+      stop = dispose;
+      // Subscription acknowledgement is the ordering boundary. Reading after
+      // it closes both gaps: a cache-hit completion before subscription, and a
+      // change between the first render and the subscription acknowledgement.
+      await accept(await api.images.pullStatus(activePullJob));
     }).catch((cause: unknown) => {
       if (!disposed) setPull((current) => current
         ? { ...current, state: 'failed', error: boundedMessage(cause) }
         : current);
     });
     return () => { disposed = true; if (stop) void stop(); };
-  }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
+  }, [activePullJob, api, resource.reload]);
 
   const cancelPull = () => run('pull-cancel', async () => {
     if (!pull) return;
