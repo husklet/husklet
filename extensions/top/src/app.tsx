@@ -3,18 +3,19 @@ import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
   ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
-  LOG_VIEW_CHARACTER_LIMIT,
   type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
   type TabSummary, type VolumeSummary, type WorkspaceApi,
 } from '@husklet/react';
-import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
+import { Executions } from './executions.js';
 
 export { Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
 export { Processes } from './processes.js';
+export { Executions } from './executions.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -732,168 +733,6 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
           onInvoke={() => onOpenExecution(execution.id)} /> : null}
       </Row> : null}
     </CardContent>
-  );
-}
-
-export function Executions({ api, resource, executionDetails, truncated = false, requestedExecution = '' }) {
-  const localDetails = useMemo(() => new ExecutionDetailsSource(), []);
-  const detailsSource = executionDetails ?? localDetails;
-  const [selected, setSelected] = useState('');
-  const [inspection, setInspection] = useState({ state: 'idle', count: 0, error: null });
-  const [output, setOutput] = useState(null);
-  const [busy, setBusy] = useState('');
-  const [inventoryVersion, setInventoryVersion] = useState(0);
-  const lifecycleRevision = useRef(0);
-  const inventoryRevision = useRef(resource.data);
-  const inspect = async (id) => {
-    const revision = ++lifecycleRevision.current;
-    setSelected(id); setInspection({ state: 'loading', count: 0, error: null }); setOutput(null);
-    try {
-      const detail = await api.containers.execution(id);
-      if (revision !== lifecycleRevision.current) return;
-      const count = await detailsSource.replace(detail);
-      if (revision !== lifecycleRevision.current) return;
-      setInspection({ state: 'ready', count, error: null });
-    } catch (error) { if (revision === lifecycleRevision.current) setInspection({ state: 'error', count: 0, error }); }
-  };
-  useEffect(() => {
-    if (requestedExecution && selected !== requestedExecution) void inspect(requestedExecution);
-  }, [requestedExecution]);
-  const logs = async (id) => {
-    const revision = lifecycleRevision.current;
-    setBusy(`logs:${id}`);
-    try {
-      const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
-      if (revision !== lifecycleRevision.current) return;
-      const text = (bytes) => logText(bytes).slice(-LOG_VIEW_CHARACTER_LIMIT);
-      setOutput((current) => ({ revision: (current?.revision ?? 0) + 1,
-        stdout: text({ stdout: value.stdout, stderr: [] }), stderr: text({ stdout: [], stderr: value.stderr }),
-        truncated: value.truncated, stdoutTruncated: value.stdout_truncated, stderrTruncated: value.stderr_truncated,
-        eof: value.eof }));
-    } finally { if (revision === lifecycleRevision.current) setBusy(''); }
-  };
-  const wait = async (id) => {
-    const revision = lifecycleRevision.current;
-    setBusy(`wait:${id}`);
-    try { const detail = await api.containers.waitExecution(id, { timeoutMs: 5_000 }); if (revision !== lifecycleRevision.current) return; await detailsSource.replace(detail); if (revision === lifecycleRevision.current) await resource.reload(); }
-    finally { if (revision === lifecycleRevision.current) setBusy(''); }
-  };
-  const terminate = async (id) => {
-    await api.containers.signalExecution(id, 'SIGTERM');
-    await resource.reload();
-    await inspect(id);
-  };
-  const remove = async (id) => { await api.containers.removeExecution(id); setSelected(''); setOutput(null); await resource.reload(); };
-  useEffect(() => {
-    if (inventoryRevision.current === resource.data) return;
-    inventoryRevision.current = resource.data;
-    lifecycleRevision.current += 1;
-    setSelected(''); setInspection({ state: 'idle', count: 0, error: null }); setOutput(null); setBusy('');
-    setInventoryVersion((version) => version + 1);
-  }, [resource.data]);
-  const view = bounded(resource.data);
-  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
-  return (
-    <Page
-      title={'Executions'}
-      subtitle={'Bounded exec-session catalogue, status and captured output.'}>
-      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
-      <ResourceState
-        state={state}
-        loadingLabel={'Reading executions…'}
-        emptyLabel={'No executions'}
-        emptyDetail={'Commands executed in containers will appear here.'}
-        error={resource.error?.message ?? String(resource.error ?? '')}
-        retryLabel={'Retry executions'}
-        onRetry={resource.reload}>
-        {view.records.map((item) => <Card
-          key={`${inventoryVersion}:${item.id}`}
-          variant={selected === item.id ? 'filled' : 'outline'}>
-          <CardHeader
-            label={item.command?.join(' ') || shortId(item.id)}
-            detail={`container ${shortId(item.container_id)}`} />
-          <CardContent>
-            <Badge
-              label={item.running ? 'running' : `exited ${item.exit_code}`}
-              tone={item.running ? 'positive' : 'neutral'} />
-            {selected !== item.id ? null : <ResourceState
-              state={inspection.state === 'idle' ? 'loading' : inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state}
-              loadingLabel={'Reading execution details…'}
-              emptyLabel={'No execution details'}
-              emptyDetail={'The host returned no inspectable fields.'}
-              error={inspection.error?.message ?? String(inspection.error ?? '')}
-              retryLabel={'Retry details'}
-              onRetry={() => inspect(item.id)}>
-              <KeyValueTable
-                source={EXECUTION_DETAIL_SOURCE}
-                schema={IMAGE_DETAIL_SCHEMA}
-                height={{ minimum: { step: 10 }, maximum: { step: 28 } }} />
-            </ResourceState>}
-            {selected === item.id && output ? <Column gap={1}>
-              <Heading label={'Standard output'} scale={'caption'} />
-              <LogView
-                key={`stdout-${output.revision}`}
-                value={output.stdout || (output.eof ? 'No stdout captured (EOF).' : 'No stdout captured yet; execution is still running.')}
-                monospace={true} />
-              {output.stdoutTruncated ? <Text
-                label={'Standard output was truncated to its configured bound.'}
-                color={'warning'} /> : null}
-              <Heading label={'Standard error'} scale={'caption'} />
-              <LogView
-                key={`stderr-${output.revision}`}
-                value={output.stderr || (output.eof ? 'No stderr captured (EOF).' : 'No stderr captured yet; execution is still running.')}
-                monospace={true} />
-              {output.stderrTruncated ? <Text
-                label={'Standard error was truncated to its configured bound.'}
-                color={'warning'} /> : null}
-              {output.eof ? <Text label={'Captured output is complete (EOF).'} color={'text-dim'} />
-                : <Text
-                label={'Execution is still running; later output may appear.'}
-                color={'text-dim'} />}
-              {output.truncated && !output.stdoutTruncated && !output.stderrTruncated
-                ? <Text
-                label={'Host output was truncated to its configured bound.'}
-                color={'warning'} /> : null}
-            </Column> : null}
-          </CardContent>
-          <CardActions gap={1}>
-            <Button
-              label={selected === item.id ? 'Hide details' : 'Details'}
-              enabled={!busy}
-              onInvoke={() => selected === item.id ? setSelected('') : void inspect(item.id)} />
-            <Button
-              label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-              enabled={!busy}
-              onInvoke={() => void logs(item.id)} />
-            <Button
-              label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-              enabled={!busy && item.running}
-              onInvoke={() => void wait(item.id)} />
-            <ConfirmAction
-              authorityKey={`execution:${item.id}:SIGTERM`}
-              label={'Terminate'}
-              confirmLabel={'Confirm SIGTERM'}
-              pendingLabel={'Confirm SIGTERM'}
-              question={`Send SIGTERM to execution ${item.id}?`}
-              enabled={!busy && item.running}
-              onConfirm={() => terminate(item.id)} />
-            <ConfirmAction
-              authorityKey={`execution:${item.id}:remove`}
-              label={'Remove record'}
-              confirmLabel={'Confirm removal'}
-              pendingLabel={'Confirm removal'}
-              question={`Remove execution record ${shortId(item.id)}?`}
-              enabled={!busy && !item.running}
-              onConfirm={() => remove(item.id)} />
-          </CardActions>
-        </Card>)}
-        <Omitted count={view.omitted} />
-        {truncated ? <Text
-          label={'The host execution catalogue was truncated at its safety limit.'}
-          color={'warning'}
-          wrap={true} /> : null}
-      </ResourceState>
-    </Page>
   );
 }
 
