@@ -2,6 +2,17 @@
 
 use std::sync::Mutex;
 
+#[test]
+fn aarch64_successful_terminal_outcomes_are_explicitly_retired() {
+    let source = std::fs::read_to_string("src/native/translator/guest/aarch64/interp/integer/control.c").unwrap();
+    let svc = source.split("cpu->reason = R_SYSCALL;").nth(1).expect("SVC outcome");
+    assert!(svc.trim_start().starts_with("return INTERP_RETIRED_END;"));
+    for reason in ["cpu->reason = R_ICCOMMIT;", "cpu->reason = R_ICFLUSH;"] {
+        let tail = source.split(reason).nth(1).unwrap_or_else(|| panic!("missing {reason}"));
+        assert!(tail.trim_start().starts_with("return INTERP_RETIRED_END;"), "{reason}");
+    }
+}
+
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
