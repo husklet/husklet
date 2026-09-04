@@ -52,7 +52,7 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   assert.equal((await next()).payload.call, 'workspace_info');
   assert.equal((await next()).payload.call, 'container_list');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } } }));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied', capability: 'container-read', detail: 'not granted' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied', capability: 'containers:read', detail: 'not granted' } }));
   assert.equal((await info).name, 'dev');
   await assert.rejects(list, (error) => error instanceof ExtensionError && error.kind === 'denied');
   stage.session.close(); stage.host.destroy(); stage.server.close();
@@ -314,8 +314,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drag'));
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drop'));
   assert.ok(!protocolCoverage.unavailable.events.includes('drag'));
-  const api = workspace({ granted: ['workspace-read'], call() { throw new Error('not called'); } });
-  assert.deepEqual(api.granted, ['workspace-read']);
+  const api = workspace({ granted: ['workspaces:read'], call() { throw new Error('not called'); } });
+  assert.deepEqual(api.granted, ['workspaces:read']);
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(typeof api.containers.processes, 'function');
   assert.equal(typeof api.volumes.create, 'function');
@@ -361,10 +361,10 @@ test('every fixed public facade request is classified with its Rust host capabil
   const calls = new Set([...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]));
   calls.delete('event_subscribe'); calls.delete('event_unsubscribe');
   for (const call of calls) assert.doesNotThrow(() => requestCapability(call), `${call} is unclassified`);
-  assert.equal(requestCapability('container_attach_terminal'), 'container-attach');
-  assert.equal(requestCapability('terminal_read_pane'), 'terminal-output');
-  assert.equal(requestCapability('pane_semantic_action'), 'pane-semantic-control');
-  assert.equal(requestCapability('filesystem_remove_observed'), 'filesystem-write');
+  assert.equal(requestCapability('container_attach_terminal'), 'containers:attach');
+  assert.equal(requestCapability('terminal_read_pane'), 'terminals:output');
+  assert.equal(requestCapability('pane_semantic_action'), 'panes:semantic-control');
+  assert.equal(requestCapability('filesystem_remove_observed'), 'filesystem:write');
   assert.throws(() => requestCapability('future_unclassified_call'), /unclassified/);
 });
 
@@ -580,16 +580,16 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface', 'container-attach']),
-    api.extensions.update('job-2', 8, ['container-read'])];
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface:render', 'containers:attach']),
+    api.extensions.update('job-2', 8, ['containers:read'])];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface', 'container-attach'] } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['container-read'] } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'] } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'] } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));

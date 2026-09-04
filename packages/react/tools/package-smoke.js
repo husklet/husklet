@@ -62,7 +62,7 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: hostWelcome('react-starter', ['interface']),
+      payload: hostWelcome('react-starter', ['interface:render']),
     }));
   });
   await new Promise((resolve, reject) => {
@@ -155,7 +155,7 @@ async function runPackedStarterDenied(consumer, starter) {
     ]);
     assert.deepEqual(exit, { code: 1, signal: null });
     assert.deepEqual(requests, [], 'denied starter must not send an unauthorized interface request');
-    assert.equal(stderr, 'react-starter: startup failed: extension lacks negotiated capability interface\n');
+    assert.equal(stderr, 'react-starter: startup failed: extension lacks negotiated capability interface:render\n');
   } finally {
     peer?.destroy();
     if (child.exitCode === null) child.kill('SIGKILL');
@@ -222,7 +222,7 @@ try {
     if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function' || typeof CommandPaletteView !== 'function' || typeof ConfirmAction !== 'function' || typeof ResourceState !== 'function') process.exit(1);
     if (Button !== 'Button' || !acceptsChildren('Column')) process.exit(2);
     if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
-    if (protocolSurface.requests.workspace_info.api !== 'info' || requestCapability('workspace_info') !== 'workspace-read') process.exit(4);
+    if (protocolSurface.requests.workspace_info.api !== 'info' || requestCapability('workspace_info') !== 'workspaces:read') process.exit(4);
     if (validateUiEvent({ interaction: 'focus', trigger: 'Focus', node: 1, id: 'focus-1', focused: true }).interaction !== 'focus') process.exit(5);
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
@@ -283,7 +283,7 @@ try {
   assert.match(starterManifest, /^name = "react-starter"$/m);
   assert.match(starterManifest, new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'));
   assert.match(starterManifest, /^protocol = 1$/m);
-  assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
+  assert.match(starterManifest, /^capabilities = \["interface:render"\]$/m);
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
     import { CommandPaletteView, ConfirmAction, TerminalTranscript, protocolSurface, render, requestCapability, useHostEvents, usePaneSelection, validateUiEvent, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
@@ -295,7 +295,7 @@ try {
     void requiredGrant; void infoMethod; void validatedEvent;
     const cancellable = api.withSignal(new AbortController().signal);
     const table: Promise<ProcessList> = api.containers.processes('container');
-    const attachmentGrant: ExtensionCapability = 'container-attach';
+    const attachmentGrant: ExtensionCapability = 'containers:attach';
     void attachmentGrant;
     void table;
     void cancellable.info();

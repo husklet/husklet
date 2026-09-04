@@ -17,15 +17,15 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
   assert.deepEqual(validateReplyFor('workspace_info', { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } }),
     { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } });
   assert.throws(() => validateReplyFor('workspace_info', { reply: 'workspaces', with: [] }), /must be workspace/);
-  assert.deepEqual(validateFailure({ error: 'denied', capability: 'terminal-control', detail: 'not granted' }),
-    { error: 'denied', capability: 'terminal-control', detail: 'not granted' });
+  assert.deepEqual(validateFailure({ error: 'denied', capability: 'terminals:control', detail: 'not granted' }),
+    { error: 'denied', capability: 'terminals:control', detail: 'not granted' });
   assert.deepEqual(validateSnapshot({ snapshot: 'containers', of: [] }), { snapshot: 'containers', of: [] });
   assert.throws(() => validateRequest({ call: 'workspace_info', with: { invented: true } }), /absent/);
   assert.throws(() => validateReply({ reply: 'container', with: { id: 'partial' } }), /name must be present/);
   assert.throws(() => validateSnapshot({ snapshot: 'containers', of: [{}] }), /id must be present/);
   assert(PROTOCOL_CAPABILITIES.length >= 20);
   assert.equal(PROTOCOL_REPLIES.event_subscribe, 'done');
-  assert.equal(PROTOCOL_REQUEST_CAPABILITIES.container_attach_terminal, 'container-attach');
+  assert.equal(PROTOCOL_REQUEST_CAPABILITIES.container_attach_terminal, 'containers:attach');
   assert.equal(PROTOCOL_REQUEST_CAPABILITIES.event_subscribe, null);
   assert.equal(PROTOCOL_TOPICS.find(({ wire }) => wire === 'pane-changes').snapshot, 'pane_changes');
 });

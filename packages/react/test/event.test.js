@@ -36,7 +36,7 @@ async function host() {
         }
       }
     });
-    stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'demo', granted: ['interface'] } }));
+    stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'demo', granted: ['interface:render'] } }));
     connected(stream);
   });
   await new Promise((resolve) => server.listen(socket, resolve));

@@ -12,7 +12,7 @@ use crate::port::{
 use crate::request::Topic;
 
 /// What produced a pane notification. Contents remain behind their separate
-/// terminal-output and pane-semantic-read grants.
+/// terminals:output and panes:semantic-read grants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneChangeKind {
@@ -70,7 +70,7 @@ pub enum WorkspaceLifecycleAction {
     Restart,
 }
 
-/// Window-level activity visible to an extension holding `workspace-events`.
+/// Window-level activity visible to an extension holding `workspaces:events`.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum WorkspaceEvent {

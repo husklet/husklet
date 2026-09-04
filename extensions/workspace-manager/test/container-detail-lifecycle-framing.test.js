@@ -20,7 +20,7 @@ test('authoritative container inventory replacement invalidates prior detail lif
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'container-detail-lifecycle-test', granted: ['container-read'],
+      protocol: 1, extension: 'container-detail-lifecycle-test', granted: ['containers:read'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

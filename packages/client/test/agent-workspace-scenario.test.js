@@ -44,7 +44,7 @@ test('packaged external agent arms every workspace lifecycle mutation over Unix 
           ? { reply: 'workspace_configuration', with: created } : { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'workspace-agent', granted: ['workspace-read', 'workspace-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'workspace-agent', granted: ['workspaces:read', 'workspaces:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {

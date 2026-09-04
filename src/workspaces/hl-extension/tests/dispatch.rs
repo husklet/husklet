@@ -126,6 +126,7 @@ impl Host {
             image: "husklet/api:1".into(),
             state: "running".into(),
             created: 0,
+            generation: 0,
         }
     }
 }
@@ -1975,7 +1976,7 @@ fn a_refusal_is_reported_rather_than_answered_emptily() {
         .expect_err("refused");
 
     match failure {
-        Failure::Denied { capability, .. } => assert_eq!(capability, "container-read"),
+        Failure::Denied { capability, .. } => assert_eq!(capability, "containers:read"),
         other => panic!("an empty list would be worse than a refusal, got {other:?}"),
     }
 }

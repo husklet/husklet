@@ -21,7 +21,7 @@ test('execution detail traverses every ResourceState over real framing and drops
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'execution-resource-test', granted: ['container-read', 'container-control'],
+      protocol: 1, extension: 'execution-resource-test', granted: ['containers:read', 'containers:control'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

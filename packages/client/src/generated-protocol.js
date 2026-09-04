@@ -18,187 +18,187 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": false,
     "mutates": false,
-    "wire": "workspace-read"
+    "wire": "workspaces:read"
   },
   {
     "executes": true,
     "mutates": true,
-    "wire": "workspace-control"
+    "wire": "workspaces:control"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "workspace-events"
+    "wire": "workspaces:events"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "container-read"
+    "wire": "containers:read"
   },
   {
     "executes": true,
     "mutates": true,
-    "wire": "container-control"
+    "wire": "containers:control"
   },
   {
     "executes": true,
     "mutates": true,
-    "wire": "container-attach"
+    "wire": "containers:attach"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "image-read"
+    "wire": "images:read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "image-write"
+    "wire": "images:write"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "volume-read"
+    "wire": "volumes:read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "volume-write"
+    "wire": "volumes:write"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "network-read"
+    "wire": "networks:read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "network-write"
+    "wire": "networks:write"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "terminal-read"
+    "wire": "terminals:read"
   },
   {
     "executes": true,
     "mutates": true,
-    "wire": "terminal-control"
+    "wire": "terminals:control"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "terminal-output"
+    "wire": "terminals:output"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "pane-observe"
+    "wire": "panes:observe"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "pane-semantic-read"
+    "wire": "panes:semantic-read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "pane-semantic-control"
+    "wire": "panes:semantic-control"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "extension-read"
+    "wire": "extensions:read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "extension-control"
+    "wire": "extensions:control"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "extension-install"
+    "wire": "extensions:install"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "filesystem-read"
+    "wire": "filesystem:read"
   },
   {
     "executes": false,
     "mutates": true,
-    "wire": "filesystem-write"
+    "wire": "filesystem:write"
   },
   {
     "executes": false,
     "mutates": false,
-    "wire": "interface"
+    "wire": "interface:render"
   }
 ]);
 export const PROTOCOL_TOPICS = Object.freeze([
   {
-    "capability": "container-read",
+    "capability": "containers:read",
     "snapshot": "containers",
     "wire": "containers"
   },
   {
-    "capability": "container-read",
+    "capability": "containers:read",
     "snapshot": "container_inventory",
     "wire": "container-inventory"
   },
   {
-    "capability": "container-read",
+    "capability": "containers:read",
     "snapshot": "executions",
     "wire": "executions"
   },
   {
-    "capability": "image-read",
+    "capability": "images:read",
     "snapshot": "images",
     "wire": "images"
   },
   {
-    "capability": "image-write",
+    "capability": "images:write",
     "snapshot": "image_pulls",
     "wire": "image-pulls"
   },
   {
-    "capability": "volume-read",
+    "capability": "volumes:read",
     "snapshot": "volumes",
     "wire": "volumes"
   },
   {
-    "capability": "network-read",
+    "capability": "networks:read",
     "snapshot": "networks",
     "wire": "networks"
   },
   {
-    "capability": "terminal-read",
+    "capability": "terminals:read",
     "snapshot": "terminal",
     "wire": "terminal"
   },
   {
-    "capability": "pane-observe",
+    "capability": "panes:observe",
     "snapshot": "pane_changes",
     "wire": "pane-changes"
   },
   {
-    "capability": "extension-read",
+    "capability": "extensions:read",
     "snapshot": "extensions",
     "wire": "extensions"
   },
   {
-    "capability": "extension-install",
+    "capability": "extensions:install",
     "snapshot": "extension_acquisitions",
     "wire": "extension-acquisitions"
   },
   {
-    "capability": "workspace-read",
+    "capability": "workspaces:read",
     "snapshot": "workspace_lifecycle",
     "wire": "workspace-lifecycle"
   },
   {
-    "capability": "workspace-events",
+    "capability": "workspaces:events",
     "snapshot": "workspace_events",
     "wire": "workspace-events"
   }
@@ -310,108 +310,108 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "event_unsubscribe": "done"
 });
 export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
-  "workspace_info": "workspace-read",
-  "workspace_list": "workspace-read",
-  "workspace_inspect": "workspace-read",
-  "workspace_create": "workspace-control",
-  "workspace_adopt": "workspace-control",
-  "workspace_update": "workspace-control",
-  "workspace_delete": "workspace-control",
-  "workspace_start": "workspace-control",
-  "workspace_stop": "workspace-control",
-  "workspace_restart": "workspace-control",
-  "extension_list": "extension-read",
-  "extension_inspect": "extension-read",
-  "extension_enable": "extension-control",
-  "extension_disable": "extension-control",
-  "extension_retry": "extension-control",
-  "extension_remove": "extension-control",
-  "extension_acquisition_start": "extension-install",
-  "extension_acquisition_status": "extension-install",
-  "extension_acquisition_cancel": "extension-install",
-  "extension_install": "extension-install",
-  "extension_update": "extension-install",
-  "container_list": "container-read",
-  "container_inspect": "container-read",
-  "container_processes": "container-read",
-  "container_logs": "container-read",
-  "execution_inspect": "container-read",
-  "execution_list": "container-read",
-  "execution_logs": "container-read",
-  "execution_wait": "container-read",
-  "execution_kill": "container-control",
-  "execution_remove": "container-control",
-  "container_create": "container-control",
-  "container_start": "container-control",
-  "container_stop": "container-control",
-  "container_remove": "container-control",
-  "container_pause": "container-control",
-  "container_unpause": "container-control",
-  "container_restart": "container-control",
-  "container_rename": "container-control",
-  "container_kill": "container-control",
-  "container_exec": "container-control",
-  "container_attach_terminal": "container-attach",
-  "image_list": "image-read",
-  "image_pull": "image-write",
-  "image_pull_start": "image-write",
-  "image_pull_status": "image-write",
-  "image_pull_cancel": "image-write",
-  "image_inspect": "image-read",
-  "image_remove": "image-write",
-  "image_prune": "image-write",
-  "volume_list": "volume-read",
-  "volume_inspect": "volume-read",
-  "volume_create": "volume-write",
-  "volume_remove": "volume-write",
-  "network_list": "network-read",
-  "network_inspect": "network-read",
-  "network_create": "network-write",
-  "network_remove": "network-write",
-  "network_connect": "network-write",
-  "network_disconnect": "network-write",
-  "terminal_tabs": "terminal-read",
-  "terminal_topology": "terminal-read",
-  "pane_list": "pane-observe",
-  "terminal_open_tab": "terminal-control",
-  "terminal_split": "terminal-control",
-  "terminal_split_observed": "terminal-control",
-  "terminal_spawn": "terminal-control",
-  "terminal_spawn_observed": "terminal-control",
-  "terminal_read_pane": "terminal-output",
-  "pane_semantic_read": "pane-semantic-read",
-  "pane_semantic_action": "pane-semantic-control",
-  "terminal_write_pane": "terminal-control",
-  "terminal_resize_grid": "terminal-control",
-  "terminal_resize_grid_observed": "terminal-control",
-  "terminal_close_pane": "terminal-control",
-  "terminal_close_pane_observed": "terminal-control",
-  "terminal_focus_pane": "terminal-control",
-  "terminal_focus_pane_observed": "terminal-control",
-  "terminal_retitle_pane": "terminal-control",
-  "terminal_retitle_pane_observed": "terminal-control",
-  "terminal_ratio": "terminal-control",
-  "terminal_ratio_observed": "terminal-control",
-  "terminal_switch_occupant": "terminal-control",
-  "terminal_switch_occupant_observed": "terminal-control",
-  "filesystem_list": "filesystem-read",
-  "filesystem_read": "filesystem-read",
-  "filesystem_read_range": "filesystem-read",
-  "filesystem_stat": "filesystem-read",
-  "filesystem_write": "filesystem-write",
-  "filesystem_create_observed": "filesystem-write",
-  "filesystem_mkdir": "filesystem-write",
-  "filesystem_rename": "filesystem-write",
-  "filesystem_rename_observed": "filesystem-write",
-  "filesystem_remove": "filesystem-write",
-  "filesystem_remove_observed": "filesystem-write",
-  "interface_open_tab": "interface",
-  "interface_split": "interface",
-  "interface_withdraw": "interface",
-  "interface_render": "interface",
-  "interface_render_at": "interface",
-  "source_resize": "interface",
-  "source_resize_at": "interface",
+  "workspace_info": "workspaces:read",
+  "workspace_list": "workspaces:read",
+  "workspace_inspect": "workspaces:read",
+  "workspace_create": "workspaces:control",
+  "workspace_adopt": "workspaces:control",
+  "workspace_update": "workspaces:control",
+  "workspace_delete": "workspaces:control",
+  "workspace_start": "workspaces:control",
+  "workspace_stop": "workspaces:control",
+  "workspace_restart": "workspaces:control",
+  "extension_list": "extensions:read",
+  "extension_inspect": "extensions:read",
+  "extension_enable": "extensions:control",
+  "extension_disable": "extensions:control",
+  "extension_retry": "extensions:control",
+  "extension_remove": "extensions:control",
+  "extension_acquisition_start": "extensions:install",
+  "extension_acquisition_status": "extensions:install",
+  "extension_acquisition_cancel": "extensions:install",
+  "extension_install": "extensions:install",
+  "extension_update": "extensions:install",
+  "container_list": "containers:read",
+  "container_inspect": "containers:read",
+  "container_processes": "containers:read",
+  "container_logs": "containers:read",
+  "execution_inspect": "containers:read",
+  "execution_list": "containers:read",
+  "execution_logs": "containers:read",
+  "execution_wait": "containers:read",
+  "execution_kill": "containers:control",
+  "execution_remove": "containers:control",
+  "container_create": "containers:control",
+  "container_start": "containers:control",
+  "container_stop": "containers:control",
+  "container_remove": "containers:control",
+  "container_pause": "containers:control",
+  "container_unpause": "containers:control",
+  "container_restart": "containers:control",
+  "container_rename": "containers:control",
+  "container_kill": "containers:control",
+  "container_exec": "containers:control",
+  "container_attach_terminal": "containers:attach",
+  "image_list": "images:read",
+  "image_pull": "images:write",
+  "image_pull_start": "images:write",
+  "image_pull_status": "images:write",
+  "image_pull_cancel": "images:write",
+  "image_inspect": "images:read",
+  "image_remove": "images:write",
+  "image_prune": "images:write",
+  "volume_list": "volumes:read",
+  "volume_inspect": "volumes:read",
+  "volume_create": "volumes:write",
+  "volume_remove": "volumes:write",
+  "network_list": "networks:read",
+  "network_inspect": "networks:read",
+  "network_create": "networks:write",
+  "network_remove": "networks:write",
+  "network_connect": "networks:write",
+  "network_disconnect": "networks:write",
+  "terminal_tabs": "terminals:read",
+  "terminal_topology": "terminals:read",
+  "pane_list": "panes:observe",
+  "terminal_open_tab": "terminals:control",
+  "terminal_split": "terminals:control",
+  "terminal_split_observed": "terminals:control",
+  "terminal_spawn": "terminals:control",
+  "terminal_spawn_observed": "terminals:control",
+  "terminal_read_pane": "terminals:output",
+  "pane_semantic_read": "panes:semantic-read",
+  "pane_semantic_action": "panes:semantic-control",
+  "terminal_write_pane": "terminals:control",
+  "terminal_resize_grid": "terminals:control",
+  "terminal_resize_grid_observed": "terminals:control",
+  "terminal_close_pane": "terminals:control",
+  "terminal_close_pane_observed": "terminals:control",
+  "terminal_focus_pane": "terminals:control",
+  "terminal_focus_pane_observed": "terminals:control",
+  "terminal_retitle_pane": "terminals:control",
+  "terminal_retitle_pane_observed": "terminals:control",
+  "terminal_ratio": "terminals:control",
+  "terminal_ratio_observed": "terminals:control",
+  "terminal_switch_occupant": "terminals:control",
+  "terminal_switch_occupant_observed": "terminals:control",
+  "filesystem_list": "filesystem:read",
+  "filesystem_read": "filesystem:read",
+  "filesystem_read_range": "filesystem:read",
+  "filesystem_stat": "filesystem:read",
+  "filesystem_write": "filesystem:write",
+  "filesystem_create_observed": "filesystem:write",
+  "filesystem_mkdir": "filesystem:write",
+  "filesystem_rename": "filesystem:write",
+  "filesystem_rename_observed": "filesystem:write",
+  "filesystem_remove": "filesystem:write",
+  "filesystem_remove_observed": "filesystem:write",
+  "interface_open_tab": "interface:render",
+  "interface_split": "interface:render",
+  "interface_withdraw": "interface:render",
+  "interface_render": "interface:render",
+  "interface_render_at": "interface:render",
+  "source_resize": "interface:render",
+  "source_resize_at": "interface:render",
   "event_subscribe": null,
   "event_unsubscribe": null
 });
@@ -476,150 +476,148 @@ const definitions = {
   },
   "Capability": {
     "kind": "enum",
-    "serde": {
-      "rename_all": "kebab-case"
-    },
+    "serde": {},
     "variants": [
       {
-        "name": "workspace-read",
+        "name": "workspaces:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "workspace-control",
+        "name": "workspaces:control",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "workspace-events",
+        "name": "workspaces:events",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "container-read",
+        "name": "containers:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "container-control",
+        "name": "containers:control",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "container-attach",
+        "name": "containers:attach",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "image-read",
+        "name": "images:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "image-write",
+        "name": "images:write",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "volume-read",
+        "name": "volumes:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "volume-write",
+        "name": "volumes:write",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "network-read",
+        "name": "networks:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "network-write",
+        "name": "networks:write",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "terminal-read",
+        "name": "terminals:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "terminal-control",
+        "name": "terminals:control",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "terminal-output",
+        "name": "terminals:output",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "pane-observe",
+        "name": "panes:observe",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "pane-semantic-read",
+        "name": "panes:semantic-read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "pane-semantic-control",
+        "name": "panes:semantic-control",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "extension-read",
+        "name": "extensions:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "extension-control",
+        "name": "extensions:control",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "extension-install",
+        "name": "extensions:install",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "filesystem-read",
+        "name": "filesystem:read",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "filesystem-write",
+        "name": "filesystem:write",
         "payload": {
           "kind": "unit"
         }
       },
       {
-        "name": "interface",
+        "name": "interface:render",
         "payload": {
           "kind": "unit"
         }

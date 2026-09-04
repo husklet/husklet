@@ -182,6 +182,7 @@ fn containers(count: usize) -> Snapshot {
             image: "husklet/api:1".into(),
             state: "running".into(),
             created: 0,
+            generation: 0,
         })
         .collect();
     Snapshot::Containers(listing)

@@ -54,7 +54,7 @@ test('packaged external agent controls terminal bytes and semantic UI over real 
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'external-agent', granted: ['pane-observe', 'terminal-output', 'terminal-control', 'pane-semantic-read', 'pane-semantic-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'external-agent', granted: ['panes:observe', 'terminals:output', 'terminals:control', 'panes:semantic-read', 'panes:semantic-control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {

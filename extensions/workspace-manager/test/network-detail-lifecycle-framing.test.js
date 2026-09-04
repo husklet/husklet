@@ -18,7 +18,7 @@ test('authoritative network replacement invalidates detail and identity consent'
   let lists = 0; let inspections = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'network-detail-lifecycle-test', granted: ['network-read', 'network-write'] } }));
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'network-detail-lifecycle-test', granted: ['networks:read', 'networks:write'] } }));
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       const call = frame.payload?.call; if (!call) continue;
       let payload = { reply: 'done' };

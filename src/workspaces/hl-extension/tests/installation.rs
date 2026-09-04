@@ -410,7 +410,7 @@ fn a_record_round_trips_through_serde_unchanged() {
 
 #[test]
 fn a_record_written_before_versions_were_persisted_remains_readable() {
-    let old = r#"{"name":"containers","image_digest":"sha256:first","granted":["container-read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
+    let old = r#"{"name":"containers","image_digest":"sha256:first","granted":["containers:read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
     let record: Record = serde_json::from_str(old).expect("legacy record");
     assert_eq!(record.version, "");
     assert_eq!(record.image_digest, "sha256:first");

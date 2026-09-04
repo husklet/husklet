@@ -157,11 +157,11 @@ fn native_extension_cards_are_semantic_and_actionable() {
     assert!(grants
         .value
         .as_deref()
-        .is_some_and(|value| { value.contains("interface") && value.contains("container-read") }));
+        .is_some_and(|value| { value.contains("interface") && value.contains("containers:read") }));
     let native_grants = descendants(fixture._catalogue.widget().upcast_ref())
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
-        .filter(|label| matches!(label.text().as_str(), "interface" | "container-read"))
+        .filter(|label| matches!(label.text().as_str(), "interface:render" | "containers:read"))
         .collect::<Vec<_>>();
     assert_eq!(native_grants.len(), 2, "both consented grants are visibly rendered");
     assert!(native_grants.iter().all(|grant| {
@@ -1365,7 +1365,7 @@ fn an_image_is_read_before_anybody_is_asked() {
         .find(|node| node.label.as_deref() == Some("Requested capabilities"))
         .expect("consent clients can inspect the exact requested grant");
     assert_eq!(requested.role, "list");
-    assert_eq!(requested.value.as_deref(), Some("container-read, interface"));
+    assert_eq!(requested.value.as_deref(), Some("containers:read, interface:render"));
     for label in ["Install", "Cancel"] {
         let action = proposed
             .root
@@ -1389,7 +1389,7 @@ fn an_image_is_read_before_anybody_is_asked() {
     container_read.set_active(true);
     assert!(fixture.view.semantic_snapshot().root.children.iter().any(|node| {
         node.label.as_deref() == Some("Selected capabilities")
-            && node.value.as_deref() == Some("container-read, interface")
+            && node.value.as_deref() == Some("containers:read, interface:render")
     }));
 
     let proposal = fixture.view.semantic_snapshot();
@@ -1498,11 +1498,11 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
         .iter()
         .any(|line| line.contains("candidate  2.0.0") && line.contains("sha256:cccc")));
     assert!(
-        labels.iter().any(|line| line == "+ container-control"),
+        labels.iter().any(|line| line == "+ containers:control"),
         "new authority is called out explicitly: {labels:?}"
     );
     assert!(
-        labels.iter().any(|line| line == "− container-read"),
+        labels.iter().any(|line| line == "− containers:read"),
         "authority the candidate dropped is called out explicitly: {labels:?}"
     );
     let added = proposal
@@ -1517,10 +1517,10 @@ fn an_existing_name_is_an_explicit_update_with_a_capability_delta() {
     assert!(descendants(&item).iter().any(|child| child.is::<gtk::CheckButton>()));
     let semantic = fixture.view.semantic_snapshot();
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("container-control")
+        node.label.as_deref() == Some("Added capabilities") && node.value.as_deref() == Some("containers:control")
     }));
     assert!(semantic.root.children.iter().any(|node| {
-        node.label.as_deref() == Some("Removed capabilities") && node.value.as_deref() == Some("container-read")
+        node.label.as_deref() == Some("Removed capabilities") && node.value.as_deref() == Some("containers:read")
     }));
     assert_eq!(
         fixture.shelf.content().child_by_name("sample").as_ref(),

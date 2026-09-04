@@ -378,7 +378,7 @@ mod tests {
     fn extension_archive(architecture: &str, reference: &str) -> Vec<u8> {
         use hl_images::Digest;
         let document = format!(
-            "name = \"daemon-{architecture}\"\ndisplay_name = \"Daemon {architecture}\"\nversion = \"1.2.3\"\nprotocol = 1\ncapabilities = [\"container-read\"]\n"
+            "name = \"daemon-{architecture}\"\ndisplay_name = \"Daemon {architecture}\"\nversion = \"1.2.3\"\nprotocol = 1\ncapabilities = [\"containers:read\"]\n"
         );
         let mut layer = Vec::new();
         {

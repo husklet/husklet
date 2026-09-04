@@ -8,13 +8,13 @@ export interface ExtensionSummary { name: string; image_digest: string; status: 
 export interface ExtensionProviderDeclaration { extension: string; image_digest: string; version: string; status: string; id: string; title: string; icon: string | null }
 export interface ExtensionProviderCatalogue { providers: ExtensionProviderDeclaration[]; truncated: boolean }
 export type ExtensionCapability =
-  | 'workspace-read' | 'workspace-control' | 'workspace-events'
-  | 'container-read' | 'container-control' | 'container-attach' | 'image-read' | 'image-write'
-  | 'volume-read' | 'volume-write' | 'network-read' | 'network-write'
-  | 'terminal-read' | 'terminal-control' | 'terminal-output' | 'pane-observe'
-  | 'pane-semantic-read' | 'pane-semantic-control' | 'extension-read'
-  | 'extension-control' | 'extension-install' | 'filesystem-read'
-  | 'filesystem-write' | 'interface';
+  | 'workspaces:read' | 'workspaces:control' | 'workspaces:events'
+  | 'containers:read' | 'containers:control' | 'containers:attach' | 'images:read' | 'images:write'
+  | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write'
+  | 'terminals:read' | 'terminals:control' | 'terminals:output' | 'panes:observe'
+  | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read'
+  | 'extensions:control' | 'extensions:install' | 'filesystem:read'
+  | 'filesystem:write' | 'interface:render';
 export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[]; installed_image_digest: string | null }
 export interface ExtensionAcquisitionJob { job: string }
 export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }

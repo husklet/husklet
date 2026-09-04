@@ -32,13 +32,13 @@ test('real Unix stream drives a typed inventory watcher and returns event credit
         }
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspace-read', 'image-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'fixture', granted: ['workspaces:read', 'images:read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const pushed = [];
     const session = await connect({ path: socketPath });
-    assert.deepEqual(session.granted, ['workspace-read', 'image-read']);
+    assert.deepEqual(session.granted, ['workspaces:read', 'images:read']);
     const stop = await workspace(session).watchImages((images) => pushed.push(images));
     assert.equal((await workspace(session).info()).name, 'demo');
     await credit;
@@ -91,7 +91,7 @@ test('real Unix semantic action wait arms before authority and disposes after ch
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'action-wait', granted: ['pane-observe', 'pane-semantic-read', 'pane-semantic-control'],
+      protocol: 1, peer: 'action-wait', granted: ['panes:observe', 'panes:semantic-read', 'panes:semantic-control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -137,7 +137,7 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'acquisition-wait', granted: ['extension-install'],
+      protocol: 1, peer: 'acquisition-wait', granted: ['extensions:install'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -178,7 +178,7 @@ test('real Unix occupant switch arms before CAS and verifies provider inventory'
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'switch-wait', granted: ['pane-observe', 'terminal-control'],
+      protocol: 1, peer: 'switch-wait', granted: ['panes:observe', 'terminals:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -213,7 +213,7 @@ test('real Unix extension enable arms inventory before digest-bound authority', 
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'enable-wait', granted: ['extension-read', 'extension-control'],
+      protocol: 1, peer: 'enable-wait', granted: ['extensions:read', 'extensions:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -242,7 +242,7 @@ test('real Unix extension disable arms inventory before digest-bound authority',
       } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'disable-wait', granted: ['extension-read', 'extension-control'],
+      protocol: 1, peer: 'disable-wait', granted: ['extensions:read', 'extensions:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -271,7 +271,7 @@ test('real Unix extension remove arms inventory before authority and observes ab
       } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'remove-wait', granted: ['extension-read', 'extension-control'],
+      protocol: 1, peer: 'remove-wait', granted: ['extensions:read', 'extensions:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -301,7 +301,7 @@ test('real Unix extension retry arms inventory before digest-bound authority', a
       } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'retry-wait', granted: ['extension-read', 'extension-control'],
+      protocol: 1, peer: 'retry-wait', granted: ['extensions:read', 'extensions:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -334,18 +334,18 @@ test('negotiated grants are immutable and deny calls and topics before any socke
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'grants', granted: ['workspace-read'],
+      protocol: 1, peer: 'grants', granted: ['workspaces:read'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    assert.deepEqual(session.grantedCapabilities, ['workspace-read']);
+    assert.deepEqual(session.grantedCapabilities, ['workspaces:read']);
     assert(Object.isFrozen(session.grantedCapabilities));
-    assert.throws(() => session.grantedCapabilities.push('container-read'), TypeError);
+    assert.throws(() => session.grantedCapabilities.push('containers:read'), TypeError);
     await assert.rejects(session.call('container_list'), (error) => error instanceof Error
-      && error.name === 'ExtensionError' && error.kind === 'denied' && error.capability === 'container-read');
-    await assert.rejects(session.call('event_subscribe', { topic: 'containers' }), /container-read/);
+      && error.name === 'ExtensionError' && error.kind === 'denied' && error.capability === 'containers:read');
+    await assert.rejects(session.call('event_subscribe', { topic: 'containers' }), /containers:read/);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(calls, [], 'locally denied authority writes no request frame');
     assert.equal((await session.call('workspace_info')).reply, 'workspace');
@@ -382,7 +382,7 @@ test('AbortSignal writes nothing before a call and closes ordered Unix calls aft
       }
     });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'abort', granted: ['workspace-read'],
+      protocol: 1, peer: 'abort', granted: ['workspaces:read'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -430,7 +430,7 @@ test('real Unix control frames ping both directions and close every pending oper
         if (frame.kind === KIND.ping) socket.write(encode({ channel: frame.channel, kind: KIND.pong, payload: frame.payload }));
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'control', granted: ['workspace-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'control', granted: ['workspaces:read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -492,7 +492,7 @@ test('real socket write backpressure admits no further calls until drain', async
   await new Promise((resolve, reject) => { client.once('connect', resolve); client.once('error', reject); });
   const host = await accepted;
   const baselineListeners = Object.fromEntries(['data', 'end', 'drain'].map((event) => [event, client.listenerCount(event)]));
-  host.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'pressure', granted: ['workspace-read'] } }));
+  host.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'pressure', granted: ['workspaces:read'] } }));
   const session = new Session(client, { timeout: 1_000 });
   await bounded(session.ready, 'greeting');
   const write = client.write.bind(client);
@@ -518,7 +518,7 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
   let peer;
   const server = net.createServer((socket) => {
     peer = socket;
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'channel', granted: ['workspace-read'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'channel', granted: ['workspaces:read'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -538,7 +538,7 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-wait-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
   const digest = `sha256:${'a'.repeat(64)}`;
-  const candidate = { name: 'sample', version: '1', image_digest: digest, requested: ['extension-read'], installed_image_digest: null };
+  const candidate = { name: 'sample', version: '1', image_digest: digest, requested: ['extensions:read'], installed_image_digest: null };
   const summary = { name: 'sample', image_digest: digest, version: '1', status: 'standby', enabled: false, pane_providers: [] };
   const server = net.createServer((socket) => {
     connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
@@ -553,13 +553,13 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
       } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'install-wait', granted: ['extension-read', 'extension-install'],
+      protocol: 1, peer: 'install-wait', granted: ['extensions:read', 'extensions:install'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).extensions.installAndWait('job-1', 7, ['extension-read']);
+    const result = await workspace(session).extensions.installAndWait('job-1', 7, ['extensions:read']);
     assert.equal(result.changed, true);
     assert.deepEqual(calls, ['extension_acquisition_status', 'event_subscribe', 'extension_install', 'event_unsubscribe']);
     await session.close();
@@ -588,7 +588,7 @@ test('real Unix container start wait arms first and ignores unchanged initial st
       } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'container-start-wait', granted: ['container-read', 'container-control'],
+      protocol: 1, peer: 'container-start-wait', granted: ['containers:read', 'containers:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -623,7 +623,7 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
       } else socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     } });
     socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'container-stop-wait', granted: ['container-read', 'container-control'],
+      protocol: 1, peer: 'container-stop-wait', granted: ['containers:read', 'containers:control'],
     } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
@@ -661,7 +661,7 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
         });
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'remove-wait', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'remove-wait', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -691,7 +691,7 @@ test('real Unix restart wait requires the same container at a newer running gene
         socket.write(encode({ channel: 47, kind: KIND.event, payload: { snapshot: 'containers', of: [summary('running', 8)] } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'restart-wait', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'restart-wait', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -726,7 +726,7 @@ test('real Unix splitAndWait arms before CAS, verifies the returned slot, and di
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'split-wait', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'split-wait', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -777,7 +777,7 @@ test('real Unix closeAndWait requires complete absence and disposes success and 
         } })), 1);
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'close-wait', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'close-wait', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -820,7 +820,7 @@ test('real Unix retitleAndWait arms before CAS and verifies exact title and revi
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'retitle-wait', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'retitle-wait', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -862,7 +862,7 @@ test('real Unix focusAndWait arms before CAS and verifies exact focused pane ide
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'focus-wait', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'focus-wait', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -905,7 +905,7 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'write-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'write-wait', granted: ['panes:observe', 'terminals:output', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -952,7 +952,7 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'signal-wait', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'signal-wait', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -997,7 +997,7 @@ test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns 
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'spawn-wait', granted: ['pane-observe', 'terminal-output', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'spawn-wait', granted: ['panes:observe', 'terminals:output', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1040,7 +1040,7 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: { panes: [pane], truncated: false } } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-wait', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-wait', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1080,7 +1080,7 @@ test('real Unix openTabAndWait retains the created tab when inventory verificati
         socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'inventory unavailable' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-recovery', granted: ['pane-observe', 'terminal-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-recovery', granted: ['panes:observe', 'terminals:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1124,7 +1124,7 @@ test('real Unix inspectAndAct validates live semantic authority before revision-
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'inspect-act', granted: ['pane-observe', 'pane-semantic-read', 'pane-semantic-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'inspect-act', granted: ['panes:observe', 'panes:semantic-read', 'panes:semantic-control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1168,7 +1168,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'logs', with: output } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1201,7 +1201,7 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
         socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'wait timed out' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait-failure', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-wait-failure', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -1236,7 +1236,7 @@ test('real Unix execAndWait preserves the completed execution when bounded log r
         socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'logs unavailable' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-log-failure', granted: ['container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-log-failure', granted: ['containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
