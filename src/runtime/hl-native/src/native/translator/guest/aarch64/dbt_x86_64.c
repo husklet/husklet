@@ -334,6 +334,8 @@ struct hl_a64_x86_block_header {
     uint64_t retired_steps;
     uint64_t exit_kind;
     uint64_t reserved;
+    uint64_t branch_target;
+    uint64_t branch_fallthrough;
 };
 _Static_assert(sizeof(struct hl_a64_x86_block_header) % 16u == 0, "AArch64 x86 DBT entry lost alignment");
 
@@ -345,6 +347,86 @@ static void hl_a64_x86_emit_return(hl_x64_asm *assembler) {
     hl_x64_mov_imm64(assembler, 1, (uintptr_t)hl_a64_x86_dbt_return);
     hl_x64_u8(assembler, 0xFF);
     hl_x64_u8(assembler, 0xE1); /* jmp *%rcx */
+}
+
+static uint8_t *hl_a64_x86_emit_jcc32(hl_x64_asm *assembler, unsigned condition) {
+    hl_x64_u8(assembler, 0x0F);
+    hl_x64_u8(assembler, (uint8_t)(0x80 | (condition & 15u)));
+    uint8_t *displacement = assembler->cursor;
+    hl_x64_u32(assembler, 0);
+    return displacement;
+}
+
+static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target) {
+    intptr_t relative = target - (displacement + 4);
+    if (relative < INT32_MIN || relative > INT32_MAX) abort();
+    int32_t encoded = (int32_t)relative;
+    memcpy(displacement, &encoded, sizeof encoded);
+}
+
+static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
+                                                 uint64_t cursor, uint64_t *target_out) {
+    int64_t displacement;
+    unsigned branch_condition;
+    if ((instruction & 0xFF000010u) == 0x54000000u ||
+        (instruction & 0xFF000010u) == 0x54000010u) {
+        displacement = interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4;
+        struct cpu condition_cpu = {0};
+        uint16_t truth = 0;
+        for (unsigned nzcv = 0; nzcv < 16u; ++nzcv) {
+            condition_cpu.nzcv = (uint64_t)nzcv << 28;
+            if (interp_cond_holds(&condition_cpu, instruction & 15u)) truth |= (uint16_t)(1u << nzcv);
+        }
+        hl_x64_reg_mem_disp32(assembler, 0x8B, 0, HL_A64_X86_CPU_REG, OFF_NZCV);
+        hl_x64_shift_imm8(assembler, 0, 5, 28);
+        hl_x64_mov_imm64(assembler, 1, truth);
+        hl_x64_u8(assembler, 0x48); /* bt %rax,%rcx */
+        hl_x64_u8(assembler, 0x0F);
+        hl_x64_u8(assembler, 0xA3);
+        hl_x64_u8(assembler, 0xC1);
+        branch_condition = 2; /* JC */
+    } else if ((instruction & 0x7E000000u) == 0x34000000u) {
+        unsigned sf = instruction >> 31;
+        displacement = interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4;
+        hl_a64_x86_load_gpr(assembler, 0, instruction & 31u, 0);
+        if (sf) hl_x64_u8(assembler, 0x48);
+        hl_x64_u8(assembler, 0x85); /* test %rax,%rax / %eax,%eax */
+        hl_x64_u8(assembler, 0xC0);
+        branch_condition = ((instruction >> 24) & 1u) ? 5u : 4u; /* JNZ / JZ */
+    } else if ((instruction & 0x7E000000u) == 0x36000000u) {
+        unsigned bit = ((instruction >> 31) & 1u) << 5 | ((instruction >> 19) & 31u);
+        displacement = interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4;
+        hl_a64_x86_load_gpr(assembler, 0, instruction & 31u, 0);
+        hl_x64_u8(assembler, 0x48); /* bt $bit,%rax */
+        hl_x64_u8(assembler, 0x0F);
+        hl_x64_u8(assembler, 0xBA);
+        hl_x64_u8(assembler, 0xE0);
+        hl_x64_u8(assembler, (uint8_t)bit);
+        branch_condition = ((instruction >> 24) & 1u) ? 2u : 3u; /* JC / JNC */
+    } else {
+        return 0;
+    }
+
+    uint8_t *taken_patch = hl_a64_x86_emit_jcc32(assembler, branch_condition);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, cursor + 4);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    hl_a64_x86_emit_return(assembler);
+    if (!assembler->overflow) hl_a64_x86_patch_rel32(taken_patch, assembler->cursor);
+    *target_out = cursor + (uint64_t)displacement;
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, *target_out);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    hl_a64_x86_emit_return(assembler);
+    return 1;
+}
+
+static int hl_a64_x86_conditional_is_next(uint32_t instruction) {
+    if ((instruction & 0xFF000010u) == 0x54000000u ||
+        (instruction & 0xFF000010u) == 0x54000010u ||
+        (instruction & 0x7E000000u) == 0x34000000u)
+        return ((instruction >> 5) & 0x7FFFFu) == 1u;
+    if ((instruction & 0x7E000000u) == 0x36000000u)
+        return ((instruction >> 5) & 0x3FFFu) == 1u;
+    return 0;
 }
 
 static void *translate_block(uint64_t guest_pc) {
@@ -384,8 +466,18 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if ((instruction & 0xFC000000u) == 0x14000000u &&
+            interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4)
+            continue; /* B to the next instruction: retire inside this bounded block. */
+        if (hl_a64_x86_conditional_is_next(instruction))
+            continue; /* Both conditional outcomes are the next instruction. */
         unsigned exit_kind;
-        if (hl_a64_x86_is_svc(instruction)) {
+        uint64_t conditional_target = 0;
+        int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
+                                                                &conditional_target);
+        if (conditional) {
+            exit_kind = UINT64_MAX;
+        } else if (hl_a64_x86_is_svc(instruction)) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
             exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
@@ -401,12 +493,14 @@ static void *translate_block(uint64_t guest_pc) {
             hl_backend_tree_a64_unsupported(instruction);
             break;
         }
-        hl_a64_x86_emit_return(&assembler);
+        if (!conditional) hl_a64_x86_emit_return(&assembler);
         if (assembler.overflow) break;
         header->magic = HL_A64_X86_BLOCK_MAGIC;
         header->retired_steps = (uint64_t)count + 1;
         header->exit_kind = exit_kind;
         header->reserved = 0;
+        header->branch_target = conditional_target;
+        header->branch_fallthrough = conditional ? cursor + 4 : 0;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, cursor + 4, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
@@ -459,7 +553,20 @@ static void run_block(struct cpu *cpu, void *code) {
          * interval to add. */
         hl_backend_tree_run_begin(1, header->retired_steps);
         hl_a64_x86_dbt_enter(cpu, code);
-        hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);
+        unsigned exit_kind = (unsigned)header->exit_kind;
+        if (header->exit_kind == UINT64_MAX) {
+            if (cpu->pc == header->branch_target)
+                exit_kind = HL_BACKEND_SHAPE_T_COND_TAKEN;
+            else if (cpu->pc == header->branch_fallthrough)
+                exit_kind = HL_BACKEND_SHAPE_T_COND_NOT_TAKEN;
+            else {
+                static const char message[] = "AArch64 x86 DBT conditional returned an impossible PC";
+                (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
+                cpu->reason = R_BRANCH;
+                return;
+            }
+        }
+        hl_a64_x86_record_translated_exit(exit_kind);
         hl_backend_tree_reason(cpu->reason);
     }
 }
