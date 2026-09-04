@@ -561,6 +561,9 @@ test('container rename validates locally, retries failure, and preserves immutab
 test('container creation groups its compact form and explains raw JSON before an error', () => {
   const stage = host();
   const frame = stage.render(h(Containers, { api, resource: { data: [], loading: false, error: null, reload: async () => {} } }));
+  const createDisclosure = frame.patches.find((patch) => patch.Create?.tag === 'Expander');
+  assert.ok(createDisclosure, 'container creation is collapsed behind a native disclosure by default');
+  assert.equal(frame.patches.some((patch) => patch.SetProp?.id === createDisclosure.Create.id && patch.SetProp.prop === 'Expanded'), false);
   for (const label of [
     'Identity and image', 'Process', 'Resources and connectivity',
     'Labels use JSON [name, value] pairs, for example [["role","worker"]].',

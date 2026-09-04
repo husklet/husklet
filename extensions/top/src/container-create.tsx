@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Entry, Heading, Row, Spinner, Text,
+  Button, Card, CardActions, CardContent, CardHeader, Entry, Expander, Heading, Row, Spinner, Text,
   type ContainerCreateSpec, type WorkspaceApi,
 } from '@husklet/react';
 import { boundedMessage } from './model.js';
@@ -211,9 +211,10 @@ export function ContainerCreate({ api, blocked, onBusyChange, reload }: Containe
   };
   const editable = !created && !blocked;
   return (
-    <Card variant={'outline'}>
-      <CardHeader label={'Create a container'} detail={'Uses a local image and starts it after durable creation.'} />
-      <CardContent gap={1}>
+    <Expander label={'Create a container'}>
+      <Card variant={'outline'}>
+        <CardHeader label={'New container'} detail={'Uses a local image and starts it after durable creation.'} />
+        <CardContent gap={1}>
         <Heading label={'Identity and image'} scale={'body'} />
         <Row gap={1} wrap={true}>
           <Entry value={draft.image} placeholder={'Image reference'} enabled={editable} onChange={(event) => update('image', event.value)} />
@@ -241,17 +242,18 @@ export function ContainerCreate({ api, blocked, onBusyChange, reload }: Containe
           <Entry value={draft.ports} placeholder={'Published ports JSON (optional)'} enabled={editable} onChange={(event) => update('ports', event.value)} />
         </Row>
         <Text label={'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'} color={'text-dim'} wrap={true} />
-      </CardContent>
-      <CardActions>
-        {blocked ? <Spinner /> : null}
-        <Button
-          label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
-          enabled={!blocked && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError))}
-          onInvoke={createAndStart} />
-      </CardActions>
-      {configurationError ? <Text label={configurationError} color={'danger'} wrap={true} /> : null}
-      {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
-      {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
-    </Card>
+        </CardContent>
+        <CardActions>
+          {blocked ? <Spinner /> : null}
+          <Button
+            label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
+            enabled={!blocked && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError))}
+            onInvoke={createAndStart} />
+        </CardActions>
+        {configurationError ? <Text label={configurationError} color={'danger'} wrap={true} /> : null}
+        {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
+        {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
+      </Card>
+    </Expander>
   );
 }
