@@ -1,14 +1,18 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useState } from 'react';
-import { Button, Column, Heading, InlineMessage, Row, Scroll, Separator, Text } from '@husklet/react';
+import { Button, Column, Container, Heading, InlineMessage, Row, Scroll, Separator, Text } from '@husklet/react';
 
 export const DRAG_REORDER_STORY = 'Drag and keyboard reorder';
 export const EVENT_LIMIT = 6;
-export const initialItems = Object.freeze([
+export interface PipelineItem {
+  id: string;
+  label: string;
+}
+
+export const initialItems: readonly PipelineItem[] = Object.freeze([
   { id: 'build', label: 'Build' }, { id: 'test', label: 'Test' }, { id: 'publish', label: 'Publish' },
 ]);
 
-export function reorder(items, source, target) {
+export function reorder(items: readonly PipelineItem[], source: string, target: string): readonly PipelineItem[] {
   const from = items.findIndex(({ id }) => id === source);
   const to = items.findIndex(({ id }) => id === target);
   if (from < 0 || to < 0 || from === to) return items;
@@ -19,11 +23,11 @@ export function reorder(items, source, target) {
 }
 
 export function DragReorderStory() {
-  const [items, setItems] = useState(initialItems);
-  const [source, setSource] = useState(null);
-  const [events, setEvents] = useState([]);
-  const record = (message) => setEvents((current) => [...current, message].slice(-EVENT_LIMIT));
-  const move = (id, offset, method) => {
+  const [items, setItems] = useState<readonly PipelineItem[]>(initialItems);
+  const [source, setSource] = useState<string | null>(null);
+  const [events, setEvents] = useState<string[]>([]);
+  const record = (message: string) => setEvents((current) => [...current, message].slice(-EVENT_LIMIT));
+  const move = (id: string, offset: number, method: string) => {
     const index = items.findIndex((item) => item.id === id);
     const target = items[index + offset];
     if (!target) return;
@@ -37,14 +41,15 @@ export function DragReorderStory() {
         <Text
           label={'Drag a card onto another card, or use Move up and Move down. Both paths apply the same bounded reorder.'}
           wrap={true} />
-        {items.map((item, index) => <Column
+        {items.map((item, index) => <Container
           key={item.id}
-          label={item.label}
+          tooltip={`Drag ${item.label} to reorder it`}
+          gap={1}
           onDrag={() => { setSource(item.id); record(`Drag source: ${item.id}`); }}
           onDrop={(event) => {
             if (!source) { record(`Drop ignored on ${item.id}: no source`); return; }
             setItems((current) => reorder(current, source, item.id));
-            record(`Drop: ${source} → ${item.id} (node ${event.source})`);
+            record(`Drop: ${source} → ${item.id} (node ${event.node})`);
             setSource(null);
           }}>
           <Heading label={`${index + 1}. ${item.label}`} scale={'body'} />
@@ -62,11 +67,11 @@ export function DragReorderStory() {
               onInvoke={() => move(item.id, 1, 'Keyboard')} />
           </Row>
           <Separator />
-        </Column>)}
+        </Container>)}
         <InlineMessage
           label={source ? `Dragging ${source}; choose a target.` : 'Ready to reorder.'}
           tone={'neutral'} />
-        <Column label={'Inspector metadata'} gap={1}>
+        <Column gap={1}>
           <Heading label={'Inspector metadata'} scale={'body'} />
           <Text
             label={`${items.length} bounded items · ${events.length}/${EVENT_LIMIT} events`}

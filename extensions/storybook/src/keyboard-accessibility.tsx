@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import {
   Button,
@@ -23,10 +22,10 @@ export function KeyboardAccessibilityStory() {
   const [name, setName] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [events, setEvents] = useState([]);
+  const [events, setEvents] = useState<string[]>([]);
   const sequence = useRef(0);
   const invalid = attempted && name.trim().length < 3;
-  const record = (label) => {
+  const record = (label: string) => {
     const event = `#${++sequence.current} ${label}`;
     setEvents((current) => [...current, event].slice(-EVENT_LIMIT));
   };
