@@ -778,15 +778,6 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
     if !output.status.success() || !output.stdout.is_empty() {
         return Err(format!("developer null arm failed in {mode:?}: {}", output.status).into());
     }
-    let guest_isa = arm_artifacts(options, mode).guest_isa;
-    backend_receipt(
-        execution_backend(host_isa(), mode, guest_isa),
-        guest_isa,
-        &String::from_utf8(output.stderr)?,
-        &measured,
-        root,
-        options.translated_route_observe && mode == Mode::Translated,
-    )?;
     let counters = parse_perf(&fs::read_to_string(&path)?)?;
     fs::remove_file(path)?;
     Ok(counters)
@@ -1249,6 +1240,20 @@ mod tests {
             "[prof] translit: blocks=9 entries=4"
         )
         .is_err());
+    }
+
+    #[test]
+    fn only_published_rows_require_backend_product_evidence() {
+        let production = include_str!("developer.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .unwrap().0;
+        let execute = production.split_once("fn execute(").unwrap().1
+            .split_once("fn measured_argv(").unwrap().0;
+        let null = production.split_once("fn measure_null(").unwrap().1
+            .split_once("fn validate_phases(").unwrap().0;
+        assert_eq!(execute.matches("backend_receipt(").count(), 1);
+        assert_eq!(null.matches("backend_receipt(").count(), 0);
+        assert!(execute.find("backend_receipt(").unwrap() < execute.find("Ok(Row {").unwrap());
     }
 
     #[test]
