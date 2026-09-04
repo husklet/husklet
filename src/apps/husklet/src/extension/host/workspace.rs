@@ -142,6 +142,7 @@ impl Workspace {
             reference: record.image_digest.clone(),
             digest: record.image_digest.clone(),
             entrypoint: Vec::new(),
+            command: Vec::new(),
             user: String::new(),
         };
         let spec = SidecarSpec::new(&manifest, &record.granted, &image, supply.socket(name));

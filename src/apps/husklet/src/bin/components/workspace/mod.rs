@@ -98,24 +98,26 @@ impl Form {
                 let status = status.clone();
                 let on_created = on_created.clone();
                 let w = w.clone();
-                glib::timeout_add_local(std::time::Duration::from_millis(50), move || match received.try_recv() {
-                    Ok(Ok(())) => {
-                        on_created();
-                        w.close();
-                        glib::ControlFlow::Break
-                    }
-                    Ok(Err(error)) => {
-                        status.add_css_class("err");
-                        status.set_text(&format!("Could not finish workspace setup: {error}"));
-                        create.set_sensitive(true);
-                        glib::ControlFlow::Break
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        status.add_css_class("err");
-                        status.set_text("Workspace setup stopped unexpectedly.");
-                        create.set_sensitive(true);
-                        glib::ControlFlow::Break
+                glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                    match received.try_recv() {
+                        Ok(Ok(())) => {
+                            on_created();
+                            w.close();
+                            glib::ControlFlow::Break
+                        }
+                        Ok(Err(error)) => {
+                            status.add_css_class("err");
+                            status.set_text(&format!("Could not finish workspace setup: {error}"));
+                            create.set_sensitive(true);
+                            glib::ControlFlow::Break
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            status.add_css_class("err");
+                            status.set_text("Workspace setup stopped unexpectedly.");
+                            create.set_sensitive(true);
+                            glib::ControlFlow::Break
+                        }
                     }
                 });
             });
@@ -164,27 +166,36 @@ impl Form {
 }
 
 fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> std::io::Result<()> {
-    if store.get(&workspace.name).is_some() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("A workspace named {:?} already exists.", workspace.name),
-        ));
-    }
-    store.upsert(workspace)
+    store.insert(workspace)
 }
 
 fn provision_workspace(workspace: WorkspaceConfig) -> std::io::Result<()> {
     let path = Home::current().workspaces_config();
-    let store = WorkspaceStore::load(&path)?;
-    if store.get(&workspace.name).is_some() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("A workspace named {:?} already exists.", workspace.name),
-        ));
+    provision_workspace_with(path, workspace, hl::extension::install_defaults)
+}
+
+fn provision_workspace_with(
+    path: impl Into<std::path::PathBuf>,
+    workspace: WorkspaceConfig,
+    install: impl FnOnce(&WorkspaceConfig) -> Result<(), String>,
+) -> std::io::Result<()> {
+    let path = path.into();
+    let name = workspace.name.clone();
+    let generation = workspace.generation.clone();
+    create_workspace(&mut WorkspaceStore::load(&path)?, workspace.clone())?;
+    if let Err(error) = install(&workspace) {
+        let rollback = WorkspaceStore::load(path)?.remove_if_generation(&name, &generation);
+        return match rollback {
+            Ok(true) => Err(std::io::Error::other(error)),
+            Ok(false) => Err(std::io::Error::other(format!(
+                "{error}; the incomplete workspace could not be rolled back"
+            ))),
+            Err(rollback) => Err(std::io::Error::other(format!(
+                "{error}; the incomplete workspace could not be rolled back: {rollback}"
+            ))),
+        };
     }
-    hl::extension::install_defaults(&workspace).map_err(std::io::Error::other)?;
-    let mut store = WorkspaceStore::load(path)?;
-    create_workspace(&mut store, workspace)
+    Ok(())
 }
 
 const fn native_workspace_architecture() -> Arch {
@@ -584,6 +595,37 @@ mod create_tests {
         create_workspace(&mut store, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64)).unwrap();
 
         assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+    }
+
+    #[test]
+    fn provisioning_persists_the_workspace_before_installing_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let observed = path.clone();
+
+        provision_workspace_with(
+            &path,
+            WorkspaceConfig::new("demo", "image:latest", Arch::Arm64),
+            move |workspace| {
+                assert_eq!(WorkspaceStore::load(observed).unwrap().get("demo"), Some(workspace));
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn failed_default_install_rolls_back_the_workspace_it_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+
+        let error = provision_workspace_with(&path, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64), |_| {
+            Err("default extension failed".into())
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("default extension failed"));
+        assert!(WorkspaceStore::load(path).unwrap().get("demo").is_none());
     }
 
     #[test]

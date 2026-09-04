@@ -75,6 +75,8 @@ pub struct Image {
     pub digest: String,
     /// The image's own entrypoint, used when the manifest declares none.
     pub entrypoint: Vec<String>,
+    /// Arguments supplied by the image to its entrypoint.
+    pub command: Vec<String>,
     /// The image's user, empty when the image names none.
     pub user: String,
 }
@@ -87,6 +89,7 @@ impl Image {
             reference: reference.into(),
             digest: inspection.id.clone(),
             entrypoint: inspection.config.entrypoint.clone(),
+            command: inspection.config.cmd.clone(),
             user: inspection.config.user.clone(),
         }
     }
@@ -101,6 +104,7 @@ pub struct SidecarSpec {
     name: String,
     image: Image,
     entrypoint: Vec<String>,
+    command: Vec<String>,
     granted: Vec<String>,
     resources: Resources,
     socket: PathBuf,
@@ -121,6 +125,7 @@ impl SidecarSpec {
             name: format!("{NAME_PREFIX}{}", manifest.name),
             image: image.clone(),
             entrypoint,
+            command: image.command.clone(),
             granted: granted
                 .iter()
                 .map(|capability| capability.as_str().to_owned())
@@ -179,6 +184,13 @@ impl SidecarSpec {
     fn identity(&self) -> String {
         let mut value = String::new();
         Self::field(&mut value, &self.image.digest);
+        for argument in &self.entrypoint {
+            Self::field(&mut value, argument);
+        }
+        for argument in &self.command {
+            Self::field(&mut value, argument);
+        }
+        Self::field(&mut value, &self.image.user);
         for capability in &self.granted {
             Self::field(&mut value, capability);
         }
@@ -211,6 +223,7 @@ impl SidecarSpec {
             image: self.image.reference.clone(),
             labels: self.labels(),
             entrypoint: Some(self.entrypoint.clone()).filter(|values| !values.is_empty()),
+            cmd: Some(self.command.clone()).filter(|values| !values.is_empty()),
             env: Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]),
             user: Some(self.image.user.clone()).filter(|user| !user.is_empty()),
             host_config: Some(self.host()),
@@ -528,6 +541,7 @@ mod tests {
             reference: "extension:1".to_owned(),
             digest: "sha256:aaaa".to_owned(),
             entrypoint: vec!["/usr/bin/extension".to_owned()],
+            command: vec!["--serve".to_owned()],
             user: "1000:1000".to_owned(),
         }
     }
@@ -980,6 +994,7 @@ mod tests {
 
         assert_eq!(request.user.as_deref(), Some("1000:1000"), "never forced to root");
         assert_eq!(request.entrypoint, Some(vec!["/usr/bin/extension".to_owned()]));
+        assert_eq!(request.cmd, Some(vec!["--serve".to_owned()]));
         assert_eq!(request.labels.get(SIGNATURE_LABEL), Some(&spec().signature()));
         assert_eq!(request.labels.get(NAME_LABEL).map(String::as_str), Some("sample"));
     }
