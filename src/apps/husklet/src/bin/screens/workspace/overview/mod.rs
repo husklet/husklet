@@ -1,8 +1,6 @@
 use crate::*;
 
-mod settings;
-
-use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, PendingInspection, Shelf, Surfaces};
+use screens::workspace::extensions::{Console, Gallery, Shelf, Surfaces};
 
 pub(crate) struct Overview<'a> {
     workspace: &'a WorkspaceConfig,
@@ -163,7 +161,7 @@ impl<'a> Overview<'a> {
         relay: &Rc<hl::extension::Relay>,
         gallery: &Gallery,
         window: Option<&Rc<screens::workspace::terminal::TermWin>>,
-    ) -> Option<Rc<Catalogue>> {
+    ) -> Option<Rc<Shelf>> {
         let roster = match hl::extension::Roster::workspace(workspace) {
             Ok(roster) => Rc::new(RefCell::new(roster)),
             Err(refusal) => {
@@ -215,59 +213,16 @@ impl<'a> Overview<'a> {
             }
             gallery_for_withdrawal.withdraw(name.as_str());
         });
-        let cleanup_workspace = workspace.clone();
-        let cleanup = Rc::new(move |entry: hl::extension::Entry| {
-            let (sent, received) = std::sync::mpsc::channel();
-            let workspace = cleanup_workspace.clone();
-            std::thread::spawn(move || {
-                let result = hl::extension::Workspace::remove_extension(&workspace, &entry.name);
-                let _ = sent.send(result);
-            });
-            received
-        });
-        let shelf = Shelf::with_cleanup(view, &roster, surfaces, withdraw, cleanup);
+        let shelf = Shelf::with_lifecycle(view, workspace, &roster, surfaces, withdraw);
         shelf_anchor.replace(Rc::downgrade(&shelf));
         shelf.install();
-        Some(Catalogue::new(&shelf, Self::inspections(workspace)))
-    }
-
-    /// How the "Extensions" page reads an image.
-    ///
-    /// On a thread of its own, because reading a manifest means creating a
-    /// container from the image and copying a file out of it, and the window
-    /// has to keep drawing while that happens.
-    fn inspections(workspace: &WorkspaceConfig) -> Inspection {
-        let held = workspace.clone();
-        Rc::new(move |reference: &str| {
-            let (answered, answer) = std::sync::mpsc::channel();
-            let cancellation = hl::extension::Cancellation::default();
-            let worker_cancellation = cancellation.clone();
-            let workspace = held.clone();
-            let reference = reference.to_owned();
-            std::thread::spawn(move || {
-                hl::extension::Candidate::acquire_cancellable(&workspace, &reference, &answered, &worker_cancellation);
-            });
-            PendingInspection {
-                events: answer,
-                cancellation,
-            }
-        })
+        Some(shelf)
     }
 
     pub(crate) fn view(&self) -> gtk::Box {
-        use screens::workspace::Page as WorkspacePage;
-
         let ws = self.workspace;
-
-        let shelf = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let semantics = screens::workspace::semantic::Registry::new("workspace");
-        let view = Rc::new(screens::workspace::View::with_semantics(
-            [
-                (WorkspacePage::Settings, self.settings(&semantics).upcast()),
-                (WorkspacePage::Extensions, shelf.clone().upcast()),
-            ],
-            semantics,
-        ));
+        let view = Rc::new(screens::workspace::View::with_semantics([], semantics));
         // The terminal port an extension holds is a relay to whichever window is
         // drawing; the window answers it on its own tick, which is where the
         // widgets are.
@@ -280,17 +235,12 @@ impl<'a> Overview<'a> {
         if let Some(window) = self.window {
             screens::workspace::terminal::Window::exhibit(window, gallery.clone());
         }
-        let catalogue = Self::shelf(ws, &view, &relay, &gallery, self.window);
-        if let Some(catalogue) = &catalogue {
-            catalogue.shelf().catalogue().append(catalogue.viewport());
-            shelf.append(catalogue.shelf().content());
-        } else {
-            let failure = gtk::Label::new(Some(
-                "Extensions could not be loaded. Settings remain available; reopen this workspace to retry.",
-            ));
+        let shelf = Self::shelf(ws, &view, &relay, &gallery, self.window);
+        if shelf.is_none() {
+            let failure = gtk::Label::new(Some("Extensions could not be loaded. Reopen this workspace to retry."));
             failure.set_wrap(true);
             failure.add_css_class("error");
-            shelf.append(&failure);
+            view.attach("failure", "Unavailable", failure.upcast_ref());
         }
         if let Some(window) = self.window {
             Console::new(window, errands).install();
@@ -308,18 +258,20 @@ impl<'a> Overview<'a> {
             if rooted.get() && !live {
                 return glib::ControlFlow::Break;
             }
-            // The catalogue's own polling holds only a weak reference to
-            // itself, so the page is kept alive here, beside the shell it is on.
-            let _ = &catalogue;
+            // Reconciliation reads only a process-local counter while idle;
+            // durable records are reopened after a lifecycle mutation.
+            if let Some(shelf) = &shelf {
+                shelf.reconcile();
+            }
             glib::ControlFlow::Continue
         });
 
-        // Debug selection is fail-closed: removed legacy page names leave the
-        // initial Settings page selected.
+        // Debug selection is fail-closed: an unavailable extension leaves the
+        // first mounted extension selected.
         if let Some(p) = AppConfig::get().overview_pane.as_deref() {
             view.select_name(p);
         } else if let Some(page) = self.page {
-            view.select_name(page.title());
+            view.select_name(page.id());
         }
         view.widget.clone()
     }

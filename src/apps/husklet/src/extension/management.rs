@@ -47,6 +47,7 @@ impl ExtensionManagement {
 
     fn changed(&self, result: Result<(), HostError>) -> Result<(), HostError> {
         result?;
+        super::revision::publish_inventory_change(&self.workspace);
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
         }
@@ -121,6 +122,7 @@ impl ExtensionStore for ExtensionManagement {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.install(job, revision, granted)?;
+        super::revision::publish_inventory_change(&self.workspace);
         let installed = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
@@ -132,6 +134,7 @@ impl ExtensionStore for ExtensionManagement {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.update(job, revision, granted)?;
+        super::revision::publish_inventory_change(&self.workspace);
         let updated = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
@@ -286,7 +289,9 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management.remove("absent", &format!("sha256:{}", "a".repeat(64))).is_err());
+        assert!(management
+            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
         assert!(events.drain().is_none());
     }
 
@@ -299,6 +304,8 @@ mod tests {
         };
         let value = summary(super::super::roster::Entry {
             name: ExtensionName::new("manager").unwrap(),
+            display_name: "Manager".into(),
+            interface: None,
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),

@@ -39,16 +39,12 @@ mod screenshot;
 use screenshot::Screenshot;
 
 use components::dialog::RemoveWorkspace;
-use components::layout::Field;
 use components::theme::{css, ACCENT};
 use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::{ProcessGroup, Processes};
 use host::pty::PtyProcess;
-use host::{
-    command::application_path,
-    home::Home,
-};
+use host::{command::application_path, home::Home};
 use screens::workspace::overview::Overview;
 use screens::workspace::terminal::{Terminal, Window as TerminalWindow};
 
@@ -348,23 +344,6 @@ mod application_identity_tests {
         assert_eq!(first, repeated);
         assert_ne!(first, second);
         assert!(first.starts_with("com.husklet.app.b0123456789abcdef.i"));
-    }
-}
-
-/// A prominent, color-coded os/arch badge (used beside a overview title). Shows the full
-/// `os/arch` label (e.g. `linux/aarch64`) rather than a terse `arm`/`amd`.
-struct ArchitectureView(Arch);
-
-impl ArchitectureView {
-    fn chip(&self) -> gtk::Label {
-        let l = gtk::Label::new(Some(self.0.os_arch_label()));
-        l.add_css_class("chip");
-        l.add_css_class(match self.0 {
-            Arch::Arm64 => "arm",
-            Arch::Amd64 => "amd",
-        });
-        l.set_valign(gtk::Align::Center);
-        l
     }
 }
 

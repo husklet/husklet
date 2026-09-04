@@ -267,7 +267,12 @@ impl PaneChooser {
         if let Some(popover) = chooser.popover() {
             popover.popdown();
         }
-        if let Some(terminal) = window.focused.borrow().as_ref().filter(|terminal| terminal.parent().is_some()) {
+        if let Some(terminal) = window
+            .focused
+            .borrow()
+            .as_ref()
+            .filter(|terminal| terminal.parent().is_some())
+        {
             terminal.add_tick_callback(|terminal, _| {
                 if !terminal.is_mapped() {
                     return glib::ControlFlow::Continue;
@@ -287,10 +292,6 @@ impl PaneChooser {
             }
         }
         Panes::under(window, &window.stack.visible_child()?).into_iter().next()
-    }
-
-    pub(crate) fn provider(window: &Rc<TermWin>, extension: &str, provider: &str) {
-        let _ = Self::provider_in(window, None, extension, provider);
     }
 
     pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) -> bool {
@@ -356,10 +357,6 @@ impl PaneChooser {
             Surface::restore(window, &previous, &current.content);
         }
         false
-    }
-
-    pub(crate) fn terminal(window: &Rc<TermWin>) {
-        let _ = Self::terminal_in(window, None);
     }
 
     pub(crate) fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) -> bool {
@@ -905,12 +902,7 @@ impl<'a> PaneView<'a> {
     /// Divide a live pane while preserving its current occupant. A surface's
     /// displaced terminal remains the cwd source, while topology authority is
     /// the stable pane chrome and slot.
-    pub(crate) fn split_at(
-        tw: &Rc<TermWin>,
-        pane: &Occupancy,
-        old: &vte4::Terminal,
-        orient: gtk::Orientation,
-    ) {
+    pub(crate) fn split_at(tw: &Rc<TermWin>, pane: &Occupancy, old: &vte4::Terminal, orient: gtk::Orientation) {
         let page = Page::of(tw, &pane.widget).map(|page| page.name);
         // OSC-7: split panes inherit the source pane's cwd. A fresh split gets a fresh slot; never restores.
         let split_cwd = old

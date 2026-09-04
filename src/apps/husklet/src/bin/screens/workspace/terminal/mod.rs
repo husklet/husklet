@@ -363,10 +363,7 @@ impl Window {
         let pane = Panes::at(window, slot)?;
         let point = pane.widget.compute_point(
             &window.stack,
-            &gtk::graphene::Point::new(
-                pane.widget.width() as f32 / 2.0,
-                pane.widget.height() as f32 / 2.0,
-            ),
+            &gtk::graphene::Point::new(pane.widget.width() as f32 / 2.0, pane.widget.height() as f32 / 2.0),
         )?;
         Some((f64::from(point.x()), f64::from(point.y())))
     }
@@ -435,9 +432,13 @@ impl Window {
     }
 
     pub(crate) fn retitle_pane(window: &Rc<TermWin>, pane: &gtk::Widget, title: &str) -> bool {
-        let Some(page) = Page::of(window, pane) else { return false };
+        let Some(page) = Page::of(window, pane) else {
+            return false;
+        };
         let mut entries = window.entries.borrow_mut();
-        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else { return false };
+        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else {
+            return false;
+        };
         entry.retitle(title);
         true
     }
@@ -490,7 +491,7 @@ impl Window {
     }
 
     pub(crate) fn settings(app: &gtk::Application, ws: &WorkspaceConfig) {
-        Self::open_page(app, ws, Some(screens::workspace::Page::Settings));
+        Self::open_page(app, ws, Some(screens::workspace::Page::Workspace));
     }
 
     pub(crate) fn open_page(
@@ -571,7 +572,9 @@ impl Window {
             keys.connect_key_pressed(move |_, key, _c, state| {
                 let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
+                    key: key
+                        .name()
+                        .map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: true,
                     slot,
@@ -637,7 +640,9 @@ impl Window {
             keys.connect_key_released(move |_, key, _c, state| {
                 let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
+                    key: key
+                        .name()
+                        .map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: false,
                     slot,
@@ -651,11 +656,13 @@ impl Window {
         {
             let tw = tw.clone();
             motion.connect_motion(move |controller, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 let previous = tw.last_pointer.replace(Some(target.clone()));
-                if let Some(previous) = previous.filter(|previous| {
-                    previous.slot != target.slot || previous.generation != target.generation
-                }) {
+                if let Some(previous) =
+                    previous.filter(|previous| previous.slot != target.slot || previous.generation != target.generation)
+                {
                     tw.broadcast(TermWin::pointer_event(
                         &previous,
                         hl_extension::PointerPhase::Leave,
@@ -683,7 +690,9 @@ impl Window {
         {
             let tw = tw.clone();
             motion.connect_enter(move |controller, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 tw.broadcast(TermWin::pointer_event(
                     &target,
                     hl_extension::PointerPhase::Enter,
@@ -715,7 +724,9 @@ impl Window {
         {
             let tw = tw.clone();
             clicks.connect_pressed(move |gesture, _, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 tw.broadcast(TermWin::pointer_event(
                     &target,
                     hl_extension::PointerPhase::Press,
@@ -729,7 +740,9 @@ impl Window {
         {
             let tw = tw.clone();
             clicks.connect_released(move |gesture, _, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 let button = gesture.current_button();
                 tw.broadcast(TermWin::pointer_event(
                     &target,
@@ -969,14 +982,23 @@ mod workspace_event_identity_tests {
 
     #[test]
     fn focused_terminal_identity_is_reported_and_search_focus_is_explicitly_absent() {
-        assert!(crate::test_support::on_the_toolkit_thread(|| {
-            let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
-            let tw = Window::bench(&workspace);
-            let terminal = vte4::Terminal::new();
-            Slots::new(&tw).hold(&terminal, "pane-stable".into());
-            assert_eq!(TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())), (Some("pane-stable".into()), Some(0)));
+        assert!(
+            crate::test_support::on_the_toolkit_thread(|| {
+                let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
+                let tw = Window::bench(&workspace);
+                let terminal = vte4::Terminal::new();
+                Slots::new(&tw).hold(&terminal, "pane-stable".into());
+                assert_eq!(
+                    TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())),
+                    (Some("pane-stable".into()), Some(0))
+                );
 
-            assert_eq!(TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())), (None, None));
-        }), "workspace event identity requires an Xvfb display");
+                assert_eq!(
+                    TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())),
+                    (None, None)
+                );
+            }),
+            "workspace event identity requires an Xvfb display"
+        );
     }
 }

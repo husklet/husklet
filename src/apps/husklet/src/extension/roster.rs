@@ -75,6 +75,10 @@ impl From<Objection> for Refusal {
 pub struct Entry {
     /// Identity, which is also the sidebar label and the storage key.
     pub name: ExtensionName,
+    /// Human-facing identity declared by the consented image.
+    pub display_name: String,
+    /// How the extension asks to appear in workspace navigation.
+    pub interface: Option<hl_extension::Presentation>,
     /// The image the grant was given for.
     pub image_digest: String,
     /// Manifest version consented to for this digest.
@@ -143,6 +147,14 @@ impl<S: Storage> Roster<S> {
             .records()
             .map(|record| Entry {
                 name: record.name.clone(),
+                display_name: record
+                    .declaration
+                    .as_ref()
+                    .map_or_else(|| record.name.to_string(), |manifest| manifest.display_name.clone()),
+                interface: record
+                    .declaration
+                    .as_ref()
+                    .and_then(|manifest| manifest.interface.clone()),
                 image_digest: record.image_digest.clone(),
                 version: record.version.clone(),
                 granted: record.granted.clone(),
@@ -419,8 +431,7 @@ mod tests {
         }
 
         fn remove(&self, key: &Key) -> Result<(), Self::Error> {
-            if key.as_str().starts_with(super::super::state::FAULT_PREFIX)
-                && self.refuse.swap(false, Ordering::AcqRel)
+            if key.as_str().starts_with(super::super::state::FAULT_PREFIX) && self.refuse.swap(false, Ordering::AcqRel)
             {
                 return Err(std::io::Error::other("injected fault-marker refusal").into());
             }
@@ -607,7 +618,9 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);
         let mut roster = opened(temporary.path());
-        roster.register(&asked, "sha256:new", &asked.capabilities, 7).expect("registered");
+        roster
+            .register(&asked, "sha256:new", &asked.capabilities, 7)
+            .expect("registered");
         assert!(roster.remove_if_digest(&asked.name, "sha256:old").is_err());
         assert_eq!(roster.entries()[0].image_digest, "sha256:new");
         assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
@@ -618,7 +631,9 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);
         let mut roster = opened(temporary.path());
-        roster.register(&asked, "sha256:new", &asked.capabilities, 7).expect("registered");
+        roster
+            .register(&asked, "sha256:new", &asked.capabilities, 7)
+            .expect("registered");
         assert!(roster.enable_if_digest(&asked.name, "sha256:old").is_err());
         assert!(roster.disable_if_digest(&asked.name, "sha256:old").is_err());
         assert_eq!(roster.stage(&asked.name), Stage::Standby);
@@ -629,7 +644,9 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);
         let mut initial = opened(temporary.path());
-        initial.register(&asked, "sha256:old", &asked.capabilities, 7).expect("registered");
+        initial
+            .register(&asked, "sha256:old", &asked.capabilities, 7)
+            .expect("registered");
         let roster = std::sync::Arc::new(std::sync::Mutex::new(initial));
         let replaced = std::sync::Arc::new(std::sync::Barrier::new(2));
         let worker_roster = roster.clone();
@@ -645,7 +662,11 @@ mod tests {
             worker_barrier.wait();
         });
         replaced.wait();
-        assert!(roster.lock().unwrap().enable_if_digest(&asked.name, "sha256:old").is_err());
+        assert!(roster
+            .lock()
+            .unwrap()
+            .enable_if_digest(&asked.name, "sha256:old")
+            .is_err());
         worker.join().unwrap();
         assert_eq!(opened(temporary.path()).stage(&asked.name), Stage::Standby);
     }
@@ -655,7 +676,9 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);
         let mut initial = opened(temporary.path());
-        initial.register(&asked, "sha256:old", &asked.capabilities, 7).expect("registered");
+        initial
+            .register(&asked, "sha256:old", &asked.capabilities, 7)
+            .expect("registered");
         let roster = std::sync::Arc::new(std::sync::Mutex::new(initial));
         let replaced = std::sync::Arc::new(std::sync::Barrier::new(2));
         let worker_roster = roster.clone();
@@ -671,7 +694,11 @@ mod tests {
             worker_barrier.wait();
         });
         replaced.wait();
-        assert!(roster.lock().unwrap().remove_if_digest(&asked.name, "sha256:old").is_err());
+        assert!(roster
+            .lock()
+            .unwrap()
+            .remove_if_digest(&asked.name, "sha256:old")
+            .is_err());
         worker.join().unwrap();
         assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
     }
