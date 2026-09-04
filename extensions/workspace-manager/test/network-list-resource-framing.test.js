@@ -20,7 +20,7 @@ test('network inventory removes stale identity authority across real framed refr
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'network-list-resource-test', granted: ['network-read', 'network-write'],
+      protocol: 1, extension: 'network-list-resource-test', granted: ['networks:read', 'networks:write'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

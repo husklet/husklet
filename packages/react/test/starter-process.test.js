@@ -55,7 +55,7 @@ async function host(context, protocol = 1) {
         stream.write(encode({ channel: frame.channel, kind: KIND.response, payload: frame.payload.call === 'interface_open_tab' ? { reply: 'identity', with: 'starter-pane' } : { reply: 'done' } }));
       }
     });
-    stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol, extension: 'react-starter', granted: ['interface'] } }));
+    stream.write(encode({ channel: 0, kind: KIND.open, payload: { protocol, extension: 'react-starter', granted: ['interface:render'] } }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
   context.after(() => new Promise((resolve) => server.close(resolve)));

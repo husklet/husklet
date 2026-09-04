@@ -27,7 +27,7 @@ fn manifest_document(extra: &str) -> String {
          display_name = \"Containers\"\n\
          version = \"1.0.0\"\n\
          protocol = {PROTOCOL}\n\
-         capabilities = [\"container-read\"]\n\
+         capabilities = [\"containers:read\"]\n\
          {extra}"
     )
 }
@@ -205,8 +205,8 @@ fn pane_providers_are_named_and_require_interface_authority() {
     );
 
     let document = manifest_document(providers).replace(
-        "capabilities = [\"container-read\"]",
-        "capabilities = [\"container-read\", \"interface\"]",
+        "capabilities = [\"containers:read\"]",
+        "capabilities = [\"containers:read\", \"interface:render\"]",
     );
     let manifest = Manifest::parse(&document, PROTOCOL).expect("provider manifest");
     assert_eq!(manifest.pane_providers[0].id.as_str(), "database");
@@ -219,14 +219,14 @@ fn duplicate_or_untitled_pane_providers_are_refused() {
     let prefix = "[[pane_providers]]\nid = \"database\"\ntitle = \"Postgres\"\n";
     let duplicate = format!("{prefix}[[pane_providers]]\nid = \"database\"\ntitle = \"Logs\"\n");
     let document = manifest_document(&duplicate).replace(
-        "capabilities = [\"container-read\"]",
-        "capabilities = [\"container-read\", \"interface\"]",
+        "capabilities = [\"containers:read\"]",
+        "capabilities = [\"containers:read\", \"interface:render\"]",
     );
     assert_eq!(Manifest::parse(&document, PROTOCOL), Err(Invalid::PaneProviders));
 
     let blank = manifest_document("[[pane_providers]]\nid = \"database\"\ntitle = \"  \"\n").replace(
-        "capabilities = [\"container-read\"]",
-        "capabilities = [\"container-read\", \"interface\"]",
+        "capabilities = [\"containers:read\"]",
+        "capabilities = [\"containers:read\", \"interface:render\"]",
     );
     assert_eq!(Manifest::parse(&blank, PROTOCOL), Err(Invalid::PaneProviders));
 }
@@ -235,7 +235,7 @@ fn duplicate_or_untitled_pane_providers_are_refused() {
 fn a_manifest_path_that_escapes_is_refused_with_the_manifest() {
     let label = format!(
         "{{\"name\":\"x\",\"display_name\":\"X\",\"version\":\"1\",\"protocol\":{PROTOCOL},\
-          \"capabilities\":[\"filesystem-read\"],\"filesystem_roots\":[\"../../etc\"]}}"
+          \"capabilities\":[\"filesystem:read\"],\"filesystem_roots\":[\"../../etc\"]}}"
     );
     assert!(matches!(Manifest::parse(&label, PROTOCOL), Err(Invalid::Malformed(_))));
 }

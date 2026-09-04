@@ -20,7 +20,7 @@ test('authoritative image replacement invalidates detail and removal consent', {
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'image-detail-lifecycle-test', granted: ['image-read', 'image-write'],
+      protocol: 1, extension: 'image-detail-lifecycle-test', granted: ['images:read', 'images:write'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

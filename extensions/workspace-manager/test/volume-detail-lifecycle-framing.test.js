@@ -18,7 +18,7 @@ test('same-name volume generation replacement invalidates detail authority', { t
   let lists = 0; let inspections = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'volume-detail-lifecycle-test', granted: ['volume-read', 'volume-write'] } }));
+    socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'volume-detail-lifecycle-test', granted: ['volumes:read', 'volumes:write'] } }));
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       const call = frame.payload?.call; if (!call) continue;
       let payload = { reply: 'done' };

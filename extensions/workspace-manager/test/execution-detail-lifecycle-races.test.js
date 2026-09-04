@@ -14,7 +14,7 @@ import { host } from './host.js';
 test('same-id execution replacement fences detail output wait and consent', { timeout: 8_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'husklet-execution-lifecycle-')); const socketPath = join(directory, 'host.sock');
   const id = 'e'.repeat(32); const container = 'c'.repeat(32); let lists = 0; const calls = [];
-  const server = net.createServer((socket) => { const reader = new Reader(); socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'execution-lifecycle-test', granted: ['container-read', 'container-control'] } })); socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+  const server = net.createServer((socket) => { const reader = new Reader(); socket.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: 1, extension: 'execution-lifecycle-test', granted: ['containers:read', 'containers:control'] } })); socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
     const call = frame.payload?.call; if (!call) continue; calls.push(call); let payload = { reply: 'done' };
     if (call === 'execution_list') { lists += 1; payload = { reply: 'executions', with: { executions: [{ id, container_id: container, running: true, exit_code: 0, pid: lists, command: [`generation-${lists}`], user: 'root' }], truncated: false } }; }
     else if (call === 'execution_inspect' || call === 'execution_wait') payload = { reply: 'execution', with: { id, container_id: container, running: true, exit_code: 0, pid: 1, command: ['stale-detail'], user: 'root' } };

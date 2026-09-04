@@ -31,7 +31,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       assert.equal(error.code, 'ECONNRESET');
     });
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'workspace-manager', granted: ['container-read', 'container-control', 'container-attach', 'image-read', 'image-write', 'volume-read', 'volume-write', 'network-read', 'network-write', 'interface'],
+      protocol: 1, extension: 'workspace-manager', granted: ['containers:read', 'containers:control', 'containers:attach', 'images:read', 'images:write', 'volumes:read', 'volumes:write', 'networks:read', 'networks:write', 'interface:render'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

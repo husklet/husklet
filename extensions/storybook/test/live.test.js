@@ -80,7 +80,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     stream.write(encode({
       channel: 0,
       kind: KIND.open,
-      payload: { protocol: 1, extension: 'storybook', granted: ['interface'] },
+      payload: { protocol: 1, extension: 'storybook', granted: ['interface:render'] },
     }));
   });
   await new Promise((resolve, reject) => {

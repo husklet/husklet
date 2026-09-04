@@ -48,7 +48,7 @@ test('packaged external agent restores container after exact execution lifecycle
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     } });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'container-agent', granted: ['workspace-read', 'container-read', 'container-control'] } }));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'container-agent', granted: ['workspaces:read', 'containers:read', 'containers:control'] } }));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {

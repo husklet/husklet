@@ -28,8 +28,8 @@ export function boundedExtensions(extensions) {
 }
 
 const initial = boundedExtensions([
-  { name: 'workspace-manager', version: '1.4.0', digest: 'sha256:manager-generation-14', status: 'running', grants: ['workspace-read', 'workspace-control', 'container-read'], update: { version: '1.5.0', digest: 'sha256:manager-generation-15', requested: ['workspace-read', 'workspace-control', 'container-read', 'container-control'] } },
-  { name: 'storybook', version: '1.4.0', digest: 'sha256:storybook-generation-9', status: 'stopped', grants: ['interface'] },
+  { name: 'workspace-manager', version: '1.4.0', digest: 'sha256:manager-generation-14', status: 'running', grants: ['workspaces:read', 'workspaces:control', 'containers:read'], update: { version: '1.5.0', digest: 'sha256:manager-generation-15', requested: ['workspaces:read', 'workspaces:control', 'containers:read', 'containers:control'] } },
+  { name: 'storybook', version: '1.4.0', digest: 'sha256:storybook-generation-9', status: 'stopped', grants: ['interface:render'] },
 ]);
 
 export function ExtensionLifecycleStory() {
@@ -61,7 +61,7 @@ export function ExtensionLifecycleStory() {
             h(Heading, { label: `Review update ${selected.update.version}`, scale: 'section' }),
             h(Text, { label: selected.update.digest, monospace: true, wrap: true }),
             h(Text, { label: `Requested: ${selected.update.requested.join(', ')}`, wrap: true }),
-            h(InlineMessage, { label: 'container-control is new and remains ungranted until explicit consent.', tone: 'warning' }),
+            h(InlineMessage, { label: 'containers:control is new and remains ungranted until explicit consent.', tone: 'warning' }),
             h(Button, { label: 'Keep current grants and update', onInvoke: () => { setReview(false); setStatus(`Update staged for ${selected.name} without widening grants.`); } })) : null),
         h(CardActions, {}, h(Row, { gap: 2, wrap: true },
           h(Button, { label: selected.status === 'running' ? 'Stop extension' : 'Start extension', onInvoke: () => lifecycle(selected.status === 'running' ? 'stopped' : 'running') }),

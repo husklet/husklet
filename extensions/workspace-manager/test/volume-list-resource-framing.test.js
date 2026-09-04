@@ -17,7 +17,7 @@ test('volume inventory removes stale generation authority across real framed ref
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'volume-list-resource-test', granted: ['volume-read', 'volume-write'],
+      protocol: 1, extension: 'volume-list-resource-test', granted: ['volumes:read', 'volumes:write'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {

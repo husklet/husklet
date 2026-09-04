@@ -11,43 +11,66 @@
 /// reading pane output and controlling containers — cannot ride along with a
 /// milder one.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum Capability {
+    #[serde(rename = "workspaces:read")]
     WorkspaceRead,
     /// Creating, changing, starting, stopping, or deleting workspaces.
+    #[serde(rename = "workspaces:control")]
     WorkspaceControl,
     /// Observing keyboard, focus, and pointer activity across the workspace window.
+    #[serde(rename = "workspaces:events")]
     WorkspaceEvents,
+    #[serde(rename = "containers:read")]
     ContainerRead,
+    #[serde(rename = "containers:control")]
     ContainerControl,
     /// Opens an interactive, kill-on-disconnect terminal in an existing container.
     /// Kept separate from detached container mutation and ordinary terminal control.
+    #[serde(rename = "containers:attach")]
     ContainerAttach,
+    #[serde(rename = "images:read")]
     ImageRead,
+    #[serde(rename = "images:write")]
     ImageWrite,
+    #[serde(rename = "volumes:read")]
     VolumeRead,
+    #[serde(rename = "volumes:write")]
     VolumeWrite,
+    #[serde(rename = "networks:read")]
     NetworkRead,
+    #[serde(rename = "networks:write")]
     NetworkWrite,
+    #[serde(rename = "terminals:read")]
     TerminalRead,
+    #[serde(rename = "terminals:control")]
     TerminalControl,
     /// Reading the bytes flowing through a pane. Deliberately separate from
     /// `TerminalRead`: listing panes and reading what was typed into a shell
     /// are different kinds of access.
+    #[serde(rename = "terminals:output")]
     TerminalOutput,
     /// Observing bounded pane-change metadata. This reveals activity and stable
     /// pane identities, but never terminal bytes or semantic values.
+    #[serde(rename = "panes:observe")]
     PaneObserve,
+    #[serde(rename = "panes:semantic-read")]
     PaneSemanticRead,
+    #[serde(rename = "panes:semantic-control")]
     PaneSemanticControl,
     /// Reading installed extension identity and lifecycle status.
+    #[serde(rename = "extensions:read")]
     ExtensionRead,
     /// Enabling, disabling, or removing installed extension records.
+    #[serde(rename = "extensions:control")]
     ExtensionControl,
     /// Acquiring and consent-committing extension images.
+    #[serde(rename = "extensions:install")]
     ExtensionInstall,
+    #[serde(rename = "filesystem:read")]
     FilesystemRead,
+    #[serde(rename = "filesystem:write")]
     FilesystemWrite,
+    #[serde(rename = "interface:render")]
     Interface,
 }
 
@@ -56,30 +79,30 @@ impl Capability {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::WorkspaceRead => "workspace-read",
-            Self::WorkspaceControl => "workspace-control",
-            Self::WorkspaceEvents => "workspace-events",
-            Self::ContainerRead => "container-read",
-            Self::ContainerControl => "container-control",
-            Self::ContainerAttach => "container-attach",
-            Self::ImageRead => "image-read",
-            Self::ImageWrite => "image-write",
-            Self::VolumeRead => "volume-read",
-            Self::VolumeWrite => "volume-write",
-            Self::NetworkRead => "network-read",
-            Self::NetworkWrite => "network-write",
-            Self::TerminalRead => "terminal-read",
-            Self::TerminalControl => "terminal-control",
-            Self::TerminalOutput => "terminal-output",
-            Self::PaneObserve => "pane-observe",
-            Self::PaneSemanticRead => "pane-semantic-read",
-            Self::PaneSemanticControl => "pane-semantic-control",
-            Self::ExtensionRead => "extension-read",
-            Self::ExtensionControl => "extension-control",
-            Self::ExtensionInstall => "extension-install",
-            Self::FilesystemRead => "filesystem-read",
-            Self::FilesystemWrite => "filesystem-write",
-            Self::Interface => "interface",
+            Self::WorkspaceRead => "workspaces:read",
+            Self::WorkspaceControl => "workspaces:control",
+            Self::WorkspaceEvents => "workspaces:events",
+            Self::ContainerRead => "containers:read",
+            Self::ContainerControl => "containers:control",
+            Self::ContainerAttach => "containers:attach",
+            Self::ImageRead => "images:read",
+            Self::ImageWrite => "images:write",
+            Self::VolumeRead => "volumes:read",
+            Self::VolumeWrite => "volumes:write",
+            Self::NetworkRead => "networks:read",
+            Self::NetworkWrite => "networks:write",
+            Self::TerminalRead => "terminals:read",
+            Self::TerminalControl => "terminals:control",
+            Self::TerminalOutput => "terminals:output",
+            Self::PaneObserve => "panes:observe",
+            Self::PaneSemanticRead => "panes:semantic-read",
+            Self::PaneSemanticControl => "panes:semantic-control",
+            Self::ExtensionRead => "extensions:read",
+            Self::ExtensionControl => "extensions:control",
+            Self::ExtensionInstall => "extensions:install",
+            Self::FilesystemRead => "filesystem:read",
+            Self::FilesystemWrite => "filesystem:write",
+            Self::Interface => "interface:render",
         }
     }
 

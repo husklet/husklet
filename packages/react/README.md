@@ -77,7 +77,7 @@ An extension can offer named views in the workspace pane chooser. Declare each
 choice in the image manifest alongside the required `interface` capability:
 
 ```toml
-capabilities = ["interface"]
+capabilities = ["interface:render"]
 
 [[pane_providers]]
 id = "logs"
@@ -173,7 +173,7 @@ inventory so a moved tag cannot select a different image after confirmation.
 Network inspection may use a canonical name, but remove, connect, and disconnect
 require the complete 32-hex network ID from inventory. Attachment mutations also
 require the complete immutable container ID.
-`attachTerminal` requires the separate `container-attach` grant, preserves argv
+`attachTerminal` requires the separate `containers:attach` grant, preserves argv
 boundaries, opens a non-restored GUI tab, and kills its interactive exec when that
 pane disconnects.
 Volume removal takes both its canonical name and the 32-hex `generation` returned
@@ -211,13 +211,13 @@ version really supports. Its image inventory includes the implemented bounded
 list/inspect and pull calls plus digest-bound removal and confirmed prune
 authority; callers do not need to infer those operations from TypeScript alone.
 Workspace creation, configuration and lifecycle are
-available under the explicit `workspace-control` grant. A running workspace
+available under the explicit `workspaces:control` grant. A running workspace
 must be stopped before it is updated, and an extension cannot stop, restart or
 delete the workspace hosting it. Names under `unavailable` deliberately are not
 callable methods. `Session.onEvent` is
 low-level transport plumbing for events the host does send. Interface handlers
 receive bounded key, focus, and pointer details, while the credit-controlled
-`workspace-events` subscription carries workspace-level key, focus, and pointer
+`workspaces:events` subscription carries workspace-level key, focus, and pointer
 activity. Its `dropped` count includes queue pressure, motion coalescing, and
 native callback contention, so consumers can detect every observation gap.
 Pointer events identify the exact pane slot and occupant generation,

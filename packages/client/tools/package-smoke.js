@@ -32,7 +32,7 @@ async function runPackedStarter(starter, installedClient, architecture, signal, 
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspaces:read'] },
     }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
@@ -89,7 +89,7 @@ async function runPackedProtocolRefusal(starter, installedClient) {
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 2, extension: 'client-starter', granted: ['workspace-read'] },
+      payload: { protocol: 2, extension: 'client-starter', granted: ['workspaces:read'] },
     }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
@@ -128,7 +128,7 @@ async function runPackedTruncatedGreeting(starter, installedClient) {
     const greeting = wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspaces:read'] },
     });
     // A clean EOF in the middle of a frame must not be mistaken for a host
     // that never greeted us or leave a day-one starter waiting indefinitely.
@@ -210,7 +210,7 @@ async function runPackedIllegalHeader(starter, installedClient) {
     const greeting = wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspaces:read'] },
     });
     greeting.writeUInt16LE(1, 10);
     stream.end(greeting);
@@ -296,7 +296,7 @@ async function runPackedMalformedReply(starter, installedClient) {
     stream.write(wire.encode({
       channel: 0,
       kind: wire.KIND.open,
-      payload: { protocol: 1, extension: 'client-starter', granted: ['workspace-read'] },
+      payload: { protocol: 1, extension: 'client-starter', granted: ['workspaces:read'] },
     }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
