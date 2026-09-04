@@ -2725,6 +2725,8 @@ export interface SelectProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
   /** options of a select or a radio group, each a value and a label */
   choices?: Choice[];
   /** defaults to enabled when absent */

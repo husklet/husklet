@@ -259,7 +259,7 @@ catalogue! {
     Checkbox: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
     Radio: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
     RadioGroup: children, props[Choices, Gap, Orientation], triggers[],
-    Select: leaf, props[Choices, Enabled], triggers[Change, Select, Key, Focus],
+    Select: leaf, props[Value, Choices, Enabled], triggers[Change, Select, Key, Focus],
 
     // Lists: rows composed from parts.
     List: children, props[], triggers[],

@@ -21,6 +21,7 @@ const REPORT_LIMIT: usize = 1024;
 pub struct Reports {
     queue: Rc<RefCell<VecDeque<Event>>>,
     authorities: Rc<RefCell<HashMap<(NodeId, Trigger), EventId>>>,
+    choices: Rc<RefCell<HashMap<NodeId, Vec<String>>>>,
 }
 
 impl Reports {
@@ -65,6 +66,21 @@ impl Reports {
             event_authority(event)
                 .is_none_or(|(held, kind)| held != node || trigger.is_some_and(|wanted| wanted != kind))
         });
+        if trigger.is_none() {
+            self.choices.borrow_mut().remove(&node);
+        }
+    }
+
+    pub(crate) fn set_choices(&self, node: NodeId, values: Vec<String>) {
+        self.choices.borrow_mut().insert(node, values);
+    }
+
+    fn choice(&self, node: NodeId, index: u32) -> Option<String> {
+        self.choices
+            .borrow()
+            .get(&node)?
+            .get(usize::try_from(index).ok()?)
+            .cloned()
     }
 
     /// Takes everything reported since the previous drain.
@@ -688,10 +704,13 @@ fn chosen(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) ->
         let Some(id) = slot.id() else {
             return;
         };
+        let selected = drop.selected();
         reports.push(Event::Change {
             node,
             id,
-            value: PropValue::Integer(i64::from(drop.selected())),
+            value: reports
+                .choice(node, selected)
+                .map_or(PropValue::Nothing, PropValue::text),
         });
     });
     true

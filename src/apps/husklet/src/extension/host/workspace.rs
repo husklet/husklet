@@ -441,12 +441,12 @@ impl WorkspaceControl for Store {
         if configuration.name != name {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
-        if Self::running(&old) {
+        let mut workspace = Self::configured(configuration)?;
+        if Self::running(&old) && workspace.storage != old.storage {
             return Err(HostError::Conflict(
-                "stop the workspace before changing its configuration".into(),
+                "workspace storage cannot change while the workspace is running".into(),
             ));
         }
-        let mut workspace = Self::configured(configuration)?;
         workspace.generation.clone_from(&old.generation);
         crate::config::WorkspaceStore::load(Self::path())
             .and_then(|mut store| store.upsert_if_generation(generation, workspace.clone()))
