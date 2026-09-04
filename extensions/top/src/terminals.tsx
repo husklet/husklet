@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction, Entry, Heading, LogView,
   ResourceState, Row, Scroll, Select, Spinner, Text, LOG_VIEW_CHARACTER_LIMIT,
-  type PaneText, type ReadablePane, type TabSummary, type WorkspaceApi,
+  type PaneText, type ReadablePane, type SemanticActionKind, type SemanticNode, type TabSummary, type WorkspaceApi,
 } from '@husklet/react';
 import { bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
@@ -25,6 +25,9 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [provider, setProvider] = React.useState('terminal');
   const [providerError, setProviderError] = React.useState<unknown>(null);
   const [providersTruncated, setProvidersTruncated] = React.useState(false);
+  const [semanticNodeId, setSemanticNodeId] = React.useState('');
+  const [semanticAction, setSemanticAction] = React.useState<SemanticActionKind>('invoke');
+  const [semanticValue, setSemanticValue] = React.useState('');
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -168,6 +171,25 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
+  const actSemantic = async () => {
+    if (readable?.kind !== 'ui' || !selected) return;
+    const node = semanticNodeNumber(semanticNodeId);
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    setBusy(`semantic:${slot}`); setError(null);
+    try {
+      const result = await api.terminal.inspectAndAct(slot, {
+        node, action: semanticAction, value: semanticValue === '' ? null : semanticValue,
+      });
+      if (!result.changed) throw new Error(`Interface pane ${slot} did not change after the semantic action; refresh before retrying.`);
+      if (requested !== paneRevision.current) return;
+      setReadable({ kind: 'ui', text: result.after.text, snapshot: result.after.snapshot });
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
   React.useEffect(() => {
     if (!api.extensions?.providers) return;
     let disposed = false;
@@ -190,6 +212,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
         if (!result.changed) throw new Error(`Pane ${slot} did not close before the observation window ended; refresh and try again.`);
         if (requested !== paneRevision.current) return;
         setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand(''); setColumns(''); setRows('');
+        setSemanticNodeId(''); setSemanticValue('');
       } else if (operation === 'retitle') {
         const requestedTitle = title.trim();
         if (!requestedTitle) return;
@@ -216,6 +239,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
     if (present) return;
     paneRevision.current += 1;
     setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand(''); setColumns(''); setRows('');
+    setSemanticNodeId(''); setSemanticValue('');
   }, [resource.data, selected]);
   return <Page title="Terminal tabs" subtitle="Read terminal output or semantic UI text, send revision-bound input, focus panes, and pin tabs.">
     <Row gap={1} wrap>
@@ -257,6 +281,24 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
               detail={readable.kind === 'terminal' ? 'Bounded live screen text' : 'Bounded semantic XML'} />
             <CardContent gap={1}>
               <LogView value={readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) || 'Pane is empty.'} />
+              {readable.kind === 'ui' ? <Column gap={1}>
+                <Text label="Act on a node and action advertised by the current semantic XML. The client re-inspects authority immediately before dispatch." color="text-dim" wrap />
+                <Row gap={1} wrap>
+                  <Entry value={semanticNodeId} placeholder="Semantic node ID" enabled={busy === ''}
+                    onChange={(event) => setSemanticNodeId(String(event.value ?? ''))} />
+                  <Select value={semanticAction} choices={SEMANTIC_ACTIONS.map((value) => ({ value, label: value }))}
+                    enabled={busy === ''} onChange={(event) => setSemanticAction(String(event.value ?? 'invoke') as SemanticActionKind)} />
+                  <Entry value={semanticValue} placeholder="Action value (optional)" grow enabled={busy === ''}
+                    onChange={(event) => setSemanticValue(String(event.value ?? ''))} />
+                  {semanticTarget(readable.snapshot.root, semanticNodeId)?.destructive
+                    ? <ConfirmAction authorityKey={`semantic:${selected}:${readable.snapshot.generation}:${readable.snapshot.revision}:${semanticNodeId}:${semanticAction}:${semanticValue}`}
+                      label="Run semantic action" confirmLabel="Confirm semantic action" pendingLabel="Confirm semantic action"
+                      question={`Run destructive ${semanticAction} on semantic node ${semanticNodeId}?`}
+                      enabled={busy === '' && semanticNodeId.length > 0} onConfirm={actSemantic} />
+                    : <Button label="Run semantic action" enabled={busy === '' && semanticNodeId.length > 0}
+                      onInvoke={() => { void actSemantic(); }} />}
+                </Row>
+              </Column> : null}
               {readable.kind === 'terminal' && !cursor
                 ? <Text label="This host did not provide a writable pane revision; refresh before sending input." color="warning" wrap /> : null}
               {readable.kind === 'terminal' ? <Row gap={1}>
@@ -367,6 +409,28 @@ function providerChoices(providers: { extension: string; id: string; title: stri
     choices.splice(1, 0, { value: current, label: `Current · ${current}` });
   }
   return choices;
+}
+
+const SEMANTIC_ACTIONS: SemanticActionKind[] = ['invoke', 'change', 'submit', 'toggle', 'expand', 'focus'];
+
+function semanticNodeNumber(value: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) throw new TypeError('Semantic node ID must be a nonnegative safe integer.');
+  const node = Number(value);
+  if (!Number.isSafeInteger(node)) throw new TypeError('Semantic node ID must be a nonnegative safe integer.');
+  return node;
+}
+
+function semanticTarget(root: SemanticNode, value: string): SemanticNode | null {
+  let wanted: number;
+  try { wanted = semanticNodeNumber(value); } catch { return null; }
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node) break;
+    if (node.id === wanted) return node;
+    pending.push(...node.children);
+  }
+  return null;
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {

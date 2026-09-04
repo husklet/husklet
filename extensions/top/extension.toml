@@ -9,7 +9,7 @@ activation = "tab"
 # from inventory. Pane inventory, live terminal output, semantic UI text, and
 # revision-bound input are separate authorities, so consent describes every
 # operation this compact control surface exercises.
-capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "extensions:read", "interface:render"]
+capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "extensions:read", "interface:render"]
 
 [interface]
 tab_title = "Top"

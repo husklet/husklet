@@ -315,6 +315,34 @@ test('terminal management switches an inspected pane to an enabled exact provide
   ]);
 });
 
+test('terminal management re-inspects semantic authority and confirms destructive UI actions', async () => {
+  const calls = [];
+  const tree = (revision, value) => ({
+    slot: 'pane-ui', generation: 3, revision, truncated: false,
+    root: { id: 42, role: 'button', label: 'Delete', value, disabled: false, destructive: true, actions: ['invoke'], children: [] },
+  });
+  const terminal = {
+    toText: async () => ({ kind: 'ui', text: '<button id="42" destructive="true"/>', snapshot: tree(4, null) }),
+    inspectAndAct: async (...args) => {
+      calls.push(args);
+      return { changed: true, before: { snapshot: tree(4, null), text: '<button/>' }, after: { snapshot: tree(5, 'done'), text: '<button value="done"/>' } };
+    },
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'UI', pinned: false, panes: [{ slot: 'pane-ui', occupant: 'surface', provider: { extension: 'tool', provider: 'main' } }] }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host(); stage.render(h(Terminals, { api: { terminal }, resource }));
+  invoke(stage, 'Inspect pane-ui'); await settled(); await settled();
+  change(stage, 'Semantic node ID', '42');
+  invoke(stage, 'Run semantic action'); await settled();
+  assert.deepEqual(calls, [], 'opening destructive semantic confirmation has no socket authority');
+  invoke(stage, 'Confirm semantic action'); await settled(); await settled();
+  assert.deepEqual(calls, [['pane-ui', { node: 42, action: 'invoke', value: null }]]);
+  assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '<button value="done"/>');
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],

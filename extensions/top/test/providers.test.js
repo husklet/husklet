@@ -16,7 +16,7 @@ test('the compact manager requests the complete pane inspection authority it exe
   const capabilities = new Set(manifest.match(/^capabilities = \[(.*)\]$/m)?.[1]
     .split(',').map((value) => value.trim().replaceAll('"', '')) ?? []);
 
-  for (const capability of ['terminals:read', 'terminals:control', 'terminals:output', 'panes:observe', 'panes:semantic-read', 'extensions:read']) {
+  for (const capability of ['terminals:read', 'terminals:control', 'terminals:output', 'panes:observe', 'panes:semantic-read', 'panes:semantic-control', 'extensions:read']) {
     assert.ok(capabilities.has(capability), capability);
   }
 });
