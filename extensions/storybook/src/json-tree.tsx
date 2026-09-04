@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Badge, Column, Heading, InlineMessage, JsonTree, Row, Text } from '@husklet/react';
 
@@ -9,7 +8,7 @@ export const JSON_TREE_STORY = 'Bounded JSON tree';
 export function JsonTreeStory() {
   const [activity, setActivity] = useState('Select or copy a value to inspect its callback.');
   const payload = useMemo(() => {
-    const value = {
+    const value: Record<string, unknown> = {
       status: 'ready',
       workspace: { name: 'development', features: ['terminal', 'extensions'], owner: null },
       metrics: { cpu: 0.42, healthy: true },
