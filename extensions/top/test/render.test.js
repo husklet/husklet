@@ -1333,7 +1333,8 @@ test('finished execution cleanup requires explicit destructive confirmation', as
   const controlled = { containers: {
     execution: async () => item, executionLogs: async () => ({ stdout: [], stderr: [], truncated: false,
       stdout_truncated: false, stderr_truncated: false, eof: true }),
-    waitExecution: async () => item, removeExecution: async (...args) => calls.push(args),
+    waitExecution: async () => item,
+    removeExecutionAndWait: async (...args) => { calls.push(args); return { changed: true, id: item.id }; },
   } };
   const resource = { data: [item], loading: false, error: null, reload: async () => {} };
   const stage = host();
@@ -1345,7 +1346,8 @@ test('finished execution cleanup requires explicit destructive confirmation', as
   assert.deepEqual(calls, []);
   assert.equal(isDestructive(stage, 'Confirm removal'), true);
   invoke(stage, 'Confirm removal'); await settled(); await settled();
-  assert.deepEqual(calls, [['e2']]);
+  assert.deepEqual(calls, [['e2', { running: false, exit_code: 0, pid: 0 }]]);
+  assert.ok(labelled(stage, 'Execution e2 was removed and its absence was verified.'));
 });
 
 test('running execution termination is cursor-bound, confirmed and reports observed exit', async () => {

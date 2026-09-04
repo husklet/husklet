@@ -120,11 +120,24 @@ export function Executions({
       setBusy('');
     }
   };
-  const remove = async (id: string) => {
-    await api.containers.removeExecution(id);
-    setSelected('');
-    setOutput(null);
-    await resource.reload();
+  const remove = async (item: ExecutionSummary) => {
+    setBusy(`remove:${item.id}`);
+    setNotice(null);
+    try {
+      const result = await api.containers.removeExecutionAndWait(item.id, {
+        running: item.running, exit_code: item.exit_code, pid: item.pid,
+      });
+      setSelected('');
+      setOutput(null);
+      await resource.reload();
+      setNotice(result.changed
+        ? { tone: 'positive', label: `Execution ${shortId(item.id)} was removed and its absence was verified.` }
+        : { tone: 'warning', label: `Removal was sent, but execution ${shortId(item.id)} absence was not observed before the deadline.` });
+    } catch (error) {
+      setNotice({ tone: 'danger', label: boundedMessage(error) });
+    } finally {
+      setBusy('');
+    }
   };
 
   React.useEffect(() => {
@@ -167,7 +180,7 @@ export function Executions({
             enabled={!busy && item.running} onConfirm={() => terminate(item)} />
           <ConfirmAction authorityKey={`execution:${item.id}:remove`} label="Remove record" confirmLabel="Confirm removal"
             pendingLabel="Confirm removal" question={`Remove execution record ${shortId(item.id)}?`}
-            enabled={!busy && !item.running} onConfirm={() => remove(item.id)} />
+            enabled={!busy && !item.running} onConfirm={() => remove(item)} />
         </CardActions>
       </Card>)}
       <Omitted count={view.omitted} />

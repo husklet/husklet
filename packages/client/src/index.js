@@ -1209,6 +1209,41 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.containers.removeExecutionAndWait = async (id, after, { timeoutMs = 30_000 } = {}) => {
+    const executionId = immutableIdentity(id, [32], 'execution');
+    if (after == null || typeof after.running !== 'boolean'
+      || !Number.isSafeInteger(after.exit_code) || !Number.isSafeInteger(after.pid)) {
+      throw new TypeError('execution removal wait requires the exact running, exit_code, and pid cursor');
+    }
+    if (after.running) throw new TypeError('execution removal wait requires an observed finished execution');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('execution removal wait timeout must be between 1 and 30000ms');
+    }
+    const differs = (execution) => execution.running !== after.running
+      || execution.exit_code !== after.exit_code || execution.pid !== after.pid;
+    let removing = false; let observed; let timer;
+    const absent = new Promise((resolve) => {
+      observed = (catalogue) => {
+        if (!removing || catalogue.truncated) return;
+        if (!catalogue.executions.some((execution) => execution.id === executionId)) resolve();
+      };
+    });
+    const stop = await api.watchExecutions(observed);
+    try {
+      const current = await api.containers.execution(executionId);
+      if (differs(current)) throw new Error('execution cursor changed before removal authority');
+      removing = true;
+      await api.containers.removeExecution(executionId);
+      const removed = await Promise.race([
+        absent.then(() => true),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+      return { changed: removed, id: executionId };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.watchImagePulls = (listener) => watch('image-pulls', 'image_pulls', listener, 'image pull');
   api.watchExtensions = (listener) => watch('extensions', 'extensions', listener, 'extension');
   api.extensions.enableAndWait = async (name, imageDigest, { timeoutMs = 30_000 } = {}) => {

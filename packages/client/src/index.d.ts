@@ -288,6 +288,9 @@ export interface WorkspaceApi {
         | { changed: false; id: string; state: 'changed' | 'exited'; after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'> }
       >;
     removeExecution(id: string): Promise<void>;
+    /** Inspect the exact finished cursor, remove it, then prove absence from a later complete execution catalogue. */
+    removeExecutionAndWait(id: string, after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
+      options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */
     create(image: string, name?: string): Promise<string>;

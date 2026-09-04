@@ -107,6 +107,10 @@ test('the production entrypoint handshakes and renders through a real Unix socke
               executions: [{ id: liveExecutionId, container_id: containerId, running: false, exit_code: 143, pid: 0, command: ['live-command'], user: 'root' }],
               truncated: false,
             } } }));
+          } else if (name === 'execution_remove') {
+            socket.write(encode({ channel: 80, kind: KIND.event, payload: { snapshot: 'executions', of: {
+              executions: [], truncated: false,
+            } } }));
           }
         }
       }
