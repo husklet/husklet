@@ -124,7 +124,8 @@ pub(crate) fn aarch64_opcode_product(stderr: &[u8], required: bool, require_nonz
         return Err("aarch64-opcode dedicated fixture retired no instructions".into());
     }
     if reconcile_shape {
-        let shape = backend_shape_product(stderr, true)?.ok_or("aarch64-opcode product omitted backend-shape")?;
+        let shape = backend_shape_product(stderr.as_bytes(), true)?
+            .ok_or("aarch64-opcode product omitted backend-shape")?;
         if shape["interpreted_steps"] != values["body_retired"] {
             return Err("aarch64-opcode retired total differs from aggregated interpreted steps".into());
         }
