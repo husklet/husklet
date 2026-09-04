@@ -272,13 +272,17 @@ fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
         "(instruction & 0x1F200000u) == 0x0B000000u",
         "shift_type == 3u || (!sf && (amount & 0x20u))",
         "(instruction & 0x1F200000u) == 0x0A000000u",
-        "(uintptr_t)interp_exec_dp_immediate",
-        "(uintptr_t)interp_exec_dp_register_arithmetic",
-        "mov %r15,%rdi",
-        "align the SysV stack before call",
+        "hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf)",
+        "hl_a64_x86_emit_setcc(assembler, 2, 0)",
+        "hl_a64_x86_emit_setcc(assembler, 6, subtract ? 3 : 2)",
+        "hl_a64_x86_emit_setcc(assembler, 7, 4)",
+        "hl_a64_x86_emit_setcc(assembler, 8, 8)",
+        "hl_x64_reg_mem_disp32(assembler, 0x89, 2, HL_A64_X86_CPU_REG, OFF_NZCV)",
+        "if (guest_register == 31u && !sp_allowed)",
     ] {
         assert!(source.contains(contract), "missing stage-two contract {contract}");
     }
+    assert!(!source.contains("interp_exec_dp_immediate\n"), "supported ALU emitted a C helper call");
     let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
     for instruction in [
         "orr x2,xzr,#0x7fffffffffffffff",

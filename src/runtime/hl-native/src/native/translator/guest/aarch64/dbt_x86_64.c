@@ -23,6 +23,7 @@ _Static_assert(offsetof(struct cpu, sp) == OFF_SP, "AArch64 x86 DBT sp offset dr
 _Static_assert(offsetof(struct cpu, pc) == 256, "AArch64 x86 DBT pc offset drifted");
 _Static_assert(offsetof(struct cpu, reason) == 272, "AArch64 x86 DBT reason offset drifted");
 _Static_assert(offsetof(struct cpu, host_sp) == 280, "AArch64 x86 DBT host-sp offset drifted");
+_Static_assert(offsetof(struct cpu, nzcv) == OFF_NZCV, "AArch64 x86 DBT nzcv offset drifted");
 _Static_assert(R_SYSCALL == 1, "AArch64 x86 DBT syscall reason drifted");
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
@@ -149,37 +150,72 @@ static int hl_a64_x86_emit_add_sub_immediate(hl_x64_asm *assembler, uint32_t ins
     return 1;
 }
 
-enum hl_a64_x86_alu_helper {
-    HL_A64_X86_ALU_IMMEDIATE,
-    HL_A64_X86_ALU_REGISTER,
-};
+static void hl_a64_x86_load_gpr(hl_x64_asm *assembler, int host_register, unsigned guest_register,
+                                int sp_allowed) {
+    if (guest_register == 31u && !sp_allowed) {
+        hl_x64_mov_imm64(assembler, host_register, 0);
+        return;
+    }
+    int offset = guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t);
+    hl_x64_reg_mem_disp32(assembler, 0x8B, host_register, HL_A64_X86_CPU_REG, offset);
+}
 
-/* Stage two deliberately calls the already-audited interpreter ALU leaf for
- * flag-setting and shifted forms. The generated block still owns fetch,
- * decode, retirement and its terminal; the leaf touches only canonical cpu
- * registers/NZCV and cannot fault or exit. This keeps NZCV byte-identical to
- * signal/checkpoint state while later stages can replace individual calls
- * with inline host flag materialization without changing the boundary. */
-static void hl_a64_x86_emit_alu_helper(hl_x64_asm *assembler, uint32_t instruction,
-                                       enum hl_a64_x86_alu_helper helper) {
-    uintptr_t target = helper == HL_A64_X86_ALU_IMMEDIATE ? (uintptr_t)interp_exec_dp_immediate
-                                                           : (uintptr_t)interp_exec_dp_register_arithmetic;
-    hl_x64_u8(assembler, 0x4C); /* mov %r15,%rdi */
-    hl_x64_u8(assembler, 0x89);
-    hl_x64_u8(assembler, 0xFF);
-    hl_x64_u8(assembler, 0xBE); /* mov $instruction,%esi */
-    hl_x64_u32(assembler, instruction);
-    hl_x64_u8(assembler, 0x48); /* align the SysV stack before call */
-    hl_x64_u8(assembler, 0x83);
-    hl_x64_u8(assembler, 0xEC);
-    hl_x64_u8(assembler, 8);
-    hl_x64_mov_imm64(assembler, HL_A64_X86_VALUE_REG, target);
-    hl_x64_u8(assembler, 0xFF); /* call *%rax */
-    hl_x64_u8(assembler, 0xD0);
-    hl_x64_u8(assembler, 0x48);
-    hl_x64_u8(assembler, 0x83);
-    hl_x64_u8(assembler, 0xC4);
-    hl_x64_u8(assembler, 8);
+static void hl_a64_x86_store_gpr(hl_x64_asm *assembler, int host_register, unsigned guest_register,
+                                 int sp_allowed) {
+    if (guest_register == 31u && !sp_allowed) return;
+    int offset = guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t);
+    hl_x64_reg_mem_disp32(assembler, 0x89, host_register, HL_A64_X86_CPU_REG, offset);
+}
+
+static void hl_a64_x86_emit_binary(hl_x64_asm *assembler, uint8_t opcode, unsigned sf) {
+    if (sf) hl_x64_u8(assembler, 0x48);
+    hl_x64_u8(assembler, opcode);
+    hl_x64_u8(assembler, 0xC8); /* operation %rcx,%rax (or 32-bit equivalents) */
+}
+
+static void hl_a64_x86_emit_shift(hl_x64_asm *assembler, int host_register, unsigned operation,
+                                  unsigned amount, unsigned sf) {
+    if (!amount) return;
+    if (sf) hl_x64_u8(assembler, (uint8_t)(0x48 | (host_register >= 8 ? 1 : 0)));
+    else if (host_register >= 8)
+        hl_x64_u8(assembler, 0x41);
+    hl_x64_u8(assembler, 0xC1);
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((operation & 7u) << 3) | (host_register & 7)));
+    hl_x64_u8(assembler, (uint8_t)amount);
+}
+
+static void hl_a64_x86_emit_setcc(hl_x64_asm *assembler, int host_register, unsigned condition) {
+    if (host_register >= 4) hl_x64_u8(assembler, (uint8_t)(0x40 | (host_register >= 8 ? 1 : 0)));
+    hl_x64_u8(assembler, 0x0F);
+    hl_x64_u8(assembler, (uint8_t)(0x90 | (condition & 15u)));
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | (host_register & 7)));
+}
+
+static void hl_a64_x86_prepare_nzcv(hl_x64_asm *assembler) {
+    for (int reg = 2; reg <= 8; reg += reg == 2 ? 4 : 1) {
+        if (reg >= 8) hl_x64_u8(assembler, 0x45);
+        hl_x64_u8(assembler, 0x31);
+        hl_x64_u8(assembler, (uint8_t)(0xC0 | ((reg & 7) << 3) | (reg & 7)));
+    }
+}
+
+static void hl_a64_x86_emit_nzcv(hl_x64_asm *assembler, int subtract, int logical) {
+    /* Scratch registers were zeroed before the arithmetic operation.
+     * Consecutive SETcc instructions preserve its flags, so all four host
+     * conditions are captured before shifts normalize architectural NZCV. */
+    hl_a64_x86_emit_setcc(assembler, 2, 0);                 /* V: OF */
+    if (!logical)
+        hl_a64_x86_emit_setcc(assembler, 6, subtract ? 3 : 2); /* C: no-borrow/carry */
+    hl_a64_x86_emit_setcc(assembler, 7, 4);                 /* Z: ZF */
+    hl_a64_x86_emit_setcc(assembler, 8, 8);                 /* N: SF */
+    hl_x64_shl_imm8(assembler, 2, 28);
+    hl_x64_shl_imm8(assembler, 6, 29);
+    hl_x64_shl_imm8(assembler, 7, 30);
+    hl_x64_shl_imm8(assembler, 8, 31);
+    hl_a64_x86_or_reg(assembler, 2, 6);
+    hl_a64_x86_or_reg(assembler, 2, 7);
+    hl_a64_x86_or_reg(assembler, 2, 8);
+    hl_x64_reg_mem_disp32(assembler, 0x89, 2, HL_A64_X86_CPU_REG, OFF_NZCV);
 }
 
 static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruction) {
@@ -189,7 +225,15 @@ static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruc
     /* ADDS/SUBS immediate. Rn names SP, Rd names ZR; the oracle leaf owns
      * precisely that distinction and canonical N:Z:C:V placement. */
     if ((instruction & 0x3F000000u) == 0x31000000u) {
-        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_IMMEDIATE);
+        unsigned subtract = (instruction >> 30) & 1u;
+        uint64_t immediate = (instruction >> 10) & 0xFFFu;
+        if (instruction & (1u << 22)) immediate <<= 12;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 1);
+        hl_x64_mov_imm64(assembler, 1, immediate);
+        hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf);
+        hl_a64_x86_emit_nzcv(assembler, (int)subtract, 0);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
         return 1;
     }
 
@@ -200,7 +244,13 @@ static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruc
         if (!interp_bit_masks(sf, (instruction >> 22) & 1u, (instruction >> 10) & 0x3Fu,
                               (instruction >> 16) & 0x3Fu, 1, &ignored, NULL))
             return 0;
-        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_IMMEDIATE);
+        unsigned opc = (instruction >> 29) & 3u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_x64_mov_imm64(assembler, 1, ignored);
+        if (opc == 3u) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, opc == 0u || opc == 3u ? 0x21 : opc == 1u ? 0x09 : 0x31, sf);
+        if (opc == 3u) hl_a64_x86_emit_nzcv(assembler, 0, 1);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, opc != 3u);
         return 1;
     }
 
@@ -209,7 +259,15 @@ static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruc
     if ((instruction & 0x1F200000u) == 0x0B000000u) {
         unsigned shift_type = (instruction >> 22) & 3u;
         if (shift_type == 3u || (!sf && (amount & 0x20u))) return 0;
-        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_REGISTER);
+        unsigned subtract = (instruction >> 30) & 1u;
+        unsigned setflags = (instruction >> 29) & 1u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_a64_x86_load_gpr(assembler, 1, (instruction >> 16) & 31u, 0);
+        hl_a64_x86_emit_shift(assembler, 1, shift_type == 0u ? 4u : shift_type == 1u ? 5u : 7u, amount, sf);
+        if (setflags) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf);
+        if (setflags) hl_a64_x86_emit_nzcv(assembler, (int)subtract, 0);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
         return 1;
     }
 
@@ -217,7 +275,17 @@ static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruc
      * remain interpreter-owned until their own measured stage. */
     if ((instruction & 0x1F200000u) == 0x0A000000u) {
         if (!sf && (amount & 0x20u)) return 0;
-        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_REGISTER);
+        unsigned opc = (instruction >> 29) & 3u;
+        unsigned shift_type = (instruction >> 22) & 3u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_a64_x86_load_gpr(assembler, 1, (instruction >> 16) & 31u, 0);
+        hl_a64_x86_emit_shift(assembler, 1,
+                              shift_type == 0u ? 4u : shift_type == 1u ? 5u : shift_type == 2u ? 7u : 1u,
+                              amount, sf);
+        if (opc == 3u) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, opc == 0u || opc == 3u ? 0x21 : opc == 1u ? 0x09 : 0x31, sf);
+        if (opc == 3u) hl_a64_x86_emit_nzcv(assembler, 0, 1);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
         return 1;
     }
     return 0;
@@ -368,9 +436,9 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
      * begin with an eight-byte descriptor magic. Generated blocks begin with
-     * either movabs (48 b8: MOV-wide/ADR), a cpu-record load (49 8b:
-     * ADD/SUB immediate), or mov-r15-to-rdi (4c 89: an ALU oracle leaf),
-     * while a terminal-only block also begins with movabs.
+     * either movabs (48 b8: MOV-wide/ADR or a zero-register ALU source) or a
+     * cpu-record load (49 8b: ADD/SUB/ALU), while a terminal-only block also
+     * begins with movabs.
      * None can equal descriptor magic (little-endian 54 42), and reading the
      * first word is within the published source object in either case. */
     const struct interp_block *descriptor = (const struct interp_block *)code;
