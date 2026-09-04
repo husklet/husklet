@@ -113,8 +113,9 @@ static inline void hl_a64_x86_sub_reg(hl_x64_asm *assembler, int destination, in
 static int hl_a64_x86_emit_pc_relative(hl_x64_asm *assembler, uint32_t instruction, uint64_t guest_pc) {
     if ((instruction & 0x1F000000u) != 0x10000000u) return 0;
     unsigned destination = instruction & 31u;
-    int64_t immediate = (int64_t)((int32_t)((((instruction >> 5) & 0x7FFFFu) << 13) |
-                                             ((instruction >> 29) & 3u) << 11)) >> 11;
+    int64_t immediate = interp_sext((((instruction >> 5) & 0x7FFFFu) << 2) |
+                                        ((instruction >> 29) & 3u),
+                                    21);
     uint64_t base = pcrel_base(guest_pc);
     uint64_t value = instruction & 0x80000000u
                          ? (base & ~UINT64_C(0xFFF)) + ((uint64_t)immediate << 12)
@@ -246,7 +247,7 @@ static void *translate_block(uint64_t guest_pc) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
             exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
         } else if ((instruction & 0xFC000000u) == 0x14000000u) {
-            int64_t displacement = (int64_t)(int32_t)(instruction << 6) >> 4;
+            int64_t displacement = interp_sext(instruction & 0x3FFFFFFu, 26) * 4;
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor + (uint64_t)displacement);
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_BRANCH);
             exit_kind = HL_BACKEND_SHAPE_T_DIRECT_JUMP;

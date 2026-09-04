@@ -150,7 +150,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "guest_register == 31u ? OFF_SP",
         "UINT64_C(0xFFFFFFFF)",
         "(instruction & 0xFC000000u) == 0x14000000u",
-        "(int64_t)(int32_t)(instruction << 6) >> 4",
+        "interp_sext(instruction & 0x3FFFFFFu, 26) * 4",
         "cursor + (uint64_t)displacement",
         "guest_pc >= UINT64_MAX - UINT64_C(0xFFF)",
         "count < 64u",
