@@ -334,6 +334,8 @@ try {
     'src/generated-protocol.js', 'src/generated-protocol.d.ts', 'src/semantic.js',
     'src/session.js', 'src/wire.js', 'examples/starter/.dockerignore', 'examples/starter/Dockerfile',
     'examples/starter/extension.toml', 'examples/starter/main.js', 'examples/starter/package.json',
+    'examples/agent-control.mjs', 'examples/agent-container-control.mjs',
+    'examples/agent-workspace-control.mjs',
   ]) assert(names.has(required), `npm package omits ${required}`);
   assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')),
     'developer-only files leaked into package');
