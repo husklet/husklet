@@ -136,15 +136,17 @@ static int exec_origin_write_image(const char *path, uint8_t marker) {
 static int exec_origin_basic_matrix_child(int scenario) {
     char root[] = "/tmp/hl-exec-origin-XXXXXX";
     if (mkdtemp(root) == NULL) return 1;
-    char upper[4200], lower[4200], volume[4200], nested[4200], name_dir[4200];
+    char upper[4200], lower[4200], volume[4200], nested[4200], name_dir[4200], upper_tmp[4200];
     char upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200], name_placeholder[4200];
     char upper_links[4200], lower_links[4200], upper_u2l[4200], lower_l2u[4200];
     char upper_hidden[4200], lower_hidden[4200], opaque[4200], hidden_file[4200];
     char upper_mnt[4200], volume_nested[4200], volume_tool[4200], nested_tool[4200];
     char name_file[4200], upper_race[4200], race_file[4200], race_new[4200];
+    char lower_libexec[4200], lower_cc1[4200];
     snprintf(upper, sizeof upper, "%s/upper", root); snprintf(lower, sizeof lower, "%s/lower", root);
     snprintf(volume, sizeof volume, "%s/volume", root); snprintf(nested, sizeof nested, "%s/nested", root);
     snprintf(name_dir, sizeof name_dir, "%s/name", root);
+    snprintf(upper_tmp, sizeof upper_tmp, "%s/tmp", upper);
     snprintf(upper_bin, sizeof upper_bin, "%s/bin", upper); snprintf(lower_bin, sizeof lower_bin, "%s/bin", lower);
     snprintf(upper_file, sizeof upper_file, "%s/upper", upper_bin);
     snprintf(lower_file, sizeof lower_file, "%s/lower", lower_bin);
@@ -165,15 +167,19 @@ static int exec_origin_basic_matrix_child(int scenario) {
     snprintf(upper_race, sizeof upper_race, "%s/race", upper);
     snprintf(race_file, sizeof race_file, "%s/tool", upper_race);
     snprintf(race_new, sizeof race_new, "%s/new", upper_race);
+    snprintf(lower_libexec, sizeof lower_libexec, "%s/libexec", lower);
+    snprintf(lower_cc1, sizeof lower_cc1, "%s/cc1", lower_libexec);
     if (mkdir(upper, 0700) != 0 || mkdir(lower, 0700) != 0 || mkdir(volume, 0700) != 0 ||
         mkdir(nested, 0700) != 0 || mkdir(name_dir, 0700) != 0 || mkdir(upper_bin, 0700) != 0 ||
         mkdir(lower_bin, 0700) != 0 || mkdir(upper_links, 0700) != 0 || mkdir(lower_links, 0700) != 0 ||
         mkdir(upper_hidden, 0700) != 0 || mkdir(lower_hidden, 0700) != 0 || mkdir(upper_mnt, 0700) != 0 ||
-        mkdir(volume_nested, 0700) != 0 || mkdir(upper_race, 0700) != 0 ||
+        mkdir(volume_nested, 0700) != 0 || mkdir(upper_race, 0700) != 0 || mkdir(upper_tmp, 0700) != 0 ||
+        mkdir(lower_libexec, 0700) != 0 ||
         exec_origin_write_image(upper_file, 1) != 0 || exec_origin_write_image(lower_file, 2) != 0 ||
         exec_origin_write_image(hidden_file, 3) != 0 || exec_origin_write_image(volume_tool, 4) != 0 ||
         exec_origin_write_image(nested_tool, 5) != 0 || exec_origin_write_image(name_file, 6) != 0 ||
         exec_origin_write_image(race_file, 7) != 0 || exec_origin_write_image(race_new, 8) != 0 ||
+        exec_origin_write_image(lower_cc1, 9) != 0 ||
         symlink("/bin/lower", upper_u2l) != 0 || symlink("/bin/upper", lower_l2u) != 0 ||
         close(open(opaque, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0 ||
         close(open(name_placeholder, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0)
@@ -270,6 +276,31 @@ static int exec_origin_basic_matrix_child(int scenario) {
             exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 0);
             exec_image_release(&interpreter);
         }
+    } else if (scenario == 10 || scenario == 11) {
+        error = exec_image_open_guest(scenario == 10 ? "/bin/../libexec/cc1" : "/../../bin/lower", &image);
+        exact = error == 0 && exec_image_has_lower_origin(&image, 0) && image.bytes.size > 768 &&
+                image.bytes.bytes[768] == (scenario == 10 ? 9 : 2);
+    } else if (scenario == 12) {
+        error = exec_image_open_guest("/tmp/../links/u2l", &image);
+        exact = error == 0 && exec_image_has_lower_origin(&image, 0) && image.bytes.size > 768 &&
+                image.bytes.bytes[768] == 2;
+    } else if (scenario == 13) {
+        snprintf(g_vols[0].guest, sizeof g_vols[0].guest, "/mnt");
+        g_vols[0].glen = strlen(g_vols[0].guest);
+        snprintf(g_vols[0].hcanon, sizeof g_vols[0].hcanon, "%s", volume);
+        g_vols[0].hlen = strlen(g_vols[0].hcanon);
+        g_vols[0].fd = open(volume, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        g_vols[0].handle = HL_HOST_HANDLE_INVALID;
+        snprintf(g_vols[1].guest, sizeof g_vols[1].guest, "/mnt/nested");
+        g_vols[1].glen = strlen(g_vols[1].guest);
+        snprintf(g_vols[1].hcanon, sizeof g_vols[1].hcanon, "%s", nested);
+        g_vols[1].hlen = strlen(g_vols[1].hcanon);
+        g_vols[1].fd = open(nested, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        g_vols[1].handle = HL_HOST_HANDLE_INVALID;
+        g_nvols = 2;
+        error = exec_image_open_guest("/mnt/nested/../tool", &image);
+        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_VOLUME && image.origin.index == 0 &&
+                image.bytes.size > 768 && image.bytes.bytes[768] == 4;
     }
     if (error == 0) exec_image_release(&image);
 
@@ -282,16 +313,17 @@ static int exec_origin_basic_matrix_child(int scenario) {
     if (g_root_fd >= 0) close(g_root_fd);
     unlink(upper_file); unlink(lower_file); unlink(name_placeholder); unlink(upper_u2l); unlink(lower_l2u);
     unlink(opaque); unlink(hidden_file);
-    unlink(volume_tool); unlink(nested_tool); unlink(name_file); unlink(race_file); unlink(race_new);
+    unlink(volume_tool); unlink(nested_tool); unlink(name_file); unlink(race_file); unlink(race_new); unlink(lower_cc1);
     rmdir(upper_bin); rmdir(lower_bin); rmdir(upper_links); rmdir(lower_links); rmdir(upper_hidden); rmdir(lower_hidden);
-    rmdir(upper_mnt); rmdir(upper_race); rmdir(volume_nested); rmdir(volume); rmdir(nested); rmdir(name_dir);
+    rmdir(upper_mnt); rmdir(upper_race); rmdir(upper_tmp); rmdir(lower_libexec);
+    rmdir(volume_nested); rmdir(volume); rmdir(nested); rmdir(name_dir);
     rmdir(upper); rmdir(lower); rmdir(root);
     return exact ? 0 : 3;
 }
 
 static int exec_origin_basic_matrix_test(void) {
     int failed = 0;
-    for (int scenario = 0; scenario != 10; scenario++) {
+    for (int scenario = 0; scenario != 14; scenario++) {
         pid_t child = fork();
         if (child < 0) return 4;
         if (child == 0) _exit(exec_origin_basic_matrix_child(scenario));
