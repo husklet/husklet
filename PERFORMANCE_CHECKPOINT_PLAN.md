@@ -27,8 +27,8 @@ labels or a successful exit are not sufficient.
 | --- | --- | --- | --- | --- |
 | Linux x86_64 | x86_64 | Native supervised | Native and translated coverage | Native receipt, semantic hash, timing and counters |
 | Linux AArch64 | AArch64 | Native supervised | Translated until native ARM capture is implemented | Native receipt on physical/real ARM; translated checkpoint journey |
-| Linux x86_64 | AArch64 | Interpreter-only today; translated backend required | Interpreter until a translator exists | Production run, two checkpoint cycles, counters, explicit interpreter receipt |
-| Linux AArch64 | x86_64 | x86-to-AArch64 translated | Translated | Production run, two checkpoint cycles, counters, explicit translated receipt |
+| Linux x86_64 | AArch64 | Interpreter-only today; AArch64-to-x86_64 DBT required | Interpreter until that backend exists | Production run, two checkpoint cycles, counters, explicit interpreter receipt |
+| Linux AArch64 | x86_64 | Existing x86_64-to-AArch64 DBT | Translated | Production run, two checkpoint cycles, counters, explicit translated receipt |
 
 QEMU/TCG may prove cross-ISA and ARM functional behavior. It must never be used as
 evidence for native ARM performance. Native ARM performance requires an actual ARM
@@ -58,14 +58,20 @@ native gets a focused hardware-counter profile. A performance change is accepted
 only when semantic outputs match and balanced A/B measurements improve the relevant
 mechanism without moving cost into another phase.
 
-Baseline captured on x86_64 Linux from the corrected 18-row campaign at
-`/var/tmp/devbench13-results-corrected-b6c73b53e`:
+Accepted baseline captured on x86_64 Linux from the corrected 18-row campaign at
+`/var/tmp/devbench-v13-cap8-210d/results` using production artifacts copied under
+`/var/tmp/devbench-v13-cap8-210d/artifacts`:
 
-- native-supervised / host: 0.995x wall, 1.0004x instructions, 1.007x cycles;
-- translated / host: 33.31x wall, 22.61x instructions, 32.89x cycles;
-- translated phase ratios: full build 33.13x, incremental build 56.99x,
-  process spawn 45.59x, Git 15.85x, search 25.02x, archive 23.93x,
-  package metadata 20.34x, and tests 20.91x.
+- native-supervised / host: 0.9793x wall, 1.0060x instructions, 1.0165x cycles,
+  and 1.0013x page faults;
+- translated / host: 30.4578x wall, 22.4484x instructions, 30.7789x cycles,
+  and 36.5189x page faults;
+- medians: native 0.8240617195 s and 17,506,271,554 instructions; supervised
+  0.806998777 s and 17,611,775,274.5 instructions; translated 25.0991157925 s
+  and 392,987,793,086.5 instructions.
+
+All 18 `(sample, position)` rows produced one portable semantic hash. The copied
+worker, native library, and runner SHA-256 values are retained beside the ledger.
 
 These are a starting point, not a target. Same-ISA native must remain near native.
 Translated instruction overhead must be driven down by profiles and exact output
@@ -144,8 +150,11 @@ explicit user-facing close and reopen budgets justified by the observed floor.
 
 Profile both x86_64-host/AArch64-guest and AArch64-host/x86_64-guest, as well as
 forced same-ISA translation, with the same production workload. The former is
-interpreter-only today: that missing translator is an implementation gap and must
-not be mislabeled as translated execution. Attribute generated code with
+interpreter-only today: AArch64-to-x86_64 lowering is the missing backend and must
+not be mislabeled as translated execution. The latter already has a direct
+x86_64-to-AArch64 lowering backend; it is distinct from the bounded x86-on-x86
+instruction-copy transliterator. There is currently no architecture-neutral guest
+IR shared by these backends. Attribute generated code with
 timestamped JIT records across exec/generation reuse. Report generated guest bodies,
 branch helpers, decode/build, syscall handling, cache load/build, libc, and unknown
 user-space samples separately.
