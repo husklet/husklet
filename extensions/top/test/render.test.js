@@ -287,6 +287,34 @@ test('terminal command validation cannot send shell-like text as ambiguous argv'
   assert.ok(labelled(stage, 'Command must contain 1–64 NUL-free arguments, with a non-empty program, at most 4096 UTF-8 bytes each and 32768 bytes total.'));
 });
 
+test('terminal management switches an inspected pane to an enabled exact provider', async () => {
+  const calls = [];
+  const terminal = {
+    toText: async () => ({ kind: 'ui', text: '<pane/>', snapshot: { slot: 'pane-ui', generation: 3, revision: 4, root: { id: 1 }, truncated: false } }),
+    switchOccupantAndWait: async (...args) => { calls.push(args); return { changed: true, pane: { slot: args[0], generation: 3, revision: 5 } }; },
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const controlled = {
+    extensions: { providers: async () => ({ providers: [
+      { extension: 'storybook', id: 'catalogue', title: 'Component catalogue' },
+    ], truncated: false }) },
+    terminal,
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'UI', pinned: false, panes: [{ slot: 'pane-ui', occupant: 'surface', provider: { extension: 'postgres', provider: 'overview' } }] }],
+    loading: false, error: null, reload: async () => calls.push(['reload']),
+  };
+  const stage = host(); stage.render(h(Terminals, { api: controlled, resource })); await settled();
+  invoke(stage, 'Inspect pane-ui'); await settled(); await settled();
+  const select = stage.frames.flatMap((frame) => frame.patches).filter((patch) => patch.Create?.tag === 'Select').at(-1).Create.id;
+  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: 'storybook/catalogue' }));
+  invoke(stage, 'Switch pane content'); await settled(); await settled();
+  assert.deepEqual(calls, [
+    ['pane-ui', 3, 4, { kind: 'surface', extension: 'storybook', provider: 'catalogue' }],
+    ['reload'],
+  ]);
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],

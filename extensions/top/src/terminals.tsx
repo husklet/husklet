@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction, Entry, Heading, LogView,
-  ResourceState, Row, Scroll, Spinner, Text, LOG_VIEW_CHARACTER_LIMIT,
+  ResourceState, Row, Scroll, Select, Spinner, Text, LOG_VIEW_CHARACTER_LIMIT,
   type PaneText, type ReadablePane, type TabSummary, type WorkspaceApi,
 } from '@husklet/react';
 import { bounded, boundedMessage } from './model.js';
@@ -21,6 +21,10 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [columns, setColumns] = React.useState('');
   const [rows, setRows] = React.useState('');
   const [ratio, setRatio] = React.useState('50');
+  const [providers, setProviders] = React.useState<{ extension: string; id: string; title: string }[]>([]);
+  const [provider, setProvider] = React.useState('terminal');
+  const [providerError, setProviderError] = React.useState<unknown>(null);
+  const [providersTruncated, setProvidersTruncated] = React.useState(false);
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -56,6 +60,8 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       const next = await api.terminal.toText(slot, { lines: 200 });
       if (requested !== paneRevision.current) return;
       setReadable(next); setSelected(slot);
+      const summary = (resource.data ?? []).flatMap((tab) => tab.panes).find((pane) => pane.slot === slot);
+      setProvider(summary?.provider ? `${summary.provider.extension}/${summary.provider.provider}` : 'terminal');
       if (next.kind === 'terminal') {
         setColumns(next.snapshot.columns == null ? '' : String(next.snapshot.columns));
         setRows(next.snapshot.rows == null ? '' : String(next.snapshot.rows));
@@ -143,6 +149,36 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
+  const switchOccupant = async () => {
+    if (!cursor || !selected) return;
+    const target = provider === 'terminal' ? { kind: 'terminal' as const } : providerTarget(provider);
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    setBusy(`occupant:${slot}`); setError(null);
+    try {
+      const result = await api.terminal.switchOccupantAndWait(slot, cursor.generation, cursor.revision, target);
+      if (!result.changed) throw new Error(`Pane ${slot} did not switch occupant before the observation window ended; refresh before retrying.`);
+      const next = await api.terminal.toText(slot, { lines: 200 });
+      if (requested !== paneRevision.current) return;
+      setReadable(next);
+      await resource.reload();
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
+  React.useEffect(() => {
+    if (!api.extensions?.providers) return;
+    let disposed = false;
+    void api.extensions.providers().then((catalogue) => {
+      if (!disposed) {
+        setProviders(catalogue.providers.map(({ extension, id, title }) => ({ extension, id, title })));
+        setProvidersTruncated(catalogue.truncated);
+      }
+    }).catch((cause: unknown) => { if (!disposed) setProviderError(cause); });
+    return () => { disposed = true; };
+  }, [api]);
   const mutatePane = async (operation: 'split-beside' | 'split-below' | 'retitle' | 'close') => {
     if (!cursor || !selected) return;
     const slot = selected;
@@ -190,6 +226,8 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
     </Row>
     <Toolbar loading={resource.loading} onRefresh={resource.reload} />
     <ErrorText error={error} />
+    <ErrorText error={providerError} />
+    {providersTruncated ? <Text label="The enabled pane-provider catalogue was truncated at its safety limit." color="warning" wrap /> : null}
     <ResourceState
       state={state}
       loadingLabel="Reading terminal tabs…"
@@ -257,6 +295,12 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
                   onInvoke={() => { void resizeSplit(); }} />
               </Row>
               <Row gap={1} wrap>
+                <Select value={provider} choices={providerChoices(providers, provider)} enabled={busy === '' && Boolean(cursor)}
+                onChange={(event) => setProvider(String(event.value ?? 'terminal'))} />
+                <Button label="Switch pane content" enabled={busy === '' && Boolean(cursor)}
+                  onInvoke={() => { void switchOccupant(); }} />
+              </Row>
+              <Row gap={1} wrap>
                 <Entry value={title} placeholder="New pane title" grow enabled={busy === '' && Boolean(cursor)}
                   onChange={(event) => setTitle(String(event.value ?? ''))}
                   onSubmit={() => { void mutatePane('retitle'); }} />
@@ -306,6 +350,23 @@ function gridDimension(value: string, label: string): number {
   const dimension = Number(value);
   if (dimension > 1_000) throw new TypeError(`${label} must be an integer from 1 to 1000.`);
   return dimension;
+}
+
+function providerTarget(value: string): { kind: 'surface'; extension: string; provider: string } {
+  const separator = value.indexOf('/');
+  if (separator < 1 || separator === value.length - 1) throw new TypeError('Select an exact extension pane provider.');
+  return { kind: 'surface', extension: value.slice(0, separator), provider: value.slice(separator + 1) };
+}
+
+function providerChoices(providers: { extension: string; id: string; title: string }[], current: string) {
+  const choices = [
+    { value: 'terminal', label: 'Terminal' },
+    ...providers.map((item) => ({ value: `${item.extension}/${item.id}`, label: `${item.title} · ${item.extension}/${item.id}` })),
+  ];
+  if (current !== 'terminal' && !choices.some(({ value }) => value === current)) {
+    choices.splice(1, 0, { value: current, label: `Current · ${current}` });
+  }
+  return choices;
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
