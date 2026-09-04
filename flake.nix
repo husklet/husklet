@@ -1533,6 +1533,7 @@ WINDOWS_UNITS
         pkgs:
         let
           engine = packageFor pkgs;
+          developerRootfs = developerRootfsFor pkgs;
         in
         {
           inherit engine;
@@ -1541,6 +1542,10 @@ WINDOWS_UNITS
         // lib.optionalAttrs pkgs.stdenv.isDarwin {
           mac-base = macBaseFor pkgs;
           mac-dev = macDevFor pkgs;
+        }
+        // lib.optionalAttrs pkgs.stdenv.isLinux {
+          developer-rootfs-aarch64 = developerRootfs.forArchitecture "arm64";
+          developer-rootfs-x86_64 = developerRootfs.forArchitecture "amd64";
         }
       );
 
