@@ -74,9 +74,12 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     await until(() => calls.filter(({ call }) => call === 'interface_render_at').length > beforeSlow);
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invoke(calls, 'Inspect') }));
     await until(() => renderedLabels(calls).includes('Cancel'));
+    await until(() => calls.some(({ call, with: body }) => call === 'event_subscribe' && body.topic === 'extension-acquisitions'));
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invoke(calls, 'Cancel') }));
     await until(() => calls.some(({ call }) => call === 'extension_acquisition_cancel'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_acquisition_cancel').with, { job: 'job-2', revision: 4 });
+    assert.equal(calls.filter(({ call }) => call === 'extension_acquisition_status').length, 3,
+      'one initial read per job plus the cancellation refresh replaces repeated polling');
     assert.equal(stderr, '');
   } finally {
     const closed = child.exitCode === null ? new Promise((resolve) => child.once('close', resolve)) : Promise.resolve();

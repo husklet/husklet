@@ -14,6 +14,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
+  const cancelling = React.useRef(false);
+  const cancelledJob = React.useRef('');
 
   const reload = React.useCallback(async () => {
     try { setInstalled(await api.extensions.list()); setError(''); }
@@ -32,13 +34,19 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setBusy('inspect'); setError(''); setAcquisition(null);
     try {
       const started = await api.extensions.startAcquisition(wanted);
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        const status = await api.extensions.acquisition(started.job);
+      cancelledJob.current = '';
+      let status = await api.extensions.acquisition(started.job);
+      const deadline = Date.now() + 30_000;
+      while (true) {
         setAcquisition(status);
         if (status.candidate) setGranted(status.candidate.requested);
-        if (status.state === 'ready' || status.state === 'failed' || status.state === 'cancelled') break;
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        if (status.state === 'ready' || status.state === 'failed' || status.state === 'cancelled' || cancelledJob.current === started.job) break;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const changed = await api.extensions.waitForAcquisition(started.job, status.revision, { timeoutMs: Math.min(1_000, remaining) });
+        if (changed.changed) status = changed.status;
       }
+      if (!['ready', 'failed', 'cancelled'].includes(status.state) && cancelledJob.current !== started.job) setError('Acquisition is still running. You can cancel it or inspect the reference again later.');
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(''); }
   };
@@ -53,9 +61,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     finally { setBusy(''); }
   };
   const cancel = async () => {
-    if (!acquisition || busy !== 'inspect') return;
-    try { await api.extensions.cancelAcquisition(acquisition.job, acquisition.revision); }
+    if (!acquisition || ['ready', 'failed', 'cancelled'].includes(acquisition.state) || cancelling.current) return;
+    cancelling.current = true;
+    cancelledJob.current = acquisition.job;
+    setBusy('cancel');
+    try {
+      await api.extensions.cancelAcquisition(acquisition.job, acquisition.revision);
+      setAcquisition(await api.extensions.acquisition(acquisition.job));
+    }
     catch (cause) { setError(message(cause)); }
+    finally { cancelling.current = false; setBusy(''); }
   };
   const lifecycle = async (extension: ExtensionSummary, action: 'enable' | 'disable' | 'retry' | 'remove') => {
     setBusy(`${action}:${extension.name}`);
@@ -96,7 +111,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
                 <Text label={acquisition.state} />
                 {!['failed', 'cancelled'].includes(acquisition.state)
-                  ? <Button label="Cancel" enabled={busy === 'inspect'} onInvoke={cancel} />
+                  ? <Button label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'} enabled={busy !== 'cancel'} onInvoke={cancel} />
                   : <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />}
               </Row>
               {acquisition.error && <InlineMessage label={acquisition.error} tone="danger" />}
