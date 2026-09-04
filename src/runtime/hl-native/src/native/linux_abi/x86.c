@@ -121,14 +121,47 @@ static void wr64(uint8_t *p, uint64_t v) {
 
 // struct loaded is defined by the shared os/linux (container/netns.c).
 
+static int x86_image_for_interp(const char *path, const hl_linux_image *pinned,
+                                hl_linux_image *image, int *owns_image) {
+    *owns_image = pinned == NULL;
+    if (*owns_image) return x86_image_read(path, image);
+    *image = *pinned;
+    return 0;
+}
+
+static int x86_image_for_load(const char *path, const hl_linux_image *pinned,
+                              hl_linux_image *image, int *owns_image) {
+    *owns_image = pinned == NULL;
+    if (*owns_image) return x86_image_read(path, image);
+    *image = *pinned;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int x86_pinned_image_borrow_test(void) {
+    uint8_t bytes[64] = {0};
+    hl_linux_image pinned = {bytes, sizeof bytes}, selected = {0};
+    int owns = 1;
+    if (x86_image_for_interp("unused", &pinned, &selected, &owns) != 0 || owns || selected.bytes != bytes ||
+        selected.size != sizeof bytes)
+        return 1;
+    owns = 1;
+    selected = (hl_linux_image){0};
+    if (x86_image_for_load("unused", &pinned, &selected, &owns) != 0 || owns || selected.bytes != bytes ||
+        selected.size != sizeof bytes)
+        return 2;
+    /* A borrowed malformed image remains owned by the transaction, not either parser. */
+    return bytes[0] == 0 ? 0 : 3;
+}
+#endif
+
 static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
-                        : x86_image_read(path, &image)) != 0)
-        return -1;
+    int owns_image;
+    if (x86_image_for_interp(path, pinned, &image, &owns_image) != 0) return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
-        hl_linux_image_release(&image);
+        if (owns_image) hl_linux_image_release(&image);
         return -1;
     }
     uint8_t *f = image.bytes;
@@ -146,7 +179,7 @@ static int elf_interp(const char *path, char *out, size_t n, const hl_linux_imag
             break;
         }
     }
-    hl_linux_image_release(&image);
+    if (owns_image) hl_linux_image_release(&image);
     return r;
 }
 
@@ -216,8 +249,8 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
                      const hl_linux_image *pinned) {
     const struct main_placement *placement = placement_argument;
     hl_linux_image image;
-    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
-                        : x86_image_read(path, &image)) != 0) {
+    int owns_image;
+    if (x86_image_for_load(path, pinned, &image, &owns_image) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }
@@ -245,7 +278,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     }
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
-        hl_linux_image_release(&image);
+        if (owns_image) hl_linux_image_release(&image);
         fprintf(stderr, "hl-engine: %s: malformed x86-64 ELF image\n", path);
         exit(1);
     }
@@ -261,7 +294,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     int force_displaced = 0;
     if (placement != NULL) {
         if (placement->link_start != basepage || placement->link_end - placement->link_start != span) {
-            hl_linux_image_release(&image);
+            if (owns_image) hl_linux_image_release(&image);
             fprintf(stderr, "hl-engine: %s: ELF placement does not match load segments\n", path);
             exit(1);
         }
@@ -355,7 +388,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     out->phdr = etype == 2 ? basepage + phoff : (uint64_t)base + phoff;
     out->phent = phentsize;
     out->phnum = phnum;
-    hl_linux_image_release(&image);
+    if (owns_image) hl_linux_image_release(&image);
 }
 
 // Build the SysV x86-64 process stack (identical layout to aarch64). Returns rsp.

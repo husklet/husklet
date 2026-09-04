@@ -1965,6 +1965,7 @@ HL_API int hl_x86_64_imported_path_guard_test(void) {
     int result = hl_linux_imported_path_guard_probe();
     if (result == 0) result = hl_vfs_cursor_origin_preservation_test();
     if (result == 0) result = exec_origin_basic_matrix_test();
+    if (result == 0) result = x86_pinned_image_borrow_test();
 #if defined(HL_X86_SAME_ISA_PCACHE_TEST)
     if (result == 0) result = x64_pc_nested_exec_policy_test();
 #endif

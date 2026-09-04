@@ -753,10 +753,15 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
 static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
                      const hl_linux_image *pinned) {
     hl_linux_image image;
-    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
-                        : aarch64_image_read(path, &image)) != 0) {
+    int owns_image = pinned == NULL;
+    if (owns_image ? aarch64_image_read(path, &image) != 0 : 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
+    }
+    if (!owns_image) {
+        /* exec_prepared pins these exact bytes until both main and PT_INTERP loads complete. Borrowing
+           preserves that authority while avoiding a second whole-file allocation and copy. */
+        image = *pinned;
     }
     uint8_t *f = image.bytes;
     // The image digest is the persistent translation cache's key and NOTHING else reads it: the only
@@ -779,7 +784,7 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
 #endif
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
-        hl_linux_image_release(&image);
+        if (owns_image) hl_linux_image_release(&image);
         fprintf(stderr, "hl-engine: %s: malformed aarch64 ELF image\n", path);
         exit(1);
     }
@@ -806,7 +811,7 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     int force_displaced = 0;
     if (placement != NULL) {
         if (placement->link_start != basepage || placement->link_end - placement->link_start != span) {
-            hl_linux_image_release(&image);
+            if (owns_image) hl_linux_image_release(&image);
             fprintf(stderr, "hl-engine: %s: ELF placement does not match load segments\n", path);
             exit(1);
         }
@@ -915,7 +920,7 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     out->phdr = nonpie ? ((uint64_t)base + phoff - bias) : ((uint64_t)base + phoff);
     out->phent = phentsize;
     out->phnum = phnum;
-    hl_linux_image_release(&image);
+    if (owns_image) hl_linux_image_release(&image);
 }
 
 // Build the Linux process stack: [argc][argv..][NULL][envp..][NULL][auxv..][AT_NULL].
