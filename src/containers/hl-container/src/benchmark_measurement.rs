@@ -22,6 +22,7 @@ pub(crate) struct Collector {
     child: Child,
     control: ChildStdin,
     acknowledge: BufReader<ChildStdout>,
+    enabled_at: Option<std::time::Instant>,
 }
 
 impl Collector {
@@ -52,11 +53,13 @@ impl Collector {
         let acknowledge = BufReader::new(
             child.stdout.take().ok_or_else(|| Error::Runtime("collector acknowledgement unavailable".into()))?,
         );
-        Ok(Self { path: path.to_owned(), child, control, acknowledge })
+        Ok(Self { path: path.to_owned(), child, control, acknowledge, enabled_at: None })
     }
 
     pub(crate) fn enable(&mut self) -> Result<()> {
-        self.command("enable")
+        self.command("enable")?;
+        self.enabled_at = Some(std::time::Instant::now());
+        Ok(())
     }
 
     fn command(&mut self, command: &str) -> Result<()> {
@@ -71,6 +74,15 @@ impl Collector {
     }
 
     pub(crate) fn finish(mut self) -> Result<BenchmarkMeasurement> {
+        // Timestamp before disable: control teardown latency is not guest execution.
+        let wall_ns = u64::try_from(
+            self.enabled_at
+                .take()
+                .ok_or_else(|| Error::Runtime("benchmark collector was never enabled".into()))?
+                .elapsed()
+                .as_nanos(),
+        )
+        .map_err(|_| Error::Runtime("engine measurement wall duration overflowed".into()))?;
         self.command("disable")?;
         // perf has no control command that both snapshots and exits an attached task. SIGINT is
         // its documented graceful completion path and flushes the final stat record.
@@ -80,7 +92,9 @@ impl Collector {
         if !status.success() && status.signal() != Some(2) {
             return Err(Error::Runtime(format!("benchmark collector failed: {status}")));
         }
-        let raw = fs::read_to_string(&self.path)?;
+        let mut raw = fs::read_to_string(&self.path)?;
+        raw.push_str(&format!("# husklet-engine-wall-ns={wall_ns}\n"));
+        fs::write(&self.path, &raw)?;
         Ok(BenchmarkMeasurement { path: self.path.clone(), raw })
     }
 }
@@ -112,6 +126,24 @@ mod tests {
         assert_eq!(result.path, path);
         assert!(result.raw.contains("instructions"));
         assert!(result.raw.contains("duration_time"));
+        assert!(result.raw.contains("# husklet-engine-wall-ns="));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn delayed_collector_setup_is_excluded_from_engine_wall() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("delayed.perf");
+        let total = std::time::Instant::now();
+        let mut collector = Collector::prepare(&path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        collector.enable().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = collector.finish().unwrap();
+        let wall_ns = result.raw.lines()
+            .find_map(|line| line.strip_prefix("# husklet-engine-wall-ns="))
+            .unwrap().parse::<u64>().unwrap();
+        assert!(total.elapsed().as_nanos() > u128::from(wall_ns) + 50_000_000);
     }
 
     #[cfg(target_os = "linux")]

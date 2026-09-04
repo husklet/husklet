@@ -105,10 +105,20 @@ pub(super) async fn run(
             let raw = fs::read_to_string(&path)
                 .map_err(|error| format!("read engine measurement {}: {error}", path.display()))?;
             crate::benchmark::perf::parse(&raw)?;
-            Ok::<_, Error>(super::EngineMeasurement { case: measurement_case, target, raw })
+            let wall_ns = engine_wall_ns(&raw)?;
+            Ok::<_, Error>(super::EngineMeasurement { case: measurement_case, target, wall_ns, raw })
         })
         .transpose()?;
     Ok(report)
+}
+
+fn engine_wall_ns(raw: &str) -> Result<u64, Error> {
+    let mut walls = raw.lines().filter_map(|line| line.strip_prefix("# husklet-engine-wall-ns="));
+    let wall_ns = walls.next().ok_or("engine measurement omitted monotonic wall duration")?.parse()?;
+    if walls.next().is_some() {
+        return Err("engine measurement duplicated monotonic wall duration".into());
+    }
+    Ok(wall_ns)
 }
 
 /// Ends this process once `bound` elapses, whatever it is doing and whoever is still watching.
@@ -529,6 +539,14 @@ mod tests {
     #[test]
     fn path_is_not_a_correlation_token() {
         assert!(super::validate_token("/tmp/spoof").is_err());
+    }
+
+    #[test]
+    fn engine_wall_is_required_once_and_is_not_perf_duration() {
+        let raw = "999\t\tduration_time\n# husklet-engine-wall-ns=7\n";
+        assert_eq!(super::engine_wall_ns(raw).unwrap(), 7);
+        assert!(super::engine_wall_ns("999\t\tduration_time\n").is_err());
+        assert!(super::engine_wall_ns(&format!("{raw}# husklet-engine-wall-ns=8\n")).is_err());
     }
 
     #[test]

@@ -52,6 +52,7 @@ pub struct Report {
 pub struct EngineMeasurement {
     pub case: String,
     pub target: Target,
+    pub wall_ns: u64,
     pub raw: String,
 }
 pub async fn run_case(
