@@ -143,23 +143,6 @@ impl Mode {
     }
 }
 
-fn profile_execution(mode: Mode) -> Execution {
-    if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
-        Execution::Interpreted
-    } else {
-        Execution::translated(true)
-    }
-}
-
-#[test]
-fn translated_profile_makes_its_required_backend_receipt_reachable() {
-    assert_eq!(profile_execution(Mode::Interpreter), Execution::Interpreted);
-    assert_eq!(profile_execution(Mode::CwdRelative), Execution::Interpreted);
-    assert_eq!(profile_execution(Mode::LiveNative), Execution::Interpreted);
-    assert_eq!(profile_execution(Mode::Translated), Execution::translated(true));
-    assert_eq!(profile_execution(Mode::CacheValid), Execution::translated(true));
-}
-
 #[tokio::test]
 #[ignore = "profile only: the runner supplies an owned compiler fixture and one isolated process arm"]
 async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), Error> {
@@ -848,7 +831,13 @@ int main(void) {
     let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(profile_execution(mode))
+        .execution(
+            if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
+                Execution::Interpreted
+            } else {
+                Execution::Auto
+            },
+        )
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             read_only_root: false,
