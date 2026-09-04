@@ -2,7 +2,7 @@ targets: [amd64]
 image: alpine:3.20
 execution: { translated: true, translated_diagnostics: true }
 build:
-  compiler: { amd64: x86_64-linux-gnu-gcc }
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-static-pie, -O2, -std=gnu11]
 cases:
   - id: runtime/translated-fork-exec/vfork-exec
