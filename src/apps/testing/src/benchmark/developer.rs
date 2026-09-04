@@ -128,7 +128,9 @@ enum ExecutionBackend {
     X86Transliterator,
     /// The AArch64 guest translator emits AArch64 on an AArch64 host.
     Aarch64Transliterator,
-    /// AArch64 guests are interpreter-only on an x86 host today.
+    /// AArch64 DBT on x86, with per-instruction interpreter fallback.
+    Aarch64DbtWithInterpreterFallback,
+    /// AArch64 execution with code generation unavailable.
     Aarch64Interpreter,
 }
 
@@ -137,6 +139,13 @@ impl GuestIsa {
         match self {
             Self::Aarch64 => "aarch64",
             Self::X86_64 => "x86_64",
+        }
+    }
+
+    const fn target(self) -> crate::suite::Target {
+        match self {
+            Self::Aarch64 => crate::suite::Target::Arm64,
+            Self::X86_64 => crate::suite::Target::Amd64,
         }
     }
 }
@@ -271,6 +280,22 @@ fn validate_options(options: &Options) -> Result<(), Error> {
     if options.guest_isa != host_isa().guest() {
         return Err("native and supervised controls require a baseline rootfs matching the host ISA".into());
     }
+    verify_artifact_architectures(options)?;
+    Ok(())
+}
+
+fn verify_artifact_architectures(options: &Options) -> Result<(), Error> {
+    use crate::runtime::definition::elf::verify_machine;
+    let host = host_isa().guest().target();
+    verify_machine(&options.engine, host)?;
+    verify_machine(&options.native_library, host)?;
+    for mode in [Mode::Native, Mode::Translated] {
+        let artifacts = arm_artifacts(options, mode);
+        verify_machine(artifacts.engine, host)?;
+        for executable in ["bin/sh", "usr/bin/git", "usr/bin/gcc"] {
+            verify_machine(&artifacts.rootfs.join(executable), artifacts.guest_isa.target())?;
+        }
+    }
     Ok(())
 }
 
@@ -314,7 +339,7 @@ const fn execution_backend(host_isa: HostIsa, mode: Mode, guest_isa: GuestIsa) -
         Mode::Translated => match guest_isa {
             GuestIsa::X86_64 => ExecutionBackend::X86Transliterator,
             GuestIsa::Aarch64 if matches!(host_isa, HostIsa::Aarch64) => ExecutionBackend::Aarch64Transliterator,
-            GuestIsa::Aarch64 => ExecutionBackend::Aarch64Interpreter,
+            GuestIsa::Aarch64 => ExecutionBackend::Aarch64DbtWithInterpreterFallback,
         },
     }
 }
@@ -657,7 +682,9 @@ fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str)
             .find(|line| line.starts_with("[hl-native-supervised]") && line.contains("selected=1"))
             .map(str::to_owned)
             .ok_or_else(|| -> Error { "native-supervised arm did not prove selected=1".into() })?,
-        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator => {
+        ExecutionBackend::X86Transliterator
+        | ExecutionBackend::Aarch64Transliterator
+        | ExecutionBackend::Aarch64DbtWithInterpreterFallback => {
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
                 .ok_or("translated arm emitted no backend-shape receipt")?;
             validate_backend_shape(backend, &shape)?;
@@ -681,7 +708,9 @@ fn validate_backend_shape(
     shape: &std::collections::BTreeMap<&str, u64>,
 ) -> Result<(), Error> {
     match backend {
-        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator
+        ExecutionBackend::X86Transliterator
+        | ExecutionBackend::Aarch64Transliterator
+        | ExecutionBackend::Aarch64DbtWithInterpreterFallback
             if shape.get("translation_codegen_available") == Some(&1)
                 && shape.get("translated_entries").is_some_and(|value| *value > 0) =>
         {
@@ -694,7 +723,9 @@ fn validate_backend_shape(
         {
             Ok(())
         }
-        ExecutionBackend::X86Transliterator | ExecutionBackend::Aarch64Transliterator => {
+        ExecutionBackend::X86Transliterator
+        | ExecutionBackend::Aarch64Transliterator
+        | ExecutionBackend::Aarch64DbtWithInterpreterFallback => {
             Err("translated arm did not prove available codegen and nonzero translated entries".into())
         }
         ExecutionBackend::Aarch64Interpreter => {
@@ -1125,7 +1156,7 @@ mod tests {
         );
         assert_eq!(
             execution_backend(HostIsa::X86_64, Mode::Translated, GuestIsa::Aarch64),
-            ExecutionBackend::Aarch64Interpreter
+            ExecutionBackend::Aarch64DbtWithInterpreterFallback
         );
         assert_eq!(
             execution_backend(HostIsa::Aarch64, Mode::Translated, GuestIsa::Aarch64),
@@ -1150,6 +1181,9 @@ mod tests {
         ]);
         assert!(validate_backend_shape(ExecutionBackend::X86Transliterator, &translated).is_ok());
         assert!(validate_backend_shape(ExecutionBackend::Aarch64Transliterator, &translated).is_ok());
+        let mut hybrid = translated.clone();
+        hybrid.insert("interpreted_entries", 3);
+        assert!(validate_backend_shape(ExecutionBackend::Aarch64DbtWithInterpreterFallback, &hybrid).is_ok());
         let interpreted = std::collections::BTreeMap::from([
             ("translation_codegen_available", 0),
             ("translated_entries", 0),

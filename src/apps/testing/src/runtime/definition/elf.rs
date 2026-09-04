@@ -85,9 +85,35 @@ pub(crate) fn verify(path: &Path, target: Target, expected: Expectation) -> Resu
     Ok(())
 }
 
+/// Verify only the architecture of an ELF64 artifact whose executable/shared-object
+/// shape is owned by another component.
+pub(crate) fn verify_machine(path: &Path, target: Target) -> Result<(), Error> {
+    let mut file = fs::File::open(path)?;
+    let mut header = [0_u8; 20];
+    file.read_exact(&mut header)
+        .map_err(|error| format!("read ELF header {}: {error}", path.display()))?;
+    if &header[..4] != b"\x7fELF" || header[4] != 2 || header[5] != 1 || header[6] != 1 {
+        return Err(format!("{} is not a little-endian ELF64 artifact", path.display()).into());
+    }
+    let machine = u16::from_le_bytes([header[18], header[19]]);
+    let expected = match target {
+        Target::Arm64 => 183,
+        Target::Amd64 => 62,
+    };
+    if machine != expected {
+        return Err(format!(
+            "{} ELF machine is {machine}, expected {expected} for {}",
+            path.display(),
+            target.name()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Expectation, Type, verify};
+    use super::{Expectation, Type, verify, verify_machine};
     use std::fs;
 
     fn fixture(kind: u16, machine: u16, interpreter: bool) -> tempfile::NamedTempFile {
@@ -145,5 +171,14 @@ mod tests {
             .to_string()
             .contains("PT_INTERP")
         );
+    }
+
+    #[test]
+    fn machine_only_check_accepts_executables_and_shared_objects() {
+        let executable = fixture(2, 183, false);
+        let shared = fixture(3, 183, true);
+        verify_machine(executable.path(), crate::suite::Target::Arm64).unwrap();
+        verify_machine(shared.path(), crate::suite::Target::Arm64).unwrap();
+        assert!(verify_machine(shared.path(), crate::suite::Target::Amd64).is_err());
     }
 }
