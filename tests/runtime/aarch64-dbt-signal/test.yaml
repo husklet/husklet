@@ -1,11 +1,11 @@
 targets: [arm64]
 image: alpine:3.20
-execution: { translated: true }
+execution: { translated: true, translated_diagnostics: true }
 build:
-  source: backedge_signal.S
+  source: backedge_signal.c
   output: backedge-signal
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
-  flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
+  flags: [-static, -O2, -std=gnu11]
 artifact: { destination: /opt/husklet/backedge-signal }
 cases:
   - id: runtime/aarch64-dbt-signal/backedge-signal-bound
@@ -16,4 +16,4 @@ cases:
     run: []
     timeout: 3
     orchestration: { stop-after-ms: 100 }
-    expect: { exit: 0, signal: 15, stdout_empty: true }
+    expect: { exit: 42, stdout_empty: true, stderr: [" r0=*", " fall_total=*"] }
