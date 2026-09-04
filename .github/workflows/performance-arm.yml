@@ -1,0 +1,199 @@
+name: Physical ARM performance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: physical-arm-performance
+  cancel-in-progress: false
+
+jobs:
+  developer-benchmark:
+    name: ARM to ARM and x86 to ARM developer benchmark
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require a physical AArch64 Linux host
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = aarch64
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}-physical-perf
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 6G
+          purge: true
+          purge-primary-key: never
+          purge-prefixes: nix-${{ runner.os }}-${{ runner.arch }}-
+          purge-created: 604800
+
+      - name: Prepare pinned developer root filesystems
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/physical-arm-performance"
+          artifact_root="$root/artifacts"
+          mkdir -p "$artifact_root"
+          arm_root=$(nix --extra-experimental-features 'nix-command flakes' build \
+            --no-link --print-out-paths .#developer-rootfs-aarch64)
+          x86_root=$(nix --extra-experimental-features 'nix-command flakes' build \
+            --no-link --print-out-paths .#developer-rootfs-x86_64)
+          test "$(printf '%s\n' "$arm_root" | wc -l)" -eq 1
+          test "$(printf '%s\n' "$x86_root" | wc -l)" -eq 1
+          test "$(cat "$arm_root/.husklet-developer-rootfs-architecture")" = arm64
+          test "$(cat "$x86_root/.husklet-developer-rootfs-architecture")" = amd64
+          printf '%s\n%s\n' "$arm_root" "$x86_root" > "$artifact_root/rootfs-store-paths.txt"
+          printf 'ARM_ROOTFS=%s\nX86_ROOTFS=%s\n' "$arm_root" "$x86_root" >> "$GITHUB_ENV"
+
+      - name: Build and settle production measurement artifacts
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/physical-arm-performance"
+          artifact_root="$root/artifacts"
+          build_root="$RUNNER_TEMP/physical-arm-performance/build"
+          mkdir -p "$artifact_root/bin" "$artifact_root/lib"
+          CARGO_TARGET_DIR="$build_root" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo build -p engine --bin hl-aarch64 --bin hl-x86_64 \
+              -p testing --bin testing --locked --offline
+
+          # Copy only after Cargo has returned; measurement never reads a moving target tree.
+          cp "$build_root/debug/hl-aarch64" "$artifact_root/bin/hl-aarch64"
+          cp "$build_root/debug/hl-x86_64" "$artifact_root/bin/hl-x86_64"
+          cp "$build_root/debug/testing" "$artifact_root/bin/testing"
+          mapfile -t libraries < <(
+            find "$build_root/debug/build" -path '*/out/libhl_native_engine.so' -type f -print
+          )
+          if [ "${#libraries[@]}" -ne 1 ]; then
+            printf 'expected exactly one production native library, found %s\n' \
+              "${#libraries[@]}" >&2
+            exit 1
+          fi
+          cp "${libraries[0]}" "$artifact_root/lib/libhl_native_engine.so"
+          sha256sum "$artifact_root/bin/testing" "$artifact_root/bin/hl-aarch64" \
+            "$artifact_root/bin/hl-x86_64" "$artifact_root/lib/libhl_native_engine.so" \
+            | tee "$artifact_root/artifacts.sha256"
+          file "$artifact_root/bin/testing" "$artifact_root/bin/hl-aarch64" \
+            "$artifact_root/bin/hl-x86_64" "$artifact_root/lib/libhl_native_engine.so" \
+            | tee "$artifact_root/artifacts.file"
+          grep -F 'ARM aarch64' "$artifact_root/artifacts.file"
+          "$artifact_root/bin/testing" --help > "$artifact_root/testing-help.txt"
+
+      - name: Record immutable host identity
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/physical-arm-performance/artifacts"
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'runner_image=%s\n' "${ImageOS:-unknown}"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'kernel='; uname -srv
+            printf 'architecture='; uname -m
+            printf 'cpus=%s\n' "$(nproc)"
+            lscpu
+          } > "$artifact_root/host-manifest.txt"
+          sha256sum "$artifact_root/host-manifest.txt" | tee "$artifact_root/host-manifest.sha256"
+
+      - name: Smoke copied workers and bind the loaded DSO
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/physical-arm-performance/artifacts"
+          library="$artifact_root/lib/libhl_native_engine.so"
+          library_sha=$(sha256sum "$library" | cut -d ' ' -f 1)
+
+          smoke() {
+            local name="$1" worker="$2" rootfs="$3"
+            shift 3
+            "$worker" --loader-receipt --report-exit --diagnostics \
+              --native-library "$library" --rootfs "$rootfs" "$@" bin/true \
+              > "$artifact_root/$name.stdout" 2> "$artifact_root/$name.stderr"
+            test ! -s "$artifact_root/$name.stdout"
+            receipt=$(grep '^\[hl-loader\]' "$artifact_root/$name.stderr")
+            test "$(printf '%s\n' "$receipt" | wc -l)" -eq 1
+            printf '%s\n' "$receipt" | grep -Fq "\"library_sha256\":\"$library_sha\""
+          }
+
+          smoke arm-native "$artifact_root/bin/hl-aarch64" \
+            "$ARM_ROOTFS" --native-supervised
+          grep -q '^\[hl-native-supervised\].*selected=1 .*translated_abi=0' \
+            "$artifact_root/arm-native.stderr"
+          smoke arm-translated "$artifact_root/bin/hl-aarch64" \
+            "$ARM_ROOTFS" --native-supervised=off --translit
+          grep -q '^\[diag\] backend-shape .*translation_codegen_available=1 .*translated_entries=[1-9]' \
+            "$artifact_root/arm-translated.stderr"
+          smoke x86-translated "$artifact_root/bin/hl-x86_64" \
+            "$X86_ROOTFS" --native-supervised=off --translit
+          grep -q '^\[diag\] backend-shape .*translation_codegen_available=1 .*translated_entries=[1-9]' \
+            "$artifact_root/x86-translated.stderr"
+
+      - name: Measure native, supervised, and ARM to ARM translation
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/physical-arm-performance"
+          artifacts="$root/artifacts"
+          sudo "$artifacts/bin/testing" benchmark-developer \
+            --host-manifest "$artifacts/host-manifest.txt" \
+            --rootfs "$ARM_ROOTFS" \
+            --engine "$artifacts/bin/hl-aarch64" \
+            --guest-isa aarch64 \
+            --native-library "$artifacts/lib/libhl_native_engine.so" \
+            --results "$root/results-arm-to-arm" \
+            --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
+
+      - name: Measure x86 to ARM translation against ARM controls
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/physical-arm-performance"
+          artifacts="$root/artifacts"
+          sudo "$artifacts/bin/testing" benchmark-developer \
+            --host-manifest "$artifacts/host-manifest.txt" \
+            --rootfs "$ARM_ROOTFS" \
+            --engine "$artifacts/bin/hl-aarch64" \
+            --guest-isa aarch64 \
+            --translated-rootfs "$X86_ROOTFS" \
+            --translated-engine "$artifacts/bin/hl-x86_64" \
+            --translated-guest-isa x86_64 \
+            --native-library "$artifacts/lib/libhl_native_engine.so" \
+            --results "$root/results-x86-to-arm" \
+            --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
+
+      - name: Require complete benchmark evidence
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/physical-arm-performance"
+          for results in "$root/results-arm-to-arm" "$root/results-x86-to-arm"; do
+            test -s "$results/identity.json"
+            test -s "$results/ledger.jsonl"
+            test -s "$results/lock.receipt"
+            test -s "$results/report.tsv"
+            test ! -e "$results/first-divergence.txt"
+            test "$(wc -l < "$results/ledger.jsonl")" -eq 30
+            test "$(find "$results" -maxdepth 1 -name 'stderr-*.txt' -type f | wc -l)" -eq 30
+          done
+
+      - name: Upload physical ARM benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: physical-arm-performance-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/physical-arm-performance/artifacts
+            ${{ runner.temp }}/physical-arm-performance/results-arm-to-arm
+            ${{ runner.temp }}/physical-arm-performance/results-x86-to-arm
+          if-no-files-found: error
+          retention-days: 30
