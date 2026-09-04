@@ -309,6 +309,12 @@ fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
 #[test]
 fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
     let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/alu_bench.c");
+    let interpreter_fixture = include_str!("../../../../tests/runtime/aarch64-dbt-interp/source/alu_bench.c");
+    assert_eq!(
+        fixture.split_once("__asm__").map(|(_, body)| body),
+        interpreter_fixture.split_once("__asm__").map(|(_, body)| body),
+        "translated and interpreter benchmark instruction streams drifted"
+    );
     assert!(fixture.contains(".rept 12"), "{fixture}");
     for instruction in [
         "add x1,x1,x2,lsl #1",
