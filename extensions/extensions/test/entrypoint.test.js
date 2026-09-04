@@ -34,6 +34,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       if (call === 'extension_acquisition_cancel') cancelled = true;
       if (call === 'extension_disable') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'standby', enabled: false } : item);
       if (call === 'extension_enable' || call === 'extension_retry') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'duty', enabled: true } : item);
+      if (call === 'extension_remove') installed = installed.filter((item) => item.name !== frame.payload.with.name || item.image_digest !== frame.payload.with.image_digest);
       if (call === 'extension_update') installed = installed.map((item) => item.name === 'resources' ? { ...item, image_digest: `sha256:${'b'.repeat(64)}`, version: '2.0.0', status: 'duty', enabled: true } : item);
       const payload = call === 'extension_list'
         ? { reply: 'extensions', with: installed }
@@ -54,7 +55,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
           ? { reply: 'identity', with: 'extensions-catalogue' }
           : { reply: 'done' };
       socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload }));
-      if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_update'].includes(call)) {
+      if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_remove', 'extension_update'].includes(call)) {
         socket.write(encode({ channel: 30, kind: KIND.event, payload: { snapshot: 'extensions', of: installed } }));
       }
     } });
@@ -96,6 +97,15 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`,
     });
     await until(() => renderedLabels(calls).includes('paused enabled and verified.'));
+    peer.write(encode({ channel: 23, kind: KIND.event, payload: invoke(calls, 'Remove') }));
+    await until(() => renderedLabels(calls).includes('Remove paused'));
+    peer.write(encode({ channel: 24, kind: KIND.event, payload: invoke(calls, 'Remove paused') }));
+    await until(() => calls.some(({ call }) => call === 'extension_remove'));
+    assert.deepEqual(calls.find(({ call }) => call === 'extension_remove').with, {
+      name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`,
+    });
+    await until(() => renderedLabels(calls).includes('paused removed and verified.'));
+    assert.equal(installed.some(({ name }) => name === 'paused'), false);
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'registry.example/extension:version', 'registry.example/extension:2') }));
     await until(() => renderedLabels(calls).includes('Inspect'));
     peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Inspect') }));
@@ -111,8 +121,8 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     peer.write(encode({ channel: 11, kind: KIND.event, payload: change(calls, 'registry.example/extension:version', 'registry.example/slow:1') }));
     await until(() => calls.filter(({ call }) => call === 'interface_render_at').length > beforeSlow);
     peer.write(encode({ channel: 12, kind: KIND.event, payload: invoke(calls, 'Inspect') }));
-    await until(() => renderedLabels(calls).includes('Cancel'));
-    assert.ok(renderedLabels(calls).includes('Pulling layers · layer-2 · 1024/4096 bytes'));
+    await until(() => renderedLabels(calls).includes('Pulling layers · layer-2 · 1024/4096 bytes'));
+    assert.ok(renderedLabels(calls).includes('Cancel'));
     assert.equal(enabledState(calls, 'Install extension'), false, 'candidate metadata is not commit authority before ready');
     await until(() => calls.some(({ call, with: body }) => call === 'event_subscribe' && body.topic === 'extension-acquisitions'));
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invoke(calls, 'Install extension') }));
