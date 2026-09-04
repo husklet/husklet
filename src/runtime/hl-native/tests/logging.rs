@@ -57,9 +57,9 @@ fn restored_chains_preserve_fixed_edges_and_defer_dso_edges() {
     let emitter =
         fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read x86 chain emitter");
     let backward = emitter
-        .split("translit_emit_spill(a);")
+        .split("static void translit_emit_jcc_link(")
         .nth(1)
-        .and_then(|source| source.split("translit_emit_return(a, R_BRANCH);").next())
+        .and_then(|source| source.split("static void ").next())
         .expect("backward JCC chain body");
     let reload = backward.find("translit_emit_reload(a);").expect("guest-state reload");
     let chain = backward.find("uint8_t *chain = a->cursor;").expect("direct chain site");
