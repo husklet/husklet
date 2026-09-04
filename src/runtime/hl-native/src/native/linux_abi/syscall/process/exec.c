@@ -122,7 +122,7 @@ static int exec_origin_basic_matrix_child(int scenario) {
     char root[] = "/tmp/hl-exec-origin-XXXXXX";
     if (mkdtemp(root) == NULL) return 1;
     char upper[4200], lower[4200], volume[4200], nested[4200], name_dir[4200];
-    char upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200];
+    char upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200], name_placeholder[4200];
     char upper_links[4200], lower_links[4200], upper_u2l[4200], lower_l2u[4200];
     char upper_hidden[4200], lower_hidden[4200], opaque[4200], hidden_file[4200];
     char upper_mnt[4200], volume_nested[4200], volume_tool[4200], nested_tool[4200];
@@ -133,6 +133,7 @@ static int exec_origin_basic_matrix_child(int scenario) {
     snprintf(upper_bin, sizeof upper_bin, "%s/bin", upper); snprintf(lower_bin, sizeof lower_bin, "%s/bin", lower);
     snprintf(upper_file, sizeof upper_file, "%s/upper", upper_bin);
     snprintf(lower_file, sizeof lower_file, "%s/lower", lower_bin);
+    snprintf(name_placeholder, sizeof name_placeholder, "%s/alias", upper_bin);
     snprintf(upper_links, sizeof upper_links, "%s/links", upper);
     snprintf(lower_links, sizeof lower_links, "%s/links", lower);
     snprintf(upper_u2l, sizeof upper_u2l, "%s/u2l", upper_links);
@@ -159,7 +160,8 @@ static int exec_origin_basic_matrix_child(int scenario) {
         exec_origin_write_image(nested_tool, 5) != 0 || exec_origin_write_image(name_file, 6) != 0 ||
         exec_origin_write_image(race_file, 7) != 0 || exec_origin_write_image(race_new, 8) != 0 ||
         symlink("/bin/lower", upper_u2l) != 0 || symlink("/bin/upper", lower_l2u) != 0 ||
-        close(open(opaque, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0)
+        close(open(opaque, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0 ||
+        close(open(name_placeholder, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) != 0)
         return 2;
     hl_vfs_cursor_state_clear();
     g_nvols = 0;
@@ -230,7 +232,8 @@ static int exec_origin_basic_matrix_child(int scenario) {
     hl_vfs_cursor_state_clear();
     hl_vfs_lower_state_clear();
     if (g_root_fd >= 0) close(g_root_fd);
-    unlink(upper_file); unlink(lower_file); unlink(upper_u2l); unlink(lower_l2u); unlink(opaque); unlink(hidden_file);
+    unlink(upper_file); unlink(lower_file); unlink(name_placeholder); unlink(upper_u2l); unlink(lower_l2u);
+    unlink(opaque); unlink(hidden_file);
     unlink(volume_tool); unlink(nested_tool); unlink(name_file); unlink(race_file); unlink(race_new);
     rmdir(upper_bin); rmdir(lower_bin); rmdir(upper_links); rmdir(lower_links); rmdir(upper_hidden); rmdir(lower_hidden);
     rmdir(upper_mnt); rmdir(upper_race); rmdir(volume_nested); rmdir(volume); rmdir(nested); rmdir(name_dir);
