@@ -42,6 +42,9 @@ enum Mode {
     Translated,
     CacheCold,
     CacheNestedLaunchOnly,
+    CacheNestedToolchain,
+    CacheNestedToolchainUpper,
+    CacheNestedToolchainSmc,
     CacheFreshRollover,
     CacheSemanticMap,
     CacheSemanticOwner,
@@ -86,6 +89,9 @@ impl Mode {
             "translated" => Ok(Self::Translated),
             "cache-cold" => Ok(Self::CacheCold),
             "cache-nested-launch-only" => Ok(Self::CacheNestedLaunchOnly),
+            "cache-nested-toolchain" => Ok(Self::CacheNestedToolchain),
+            "cache-nested-toolchain-upper" => Ok(Self::CacheNestedToolchainUpper),
+            "cache-nested-toolchain-smc" => Ok(Self::CacheNestedToolchainSmc),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
             "cache-semantic-map" => Ok(Self::CacheSemanticMap),
             "cache-semantic-owner" => Ok(Self::CacheSemanticOwner),
@@ -162,6 +168,9 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         mode,
         Mode::CacheCold
             | Mode::CacheNestedLaunchOnly
+            | Mode::CacheNestedToolchain
+            | Mode::CacheNestedToolchainUpper
+            | Mode::CacheNestedToolchainSmc
             | Mode::CacheAuthorityReuse
             | Mode::CacheUpperOverride
             | Mode::CacheThreadCold
@@ -304,6 +313,44 @@ int main(void) {
         header.set_size(page.len() as u64);
         header.set_cksum();
         archive.append_data(&mut header, "work/executable-page.bin", page.as_slice())?;
+    }
+    if mode == Mode::CacheNestedToolchainSmc {
+        const SOURCE: &[u8] = br#"#include <stdint.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
+int main(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint8_t *code = mmap(0, (size_t)page, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (code == MAP_FAILED) return 2;
+  code[0] = 0xb8; code[1] = 1; code[2] = code[3] = code[4] = 0; code[5] = 0xc3;
+  if (mprotect(code, (size_t)page, PROT_READ | PROT_EXEC)) return 3;
+  int (*run)(void) = (int (*)(void))code;
+  if (run() != 1) return 4;
+  if (mprotect(code, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC)) return 5;
+  code[1] = 2;
+  __builtin___clear_cache((char *)code, (char *)code + 6);
+  if (run() != 2) return 6;
+  puts("smc-ok");
+  return 0;
+}
+"#;
+        let host_source = owned.path().join("pcache_smc.c");
+        let host_binary = owned.path().join("pcache_smc");
+        fs::write(&host_source, SOURCE)?;
+        let built = std::process::Command::new("cc")
+            .args(["-O2", "-static", "-Wl,--build-id=none", "-o"])
+            .arg(&host_binary)
+            .arg(&host_source)
+            .status()?;
+        require(built.success(), "host compiler did not build the immutable SMC fixture")?;
+        let binary = fs::read(&host_binary)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o755);
+        header.set_size(binary.len() as u64);
+        header.set_cksum();
+        archive.append_data(&mut header, "work/pcache-smc", binary.as_slice())?;
     }
     archive.finish()?;
     drop(archive);
@@ -702,10 +749,7 @@ int main(void) {
             .env("COLORTERM", "truecolor")
             .env("LANG", "C.UTF-8")
             .env("HOME", "/root")
-            .env(
-                "PATH",
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            )
+            .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     } else if mode == Mode::ForkNoExec {
         Process::new("/bin/sh").args(["-c", "(i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done) & wait"])
     } else if mode == Mode::ForkExec {
@@ -730,6 +774,18 @@ int main(void) {
             compiler("/tmp/second.s")
         );
         Process::new("/bin/sh").args(["-c".to_owned(), command])
+    } else if mode == Mode::CacheNestedToolchain {
+        Process::new("/bin/sh").args([
+            "-c",
+            "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && gcc -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain",
+        ])
+    } else if mode == Mode::CacheNestedToolchainUpper {
+        Process::new("/bin/sh").args([
+            "-c",
+            "cp /usr/bin/gcc /tmp/gcc-upper && printf x >>/tmp/gcc-upper && chmod 755 /tmp/gcc-upper && /tmp/gcc-upper --version | head -1",
+        ])
+    } else if mode == Mode::CacheNestedToolchainSmc {
+        Process::new("/work/pcache-smc")
     } else {
         Process::new(CC1).args([
             "-quiet",
@@ -758,11 +814,13 @@ int main(void) {
     let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
-            Execution::Interpreted
-        } else {
-            Execution::Auto
-        })
+        .execution(
+            if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
+                Execution::Interpreted
+            } else {
+                Execution::Auto
+            },
+        )
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             read_only_root: false,
@@ -824,13 +882,24 @@ int main(void) {
     // The nested arm ends in its shell parent after two forked compiler children. The backend's
     // process-local report belongs to those child exits and is not part of the parent's guest log;
     // its cache-directory receipts below are the durable assertion for that lifecycle instead.
-    if mode.translated() && mode != Mode::CacheNestedLaunchOnly {
+    if mode.translated()
+        && !matches!(
+            mode,
+            Mode::CacheNestedLaunchOnly
+                | Mode::CacheNestedToolchain
+                | Mode::CacheNestedToolchainUpper
+                | Mode::CacheNestedToolchainSmc
+        )
+    {
         let stderr = String::from_utf8_lossy(&logs.stderr);
         let receipt = stderr
             .lines()
             .find(|line| line.starts_with("[prof] translit:"))
             .ok_or("translated product run published no backend receipt")?;
-        require(!receipt.ends_with("not selected"), "translated product run selected the interpreter")?;
+        require(
+            !receipt.ends_with("not selected"),
+            "translated product run selected the interpreter",
+        )?;
         let entries = receipt
             .split_ascii_whitespace()
             .find_map(|field| field.strip_prefix("entries="))
@@ -859,7 +928,30 @@ int main(void) {
         return Ok(());
     }
     let status = waited?;
-    if matches!(mode, Mode::CacheAuthorityReuse | Mode::CacheUpperOverride) {
+    let nested_cold_artifacts = if mode == Mode::CacheNestedToolchain {
+        require(
+            std::env::var("HL_PCACHE_PROFILE_OBSERVE").as_deref() == Ok("1"),
+            "nested toolchain witness requires production cache observation",
+        )?;
+        let mut names = cache
+            .read_dir()?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        require(
+            names.len() >= 4,
+            "cold toolchain did not publish distinct driver/compiler/assembler/linker keys",
+        )?;
+        Some(names)
+    } else {
+        None
+    };
+    if matches!(
+        mode,
+        Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CacheNestedToolchain
+    ) {
         let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
         if mode == Mode::CacheUpperOverride {
             let view = images.roots().open_overlay(&repeat_root)?;
@@ -899,6 +991,34 @@ int main(void) {
         containers.remove("pcache-profile-repeat").await?;
         require(repeat_status == ExitStatus::Code(0), "repeated compiler process failed")?;
         require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
+        if let Some(cold) = &nested_cold_artifacts {
+            let mut warm = cache
+                .read_dir()?
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                .map(|entry| entry.file_name())
+                .collect::<Vec<_>>();
+            warm.sort();
+            require(
+                &warm == cold,
+                "warm toolchain changed the set of authenticated executable cache keys",
+            )?;
+            let hits = cache
+                .read_dir()?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(18)
+                        .any(|part| part == b".execution-census-")
+                })
+                .count();
+            require(
+                hits >= cold.len(),
+                "warm toolchain did not execute every cold-published key as a production HIT",
+            )?;
+        }
         eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
     if !matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
@@ -924,6 +1044,18 @@ int main(void) {
             logs.stdout == b"thread-warm-ok\n",
             "threaded executable-map workload output changed",
         )?;
+    } else if mode == Mode::CacheNestedToolchain {
+        require(
+            String::from_utf8_lossy(&logs.stdout).split_ascii_whitespace().count() == 2,
+            "toolchain did not emit exactly one executable digest",
+        )?;
+    } else if mode == Mode::CacheNestedToolchainUpper {
+        require(
+            String::from_utf8_lossy(&logs.stdout).contains("gcc"),
+            "upper driver did not execute",
+        )?;
+    } else if mode == Mode::CacheNestedToolchainSmc {
+        require(logs.stdout == b"smc-ok\n", "immutable SMC fixture output changed")?;
     } else {
         require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
     }
@@ -937,7 +1069,10 @@ int main(void) {
                 .windows(17)
                 .any(|part| part == b".hit-fixed-image-")
         });
-        require(!entries.is_empty(), "cache arm published no entries")?;
+        require(
+            !entries.is_empty() || mode == Mode::CacheNestedToolchainSmc,
+            "cache arm published no entries",
+        )?;
         require(
             entries.iter().all(|entry| {
                 entry.file_type().is_ok_and(|kind| kind.is_file() && !kind.is_symlink())
@@ -1008,6 +1143,24 @@ int main(void) {
                     "launch-only policy cached or restored a nested compiler execution",
                 )?;
             }
+            Mode::CacheNestedToolchain => require(
+                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() >= 4),
+                "nested toolchain did not retain its cold authenticated key census",
+            )?,
+            Mode::CacheNestedToolchainUpper => require(
+                entries
+                    .iter()
+                    .filter(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache"))
+                    .count()
+                    == 1,
+                "upper driver published a cache artifact instead of only its immutable shell parent",
+            )?,
+            Mode::CacheNestedToolchainSmc => require(
+                !entries
+                    .iter()
+                    .any(|entry| entry.file_name().as_encoded_bytes().ends_with(b".x64pcache")),
+                "self-modifying immutable executable published a poisoned cache generation",
+            )?,
             Mode::CacheUpperOverride => require(
                 entries
                     .iter()
