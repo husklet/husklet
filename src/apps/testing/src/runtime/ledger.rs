@@ -364,7 +364,7 @@ mod tests {
             (key("runtime/c"), campaign_row("runtime/c", second_host)),
             (key("runtime/d"), campaign_row("runtime/d", second_host_peer)),
         ]);
-        assert!(super::Runtime::validate_complete(&rows).is_err());
+        assert!(super::Runtime::validate_resumption(&rows).is_err());
     }
 
     #[test]
