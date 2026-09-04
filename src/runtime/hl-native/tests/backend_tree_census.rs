@@ -235,7 +235,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "uint64_t exit_kind;",
         "HL_A64_X86_BACKEDGE_BUDGET = 8",
         "HL_A64_X86_MAX_BLOCK_INSNS +",
-        "at most one direct backedge",
+        "Translation stops at the first terminal",
         "Forward edges remain ordinary dispatcher exits",
         "guest NZCV remains canonical in cpu",
         "decoded_target >= guest_pc && decoded_target < cursor",
