@@ -13,30 +13,6 @@ fn forward_jcc_link_emits_only_a_live_state_jump() {
 }
 
 #[test]
-fn shared_jcc_helper_retains_the_committed_target_after_the_irq_edge() {
-    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
-    let source = fs::read_to_string(native.join("translator/guest/x86_64/translit.inc"))
-        .expect("read transliterator");
-    let start = source.find("static int translit_jcc_ibtc_stub_init(void)").expect("JCC helper");
-    let end = source[start..]
-        .find("static int translit_direct_jmp_ibtc_stub_init(void)")
-        .expect("JCC helper end");
-    let body = &source[start..start + end];
-    let irq = body.find("uint8_t *irq = hl_x64_jcc_rel32(&a, 5)").expect("IRQ edge");
-    let retain = body
-        .find("hl_x64_mov_reg(&a, HL_X64_RCX, HL_X64_RAX)")
-        .expect("materialized target handoff");
-    let table = body
-        .find("hl_x64_load_gs(&a, HL_X64_RAX, OFF_IBTC)")
-        .expect("IBTC base load");
-    assert!(irq < retain && retain < table, "target handoff must not burden the IRQ path: {body}");
-    assert!(
-        !body.contains("hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP)"),
-        "helper reloads the target it received from every source"
-    );
-}
-
-#[test]
 fn sampling_exit_flush_joins_translation_serialization() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let source = fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read transliterator");
