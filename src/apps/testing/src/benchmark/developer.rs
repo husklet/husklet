@@ -498,7 +498,15 @@ mark(){ printf 'HL_PHASE %s\n' "$1" >&2; }
 semantic(){ name=$1; hash=$(sha256sum | cut -d' ' -f1); printf 'HL_SEM %s=%s\n' "$name" "$hash"; }
 mark prompt; printf 'prompt-ok:%s\n' "$(id -u)"
 mark git; rm -rf checkout; git clone -q /fixture.git checkout; cd checkout; git status --porcelain=v1
-mark search; rg -n 'unit_(001|064|128)' src | LC_ALL=C sort | semantic search-content; find src -type f -print0 | sort -z | xargs -0 sha256sum | semantic search-files; LC_ALL=C ls -R src | semantic search-tree
+mark search
+rg -n 'unit_(001|064|128)' src >search-content.unsorted
+LC_ALL=C sort search-content.unsorted | semantic search-content
+find src -type f -print0 >search-files.unsorted
+sort -z search-files.unsorted >search-files.sorted
+xargs -0 sha256sum <search-files.sorted >search-files.hashes
+test -s search-files.hashes
+semantic search-files <search-files.hashes
+LC_ALL=C ls -R src | semantic search-tree
 mark full-build; make -s -j2 all; semantic full-build-artifact <build/devlib.a
 mark edit; printf '\n/* incremental edit */\n' >>src/unit_064.c
 mark incremental-build; make -s -j2 all; semantic incremental-build-artifact <build/devlib.a
@@ -1102,6 +1110,13 @@ mod tests {
                 "apk info -vv >package-metadata.txt; test -s package-metadata.txt; LC_ALL=C sort package-metadata.txt | semantic package-metadata"
             ),
             "a missing package producer must not be hidden by a successful pipeline tail"
+        );
+        assert!(
+            fixture.contains("find src -type f -print0 >search-files.unsorted\n")
+                && fixture.contains("xargs -0 sha256sum <search-files.sorted >search-files.hashes\n")
+                && fixture.contains("test -s search-files.hashes\n")
+                && fixture.contains("semantic search-files <search-files.hashes\n"),
+            "file discovery and hashing must finish successfully before the semantic consumer runs"
         );
     }
 
