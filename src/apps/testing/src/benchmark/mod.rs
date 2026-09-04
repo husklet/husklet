@@ -3,6 +3,7 @@
 mod calibration;
 mod definition;
 mod developer;
+mod engine;
 mod evidence;
 mod floor;
 mod identity;
@@ -40,6 +41,7 @@ pub(crate) struct HashOptions {
 
 pub(crate) use calibration::Options as CalibrationOptions;
 pub(crate) use developer::Options as DeveloperOptions;
+pub(crate) use engine::Options as EngineOptions;
 pub(crate) use floor::FloorOptions;
 pub(crate) use stage::Options as StageOptions;
 
@@ -62,6 +64,10 @@ pub(crate) fn calibrate(options: CalibrationOptions) -> Result<(), Error> {
 
 pub(crate) fn developer(options: DeveloperOptions) -> Result<(), Error> {
     developer::run(options)
+}
+
+pub(crate) fn engine(options: EngineOptions) -> Result<(), Error> {
+    engine::run(options)
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {

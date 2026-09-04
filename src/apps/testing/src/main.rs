@@ -50,6 +50,8 @@ enum Command {
     BenchmarkStage(benchmark::StageOptions),
     /// Measure a production-like edit, build, test, and packaging session.
     BenchmarkDeveloper(benchmark::DeveloperOptions),
+    /// Measure one already-staged engine and its complete guest process tree.
+    BenchmarkEngine(benchmark::EngineOptions),
     /// Record or parse a bounded, immutable CPU attribution campaign.
     ProfileAttribution(profile_attribution::Options),
     /// Profile real checkpoint/restore phases over a daily-development process tree.
@@ -110,6 +112,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::BenchmarkStage(options) => benchmark::stage(options),
         Command::BenchmarkDeveloper(options) => benchmark::developer(options),
+        Command::BenchmarkEngine(options) => benchmark::engine(options),
         Command::ProfileAttribution(options) => profile_attribution::run(options),
         Command::CheckpointProfile(options) => checkpoint_profile::run(options),
         Command::Runtime(options) => runtime::run(options).await,
@@ -147,6 +150,7 @@ mod cli_tests {
         for command in [
             "benchmark",
             "benchmark-calibrate",
+            "benchmark-engine",
             "benchmark-hash",
             "benchmark-stage",
             "profile-attribution",
