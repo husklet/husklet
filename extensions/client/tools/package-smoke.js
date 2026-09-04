@@ -431,7 +431,7 @@ try {
     import {
       semanticXml, workspace, type ConnectOptions, type ContainerCreateSpec, type PaneSemanticAction,
       type PaneSemanticTree, type ProcessList, type Session, type TerminalTopology,
-      type WorkspaceConfiguration,
+      type WorkspaceConfiguration, type WorkspaceInfo,
     } from '@husklet/client';
     import { PROTOCOL_VERSION, type WireRequest, type WireUiEvent } from '@husklet/client/protocol';
     declare const session: Session;
@@ -449,11 +449,17 @@ try {
     declare const tree: PaneSemanticTree;
     const xml: string = semanticXml(tree);
     const request: WireRequest = { call: 'workspace_info' };
+    const rawInfo: Promise<{ reply: 'workspace'; with: WorkspaceInfo }> = session.call('workspace_info');
+    const rawInspect = session.call('container_inspect', { id: 'a'.repeat(64) });
+    // @ts-expect-error generated request payload rejects a missing immutable container ID
+    session.call('container_inspect', {});
+    // @ts-expect-error unknown calls are not part of the authoritative Rust request union
+    session.call('invented_operation');
     const event: WireUiEvent = { interaction: 'key', trigger: 'Key', node: 1, id: 'key-1', key: 'Enter', keycode: 13, modifiers: 0, pressed: true };
     const protocol: 1 = PROTOCOL_VERSION;
     const lifecycle: ConnectOptions = { connectTimeout: 5_000, onClose: (error) => { void error.message; } };
     void configuration; void container; void processes; void topology; void text; void input;
-    void acted; void xml; void request; void event; void protocol; void lifecycle; void cancellable.info();
+    void acted; void xml; void request; void rawInfo; void rawInspect; void event; void protocol; void lifecycle; void cancellable.info();
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--target', 'ES2022',

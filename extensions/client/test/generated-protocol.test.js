@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 import {
   PROTOCOL_CAPABILITIES, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, encodeRequest,
@@ -27,6 +28,15 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
   assert.equal(PROTOCOL_REQUEST_CAPABILITIES.container_attach_terminal, 'container-attach');
   assert.equal(PROTOCOL_REQUEST_CAPABILITIES.event_subscribe, null);
   assert.equal(PROTOCOL_TOPICS.find(({ wire }) => wire === 'pane-changes').snapshot, 'pane_changes');
+});
+
+test('generated declarations correlate every authoritative request with its exact reply', () => {
+  const declarations = fs.readFileSync(new URL('../src/generated-protocol.d.ts', import.meta.url), 'utf8');
+  for (const [call, reply] of Object.entries(PROTOCOL_REPLIES)) {
+    assert.match(declarations, new RegExp(`"${call}": Extract<WireReply, \\{ reply: "${reply}" \\}>;`));
+  }
+  assert.match(declarations, /WireRequestParameters<C extends WireCall>/);
+  assert.match(declarations, /WireReplyFor<C extends WireCall> = WireReplyByCall\[C\]/);
 });
 
 test('integer widths and the cross-language lossless boundary are enforced before framing', () => {

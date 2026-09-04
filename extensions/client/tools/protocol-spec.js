@@ -152,6 +152,13 @@ export type ExtensionCapability = ${schema.capabilities.map(({wire}) => JSON.str
 ${Object.entries(schema.definitions).map(([name, definition]) => `export type ${name} = ${type(definition)};`).join('\n')}
 export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};
+export type WireCall = WireRequest['call'];
+export type WireRequestFor<C extends WireCall> = Extract<WireRequest, { call: C }>;
+export type WireRequestParameters<C extends WireCall> = WireRequestFor<C> extends { with: infer P } ? P : undefined;
+export interface WireReplyByCall {
+${schema.request_to_reply.map(({ request, reply }) => `  ${JSON.stringify(request)}: Extract<WireReply, { reply: ${JSON.stringify(reply)} }>;`).join('\n')}
+}
+export type WireReplyFor<C extends WireCall> = WireReplyByCall[C];
 export type WireFailure = ${type(schema.roots.failure)};
 export type WireSnapshot = ${type(schema.roots.snapshot)};
 export type WireUiEvent = ${type(schema.roots.uievent)};

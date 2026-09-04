@@ -285,6 +285,11 @@ maps every host topic to the typed `subscribe(topic)` / `unsubscribe(topic)`
 API, so extensions do not need to discover normal operations through
 `Session.call()`.
 
+For lower-level integrations, `Session.call()` is still public, but its call
+name, payload, and operation-correlated reply are generated from the same Rust
+request-to-reply table. Unknown calls and mismatched payloads therefore fail
+TypeScript checking as well as the runtime validator.
+
 Use the typed inventory watchers when consuming host snapshots: `watchImages`,
 `watchVolumes`, `watchNetworks`, and `watchTerminal` deliver the bounded types
 from the Rust protocol schema and return an async disposer. The disposer sends

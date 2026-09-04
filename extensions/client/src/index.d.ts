@@ -1,4 +1,4 @@
-import type { WireUiEvent } from './generated-protocol.js';
+import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
 
 export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
 export type Division = 'beside' | 'below';
@@ -177,7 +177,11 @@ export class Session {
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
-  call(method: string, params?: unknown, options?: CallOptions): Promise<unknown>;
+  call<C extends WireCall>(method: C,
+    ...args: WireRequestFor<C> extends { with: infer P }
+      ? [params: P, options?: CallOptions]
+      : [params?: undefined, options?: CallOptions]
+  ): Promise<WireReplyFor<C>>;
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
   answer(channel: number, window: unknown): void;
