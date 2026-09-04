@@ -302,7 +302,7 @@ fn two_topics_on_one_session_do_not_supersede_each_other() {
     follow(&mut session, Topic::Containers, &mut subscriptions, &mut channels);
     follow(&mut session, Topic::Images, &mut subscriptions, &mut channels);
 
-    let images = Snapshot::Images(Vec::new());
+    let images = Snapshot::Images(hl_extension::port::ImageInventory::bounded(Vec::new()));
     for count in 1..=200 {
         subscriptions.emit(
             Topic::Containers,

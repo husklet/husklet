@@ -368,7 +368,7 @@ impl Conversation {
         }
         if self.may_observe(Topic::Images) {
             if let Ok(images) = services.images.list() {
-                snapshots.push(Snapshot::Images(images));
+                snapshots.push(Snapshot::Images(hl_extension::port::ImageInventory::bounded(images)));
             }
         }
         if self.may_observe(Topic::ImagePulls) {
@@ -376,12 +376,14 @@ impl Conversation {
         }
         if self.may_observe(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
-                snapshots.push(Snapshot::Volumes(volumes));
+                snapshots.push(Snapshot::Volumes(hl_extension::port::VolumeInventory::bounded(volumes)));
             }
         }
         if self.may_observe(Topic::Networks) {
             if let Ok(networks) = services.networks.list() {
-                snapshots.push(Snapshot::Networks(networks));
+                snapshots.push(Snapshot::Networks(hl_extension::port::NetworkInventory::bounded(
+                    networks,
+                )));
             }
         }
         if self.may_observe(Topic::Terminal) {

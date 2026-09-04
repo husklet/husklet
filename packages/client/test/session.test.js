@@ -28,7 +28,7 @@ test('real Unix stream drives a typed inventory watcher and returns event credit
         }
         if (frame.channel === 2 && frame.payload.call === 'workspace_info') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'demo', image: 'alpine', architecture: 'amd64' } } }));
-          socket.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'images', of: [] } }));
+          socket.write(encode({ channel: 7, kind: KIND.event, payload: { snapshot: 'images', of: { images: [], truncated: false } } }));
         }
       }
     });

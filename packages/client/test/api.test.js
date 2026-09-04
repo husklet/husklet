@@ -191,10 +191,10 @@ test('a throwing event listener cannot starve healthy listeners or event credit'
   await subscribed;
   stage.session.onEvent(() => { throw new Error('broken observer'); });
   stage.session.onEvent((event) => seen.push(event));
-  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'images', of: [] } }));
+  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'images', of: { images: [], truncated: false } } }));
   const credit = await next();
   assert.deepEqual(errors, ['broken observer']);
-  assert.deepEqual(seen, [{ snapshot: 'images', of: [] }]);
+  assert.deepEqual(seen, [{ snapshot: 'images', of: { images: [], truncated: false } }]);
   assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, {
     channel: 9, kind: KIND.credit, payload: 1,
   });
@@ -346,7 +346,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
   assert.deepEqual(protocolCoverage.available.images, [
-    'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune',
+    'inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune',
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
@@ -593,7 +593,10 @@ test('all bounded inventory snapshots have typed watchers with independent dispo
     assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic } });
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     const stop = await opening;
-    stage.host.write(encode({ channel: 20, kind: KIND.event, payload: { snapshot, of: value } }));
+    const inventory = snapshot === 'images' ? { images: value, truncated: false }
+      : snapshot === 'volumes' ? { volumes: value, truncated: false }
+        : snapshot === 'networks' ? { networks: value, truncated: false } : value;
+    stage.host.write(encode({ channel: 20, kind: KIND.event, payload: { snapshot, of: inventory } }));
     const credit = await next();
     assert.equal(credit.kind, KIND.credit); assert.equal(credit.channel, 20);
     assert.deepEqual(seen[topic], [value]);
@@ -815,9 +818,9 @@ test('volume and network facades preserve safe request shapes', async () => {
   assert.deepEqual(aliasOptions, { aliases: ['database.internal', 'database_2'] });
   assert.deepEqual(calls[10].with, { reference: networkId, container: containerId });
   const replies = [
-    { reply: 'volumes', with: [] }, { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } },
+    { reply: 'volumes', with: { volumes: [], truncated: false } }, { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } },
     { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }, { reply: 'done' },
-    { reply: 'networks', with: [] }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
+    { reply: 'networks', with: { networks: [], truncated: false } }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
     { reply: 'identity', with: 'n1' }, ...Array(7).fill({ reply: 'done' }),
   ];
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));

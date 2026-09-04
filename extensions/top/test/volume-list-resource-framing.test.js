@@ -29,10 +29,10 @@ test('volume inventory removes stale generation authority across real framed ref
           flags = 3;
           payload = { error: 'failed', detail: 'volume inventory unavailable' };
         } else {
-          payload = { reply: 'volumes', with: attempts === 3 ? [] : [{
+          payload = { reply: 'volumes', with: { volumes: attempts === 3 ? [] : [{
             name: attempts === 1 ? 'stale-cache' : 'current-cache', driver: 'local',
             generation: (attempts === 1 ? 'a' : 'b').repeat(32),
-          }] };
+          }], truncated: false } };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
         setTimeout(() => socket.write(response), 20);

@@ -73,7 +73,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
           : name === 'execution_logs'
             ? { reply: 'logs', with: { stdout: [111, 107], stderr: [33], truncated: false } }
           : name === 'image_list'
-            ? { reply: 'images', with: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }] }
+            ? { reply: 'images', with: { images: [{ id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 }], truncated: false } }
             : name === 'image_pull_start'
               ? { reply: 'image_pull_job', with: { job: 'p1' } }
             : name === 'image_pull_status'
@@ -83,7 +83,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
                 ? { error: 'failed', detail: 'image inspect unavailable' }
                 : { reply: 'image_details', with: { id: 'i1', references: ['alpine:3.20'], created: 'now', size: 7, os: 'linux', architecture: 'amd64', entrypoint: ['/bin/sh'], command: [], working_directory: '/', user: '' } }
             : name === 'volume_list'
-              ? { reply: 'volumes', with: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }] }
+              ? { reply: 'volumes', with: { volumes: [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }], truncated: false } }
             : name === 'volume_inspect'
               ? { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }
               : name === 'network_create'
@@ -91,7 +91,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
                 : name === 'volume_create'
                   ? { reply: 'volume', with: { name: frame.payload.with.name, driver: 'local', generation: 'b'.repeat(32) } }
               : name === 'network_list'
-                ? { reply: 'networks', with: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }] }
+                ? { reply: 'networks', with: { networks: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }], truncated: false } }
               : name === 'terminal_tabs'
                 ? { reply: 'tabs', with: [{ id: 'p7', title: 'Build', pinned: false, panes: [{ slot: 's4', working_directory: '/work', command: 'make', occupant: 'terminal', provider: null }] }] }
               : name === 'network_inspect'

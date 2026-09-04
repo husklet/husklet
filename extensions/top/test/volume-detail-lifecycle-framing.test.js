@@ -22,7 +22,7 @@ test('same-name volume generation replacement invalidates detail authority', { t
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       const call = frame.payload?.call; if (!call) continue;
       let payload = { reply: 'done' };
-      if (call === 'volume_list') { lists += 1; payload = { reply: 'volumes', with: [{ name, driver: 'local', generation: lists === 1 ? oldGeneration : newGeneration }] }; }
+      if (call === 'volume_list') { lists += 1; payload = { reply: 'volumes', with: { volumes: [{ name, driver: 'local', generation: lists === 1 ? oldGeneration : newGeneration }], truncated: false } }; }
       else if (call === 'volume_inspect') { inspections += 1; payload = { reply: 'volume', with: { name, driver: inspections === 1 ? 'old-driver' : 'new-driver', generation: inspections === 1 ? oldGeneration : newGeneration } }; }
       const delay = call === 'volume_inspect' && inspections === 1 ? 150 : 20;
       setTimeout(() => socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload })), delay);

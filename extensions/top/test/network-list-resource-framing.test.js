@@ -32,10 +32,10 @@ test('network inventory removes stale identity authority across real framed refr
           flags = 3;
           payload = { error: 'failed', detail: 'network inventory unavailable' };
         } else {
-          payload = { reply: 'networks', with: attempts === 3 ? [] : [{
+          payload = { reply: 'networks', with: { networks: attempts === 3 ? [] : [{
             id: attempts === 1 ? staleId : currentId,
             name: attempts === 1 ? 'stale-net' : 'current-net', driver: 'bridge', scope: 'local',
-          }] };
+          }], truncated: false } };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
         setTimeout(() => socket.write(response), 20);

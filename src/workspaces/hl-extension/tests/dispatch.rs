@@ -2474,7 +2474,7 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     let host = Host::new();
     let mut read = session(&[Capability::VolumeRead, Capability::NetworkRead], &[]);
     assert!(
-        matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values[0].name == "cache")
+        matches!(read.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values.volumes[0].name == "cache")
     );
     assert!(
         matches!(read.dispatch(&Request::NetworkInspect { reference: "private".into() }, &services(&host)), Ok(Reply::Network(value)) if value.id == "a".repeat(32))

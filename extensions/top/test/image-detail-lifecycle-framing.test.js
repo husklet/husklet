@@ -29,9 +29,9 @@ test('authoritative image replacement invalidates detail and removal consent', {
         let payload = { reply: 'done' };
         if (call === 'image_list') {
           listAttempts += 1;
-          payload = { reply: 'images', with: [{
+          payload = { reply: 'images', with: { images: [{
             id: digest, reference: listAttempts === 1 ? 'old/image:1' : 'new/image:2', size: 1024, created: listAttempts,
-          }] };
+          }], truncated: false } };
         } else if (call === 'image_inspect') {
           inspectAttempts += 1;
           payload = { reply: 'image_details', with: {

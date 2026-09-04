@@ -7,6 +7,7 @@ export const PROTOCOL_BOUNDS = Object.freeze({
   "pane_input_bytes": 65536,
   "pane_inventory_items": 512,
   "pane_text_bytes": 524288,
+  "resource_inventory_items": 256,
   "semantic_action_value_bytes": 4096,
   "semantic_depth": 32,
   "semantic_nodes": 256,
@@ -1887,6 +1888,30 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ImageInventory": {
+    "fields": [
+      {
+        "name": "images",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ImageSummary"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "ImagePruneResult": {
     "fields": [
       {
@@ -2329,6 +2354,30 @@ const definitions = {
         }
       }
     ]
+  },
+  "NetworkInventory": {
+    "fields": [
+      {
+        "name": "networks",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "NetworkSummary"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
   },
   "NetworkSummary": {
     "fields": [
@@ -5665,6 +5714,30 @@ const definitions = {
     },
     "serde": {}
   },
+  "VolumeInventory": {
+    "fields": [
+      {
+        "name": "volumes",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "VolumeSummary"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "VolumeSummary": {
     "fields": [
       {
@@ -6574,11 +6647,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "ImageSummary"
-            }
+            "kind": "ref",
+            "name": "ImageInventory"
           }
         }
       },
@@ -6637,11 +6707,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "VolumeSummary"
-            }
+            "kind": "ref",
+            "name": "VolumeInventory"
           }
         }
       },
@@ -6660,11 +6727,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "NetworkSummary"
-            }
+            "kind": "ref",
+            "name": "NetworkInventory"
           }
         }
       },
@@ -9061,11 +9125,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "ImageSummary"
-            }
+            "kind": "ref",
+            "name": "ImageInventory"
           }
         }
       },
@@ -9084,11 +9145,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "VolumeSummary"
-            }
+            "kind": "ref",
+            "name": "VolumeInventory"
           }
         }
       },
@@ -9097,11 +9155,8 @@ const roots = {
         "payload": {
           "kind": "newtype",
           "of": {
-            "kind": "array",
-            "of": {
-              "kind": "ref",
-              "name": "NetworkSummary"
-            }
+            "kind": "ref",
+            "name": "NetworkInventory"
           }
         }
       },

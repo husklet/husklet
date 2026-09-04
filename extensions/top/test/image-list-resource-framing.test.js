@@ -30,9 +30,9 @@ test('image inventory removes stale destructive controls across real framed refr
           flags = 3;
           payload = { error: 'failed', detail: 'image inventory unavailable' };
         } else {
-          payload = { reply: 'images', with: attempts === 3 ? [] : [{
+          payload = { reply: 'images', with: { images: attempts === 3 ? [] : [{
             id: digest, reference: attempts === 1 ? 'stale/image:1' : 'current/image:2', size: 1024, created: 0,
-          }] };
+          }], truncated: false } };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
         setTimeout(() => socket.write(response), 20);

@@ -22,7 +22,7 @@ test('authoritative network replacement invalidates detail and identity consent'
     socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
       const call = frame.payload?.call; if (!call) continue;
       let payload = { reply: 'done' };
-      if (call === 'network_list') { lists += 1; payload = { reply: 'networks', with: [{ id, name: lists === 1 ? 'old-net' : 'new-net', driver: 'bridge', scope: 'local' }] }; }
+      if (call === 'network_list') { lists += 1; payload = { reply: 'networks', with: { networks: [{ id, name: lists === 1 ? 'old-net' : 'new-net', driver: 'bridge', scope: 'local' }], truncated: false } }; }
       else if (call === 'network_inspect') { inspections += 1; payload = { reply: 'network', with: { id, name: inspections === 1 ? 'old-net' : 'new-net', driver: 'bridge', scope: inspections === 1 ? 'old-scope' : 'new-scope' } }; }
       const delay = call === 'network_inspect' && inspections === 1 ? 150 : 20;
       setTimeout(() => socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload })), delay);

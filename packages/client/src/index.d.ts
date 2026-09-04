@@ -68,13 +68,16 @@ export interface ExecutionSummary {
 }
 export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
 export interface ImageSummary { id: string; reference: string; size: number; created: number }
+export interface ImageInventory { images: ImageSummary[]; truncated: boolean }
 export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
 export interface ImagePruneResult { deleted: number; space_reclaimed: number }
 export interface ImagePullJob { job: string }
 export interface ImagePullStatus { job: string; reference: string; revision: number; state: string; status: string | null; layer: string | null; current: number | null; total: number | null; image: ImageSummary | null; error: string | null }
 export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
 export interface VolumeSummary { name: string; driver: string; generation: string }
+export interface VolumeInventory { volumes: VolumeSummary[]; truncated: boolean }
 export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
+export interface NetworkInventory { networks: NetworkSummary[]; truncated: boolean }
 export interface PaneSummary {
   slot: string;
   working_directory: string | null;
@@ -119,9 +122,9 @@ export type LegacyInterfaceEvent =
   | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
-  | { snapshot: 'images'; of: ImageSummary[] }
-  | { snapshot: 'volumes'; of: VolumeSummary[] }
-  | { snapshot: 'networks'; of: NetworkSummary[] }
+  | { snapshot: 'images'; of: ImageInventory }
+  | { snapshot: 'volumes'; of: VolumeInventory }
+  | { snapshot: 'networks'; of: NetworkInventory }
   | { snapshot: 'terminal'; of: TabSummary[] }
   | { snapshot: 'pane_changes'; of: PaneChange }
   | { snapshot: 'executions'; of: ExecutionList }
@@ -322,14 +325,16 @@ export interface WorkspaceApi {
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
-  images: { list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
+  images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
   volumes: {
+    inventory(): Promise<VolumeInventory>;
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
     remove(name: string, imageDigest: string): Promise<void>;
   };
   networks: {
+    inventory(): Promise<NetworkInventory>;
     list(): Promise<NetworkSummary[]>;
     inspect(reference: string): Promise<NetworkSummary>;
     create(name: string): Promise<string>;
@@ -461,8 +466,11 @@ export interface WorkspaceApi {
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
   watchContainerInventory(listener: (inventory: ContainerInventory) => void): Promise<() => Promise<void>>;
   watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;
+  watchImageInventory(listener: (inventory: ImageInventory) => void): Promise<() => Promise<void>>;
   watchVolumes(listener: (volumes: VolumeSummary[]) => void): Promise<() => Promise<void>>;
+  watchVolumeInventory(listener: (inventory: VolumeInventory) => void): Promise<() => Promise<void>>;
   watchNetworks(listener: (networks: NetworkSummary[]) => void): Promise<() => Promise<void>>;
+  watchNetworkInventory(listener: (inventory: NetworkInventory) => void): Promise<() => Promise<void>>;
   watchTerminal(listener: (tabs: TabSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
   watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;

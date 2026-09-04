@@ -305,7 +305,8 @@ export function workspace(session, { signal } = {}) {
       }).then((reply) => expect(reply, 'identity')),
     },
     images: {
-      list: async () => expect(await session.call('image_list'), 'images'),
+      inventory: async () => expect(await session.call('image_list'), 'images'),
+      list: async () => (await api.images.inventory()).images,
       inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
       startPull: async (reference) => expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
@@ -315,13 +316,15 @@ export function workspace(session, { signal } = {}) {
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
-      list: async () => expect(await session.call('volume_list'), 'volumes'),
+      inventory: async () => expect(await session.call('volume_list'), 'volumes'),
+      list: async () => (await api.volumes.inventory()).volumes,
       inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
       create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
       remove: (name, generation) => done('volume_remove', { name, generation: immutableIdentity(generation, [32], 'volume generation') }),
     },
     networks: {
-      list: async () => expect(await session.call('network_list'), 'networks'),
+      inventory: async () => expect(await session.call('network_list'), 'networks'),
+      list: async () => (await api.networks.inventory()).networks,
       inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
       remove: (reference) => done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
@@ -627,9 +630,12 @@ export function workspace(session, { signal } = {}) {
       await stopWatching();
     }
   };
-  api.watchImages = (listener) => watch('images', 'images', listener, 'image');
-  api.watchVolumes = (listener) => watch('volumes', 'volumes', listener, 'volume');
-  api.watchNetworks = (listener) => watch('networks', 'networks', listener, 'network');
+  api.watchImageInventory = (listener) => watch('images', 'images', listener, 'image inventory');
+  api.watchImages = (listener) => api.watchImageInventory((inventory) => listener(inventory.images));
+  api.watchVolumeInventory = (listener) => watch('volumes', 'volumes', listener, 'volume inventory');
+  api.watchVolumes = (listener) => api.watchVolumeInventory((inventory) => listener(inventory.volumes));
+  api.watchNetworkInventory = (listener) => watch('networks', 'networks', listener, 'network inventory');
+  api.watchNetworks = (listener) => api.watchNetworkInventory((inventory) => listener(inventory.networks));
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
   api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
@@ -1533,9 +1539,9 @@ export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
-    images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
-    volumes: ['list', 'inspect', 'create', 'remove'],
-    networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
+    images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
+    volumes: ['inventory', 'list', 'inspect', 'create', 'remove'],
+    networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],

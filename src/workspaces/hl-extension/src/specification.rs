@@ -326,7 +326,8 @@ pub fn document() -> String {
             "pane_input_bytes":crate::port::PANE_INPUT_BYTES,"terminal_command_argument_bytes":crate::port::TERMINAL_COMMAND_ARGUMENT_BYTES,
             "terminal_command_bytes":crate::port::TERMINAL_COMMAND_BYTES,"pane_inventory_items":crate::port::PANE_INVENTORY_LIMIT,
             "pane_text_bytes":crate::port::PANE_TEXT_BYTES,"extension_reference_bytes":crate::port::EXTENSION_REFERENCE_BYTES,
-            "extension_job_bytes":crate::port::EXTENSION_JOB_BYTES
+            "extension_job_bytes":crate::port::EXTENSION_JOB_BYTES,
+            "resource_inventory_items":crate::port::RESOURCE_INVENTORY_LIMIT
         },
         "roots":roots,"definitions":definitions
     });

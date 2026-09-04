@@ -169,6 +169,23 @@ pub struct ImageSummary {
     pub created: i64,
 }
 
+pub const RESOURCE_INVENTORY_LIMIT: usize = 256;
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImageInventory {
+    pub images: Vec<ImageSummary>,
+    pub truncated: bool,
+}
+
+impl ImageInventory {
+    #[must_use]
+    pub fn bounded(mut images: Vec<ImageSummary>) -> Self {
+        let truncated = images.len() > RESOURCE_INVENTORY_LIMIT;
+        images.truncate(RESOURCE_INVENTORY_LIMIT);
+        Self { images, truncated }
+    }
+}
+
 /// Bounded, useful image inspection data. Environment values and arbitrary
 /// labels are intentionally not exposed through this inventory API.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -231,6 +248,21 @@ pub struct VolumeSummary {
     pub generation: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct VolumeInventory {
+    pub volumes: Vec<VolumeSummary>,
+    pub truncated: bool,
+}
+
+impl VolumeInventory {
+    #[must_use]
+    pub fn bounded(mut volumes: Vec<VolumeSummary>) -> Self {
+        let truncated = volumes.len() > RESOURCE_INVENTORY_LIMIT;
+        volumes.truncate(RESOURCE_INVENTORY_LIMIT);
+        Self { volumes, truncated }
+    }
+}
+
 /// A workspace-local network as an extension sees it.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct NetworkSummary {
@@ -238,6 +270,21 @@ pub struct NetworkSummary {
     pub name: String,
     pub driver: String,
     pub scope: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct NetworkInventory {
+    pub networks: Vec<NetworkSummary>,
+    pub truncated: bool,
+}
+
+impl NetworkInventory {
+    #[must_use]
+    pub fn bounded(mut networks: Vec<NetworkSummary>) -> Self {
+        let truncated = networks.len() > RESOURCE_INVENTORY_LIMIT;
+        networks.truncate(RESOURCE_INVENTORY_LIMIT);
+        Self { networks, truncated }
+    }
 }
 
 /// A terminal tab and what occupies it.

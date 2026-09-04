@@ -405,7 +405,7 @@ impl Session {
     fn images(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let port = self.peer.authority().port(request.capability(), services.images)?;
         match request {
-            Request::ImageList => Ok(Reply::Images(port.list()?)),
+            Request::ImageList => Ok(Reply::Images(crate::port::ImageInventory::bounded(port.list()?))),
             Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
             Request::ImagePullStart { reference } => Ok(Reply::ImagePullJob(port.pull_start(reference)?)),
             Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(job)?)),
@@ -426,7 +426,7 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.volumes)?;
         match request {
-            Request::VolumeList => Ok(Reply::Volumes(port.list()?)),
+            Request::VolumeList => Ok(Reply::Volumes(crate::port::VolumeInventory::bounded(port.list()?))),
             Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
             Request::VolumeRemove { name, generation } => {
@@ -443,7 +443,7 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.networks)?;
         match request {
-            Request::NetworkList => Ok(Reply::Networks(port.list()?)),
+            Request::NetworkList => Ok(Reply::Networks(crate::port::NetworkInventory::bounded(port.list()?))),
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
             Request::NetworkRemove { reference } => {

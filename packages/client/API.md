@@ -223,6 +223,7 @@ The generated `PROTOCOL_BOUNDS` values are:
 - `pane_input_bytes`: 65536
 - `pane_inventory_items`: 512
 - `pane_text_bytes`: 524288
+- `resource_inventory_items`: 256
 - `semantic_action_value_bytes`: 4096
 - `semantic_depth`: 32
 - `semantic_nodes`: 256
