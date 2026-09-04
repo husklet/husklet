@@ -138,6 +138,23 @@ test('terminal management reads every pane as text and writes against the inspec
   assert.deepEqual(calls.filter(([kind]) => kind === 'write').length, 1, 'reading semantic XML never writes terminal bytes');
 });
 
+test('terminal input stays unavailable without a host-issued revision cursor', async () => {
+  const calls = [];
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [{ slot: 'pane-1', occupant: 'terminal', provider: null }] }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host();
+  stage.render(h(Terminals, { api: { terminal: {
+    toText: async () => ({ kind: 'terminal', text: '$ old host', snapshot: { slot: 'pane-1', lines: ['$ old host'], truncated: false } }),
+    writeAndWait: async (...args) => calls.push(args), pinTab: async () => {}, focus: async () => {},
+  } }, resource }));
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  assert.ok(labelled(stage, 'This host did not provide a writable pane revision; refresh before sending input.'));
+  assert.equal(isEnabled(stage, 'Send line'), false);
+  assert.deepEqual(calls, [], 'input without an observed generation and revision cannot reach the socket');
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],

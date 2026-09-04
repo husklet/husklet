@@ -9,8 +9,10 @@ import {
 } from '@husklet/react';
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
+import { Terminals } from './terminals.js';
 
 export { Overview, SECTIONS } from './overview.js';
+export { Terminals } from './terminals.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -1507,139 +1509,6 @@ export function Networks({ api, resource, networkDetails }) {
               detail={'The host returned no inspectable fields.'} />
                   : <StructuredDetail value={inspection.detail} />}
           </CardContent> : null}
-        </Card>)}
-        <Omitted count={view.omitted} />
-      </ResourceState>
-    </Page>
-  );
-}
-
-export function Terminals({ api, resource }) {
-  const [busy, setBusy] = useState('');
-  const [error, setError] = useState(null);
-  const [selected, setSelected] = useState('');
-  const [readable, setReadable] = useState(null);
-  const [input, setInput] = useState('');
-  const paneRevision = useRef(0);
-  const view = bounded(resource.data ?? []);
-  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
-  const pin = async (tab) => {
-    setBusy(tab.id); setError(null);
-    try {
-      await api.terminal.pinTab(tab.id, !tab.pinned);
-      await resource.reload();
-    } catch (cause) {
-      setError(cause);
-    } finally {
-      setBusy('');
-    }
-  };
-  const focus = async (tab) => {
-    const slot = tab.panes?.[0]?.slot;
-    if (!slot) return;
-    setBusy(tab.id); setError(null);
-    try { await api.terminal.focus(slot); } catch (cause) { setError(cause); } finally { setBusy(''); }
-  };
-  const inspect = async (slot) => {
-    const requested = ++paneRevision.current;
-    setBusy(`read:${slot}`); setError(null);
-    try {
-      const next = await api.terminal.toText(slot, { lines: 200 });
-      if (requested !== paneRevision.current) return;
-      setReadable(next);
-      setSelected(slot);
-    } catch (cause) {
-      if (requested === paneRevision.current) setError(cause);
-    } finally {
-      if (requested === paneRevision.current) setBusy('');
-    }
-  };
-  const sendLine = async () => {
-    if (readable?.kind !== 'terminal' || selected === '' || input === '') return;
-    const { generation, revision } = readable.snapshot;
-    const requested = ++paneRevision.current;
-    setBusy(`write:${selected}`); setError(null);
-    try {
-      const result = await api.terminal.writeAndWait(selected, generation, revision, `${input}\n`, { lines: 200 });
-      if (requested !== paneRevision.current) return;
-      if (result.changed) setReadable(result.readable ?? { kind: 'terminal', text: result.after.lines.join('\n'), snapshot: result.after });
-      setInput('');
-    } catch (cause) {
-      if (requested === paneRevision.current) setError(cause);
-    } finally {
-      if (requested === paneRevision.current) setBusy('');
-    }
-  };
-  useEffect(() => {
-    if (!selected) return;
-    const present = (resource.data ?? []).some((tab) => (tab.panes ?? []).some((pane) => pane.slot === selected));
-    if (present) return;
-    paneRevision.current += 1;
-    setSelected(''); setReadable(null); setInput('');
-  }, [resource.data, selected]);
-  return (
-    <Page
-      title={'Terminal tabs'}
-      subtitle={'Inspect live pane occupancy and protect important tabs from accidental close.'}>
-      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
-      <ErrorText error={error} />
-      <ResourceState
-        state={state}
-        loadingLabel={'Reading terminal tabs…'}
-        emptyLabel={'No terminal tabs'}
-        emptyDetail={'Open a terminal tab to manage it here.'}
-        error={resource.error?.message ?? String(resource.error ?? '')}
-        retryLabel={'Retry terminal tabs'}
-        onRetry={resource.reload}>
-        {view.records.map((tab) => <Card key={tab.id} variant={tab.pinned ? 'filled' : 'outline'}>
-          <CardHeader label={tab.title} detail={tab.id} />
-          <CardContent gap={1}>
-            <Row gap={1} align={'center'}>
-              <Badge label={tab.pinned ? 'Pinned' : 'Unpinned'} tone={tab.pinned ? 'positive' : 'neutral'} />
-              <Text label={`${tab.panes?.length ?? 0} pane${tab.panes?.length === 1 ? '' : 's'}`} color={'text-dim'} />
-            </Row>
-            {(tab.panes ?? []).map((pane) => <Row key={pane.slot} gap={1} align={'center'}>
-              <Text
-                label={`${pane.slot} · ${pane.occupant}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
-                color={'text-dim'} />
-              <Button
-                label={`${selected === pane.slot ? 'Refresh' : 'Inspect'} ${pane.slot}`}
-                enabled={busy === ''}
-                variant={'ghost'}
-                onInvoke={() => { void inspect(pane.slot); }} />
-            </Row>)}
-            {selected && (tab.panes ?? []).some((pane) => pane.slot === selected) && readable ? <Card variant={'filled'}>
-              <CardHeader
-                label={readable.kind === 'terminal' ? `Terminal ${selected}` : `Interface ${selected}`}
-                detail={readable.kind === 'terminal' ? 'Bounded live screen text' : 'Bounded semantic XML'} />
-              <CardContent gap={1}>
-                <LogView value={readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) || 'Pane is empty.'} />
-                {readable.kind === 'terminal' ? <Row gap={1}>
-                  <Entry
-                    value={input}
-                    placeholder={'Send a line to this terminal'}
-                    grow={true}
-                    onChange={(event) => setInput(String(event.value ?? ''))}
-                    onSubmit={() => { void sendLine(); }} />
-                  <Button
-                    label={'Send line'}
-                    enabled={busy === '' && input.length > 0}
-                    onInvoke={() => { void sendLine(); }} />
-                </Row> : null}
-              </CardContent>
-            </Card> : null}
-          </CardContent>
-          <CardActions gap={1}>
-            {busy === tab.id ? <Spinner /> : null}
-            <Button
-              label={`${tab.pinned ? 'Unpin' : 'Pin'} ${tab.title}`}
-              enabled={busy === ''}
-              onInvoke={() => { void pin(tab); }} />
-            <Button
-              label={`Focus ${tab.title}`}
-              enabled={busy === '' && Boolean(tab.panes?.[0])}
-              onInvoke={() => { void focus(tab); }} />
-          </CardActions>
         </Card>)}
         <Omitted count={view.omitted} />
       </ResourceState>
