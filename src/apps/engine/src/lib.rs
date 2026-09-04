@@ -456,7 +456,7 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
     if let Some(directory) = &launch.checkpoint_cycle {
         let rootfs = launch.rootfs.as_deref().expect("clap requires rootfs");
         let plan = plan.expect("a rootfs launch has a plan");
-        let (exit, receipt) = checkpoint_cycle::run(guest.isa(), plan, rootfs, directory)?;
+        let (exit, receipt) = checkpoint_cycle::run(guest.isa(), plan, rootfs, directory, launch.loader_receipt)?;
         eprintln!("[hl-checkpoint-cycle]\t{receipt}");
         return Ok(exit);
     }
@@ -470,14 +470,18 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
         builder.build()?
     };
     if launch.loader_receipt {
-        let receipt =
-            loader_receipt().map_err(|reason| Failure::Request(format!("cannot emit loader receipt: {reason}")))?;
-        eprintln!("[hl-loader]\t{receipt}");
+        emit_loader_receipt()?;
     }
     engine.start()?;
     let exit = engine.wait()?;
     engine.destroy()?;
     Ok(exit)
+}
+
+fn emit_loader_receipt() -> Result<(), Failure> {
+    let receipt = loader_receipt().map_err(|reason| Failure::Request(format!("cannot emit loader receipt: {reason}")))?;
+    eprintln!("[hl-loader]\t{receipt}");
+    Ok(())
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
