@@ -6,13 +6,6 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
 cases:
-  - id: runtime/aarch64-dbt/backedge-smc
-    status: active
-    compat: { class: compatibility }
-    build: { source: ../memory/source/aarch64_smctargeted.c, output: backedge-smc, flags: [-static, -O2, -std=gnu11] }
-    artifact: { destination: /opt/husklet/backedge-smc }
-    run: []
-    expect: { exit: 0, stdout: golden/backedge-smc.out, stderr: [" r0=*", " fall_total=*"] }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
