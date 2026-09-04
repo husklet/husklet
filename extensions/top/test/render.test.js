@@ -77,7 +77,7 @@ test('late inventory reloads cannot replace a newer authoritative snapshot', asy
   await settled(); await settled();
   assert.ok(labelled(stage, '2'));
   assert.ok(labelled(stage, '2 running'));
-  pending[0]([{ id: 'stale', state: 'stopped' }]);
+  pending[0]([{ id: 'stale', state: 'exited' }]);
   await settled(); await settled();
   assert.ok(labelled(stage, '2'));
   assert.ok(labelled(stage, '2 running'));
@@ -953,7 +953,7 @@ test('container creation validates an initial network reference and retains it u
   assert.equal(fieldValue(stage, placeholder), '');
 });
 
-test('container removal authority is available only for a stopped inventory record', () => {
+test('container controls follow the real daemon lifecycle states', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
   const stage = host();
@@ -961,8 +961,22 @@ test('container removal authority is available only for a stopped inventory reco
   stage.render(h(Containers, { api, resource: inventory('running') }));
   assert.equal(isEnabled(stage, 'Remove'), false, 'a running container cannot be removed');
 
-  stage.render(h(Containers, { api, resource: inventory('stopped') }));
-  assert.equal(isEnabled(stage, 'Remove'), true, 'the authoritative stopped state enables removal consent');
+  stage.render(h(Containers, { api, resource: inventory('created') }));
+  assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
+  assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
+
+  stage.render(h(Containers, { api, resource: inventory('exited') }));
+  assert.equal(isEnabled(stage, 'Remove'), true, 'exited containers are removable');
+  assert.equal(isEnabled(stage, 'Start'), true, 'exited containers are restartable through start');
+
+  stage.render(h(Containers, { api, resource: inventory('paused') }));
+  assert.equal(isEnabled(stage, 'Remove'), false, 'paused containers remain active');
+  assert.equal(isEnabled(stage, 'Restart'), true, 'paused containers can be restarted');
+  assert.equal(isEnabled(stage, 'Stop'), true, 'paused containers can be stopped');
+
+  stage.render(h(Containers, { api, resource: inventory('restarting') }));
+  assert.equal(isEnabled(stage, 'Start'), false, 'a restarting container cannot be started twice');
+  assert.equal(isEnabled(stage, 'Stop'), true, 'a restart loop can be stopped');
 });
 
 test('container execution preserves argv and exposes the exact inspectable identity', async () => {

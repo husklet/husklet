@@ -35,7 +35,7 @@ test('container catalogue removes stale authority across framed loading, failure
             payload = { error: 'failed', detail: 'container inventory unavailable' };
           } else {
             payload = { reply: 'containers', with: attempts === 3 || removed ? [] : [
-              { id, name: attempts === 1 ? 'stale-worker' : 'current-worker', image: 'alpine:3.20', state: 'stopped', created: 0 },
+              { id, name: attempts === 1 ? 'stale-worker' : 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 },
             ] };
           }
         } else if (call === 'container_remove') {
@@ -64,7 +64,7 @@ test('container catalogue removes stale authority across framed loading, failure
     await until(() => labelled(stage, 'stale-worker'));
     assert.ok(labelled(stage, 'Start'));
     invoke(stage, 'Remove');
-    assert.ok(labelled(stage, `Remove stopped container stale-worker with immutable ID ${id}?`));
+    assert.ok(labelled(stage, `Remove inactive container stale-worker with immutable ID ${id}?`));
 
     const refreshStart = stage.frames.length;
     invoke(stage, 'Refresh');
@@ -88,7 +88,7 @@ test('container catalogue removes stale authority across framed loading, failure
     assert.equal(attempts, 4);
     assert.ok(labelled(stage, 'Start'), 'ready state restores lifecycle controls for current inventory');
     invoke(stage, 'Remove');
-    assert.ok(labelled(stage, `Remove stopped container current-worker with immutable ID ${id}?`));
+    assert.ok(labelled(stage, `Remove inactive container current-worker with immutable ID ${id}?`));
     invoke(stage, 'Confirm remove');
     await until(() => removals.length === 1 && labelled(stage, 'No containers'));
     assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');

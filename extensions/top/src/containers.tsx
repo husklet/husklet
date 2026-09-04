@@ -65,8 +65,9 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
     void inspect(item);
   };
   const remove = async (item: ContainerSummary) => {
-    if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
-      throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
+    const current = currentContainers.current.get(item.id);
+    if (!removable(current) || !removable(item.state)) {
+      throw new Error(`Container ${item.id} changed or is no longer created or exited; refresh and confirm again.`);
     }
     setBusy(`remove:${item.id}`);
     try {
@@ -135,12 +136,14 @@ function containerActions(
 ): React.ReactNode[] {
   const blocked = busy !== '';
   const running = item.state === 'running';
+  const active = running || item.state === 'paused';
+  const startable = item.state === 'created' || item.state === 'exited';
   return [
     <Button
       key={'start'}
-      label={running ? 'Restart' : 'Start'}
-      enabled={!blocked}
-      onInvoke={() => act(running ? 'restart' : 'start', item.id)} />,
+      label={active ? 'Restart' : 'Start'}
+      enabled={!blocked && (active || startable)}
+      onInvoke={() => act(active ? 'restart' : 'start', item.id)} />,
     <Button
       key={'pause'}
       label={item.state === 'paused' ? 'Resume' : 'Pause'}
@@ -153,7 +156,7 @@ function containerActions(
       pendingLabel={'Confirm stop'}
       authorityKey={`container:${item.id}:stop`}
       question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-      enabled={!blocked && running}
+      enabled={!blocked && (active || item.state === 'restarting')}
       onConfirm={() => act('stop', item.id)} />,
     <ConfirmAction
       key={'remove'}
@@ -161,8 +164,8 @@ function containerActions(
       confirmLabel={'Confirm remove'}
       pendingLabel={'Confirm remove'}
       authorityKey={`container:${item.id}:remove`}
-      question={`Remove stopped container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-      enabled={!blocked && item.state === 'stopped'}
+      question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
+      enabled={!blocked && removable(item.state)}
       onConfirm={() => remove(item)} />,
   ];
 }
@@ -188,3 +191,4 @@ function Omitted({ count }: { count: number }) { return count > 0 ? <Text
   color={'text-dim'} /> : null; }
 
 function stateTone(state: string): 'positive' | 'warning' | 'neutral' { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
+function removable(state: string | undefined): boolean { return state === 'created' || state === 'exited'; }
