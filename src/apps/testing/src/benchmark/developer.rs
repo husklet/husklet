@@ -158,6 +158,7 @@ struct ArmArtifacts<'a> {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct Identity {
     schema: String,
     host_manifest: String,
@@ -239,8 +240,10 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
                 fs::remove_dir_all(&root)?;
             }
             clone_root(arm_artifacts(&options, mode).rootfs, &root)?;
-            stage_fixture(&options, &root, mode, fixture)?;
-            let result = execute(&options, &root, mode, sample, position);
+            let result = (|| {
+                stage_fixture(&options, &root, mode, fixture)?;
+                execute(&options, &root, mode, sample, position)
+            })();
             fs::remove_dir_all(&root)?;
             append(&ledger_path, &result?)?;
         }
@@ -293,10 +296,49 @@ fn verify_artifact_architectures(options: &Options) -> Result<(), Error> {
         let artifacts = arm_artifacts(options, mode);
         verify_machine(artifacts.engine, host)?;
         for executable in ["bin/sh", "usr/bin/git", "usr/bin/gcc"] {
-            verify_machine(&artifacts.rootfs.join(executable), artifacts.guest_isa.target())?;
+            let executable = resolve_rootfs_elf(artifacts.rootfs, Path::new(executable))?;
+            verify_machine(&executable, artifacts.guest_isa.target())?;
         }
     }
     Ok(())
+}
+
+fn resolve_rootfs_elf(root: &Path, relative: &Path) -> Result<PathBuf, Error> {
+    use std::{collections::VecDeque, path::Component};
+    let mut pending = relative
+        .components()
+        .map(|part| part.as_os_str().to_owned())
+        .collect::<VecDeque<_>>();
+    let mut resolved = PathBuf::new();
+    let mut followed = 0;
+    while let Some(part) = pending.pop_front() {
+        match Path::new(&part).components().next() {
+            Some(Component::Normal(_)) => resolved.push(&part),
+            Some(Component::CurDir) => continue,
+            Some(Component::RootDir) => {
+                resolved.clear();
+                continue;
+            }
+            Some(Component::ParentDir) if resolved.pop() => continue,
+            _ => return Err("rootfs ELF path escapes its root".into()),
+        }
+        let candidate = root.join(&resolved);
+        if fs::symlink_metadata(&candidate)?.file_type().is_symlink() {
+            followed += 1;
+            if followed > 40 {
+                return Err("rootfs ELF path contains a symlink loop".into());
+            }
+            resolved.pop();
+            let target = fs::read_link(candidate)?;
+            if target.is_absolute() {
+                resolved.clear();
+            }
+            for component in target.components().rev() {
+                pending.push_front(component.as_os_str().to_owned());
+            }
+        }
+    }
+    Ok(root.join(resolved))
 }
 
 fn arm_artifacts(options: &Options, mode: Mode) -> ArmArtifacts<'_> {
@@ -401,6 +443,9 @@ fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
 
 fn stage_fixture(options: &Options, root: &Path, mode: Mode, script: &str) -> Result<(), Error> {
     let work = root.join("work");
+    if fs::symlink_metadata(&work).is_ok() || fs::symlink_metadata(root.join("fixture.git")).is_ok() {
+        return Err("developer rootfs already contains a benchmark-owned staging path".into());
+    }
     write_workload_tree(&work, script)?;
     let argv = stage_argv(options, root, mode);
     let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
@@ -920,6 +965,9 @@ fn hex(bytes: impl AsRef<[u8]>) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     fn cross_isa_options() -> Options {
         Options {
             host_manifest: "/identity/host.json".into(),
@@ -937,6 +985,31 @@ mod tests {
             lock_timeout: 900,
             max_load: 1.0,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_elf_resolution_keeps_absolute_links_inside_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("bin")).unwrap();
+        fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        fs::write(root.path().join("usr/bin/tool"), b"guest").unwrap();
+        symlink("/usr/bin/tool", root.path().join("bin/tool")).unwrap();
+        assert_eq!(
+            resolve_rootfs_elf(root.path(), Path::new("bin/tool")).unwrap(),
+            root.path().join("usr/bin/tool")
+        );
+        symlink("../../outside", root.path().join("bin/escape")).unwrap();
+        assert!(resolve_rootfs_elf(root.path(), Path::new("bin/escape")).is_err());
+    }
+
+    #[test]
+    fn v3_identity_cannot_resume_as_v4() {
+        let error = serde_json::from_str::<Identity>(r#"{"schema":"husklet-developer-benchmark-v3"}"#)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("host_manifest"), "{error}");
     }
 
     #[test]
