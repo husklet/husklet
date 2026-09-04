@@ -651,6 +651,9 @@ fn shown(value: &gtk::glib::Value) -> String {
 /// property of its own: what a view's buffer holds, and where a control's
 /// adjustment stands.
 fn held(widget: &gtk::Widget) -> String {
+    if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
+        return format!("color {}", color_text(&picker.rgba()));
+    }
     if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
         let buffer = view.buffer();
         return format!(
@@ -667,6 +670,15 @@ fn held(widget: &gtk::Widget) -> String {
         adjustment.upper(),
         adjustment.value(),
         adjustment.step_increment()
+    )
+}
+
+fn color_text(color: &gtk::gdk::RGBA) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (color.red().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.green().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.blue().clamp(0.0, 1.0) * 255.0).round() as u8,
     )
 }
 
@@ -707,6 +719,7 @@ fn offers(prop: Prop) -> Vec<PropValue> {
             PropValue::Number(3.0),
             PropValue::text("2024-03-05"),
             PropValue::text("14:30"),
+            PropValue::text("#336699"),
         ],
         Prop::Icon => vec![PropValue::text(EMBLEM)],
         Prop::Uri => vec![PropValue::text(REFERENCE)],
@@ -806,6 +819,7 @@ enum Aspect {
     Measure,
     Date,
     Time,
+    ColorValue,
 }
 
 /// The text every label-shaped scenario writes, and reads back.
@@ -846,7 +860,7 @@ fn every_tag_honours_the_property_it_is_for() {
 fn asked(aspect: Aspect) -> Prop {
     match aspect {
         Aspect::Label => Prop::Label,
-        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time => Prop::Value,
+        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time | Aspect::ColorValue => Prop::Value,
         Aspect::Revealed => Prop::Expanded,
         Aspect::Icon => Prop::Icon,
         Aspect::Uri => Prop::Uri,
@@ -881,6 +895,7 @@ fn written(aspect: Aspect) -> PropValue {
         Aspect::Measure => PropValue::Length(Length::Step(4)),
         Aspect::Date => PropValue::text("2024-03-05"),
         Aspect::Time => PropValue::text("14:30"),
+        Aspect::ColorValue => PropValue::text("#336699"),
     }
 }
 
@@ -903,6 +918,8 @@ fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
         Aspect::Measure => widget.size_request().0 == 16,
         Aspect::Date => dated(widget),
         Aspect::Time => timed(widget),
+        Aspect::ColorValue => widget.downcast_ref::<gtk::ColorDialogButton>()
+            .is_some_and(|picker| color_text(&picker.rgba()) == "#336699"),
     }
 }
 
@@ -1117,7 +1134,8 @@ fn principal(tag: Tag) -> Aspect {
         Tag::DrawerPanel => Aspect::Revealed,
         Tag::Rating => Aspect::Stars,
         Tag::TablePagination => Aspect::Value,
-        Tag::Popover | Tag::ContextMenu | Tag::ColorPicker => Aspect::Grow,
+        Tag::Popover | Tag::ContextMenu => Aspect::Grow,
+        Tag::ColorPicker => Aspect::ColorValue,
         Tag::AvatarGroup => Aspect::Gap,
         Tag::Icon | Tag::IconButton | Tag::Fab | Tag::SpeedDial | Tag::Overflow => Aspect::Icon,
         Tag::ListItemIcon | Tag::StepIcon => Aspect::Icon,

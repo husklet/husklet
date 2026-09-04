@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Accordion, AccordionDetails, AccordionSummary, Button, CardActions, Column, Entry, Heading,
+  Accordion, AccordionDetails, AccordionSummary, Button, CardActions, ColorPicker, Column, Entry, Heading,
   InlineMessage, Row, Scroll, Select, Spinner, Switch, Text,
   type WorkspaceApi, type WorkspaceConfiguration, type WorkspaceMount,
 } from '@husklet/react';
@@ -69,8 +69,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
     <SettingsGroup name="terminal" label="Terminal appearance" detail={terminalSummary(configuration)} expanded={expanded} onExpand={setExpanded}>
       {field('Font family', configuration.terminal.font_family ?? '', 'Host default', (event) => terminal('font_family', nullable(event.value)))}
       {field('Font size', numbers.fontSize, 'Host default', (event) => numeric('fontSize', event.value))}
-      {field('Foreground', configuration.terminal.foreground ?? '', '#RRGGBB or host default', (event) => terminal('foreground', nullable(event.value)))}
-      {field('Background', configuration.terminal.background ?? '', '#RRGGBB or host default', (event) => terminal('background', nullable(event.value)))}
+      {colorField('Foreground', configuration.terminal.foreground, (value) => terminal('foreground', value))}
+      {colorField('Background', configuration.terminal.background, (value) => terminal('background', value))}
       <Column gap={1}><Text label="Cursor shape" /><Select value={configuration.terminal.cursor_shape ?? ''} choices={[
         { value: '', label: 'Host default' }, { value: 'block', label: 'Block' }, { value: 'ibeam', label: 'I-beam' }, { value: 'underline', label: 'Underline' },
       ]} onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))} /></Column>
@@ -104,6 +104,7 @@ function Mounts({ values, onChange }: { values: WorkspaceMount[]; onChange: (val
   return <Column gap={2}>{values.map((mount, index) => <Column key={`${index}:${mount.container}`} gap={1}><Row gap={1}><Entry value={mount.host} placeholder="Host path" grow onChange={(event: Change) => replace(index, { host: String(event.value ?? '') })} /><Entry value={mount.container} placeholder="Absolute container path" grow onChange={(event: Change) => replace(index, { container: String(event.value ?? '') })} /></Row><Row gap={2} align="center"><Switch checked={mount.read_only} onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })} /><Text label="Read only" /><Button label={`Remove mount ${index + 1}`} onInvoke={() => onChange(values.filter((_, at) => at !== index))} /></Row></Column>)}<CardActions><Button label="Add mount" onInvoke={() => onChange([...values, { host: '', container: '', read_only: true }])} /></CardActions></Column>;
 }
 function field(label: string, value: string, placeholder: string, onChange: (event: Change) => void) { return <Column gap={1}><Text label={label} /><Entry value={value} placeholder={placeholder} onChange={onChange} /></Column>; }
+function colorField(label: string, value: string | null, onChange: (value: string | null) => void) { return <Column gap={1}><Text label={label} /><Row gap={1} align="center"><ColorPicker value={value ?? '#000000'} onChange={(event: Change) => onChange(nullable(event.value))} /><Button label={`Use host default for ${label.toLowerCase()}`} enabled={value !== null} onInvoke={() => onChange(null)} /></Row>{value === null && <Text label="Host default" color="text-dim" />}</Column>; }
 function nullable(value: unknown): string | null { const result = String(value ?? '').trim(); return result || null; }
 function numberDraft(value: WorkspaceConfiguration): Numbers { return { cpus: text(value.cpus), memory: text(value.memory_mb), scrollback: text(value.scrollback), fontSize: text(value.terminal.font_size) }; }
 function text(value: number | null): string { return value === null ? '' : String(value); }

@@ -358,12 +358,26 @@ fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
 /// editable too, and connecting both would report the same keystroke twice —
 /// once as the number it now stands at and once as the text showing it.
 fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) {
+    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) || color(widget, node, slot, reports) {
         return;
     }
     entry(widget, node, slot, reports);
     text_view(widget, node, slot, reports);
     scale(widget, node, slot, reports);
+}
+
+fn color(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else { return false };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    picker.connect_rgba_notify(move |picker| {
+        identified(&reports, &slot, |id| Event::Change {
+            node,
+            id,
+            value: PropValue::text(crate::component::field::color_value(&picker.rgba())),
+        });
+    });
+    true
 }
 
 fn text_view(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {

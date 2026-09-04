@@ -49,6 +49,7 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'Automatic when empty', '/bin/bash') }));
     peer.write(encode({ channel: 7, kind: KIND.event, payload: expand(calls, 'Terminal appearance') }));
     await until(() => expandedState(calls, 'Terminal appearance') === true);
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: changeTag(calls, 'ColorPicker', 0, '#112233') }));
     await until(() => renderedLabels(calls).includes('Save workspace'));
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invoke(calls, 'Save workspace') }));
     await until(() => calls.some(({ call }) => call === 'workspace_update'));
@@ -56,6 +57,7 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     assert.equal(update.name, 'daily');
     assert.equal(update.generation, 'a'.repeat(32));
     assert.equal(update.configuration.shell, '/bin/bash');
+    assert.equal(update.configuration.terminal.foreground, '#112233');
     assert.equal(stderr, '');
   } finally {
     const closed = child.exitCode === null ? new Promise((resolve) => child.once('close', resolve)) : Promise.resolve();
@@ -83,6 +85,15 @@ function change(calls, placeholder, value) {
   const patches = renderedPatches(calls);
   const node = patches.findLast((patch) => patch.SetProp?.prop === 'Placeholder'
     && patch.SetProp.value?.Text === placeholder).SetProp.id;
+  const handler = patches.findLast((patch) => patch.SetHandler?.id === node
+    && patch.SetHandler.handler?.trigger === 'Change').SetHandler;
+  return { slot: 'workspace-settings', event: 'Change', node, id: handler.handler.id, value };
+}
+
+function changeTag(calls, tag, index, value) {
+  const patches = renderedPatches(calls);
+  const nodes = patches.filter((patch) => patch.Create?.tag === tag).map((patch) => patch.Create.id);
+  const node = nodes[index];
   const handler = patches.findLast((patch) => patch.SetHandler?.id === node
     && patch.SetHandler.handler?.trigger === 'Change').SetHandler;
   return { slot: 'workspace-settings', event: 'Change', node, id: handler.handler.id, value };

@@ -2350,8 +2350,11 @@ export interface ColorPickerProps extends NodeProps {
   span?: number;
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
+  /** what a field holds or a display shows; numeric for a slider, a number entry and a rating */
+  value?: string | number;
   /** defaults to enabled when absent */
   enabled?: boolean;
+  onChange?: (report: Report) => void;
 }
 
 export interface FilePickerProps extends NodeProps {

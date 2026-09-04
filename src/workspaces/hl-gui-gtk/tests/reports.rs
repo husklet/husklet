@@ -370,6 +370,10 @@ fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
 
 /// The components whose interaction is a value changing.
 fn valued(widget: &gtk::Widget) {
+    if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
+        picker.set_rgba(&gtk::gdk::RGBA::new(0.2, 0.4, 0.6, 1.0));
+        return;
+    }
     if let Some(view) = widget
         .downcast_ref::<gtk::ScrolledWindow>()
         .and_then(gtk::ScrolledWindow::child)

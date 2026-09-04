@@ -50,6 +50,7 @@ const BY_TAG = {
   Grid: { columns: 2 },
   Splitter: { orientation: 'horizontal', position: 160 },
   Slider: { value: 5, minimum: 0, maximum: 10, step: 1 },
+  ColorPicker: { value: '#336699' },
   NumberEntry: { value: 3, minimum: 0, maximum: 10, step: 1 },
   Rating: { value: 3, maximum: 5 },
   Stat: { label: 'Containers', value: '12' },

@@ -245,7 +245,7 @@ catalogue! {
     Slider: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change],
     DatePicker: leaf, props[Value, Enabled], triggers[],
     TimePicker: leaf, props[Value, Gap, Enabled], triggers[],
-    ColorPicker: leaf, props[Enabled], triggers[],
+    ColorPicker: leaf, props[Value, Enabled], triggers[Change],
     FilePicker: leaf, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke],
     Rating: leaf, props[Value, Enabled], triggers[Change],
 
