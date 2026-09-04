@@ -942,6 +942,14 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         memf_materialize_all();
         exec_prepared prepared;
         int error = exec_prepare_request(a0, a1, a2, requested_descriptor, &prepared);
+        if (g_coldprof)
+            fprintf(stderr,
+                    "[exec-profile] pid=%lld comm=%s prepare=%d requested_fd=%d main_origin=%u interp_present=%d "
+                    "interp_origin=%u cache_authorized=%d\n",
+                    (long long)getpid(), prepared.comm, error, requested_descriptor,
+                    error == 0 ? prepared.main_image.origin.kind : 0, error == 0 ? prepared.has_program_interpreter : 0,
+                    error == 0 && prepared.has_program_interpreter ? prepared.program_interpreter.origin.kind : 0,
+                    error == 0 ? prepared.cache_identity_authorized : 0);
         if (error == 0) error = exec_commit_request(c, &prepared);
         if (error != 0) {
             if (error == -EAGAIN) exec_prepared_discard(&prepared);
