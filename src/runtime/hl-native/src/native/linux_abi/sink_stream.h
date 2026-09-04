@@ -18,6 +18,7 @@
 
 #include "ckpt_sink.h"
 #include "../engine/checkpoint_channel.h"
+#include "../engine/options.h"
 
 #include <stdio.h>
 #include <stdlib.h>
