@@ -7,6 +7,7 @@ name = "storybook"
 display_name = "Component playground"
 version = "0.1.0"
 protocol = 1
+activation = "tab"
 
 # Draw, and nothing else. A playground renders components; it has no business
 # reading a container or a file.

@@ -1318,7 +1318,7 @@ mod tests {
         fn list(&self) -> Result<Vec<hl_extension::port::ExtensionSummary>, HostError> {
             self.ledger.note("extensions.list");
             Ok(vec![hl_extension::port::ExtensionSummary {
-                name: "workspace-manager".into(),
+                name: "top".into(),
                 image_digest: "sha256:manager".into(),
                 status: "duty".into(),
                 version: "1.0.0".into(),
@@ -1381,7 +1381,7 @@ mod tests {
         let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
         let events = super::super::management_events::ExtensionEvents::default();
         events.inventory(vec![hl_extension::port::ExtensionSummary {
-            name: "workspace-manager".into(),
+            name: "top".into(),
             image_digest: "sha256:observed".into(),
             status: "duty".into(),
             version: "1.0.0".into(),
@@ -1391,7 +1391,7 @@ mod tests {
         conversation.with_extension_events(events);
 
         let batch = conversation.drain_extension_events().expect("native extension change");
-        assert_eq!(batch.inventory.expect("inventory")[0].name, "workspace-manager");
+        assert_eq!(batch.inventory.expect("inventory")[0].name, "top");
         assert!(
             conversation.drain_extension_events().is_none(),
             "the adapter drains rather than polls history"
@@ -1690,7 +1690,7 @@ mod tests {
         let event = wire.receive().expect("initial extension snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
         assert!(
-            matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "workspace-manager")
+            matches!(snapshot, Snapshot::Extensions(extensions) if extensions.len() == 1 && extensions[0].name == "top")
         );
         assert_eq!(
             wire.receive(),

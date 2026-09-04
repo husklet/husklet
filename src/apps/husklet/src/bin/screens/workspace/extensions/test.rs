@@ -1122,7 +1122,7 @@ fn extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue() {
     let roster = Rc::new(RefCell::new(
         Roster::open(Directory::open(storage.path()).expect("storage")).expect("roster"),
     ));
-    let managed = named("workspace-manager");
+    let managed = named("top");
     record(&roster, managed.as_str(), true);
     let view = Rc::new(View::new([
         (Page::Settings, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
@@ -1132,7 +1132,7 @@ fn extension_lifecycle_keeps_fixed_navigation_and_recovers_catalogue() {
     let withdrawals = Rc::new(Cell::new(0));
     let counted = Rc::clone(&withdrawals);
     let withdraw = Rc::new(move |name: &ExtensionName| {
-        if name.as_str() == "workspace-manager" {
+        if name.as_str() == "top" {
             counted.set(counted.get() + 1);
         }
     });
