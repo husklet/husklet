@@ -3358,14 +3358,6 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CALL_SIM("call_sim_decline_authority", call_sim_decline_authority);
 #undef HL_APPEND_CALL_SIM
 #undef HL_APPEND_CROSSING
-    if ((size_t)formatted + 1 >= sizeof record) return;
-    record[formatted++] = '\n';
-    size_t offset = 0;
-    while (offset < (size_t)formatted) {
-        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
-        if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
-        offset += (size_t)written;
-    }
 #if defined(HL_BACKEND_A64_OPCODE_CENSUS)
     uint64_t major[HL_BACKEND_A64_MAJOR_COUNT];
     uint64_t family[6] = {0};
@@ -3379,34 +3371,36 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     };
     for (unsigned i = 0; i < HL_BACKEND_A64_MAJOR_COUNT; ++i)
         family[family_for_major[i]] += major[i];
-    char a64_record[1024];
-    int a64_len = snprintf(a64_record, sizeof a64_record,
-                           "[diag] aarch64-opcode version=1 available=%d body_retired=%llu "
-                           "major0=%llu major1=%llu major2=%llu major3=%llu major4=%llu major5=%llu "
-                           "major6=%llu major7=%llu major8=%llu major9=%llu major10=%llu major11=%llu "
-                           "major12=%llu major13=%llu major14=%llu major15=%llu "
-                           "reserved=%llu load_store=%llu dp_register=%llu dp_immediate=%llu "
-                           "branch_system=%llu simd_fp=%llu\n",
-                           available, (unsigned long long)body_retired,
-                           (unsigned long long)major[0], (unsigned long long)major[1],
-                           (unsigned long long)major[2], (unsigned long long)major[3],
-                           (unsigned long long)major[4], (unsigned long long)major[5],
-                           (unsigned long long)major[6], (unsigned long long)major[7],
-                           (unsigned long long)major[8], (unsigned long long)major[9],
-                           (unsigned long long)major[10], (unsigned long long)major[11],
-                           (unsigned long long)major[12], (unsigned long long)major[13],
-                           (unsigned long long)major[14], (unsigned long long)major[15],
-                           (unsigned long long)family[0], (unsigned long long)family[1],
-                           (unsigned long long)family[2], (unsigned long long)family[3],
-                           (unsigned long long)family[4], (unsigned long long)family[5]);
-    if (a64_len <= 0 || (size_t)a64_len >= sizeof a64_record) return;
-    offset = 0;
-    while (offset < (size_t)a64_len) {
-        int64_t written = hl_linux_write(box, STDERR_FILENO, a64_record + offset, (size_t)a64_len - offset);
-        if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)a64_len - offset) return;
+    int a64_added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             "\n[diag] aarch64-opcode version=1 available=%d body_retired=%llu "
+                             "major0=%llu major1=%llu major2=%llu major3=%llu major4=%llu major5=%llu "
+                             "major6=%llu major7=%llu major8=%llu major9=%llu major10=%llu major11=%llu "
+                             "major12=%llu major13=%llu major14=%llu major15=%llu "
+                             "reserved=%llu load_store=%llu dp_register=%llu dp_immediate=%llu "
+                             "branch_system=%llu simd_fp=%llu",
+                             available, (unsigned long long)body_retired,
+                             (unsigned long long)major[0], (unsigned long long)major[1],
+                             (unsigned long long)major[2], (unsigned long long)major[3],
+                             (unsigned long long)major[4], (unsigned long long)major[5],
+                             (unsigned long long)major[6], (unsigned long long)major[7],
+                             (unsigned long long)major[8], (unsigned long long)major[9],
+                             (unsigned long long)major[10], (unsigned long long)major[11],
+                             (unsigned long long)major[12], (unsigned long long)major[13],
+                             (unsigned long long)major[14], (unsigned long long)major[15],
+                             (unsigned long long)family[0], (unsigned long long)family[1],
+                             (unsigned long long)family[2], (unsigned long long)family[3],
+                             (unsigned long long)family[4], (unsigned long long)family[5]);
+    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted) return;
+    formatted += a64_added;
+#endif
+    if ((size_t)formatted + 1 >= sizeof record) return;
+    record[formatted++] = '\n';
+    size_t offset = 0;
+    while (offset < (size_t)formatted) {
+        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+        if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
-#endif
     for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
         struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];
         if (atomic_load_explicit(&site->state, memory_order_acquire) != 2) continue;
