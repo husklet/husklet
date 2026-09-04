@@ -540,7 +540,7 @@ test('all bounded inventory snapshots have typed watchers with independent dispo
     ['watchImages', 'images', 'images', [{ id: 'sha256:a', reference: 'alpine:3.20', size: 42, created: 7 }]],
     ['watchVolumes', 'volumes', 'volumes', [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }]],
     ['watchNetworks', 'networks', 'networks', [{ id: 'b'.repeat(32), name: 'dev', driver: 'bridge', scope: 'local' }]],
-    ['watchTerminal', 'terminal', 'terminal', [{ id: 'tab-1', title: 'Shell', panes: [] }]],
+    ['watchTerminal', 'terminal', 'terminal', [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [] }]],
   ];
   for (const [method, topic, snapshot, value] of definitions) {
     const opening = api[method]((payload) => seen[topic].push(payload));
@@ -943,6 +943,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   await next();
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
+  const pinning = terminal.pinTab('t1');
   const splitting = terminal.splitObserved('s1', 4, 7, 'below');
   const spawning = terminal.spawnObserved('s1', 4, 7, ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
@@ -952,6 +953,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const retitling = terminal.retitleObserved('s1', 4, 7, ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
+  assert.deepEqual((await next()).payload, { call: 'terminal_pin_tab', with: { tab: 't1', pinned: true } });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_split_observed', with: { slot: 's1', generation: 4, revision: 7, division: 'below' },
   });
@@ -976,6 +978,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   });
   const tree = { active_tab: 't1', tabs: [] };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 's2' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
@@ -986,7 +989,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
   assert.equal(await splitting, 's2');
-  await Promise.all([spawning, writing, resizing, ratio, focusing, retitling, closing]);
+  await Promise.all([pinning, spawning, writing, resizing, ratio, focusing, retitling, closing]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);

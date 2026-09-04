@@ -15,7 +15,8 @@ use hl_extension::port::{
 use vte4::prelude::*;
 
 use super::super::terminal::{
-    Adjustment, Occupancy, PaneChooser, PaneChrome, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin, Window,
+    Adjustment, Occupancy, Page, PaneChooser, PaneChrome, PaneView, Panes, Reading, Slots, Surface, Tabs, TermWin,
+    Window,
 };
 
 /// How often the window looks for errands.
@@ -80,6 +81,7 @@ impl Console {
             Request::Topology => Self::topology(window).map(Answer::Topology),
             Request::PaneList => Self::pane_inventory(window).map(Answer::Panes),
             Request::OpenTab(title) => Ok(Answer::Slot(Self::open(window, title))),
+            Request::PinTab { tab, pinned } => Tabs::new(window).pin(tab, *pinned).map(|()| Answer::Done),
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
             Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),
@@ -90,9 +92,12 @@ impl Console {
             Request::SemanticAction { slot, action } => {
                 Self::semantic_action(window, slot, action).map(|()| Answer::Done)
             }
-            Request::Write { slot, generation, revision, contents } => {
-                Self::write(window, slot, *generation, *revision, contents).map(|()| Answer::Done)
-            }
+            Request::Write {
+                slot,
+                generation,
+                revision,
+                contents,
+            } => Self::write(window, slot, *generation, *revision, contents).map(|()| Answer::Done),
             Request::ResizeGrid { slot, grid } => Self::resize_grid(window, slot, *grid).map(|()| Answer::Done),
             Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
             Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
@@ -116,7 +121,8 @@ impl Console {
             .into_iter()
             .map(|(name, widget, _)| TabSummary {
                 id: name.clone(),
-                title: name,
+                title: Window::tab_title(window, &name).unwrap_or_else(|| name.clone()),
+                pinned: Window::tab_pinned(window, &name),
                 panes: Panes::under(window, &widget)
                     .into_iter()
                     .map(|occupancy| pane(window, occupancy))
@@ -132,6 +138,7 @@ impl Console {
             .filter_map(|(id, widget, _)| {
                 Some(TabTopology {
                     title: Window::tab_title(window, &id).unwrap_or_else(|| id.clone()),
+                    pinned: Window::tab_pinned(window, &id),
                     id,
                     root: Self::node(window, &widget)?,
                 })
@@ -147,7 +154,8 @@ impl Console {
         for tab in topology.tabs {
             Self::inventory_node(window, &tab.root, &tab.id, &tab.title, &mut panes);
         }
-        if let Some(semantics) = Window::gallery(window).and_then(|gallery| gallery.native_semantics("workspace").ok()) {
+        if let Some(semantics) = Window::gallery(window).and_then(|gallery| gallery.native_semantics("workspace").ok())
+        {
             panes.push(InspectablePane {
                 slot: "workspace".into(),
                 generation: semantics.generation,
@@ -188,7 +196,9 @@ impl Console {
                 } else {
                     PaneKind::Terminal
                 },
-                provider: (pane.occupant == Occupant::Surface).then(|| pane.provider.clone()).flatten(),
+                provider: (pane.occupant == Occupant::Surface)
+                    .then(|| pane.provider.clone())
+                    .flatten(),
                 tab: Some(tab.to_owned()),
                 title: Some(title.to_owned()),
                 focused: *focused,
@@ -348,6 +358,12 @@ impl Console {
     /// Closes one pane. The last pane of a tab takes the tab with it, which is
     /// what closing that pane by hand already does.
     fn close(window: &Rc<TermWin>, slot: &str) -> Result<(), HostError> {
+        if Panes::at(window, slot)
+            .and_then(|pane| Page::of(window, &pane.widget))
+            .is_some_and(|page| page.pinned())
+        {
+            return Err(HostError::Conflict(format!("the tab containing {slot} is pinned")));
+        }
         let owner = Self::surface_owner(window, slot).ok();
         if Panes::close(window, slot) {
             if let (Some(owner), Some(gallery)) = (owner, Window::gallery(window)) {

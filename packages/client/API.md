@@ -72,6 +72,7 @@ wrong caller.
 - `host.terminal.topology(...)` — `terminal_topology`, requires `terminals:read`.
 - `host.terminal.panes(...)` — `pane_list`, requires `panes:observe`.
 - `host.terminal.openTab(...)` — `terminal_open_tab`, requires `terminals:control`.
+- `host.terminal.pinTab(...)` — `terminal_pin_tab`, requires `terminals:control`.
 - `host.terminal.split(...)` — `terminal_split`, requires `terminals:control`.
 - `host.terminal.splitObserved(...)` — `terminal_split_observed`, requires `terminals:control`.
 - `host.terminal.spawn(...)` — `terminal_spawn`, requires `terminals:control`.

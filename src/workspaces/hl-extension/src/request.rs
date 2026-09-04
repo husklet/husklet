@@ -221,6 +221,10 @@ pub enum Request {
     TerminalOpenTab {
         title: String,
     },
+    TerminalPinTab {
+        tab: String,
+        pinned: bool,
+    },
     TerminalSplit {
         slot: String,
         division: Division,
@@ -284,12 +288,21 @@ pub enum Request {
     TerminalFocusPane {
         slot: String,
     },
-    TerminalFocusPaneObserved { slot: String, generation: u64, revision: u64 },
+    TerminalFocusPaneObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+    },
     TerminalRetitlePane {
         slot: String,
         title: String,
     },
-    TerminalRetitlePaneObserved { slot: String, generation: u64, revision: u64, title: String },
+    TerminalRetitlePaneObserved {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        title: String,
+    },
     TerminalRatio {
         slot: String,
         ratio: f64,
@@ -343,11 +356,18 @@ pub enum Request {
         from: RelativePath,
         to: RelativePath,
     },
-    FilesystemRenameObserved { from: RelativePath, to: RelativePath, observed: String },
+    FilesystemRenameObserved {
+        from: RelativePath,
+        to: RelativePath,
+        observed: String,
+    },
     FilesystemRemove {
         path: RelativePath,
     },
-    FilesystemRemoveObserved { path: RelativePath, observed: String },
+    FilesystemRemoveObserved {
+        path: RelativePath,
+        observed: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -395,9 +415,10 @@ impl Request {
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
             Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
-            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRetry { .. } | Self::ExtensionRemove { .. } => {
-                Capability::ExtensionControl
-            }
+            Self::ExtensionEnable { .. }
+            | Self::ExtensionDisable { .. }
+            | Self::ExtensionRetry { .. }
+            | Self::ExtensionRemove { .. } => Capability::ExtensionControl,
             Self::ExtensionAcquisitionStart { .. }
             | Self::ExtensionAcquisitionStatus { .. }
             | Self::ExtensionAcquisitionCancel { .. }
@@ -441,6 +462,7 @@ impl Request {
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalOpenTab { .. }
+            | Self::TerminalPinTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSplitObserved { .. }
             | Self::TerminalSpawn { .. }
@@ -464,9 +486,10 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. } | Self::FilesystemRead { .. } | Self::FilesystemReadRange { .. } | Self::FilesystemStat { .. } => {
-                Capability::FilesystemRead
-            }
+            Self::FilesystemList { .. }
+            | Self::FilesystemRead { .. }
+            | Self::FilesystemReadRange { .. }
+            | Self::FilesystemStat { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. }
             | Self::FilesystemCreateObserved { .. }
             | Self::FilesystemMkdir { .. }
@@ -769,7 +792,11 @@ mod tests {
         );
         for request in [
             Request::TerminalClosePane { slot: "1".into() },
-            Request::TerminalClosePaneObserved { slot: "1".into(), generation: 2, revision: 3 },
+            Request::TerminalClosePaneObserved {
+                slot: "1".into(),
+                generation: 2,
+                revision: 3,
+            },
             Request::TerminalFocusPane { slot: "1".into() },
             Request::TerminalRetitlePane {
                 slot: "1".into(),

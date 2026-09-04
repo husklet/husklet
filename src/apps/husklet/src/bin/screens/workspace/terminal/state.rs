@@ -214,20 +214,20 @@ impl<'a> WindowSession<'a> {
         let generation = HistoryGeneration::new(&storage)?;
         let mut tabs = Vec::new();
         // entries[0] is the non-closable overview; shells are the rest.
-        let entries: Vec<(String, String)> = {
+        let entries: Vec<(String, String, bool)> = {
             let es = tw.entries.borrow();
             es.iter()
                 .skip(1)
                 .filter(|entry| entry.persisted)
-                .map(|e| (e.name.clone(), e.title()))
+                .map(|e| (e.name.clone(), e.title(), e.pinned))
                 .collect()
         };
-        for (page_name, title) in entries {
+        for (page_name, title, pinned) in entries {
             let Some(child) = tw.stack.child_by_name(&page_name) else {
                 continue;
             };
             if let Some(root) = self.snapshot_node(&child, &storage, generation.as_str(), &mut hist_idx)? {
-                tabs.push(SessionTab { title, root });
+                tabs.push(SessionTab { title, pinned, root });
             }
         }
         let session = Session { tabs };
@@ -258,7 +258,6 @@ impl TabEntry {
     pub(crate) fn retitle(&mut self, title: &str) {
         self.title.set_text(title);
     }
-
 }
 
 /// Walk a page's widget subtree into a [`PaneNode`], dumping each terminal's history to a file and
@@ -450,7 +449,7 @@ impl WindowSession<'_> {
             } else {
                 tab.title.clone()
             };
-            let name = Tabs::new(tw).add(&title, None, &paneroot, true);
+            let name = Tabs::new(tw).add_persisted(&title, None, &paneroot, true, tab.pinned);
             tw.pids.borrow_mut().entry(name).or_default().extend(pids);
             if let Some(t) = first {
                 t.grab_focus();

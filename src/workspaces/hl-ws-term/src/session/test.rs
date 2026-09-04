@@ -5,6 +5,7 @@ fn sample_session() -> Session {
         tabs: vec![
             SessionTab {
                 title: "shell 1".to_string(),
+                pinned: true,
                 root: PaneNode::Leaf(Pane {
                     cwd: Some("/root/my project".to_string()),
                     history_file: Some("hist-0.txt".to_string()),
@@ -13,6 +14,7 @@ fn sample_session() -> Session {
             },
             SessionTab {
                 title: "build".to_string(),
+                pinned: false,
                 root: PaneNode::Split {
                     dir: SplitDir::Horizontal,
                     ratio: 0.5,
@@ -44,6 +46,8 @@ fn layout_roundtrips() {
     let back = Session::parse(&text).unwrap();
     assert_eq!(back.tabs.len(), 2);
     assert_eq!(back.tabs[0].title, "shell 1");
+    assert!(back.tabs[0].pinned);
+    assert!(!back.tabs[1].pinned);
     // ratio is formatted to 4 decimals; compare the structure with tolerance.
     assert_eq!(back.tabs[0].root, s.tabs[0].root);
     assert_eq!(back.tabs[1].root, s.tabs[1].root);
@@ -58,6 +62,7 @@ fn escaping_survives_spaces_and_specials() {
     let s = Session {
         tabs: vec![SessionTab {
             title: "a b%c".to_string(),
+            pinned: false,
             root: PaneNode::Leaf(Pane {
                 cwd: Some("/p a/th".to_string()),
                 history_file: None,
@@ -73,18 +78,18 @@ fn escaping_survives_spaces_and_specials() {
 #[test]
 fn empty_and_absent_are_empty() {
     assert!(Session::parse("").is_err());
-    assert_eq!(Session::parse("# just a comment\nversion 1\n").unwrap().tabs.len(), 0);
+    assert_eq!(Session::parse("# just a comment\nversion 2\n").unwrap().tabs.len(), 0);
 }
 
 #[test]
 fn parser_rejects_the_whole_malformed_layout() {
-    let result = Session::parse("version 1\ntab valid leaf /ok hist 7\ntab broken hsplit nope leaf /a -\n");
+    let result = Session::parse("version 2\ntab loose valid leaf /ok hist 7\ntab loose broken hsplit nope leaf /a -\n");
     assert!(result.is_err());
 }
 
 #[test]
 fn malformed_percent_escape_is_preserved() {
-    let session = Session::parse("version 1\ntab bad%zz leaf /tmp - -").unwrap();
+    let session = Session::parse("version 2\ntab loose bad%zz leaf /tmp - -").unwrap();
     assert_eq!(session.tabs[0].title, "bad%zz");
 }
 
@@ -93,7 +98,7 @@ fn open_reports_corrupt_persistent_layouts() {
     let temporary = tempfile::tempdir().unwrap();
     let session = Session::dir(temporary.path());
     std::fs::create_dir_all(&session).unwrap();
-    std::fs::write(session.join("layout.conf"), "version 1\ntab broken hsplit nope\n").unwrap();
+    std::fs::write(session.join("layout.conf"), "version 2\ntab loose broken hsplit nope\n").unwrap();
 
     let error = Session::open(temporary.path()).unwrap_err();
 
@@ -131,6 +136,7 @@ fn successful_layout_commit_prunes_only_unreferenced_histories() {
     let session = Session {
         tabs: vec![SessionTab {
             title: "shell".into(),
+            pinned: false,
             root: PaneNode::Leaf(Pane {
                 history_file: Some("hist-current.txt".into()),
                 ..Pane::default()
@@ -175,7 +181,7 @@ fn persistent_layout_rejects_unsafe_history_references() {
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(
         directory.join("layout.conf"),
-        "version 1\ntab shell leaf /root ../secret slot\n",
+        "version 2\ntab loose shell leaf /root ../secret slot\n",
     )
     .unwrap();
 
@@ -226,6 +232,7 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
     let session = Session {
         tabs: vec![SessionTab {
             title: "shell 1".to_string(),
+            pinned: true,
             root: PaneNode::Split {
                 dir: SplitDir::Horizontal,
                 ratio: 0.5,
@@ -258,7 +265,7 @@ fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
 
 #[test]
 fn a_surface_pane_without_an_extension_is_refused_rather_than_restored_as_a_shell() {
-    let refused = Session::parse("version 1\ntab t surface - 1\n").expect_err("an unnamed surface");
+    let refused = Session::parse("version 2\ntab loose t surface - 1\n").expect_err("an unnamed surface");
 
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
 }

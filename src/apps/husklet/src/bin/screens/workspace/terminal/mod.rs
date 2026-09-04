@@ -92,6 +92,9 @@ pub(crate) struct TabEntry {
     button: gtk::Box,
     title: gtk::Label,
     persisted: bool,
+    pinned: bool,
+    close: Option<gtk::Button>,
+    pin: Option<gtk::ToggleButton>,
 }
 
 /// The minimalist search bar: a slim black overlay with a query field + a match-state hint.
@@ -388,6 +391,15 @@ impl Window {
                 (name, widget, slots)
             })
             .collect()
+    }
+
+    pub(crate) fn tab_pinned(window: &Rc<TermWin>, name: &str) -> bool {
+        window
+            .entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.name == name)
+            .is_some_and(|entry| entry.pinned)
     }
 
     /// The layout slots of every pane under one tab's widget, shells and

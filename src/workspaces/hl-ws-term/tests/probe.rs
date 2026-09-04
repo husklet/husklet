@@ -10,6 +10,7 @@ fn nonascii_title_and_cwd_roundtrip() {
     let s = Session {
         tabs: vec![SessionTab {
             title: "café ☕".to_string(),
+            pinned: false,
             root: PaneNode::Leaf(Pane {
                 cwd: Some("/home/joão/prjá".to_string()),
                 history_file: None,
@@ -44,7 +45,7 @@ fn percent_before_literal_multibyte_does_not_panic() {
     assert!(
         WorkingDirectory::from_osc7("file://h/%aé").is_some() || WorkingDirectory::from_osc7("file://h/%aé").is_none()
     );
-    let _ = Session::parse("version 1\ntab %aé leaf /%zé - -\n").unwrap();
+    let _ = Session::parse("version 2\ntab loose %aé leaf /%zé - -\n").unwrap();
 }
 
 // --- VT: SGR colon-grouped underline style must not leak the style digit as a separate SGR code ---

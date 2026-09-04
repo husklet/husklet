@@ -3861,6 +3861,13 @@
           }
         },
         {
+          "name": "pinned",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "panes",
           "optional": false,
           "schema": {
@@ -3889,6 +3896,13 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "pinned",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
           }
         },
         {
@@ -6352,6 +6366,10 @@
     },
     {
       "capability": "terminals:control",
+      "request": "terminal_pin_tab"
+    },
+    {
+      "capability": "terminals:control",
       "request": "terminal_split"
     },
     {
@@ -6767,6 +6785,10 @@
     {
       "reply": "identity",
       "request": "terminal_open_tab"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_pin_tab"
     },
     {
       "reply": "identity",
@@ -8484,6 +8506,28 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_pin_tab",
+          "payload": {
+            "fields": [
+              {
+                "name": "tab",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "pinned",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
                 }
               }
             ],
@@ -10629,7 +10673,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:697cd96ca3fcf691",
+  "source_fingerprint": "fnv1a64:32b30ecc1834875b",
   "specification_version": 1,
   "topics": [
     {

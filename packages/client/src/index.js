@@ -396,6 +396,7 @@ export function workspace(session, { signal } = {}) {
         return done('terminal_resize_grid_observed', { slot, generation, revision, columns, rows });
       },
       close: (slot) => done('terminal_close_pane', { slot }),
+      pinTab: (tab, pinned = true) => done('terminal_pin_tab', { tab, pinned: Boolean(pinned) }),
       closeObserved: (slot, generation, revision) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
           throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
@@ -1407,7 +1408,7 @@ export const protocolCoverage = Object.freeze({
     images: ['list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
     volumes: ['list', 'inspect', 'create', 'remove'],
     networks: ['list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
+    terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],

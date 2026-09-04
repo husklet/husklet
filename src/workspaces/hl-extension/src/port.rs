@@ -245,6 +245,7 @@ pub struct NetworkSummary {
 pub struct TabSummary {
     pub id: String,
     pub title: String,
+    pub pinned: bool,
     pub panes: Vec<PaneSummary>,
 }
 
@@ -423,6 +424,7 @@ pub const PANE_INVENTORY_LIMIT: usize = 512;
 pub struct TabTopology {
     pub id: String,
     pub title: String,
+    pub pinned: bool,
     pub root: LayoutNode,
 }
 
@@ -940,6 +942,11 @@ pub trait TerminalSurface {
     /// Returns a host failure.
     fn open_tab(&self, title: &str) -> Result<String, HostError>;
 
+    /// Protects or releases a tab from close actions.
+    fn pin_tab(&self, _tab: &str, _pinned: bool) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal tab pinning is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn split(&self, slot: &str, division: Division) -> Result<String, HostError>;
@@ -1076,8 +1083,16 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
-    fn read_range(&self, _path: &RelativePath, _offset: u64, _limit: usize, _observed: Option<&str>) -> Result<FileRange, HostError> {
-        Err(HostError::Unsupported("observed filesystem reads are unavailable".into()))
+    fn read_range(
+        &self,
+        _path: &RelativePath,
+        _offset: u64,
+        _limit: usize,
+        _observed: Option<&str>,
+    ) -> Result<FileRange, HostError> {
+        Err(HostError::Unsupported(
+            "observed filesystem reads are unavailable".into(),
+        ))
     }
 
     /// Reads metadata for exactly one confined workspace-relative path.
@@ -1090,7 +1105,9 @@ pub trait WorkspaceFiles {
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
 
     fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
-        Err(HostError::Unsupported("observed filesystem creation is unavailable".into()))
+        Err(HostError::Unsupported(
+            "observed filesystem creation is unavailable".into(),
+        ))
     }
 
     fn mkdir(&self, _path: &RelativePath) -> Result<(), HostError> {
@@ -1101,14 +1118,18 @@ pub trait WorkspaceFiles {
         Err(HostError::Unsupported("filesystem rename is unavailable".into()))
     }
     fn rename_observed(&self, _from: &RelativePath, _to: &RelativePath, _observed: &str) -> Result<String, HostError> {
-        Err(HostError::Unsupported("observed filesystem rename is unavailable".into()))
+        Err(HostError::Unsupported(
+            "observed filesystem rename is unavailable".into(),
+        ))
     }
 
     fn remove(&self, _path: &RelativePath) -> Result<(), HostError> {
         Err(HostError::Unsupported("filesystem removal is unavailable".into()))
     }
     fn remove_observed(&self, _path: &RelativePath, _observed: &str) -> Result<(), HostError> {
-        Err(HostError::Unsupported("observed filesystem removal is unavailable".into()))
+        Err(HostError::Unsupported(
+            "observed filesystem removal is unavailable".into(),
+        ))
     }
 }
 
@@ -1179,7 +1200,10 @@ mod tests {
     fn namespace_process_scope_has_a_stable_wire_value() {
         let value = serde_json::to_value(super::ProcessScope::Namespace).expect("scope");
         assert_eq!(value, serde_json::json!("namespace"));
-        assert_eq!(serde_json::from_value::<super::ProcessScope>(value).expect("scope"), super::ProcessScope::Namespace);
+        assert_eq!(
+            serde_json::from_value::<super::ProcessScope>(value).expect("scope"),
+            super::ProcessScope::Namespace
+        );
     }
 
     #[test]

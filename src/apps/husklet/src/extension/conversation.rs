@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
+    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -741,15 +741,58 @@ impl Conversation {
                 });
             }
             *generation = pane.generation;
-        } else if let hl_extension::Request::TerminalWritePane { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalRetitlePaneObserved { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalFocusPaneObserved { slot, generation, revision }
-        | hl_extension::Request::TerminalResizeGridObserved { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalRatioObserved { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalSpawnObserved { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalClosePaneObserved { slot, generation, revision }
-        | hl_extension::Request::TerminalSplitObserved { slot, generation, revision, .. }
-        | hl_extension::Request::TerminalSwitchOccupantObserved { slot, generation, revision, .. } = &mut request
+        } else if let hl_extension::Request::TerminalWritePane {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalRetitlePaneObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalFocusPaneObserved {
+            slot,
+            generation,
+            revision,
+        }
+        | hl_extension::Request::TerminalResizeGridObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalRatioObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalSpawnObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalClosePaneObserved {
+            slot,
+            generation,
+            revision,
+        }
+        | hl_extension::Request::TerminalSplitObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        }
+        | hl_extension::Request::TerminalSwitchOccupantObserved {
+            slot,
+            generation,
+            revision,
+            ..
+        } = &mut request
         {
             let topology = services.terminal.topology().ok().map(|topology| {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -961,8 +1004,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
+        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1134,6 +1177,7 @@ mod tests {
             Ok(vec![TabSummary {
                 id: "t1".to_owned(),
                 title: "shell".to_owned(),
+                pinned: false,
                 panes: vec![PaneSummary {
                     slot: "s1".to_owned(),
                     working_directory: None,
@@ -1559,14 +1603,24 @@ mod tests {
         let pong = wire.receive().expect("bounded pong");
         assert_eq!(pong.kind, Kind::Pong);
         assert_eq!(pong.channel, channel, "the heartbeat retains its correlation channel");
-        assert_eq!(pong.payload, payload, "the heartbeat retains its opaque correlation payload");
-        assert!(ledger.reached().is_empty(), "heartbeats never dispatch workspace authority");
+        assert_eq!(
+            pong.payload, payload,
+            "the heartbeat retains its opaque correlation payload"
+        );
+        assert!(
+            ledger.reached().is_empty(),
+            "heartbeats never dispatch workspace authority"
+        );
 
         let answer = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
         assert_eq!(ledger.reached(), vec!["containers.list"]);
         drop(wire);
-        assert_eq!(served.join().expect("joined"), Ok(()), "a hangup after a pong stays clean");
+        assert_eq!(
+            served.join().expect("joined"),
+            Ok(()),
+            "a hangup after a pong stays clean"
+        );
     }
 
     #[test]
@@ -1637,13 +1691,20 @@ mod tests {
 
         wire.send(&Frame::new(event.channel, Kind::Close, Vec::new()))
             .expect("channel close sent");
-        assert_eq!(wire.receive(), Err(Transit::Pending), "a closed channel emits no more events");
+        assert_eq!(
+            wire.receive(),
+            Err(Transit::Pending),
+            "a closed channel emits no more events"
+        );
         let reads_after_close = ledger
             .reached()
             .iter()
             .filter(|call| **call == "containers.list")
             .count();
-        assert_eq!(reads_after_close, reads_before_close, "a closed channel induces no service polling");
+        assert_eq!(
+            reads_after_close, reads_before_close,
+            "a closed channel induces no service polling"
+        );
 
         let answer = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
@@ -2240,10 +2301,19 @@ mod tests {
         let started = Instant::now();
         stream.write_all(&encoded[..5]).expect("partial frame header");
 
-        let fault = served.join().expect("conversation thread").expect_err("partial peer released");
+        let fault = served
+            .join()
+            .expect("conversation thread")
+            .expect_err("partial peer released");
         assert!(matches!(fault, Fault::Malformed(ref detail) if detail.contains("unfinished frame")));
-        assert!(started.elapsed() >= deadline, "an ordinary observation tick is not mistaken for a stalled frame");
-        assert!(started.elapsed() < Duration::from_secs(2), "the partial-frame deadline remains bounded");
+        assert!(
+            started.elapsed() >= deadline,
+            "an ordinary observation tick is not mistaken for a stalled frame"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the partial-frame deadline remains bounded"
+        );
     }
 
     #[test]
@@ -2456,7 +2526,10 @@ mod tests {
         wire.send(&unfinished).expect("unfinished frame sent over Unix socket");
         let refused = wire.receive().expect("unfinished request is answered");
         assert!(codec::is_failure(&refused));
-        assert!(ledger.reached().is_empty(), "an unfinished logical request never reaches authority");
+        assert!(
+            ledger.reached().is_empty(),
+            "an unfinished logical request never reaches authority"
+        );
 
         let answered = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&answered), Ok(Reply::Containers(_))));

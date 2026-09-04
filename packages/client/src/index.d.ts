@@ -82,7 +82,7 @@ export interface PaneSummary {
   occupant: 'terminal' | 'surface';
   provider: { extension: string; provider: string } | null;
 }
-export interface TabSummary { id: string; title: string; panes: PaneSummary[] }
+export interface TabSummary { id: string; title: string; pinned: boolean; panes: PaneSummary[] }
 export interface PaneText { slot: string; generation?: number; revision?: number; columns?: number; rows?: number; lines: string[]; cursor_column?: number; cursor_row?: number; truncated: boolean }
 export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
 export interface InspectablePane { slot: string; generation: number; revision: number; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
@@ -98,7 +98,7 @@ export interface GridSize { columns: number; rows: number }
 export type LayoutNode =
   | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
   | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
-export interface TabTopology { id: string; title: string; root: LayoutNode }
+export interface TabTopology { id: string; title: string; pinned: boolean; root: LayoutNode }
 export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
 export interface FileEntry { path: string; directory: boolean; size: number; identity?: string | null }
 export interface FileRange { path: string; identity: string; offset: number; total: number; contents: number[]; eof: boolean; truncated: boolean }
@@ -339,6 +339,7 @@ export interface WorkspaceApi {
     tabs(): Promise<TabSummary[]>;
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
+    pinTab(tab: string, pinned?: boolean): Promise<void>;
     /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. Observation failures retain the created tab in TerminalOperationError. */
     openTabAndWait(title: string, options?: { timeoutMs?: number }): Promise<
       | { changed: true; tab: string; pane: InspectablePane }

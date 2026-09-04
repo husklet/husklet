@@ -9,10 +9,10 @@ use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange, GridSize, HostError,
-    ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree,
-    PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface,
-    TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange, GridSize,
+    HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
+    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -360,6 +360,7 @@ impl TerminalSurface for Host {
         Ok(vec![TabSummary {
             id: "t1".into(),
             title: "shell".into(),
+            pinned: false,
             panes: vec![PaneSummary {
                 slot: "s1".into(),
                 working_directory: Some("/root".into()),
@@ -381,6 +382,11 @@ impl TerminalSurface for Host {
     fn open_tab(&self, title: &str) -> Result<String, HostError> {
         self.ledger.note("terminal.open_tab");
         Ok(format!("tab-{title}"))
+    }
+
+    fn pin_tab(&self, _tab: &str, _pinned: bool) -> Result<(), HostError> {
+        self.ledger.note("terminal.pin_tab");
+        Ok(())
     }
 
     fn split(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
@@ -661,9 +667,23 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.read");
         Ok(b"contents".to_vec())
     }
-    fn read_range(&self, path: &RelativePath, offset: u64, _limit: usize, _observed: Option<&str>) -> Result<FileRange, HostError> {
+    fn read_range(
+        &self,
+        path: &RelativePath,
+        offset: u64,
+        _limit: usize,
+        _observed: Option<&str>,
+    ) -> Result<FileRange, HostError> {
         self.ledger.note("files.read_range");
-        Ok(FileRange { path: path.clone(), identity: "v1:1:2:3:4:5:6:7".into(), offset, total: 8, contents: b"contents".to_vec(), eof: true, truncated: false })
+        Ok(FileRange {
+            path: path.clone(),
+            identity: "v1:1:2:3:4:5:6:7".into(),
+            offset,
+            total: 8,
+            contents: b"contents".to_vec(),
+            eof: true,
+            truncated: false,
+        })
     }
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
         self.ledger.note("files.stat");
@@ -964,7 +984,10 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::ContainerRead,
         ),
-        (Request::ExecutionInspect { id: "e".repeat(32) }, Capability::ContainerRead),
+        (
+            Request::ExecutionInspect { id: "e".repeat(32) },
+            Capability::ContainerRead,
+        ),
         (Request::ExecutionList, Capability::ContainerRead),
         (
             Request::ExecutionLogs {
@@ -1089,6 +1112,13 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalControl,
         ),
         (
+            Request::TerminalPinTab {
+                tab: "t1".into(),
+                pinned: true,
+            },
+            Capability::TerminalControl,
+        ),
+        (
             Request::TerminalSplit {
                 slot: "s1".into(),
                 division: Division::Beside,
@@ -1175,7 +1205,12 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemRead,
         ),
         (
-            Request::FilesystemReadRange { path: path("logs/app.log"), offset: 0, limit: 8, observed: None },
+            Request::FilesystemReadRange {
+                path: path("logs/app.log"),
+                offset: 0,
+                limit: 8,
+                observed: None,
+            },
             Capability::FilesystemRead,
         ),
         (
@@ -1192,7 +1227,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemWrite,
         ),
         (
-            Request::FilesystemCreateObserved { path: path("logs/new.log"), contents: b"x".to_vec() },
+            Request::FilesystemCreateObserved {
+                path: path("logs/new.log"),
+                contents: b"x".to_vec(),
+            },
             Capability::FilesystemWrite,
         ),
         (
@@ -1206,12 +1244,25 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::FilesystemWrite,
         ),
-        (Request::FilesystemRenameObserved { from: path("logs/a"), to: path("logs/b"), observed: "v1:1:2:3:4:5:6:7".into() }, Capability::FilesystemWrite),
+        (
+            Request::FilesystemRenameObserved {
+                from: path("logs/a"),
+                to: path("logs/b"),
+                observed: "v1:1:2:3:4:5:6:7".into(),
+            },
+            Capability::FilesystemWrite,
+        ),
         (
             Request::FilesystemRemove { path: path("logs/old") },
             Capability::FilesystemWrite,
         ),
-        (Request::FilesystemRemoveObserved { path: path("logs/old"), observed: "v1:1:2:3:4:5:6:7".into() }, Capability::FilesystemWrite),
+        (
+            Request::FilesystemRemoveObserved {
+                path: path("logs/old"),
+                observed: "v1:1:2:3:4:5:6:7".into(),
+            },
+            Capability::FilesystemWrite,
+        ),
         (
             Request::InterfaceOpenTab {
                 title: "Postgres".into(),
@@ -1228,39 +1279,200 @@ fn calls() -> Vec<(Request, Capability)> {
 fn all_calls() -> Vec<(Request, Capability)> {
     let mut requests = calls();
     requests.extend([
-        (Request::ContainerAttachTerminal { id: "c".repeat(64), command: vec!["sh".into()] }, Capability::ContainerAttach),
-        (Request::ImagePullStart { reference: "alpine".into() }, Capability::ImageWrite),
+        (
+            Request::ContainerAttachTerminal {
+                id: "c".repeat(64),
+                command: vec!["sh".into()],
+            },
+            Capability::ContainerAttach,
+        ),
+        (
+            Request::ImagePullStart {
+                reference: "alpine".into(),
+            },
+            Capability::ImageWrite,
+        ),
         (Request::ImagePullStatus { job: "job".into() }, Capability::ImageWrite),
         (Request::ImagePullCancel { job: "job".into() }, Capability::ImageWrite),
         (Request::VolumeList, Capability::VolumeRead),
         (Request::VolumeInspect { name: "cache".into() }, Capability::VolumeRead),
         (Request::VolumeCreate { name: "cache".into() }, Capability::VolumeWrite),
-        (Request::VolumeRemove { name: "cache".into(), generation: "a".repeat(32) }, Capability::VolumeWrite),
+        (
+            Request::VolumeRemove {
+                name: "cache".into(),
+                generation: "a".repeat(32),
+            },
+            Capability::VolumeWrite,
+        ),
         (Request::NetworkList, Capability::NetworkRead),
-        (Request::NetworkInspect { reference: "bridge".into() }, Capability::NetworkRead),
-        (Request::NetworkCreate { name: "private".into() }, Capability::NetworkWrite),
-        (Request::NetworkRemove { reference: "private".into() }, Capability::NetworkWrite),
-        (Request::NetworkConnect { reference: "private".into(), container: "c".repeat(64), aliases: Vec::new() }, Capability::NetworkWrite),
-        (Request::NetworkDisconnect { reference: "private".into(), container: "c".repeat(64) }, Capability::NetworkWrite),
-        (Request::TerminalReadPane { slot: "s1".into(), lines: None }, Capability::TerminalOutput),
-        (Request::PaneSemanticRead { slot: "s1".into() }, Capability::PaneSemanticRead),
-        (Request::PaneSemanticAction { slot: "s1".into(), action: PaneSemanticAction { generation: 0, revision: 1, node: 1, action: SemanticActionKind::Invoke, value: None } }, Capability::PaneSemanticControl),
-        (Request::TerminalResizeGridObserved { slot: "s1".into(), generation: 0, revision: 1, columns: 80, rows: 24 }, Capability::TerminalControl),
-        (Request::TerminalClosePane { slot: "s1".into() }, Capability::TerminalControl),
-        (Request::TerminalClosePaneObserved { slot: "s1".into(), generation: 0, revision: 1 }, Capability::TerminalControl),
-        (Request::TerminalFocusPane { slot: "s1".into() }, Capability::TerminalControl),
-        (Request::TerminalFocusPaneObserved { slot: "s1".into(), generation: 0, revision: 1 }, Capability::TerminalControl),
-        (Request::TerminalRetitlePaneObserved { slot: "s1".into(), generation: 0, revision: 1, title: "Build".into() }, Capability::TerminalControl),
-        (Request::TerminalRatio { slot: "s1".into(), ratio: 0.5 }, Capability::TerminalControl),
-        (Request::TerminalRatioObserved { slot: "s1".into(), generation: 0, revision: 1, ratio: 0.5 }, Capability::TerminalControl),
-        (Request::InterfaceSplit { slot: "s1".into(), division: Division::Beside }, Capability::Interface),
+        (
+            Request::NetworkInspect {
+                reference: "bridge".into(),
+            },
+            Capability::NetworkRead,
+        ),
+        (
+            Request::NetworkCreate { name: "private".into() },
+            Capability::NetworkWrite,
+        ),
+        (
+            Request::NetworkRemove {
+                reference: "private".into(),
+            },
+            Capability::NetworkWrite,
+        ),
+        (
+            Request::NetworkConnect {
+                reference: "private".into(),
+                container: "c".repeat(64),
+                aliases: Vec::new(),
+            },
+            Capability::NetworkWrite,
+        ),
+        (
+            Request::NetworkDisconnect {
+                reference: "private".into(),
+                container: "c".repeat(64),
+            },
+            Capability::NetworkWrite,
+        ),
+        (
+            Request::TerminalReadPane {
+                slot: "s1".into(),
+                lines: None,
+            },
+            Capability::TerminalOutput,
+        ),
+        (
+            Request::PaneSemanticRead { slot: "s1".into() },
+            Capability::PaneSemanticRead,
+        ),
+        (
+            Request::PaneSemanticAction {
+                slot: "s1".into(),
+                action: PaneSemanticAction {
+                    generation: 0,
+                    revision: 1,
+                    node: 1,
+                    action: SemanticActionKind::Invoke,
+                    value: None,
+                },
+            },
+            Capability::PaneSemanticControl,
+        ),
+        (
+            Request::TerminalResizeGridObserved {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+                columns: 80,
+                rows: 24,
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalClosePane { slot: "s1".into() },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalClosePaneObserved {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalFocusPane { slot: "s1".into() },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalFocusPaneObserved {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalRetitlePaneObserved {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+                title: "Build".into(),
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalRatio {
+                slot: "s1".into(),
+                ratio: 0.5,
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::TerminalRatioObserved {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+                ratio: 0.5,
+            },
+            Capability::TerminalControl,
+        ),
+        (
+            Request::InterfaceSplit {
+                slot: "s1".into(),
+                division: Division::Beside,
+            },
+            Capability::Interface,
+        ),
         (Request::InterfaceWithdraw { slot: "s1".into() }, Capability::Interface),
-        (Request::InterfaceRender { frame: hl_gui::Frame::new(0) }, Capability::Interface),
-        (Request::InterfaceRenderAt { slot: "s1".into(), frame: hl_gui::Frame::new(0) }, Capability::Interface),
-        (Request::SourceResize { mutation: hl_gui::SourceMutation::Length { source: hl_gui::SourceId::new(1), version: hl_gui::Version::new(1), rows: 1 } }, Capability::Interface),
-        (Request::SourceResizeAt { slot: "s1".into(), mutation: hl_gui::SourceMutation::Length { source: hl_gui::SourceId::new(1), version: hl_gui::Version::new(1), rows: 1 } }, Capability::Interface),
-        (Request::EventSubscribe { topic: Topic::WorkspaceEvents }, Capability::WorkspaceEvents),
-        (Request::EventUnsubscribe { topic: Topic::WorkspaceEvents }, Capability::WorkspaceEvents),
+        (
+            Request::InterfaceRender {
+                frame: hl_gui::Frame::new(0),
+            },
+            Capability::Interface,
+        ),
+        (
+            Request::InterfaceRenderAt {
+                slot: "s1".into(),
+                frame: hl_gui::Frame::new(0),
+            },
+            Capability::Interface,
+        ),
+        (
+            Request::SourceResize {
+                mutation: hl_gui::SourceMutation::Length {
+                    source: hl_gui::SourceId::new(1),
+                    version: hl_gui::Version::new(1),
+                    rows: 1,
+                },
+            },
+            Capability::Interface,
+        ),
+        (
+            Request::SourceResizeAt {
+                slot: "s1".into(),
+                mutation: hl_gui::SourceMutation::Length {
+                    source: hl_gui::SourceId::new(1),
+                    version: hl_gui::Version::new(1),
+                    rows: 1,
+                },
+            },
+            Capability::Interface,
+        ),
+        (
+            Request::EventSubscribe {
+                topic: Topic::WorkspaceEvents,
+            },
+            Capability::WorkspaceEvents,
+        ),
+        (
+            Request::EventUnsubscribe {
+                topic: Topic::WorkspaceEvents,
+            },
+            Capability::WorkspaceEvents,
+        ),
     ]);
     requests
 }
@@ -1278,17 +1490,32 @@ fn every_authoritative_request_has_one_explicit_capability_and_is_denied_before_
     let requests = all_calls();
     let represented = requests
         .iter()
-        .map(|(request, _)| serde_json::to_value(request).expect("request JSON")["call"].as_str().expect("call tag").to_owned())
+        .map(|(request, _)| {
+            serde_json::to_value(request).expect("request JSON")["call"]
+                .as_str()
+                .expect("call tag")
+                .to_owned()
+        })
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(represented, authoritative, "authority inventory must exhaust Request");
-    assert_eq!(requests.len(), represented.len(), "each Request variant must appear exactly once");
+    assert_eq!(
+        requests.len(),
+        represented.len(),
+        "each Request variant must appear exactly once"
+    );
 
     for (request, capability) in requests {
         assert_eq!(request.capability(), capability, "wrong authority for {request:?}");
         let host = Host::new();
         let mut denied = session(&[], &["logs"]);
-        assert!(matches!(denied.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
-        assert!(host.ledger.reached().is_empty(), "{request:?} reached authority before denial");
+        assert!(matches!(
+            denied.dispatch(&request, &services(&host)),
+            Err(Failure::Denied { .. })
+        ));
+        assert!(
+            host.ledger.reached().is_empty(),
+            "{request:?} reached authority before denial"
+        );
     }
 }
 
@@ -1748,9 +1975,13 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
-        Request::ContainerStart { id: "friendly-name".into() },
+        Request::ContainerStart {
+            id: "friendly-name".into(),
+        },
         Request::ContainerPause { id: "a".repeat(12) },
-        Request::ContainerUnpause { id: "friendly-name".into() },
+        Request::ContainerUnpause {
+            id: "friendly-name".into(),
+        },
         Request::ContainerRestart { id: "1".into() },
         Request::ContainerStop {
             id: "friendly-name".into(),
@@ -1824,19 +2055,42 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
-        Request::ContainerRename { id: "friendly-name".into(), name: "worker".into() },
-        Request::ContainerRename { id: "a".repeat(12), name: "worker".into() },
-        Request::ContainerRename { id: "a".repeat(64), name: ".worker".into() },
-        Request::ContainerRename { id: "a".repeat(64), name: "worker/name".into() },
-        Request::ContainerRename { id: "a".repeat(64), name: "x".repeat(129) },
+        Request::ContainerRename {
+            id: "friendly-name".into(),
+            name: "worker".into(),
+        },
+        Request::ContainerRename {
+            id: "a".repeat(12),
+            name: "worker".into(),
+        },
+        Request::ContainerRename {
+            id: "a".repeat(64),
+            name: ".worker".into(),
+        },
+        Request::ContainerRename {
+            id: "a".repeat(64),
+            name: "worker/name".into(),
+        },
+        Request::ContainerRename {
+            id: "a".repeat(64),
+            name: "x".repeat(129),
+        },
     ] {
-        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
-    session.dispatch(
-        &Request::ContainerRename { id: "a".repeat(64), name: "worker_2.prod".into() },
-        &services(&host),
-    ).unwrap();
+    session
+        .dispatch(
+            &Request::ContainerRename {
+                id: "a".repeat(64),
+                name: "worker_2.prod".into(),
+            },
+            &services(&host),
+        )
+        .unwrap();
     assert_eq!(host.ledger.reached(), ["containers.rename"]);
 }
 
@@ -1953,16 +2207,24 @@ fn volume_removal_requires_the_exact_observed_generation() {
     let mut session = session(&[Capability::VolumeWrite], &[]);
     assert!(matches!(
         session.dispatch(
-            &Request::VolumeRemove { name: "cache".into(), generation: "legacy-or-stale".into() },
+            &Request::VolumeRemove {
+                name: "cache".into(),
+                generation: "legacy-or-stale".into()
+            },
             &services(&host),
         ),
         Err(Failure::Conflict { .. })
     ));
     assert!(host.ledger.reached().is_empty());
-    session.dispatch(
-        &Request::VolumeRemove { name: "cache".into(), generation: "a".repeat(32) },
-        &services(&host),
-    ).unwrap();
+    session
+        .dispatch(
+            &Request::VolumeRemove {
+                name: "cache".into(),
+                generation: "a".repeat(32),
+            },
+            &services(&host),
+        )
+        .unwrap();
     assert_eq!(host.ledger.reached(), ["volumes.remove"]);
 }
 
@@ -2138,10 +2400,20 @@ fn execution_reads_refuse_names_and_prefixes_before_inventory_authority() {
     let mut session = session(&[Capability::ContainerRead], &[]);
     for request in [
         Request::ExecutionInspect { id: "worker".into() },
-        Request::ExecutionLogs { id: "a".repeat(12), stdout: true, stderr: false },
-        Request::ExecutionWait { id: "7".into(), timeout_ms: 500 },
+        Request::ExecutionLogs {
+            id: "a".repeat(12),
+            stdout: true,
+            stderr: false,
+        },
+        Request::ExecutionWait {
+            id: "7".into(),
+            timeout_ms: 500,
+        },
     ] {
-        assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Conflict { .. })));
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
 }
@@ -2178,7 +2450,10 @@ fn container_exec_returns_the_real_execution_identity() {
         &services(&host),
     );
     assert!(matches!(refused, Err(Failure::Conflict { .. })));
-    assert!(host.ledger.reached().is_empty(), "a mutable alias reached execution authority");
+    assert!(
+        host.ledger.reached().is_empty(),
+        "a mutable alias reached execution authority"
+    );
     let reply = session
         .dispatch(
             &Request::ContainerExec {

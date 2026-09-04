@@ -94,6 +94,9 @@ impl Panes {
         let Some(pane) = Self::at(window, slot) else {
             return false;
         };
+        if Page::of(window, &pane.widget).is_some_and(|page| page.pinned()) {
+            return false;
+        }
         Self::forget(window, &pane);
         PaneClosure::remove(window, &pane.widget);
         true

@@ -603,7 +603,18 @@ impl<'a> Tabs<'a> {
         content: &impl IsA<gtk::Widget>,
         closable: bool,
     ) -> String {
-        self.add_with_persistence(title, icon, content, closable, true)
+        self.add_with_persistence(title, icon, content, closable, true, false)
+    }
+
+    pub(crate) fn add_persisted(
+        &self,
+        title: &str,
+        icon: Option<&str>,
+        content: &impl IsA<gtk::Widget>,
+        closable: bool,
+        pinned: bool,
+    ) -> String {
+        self.add_with_persistence(title, icon, content, closable, true, pinned)
     }
 
     fn add_with_persistence(
@@ -613,6 +624,7 @@ impl<'a> Tabs<'a> {
         content: &impl IsA<gtk::Widget>,
         closable: bool,
         persisted: bool,
+        pinned: bool,
     ) -> String {
         let tw = self.window;
         let id = tw.counter.get();
@@ -635,13 +647,35 @@ impl<'a> Tabs<'a> {
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
         inner.append(&lbl);
         bx.append(&inner);
+        let mut close = None;
+        let mut pin = None;
         if closable {
+            let p = gtk::ToggleButton::new();
+            p.set_icon_name("view-pin-symbolic");
+            p.add_css_class("tabx");
+            p.set_tooltip_text(Some(if pinned { "Unpin tab" } else { "Pin tab" }));
+            p.set_active(pinned);
+            let tw2 = tw.clone();
+            let name2 = name.clone();
+            p.connect_clicked(move |_| {
+                let next = tw2
+                    .entries
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.name == name2)
+                    .is_some_and(|entry| !entry.pinned);
+                let _ = Tabs::new(&tw2).pin(&name2, next);
+            });
+            bx.append(&p);
+            pin = Some(p);
             let x = gtk::Button::from_icon_name("window-close-symbolic");
             x.add_css_class("tabx");
+            x.set_visible(!pinned);
             let tw2 = tw.clone();
             let name2 = name.clone();
             x.connect_clicked(move |_| Page::new(&tw2, &name2).close());
             bx.append(&x);
+            close = Some(x);
         }
         let click = gtk::GestureClick::new();
         let tw2 = tw.clone();
@@ -655,6 +689,9 @@ impl<'a> Tabs<'a> {
             button: bx,
             title: lbl,
             persisted,
+            pinned,
+            close,
+            pin,
         });
         Page::new(tw, &name).select();
         name
@@ -701,10 +738,33 @@ impl<'a> Tabs<'a> {
         let (term, pid) = make_container_terminal_ex(tw, &slot, container, command);
         paneroot.append(&PaneChrome::wrap(tw, &term));
         let title = format!("container {}", &container[..container.len().min(12)]);
-        let name = self.add_with_persistence(&title, None, &paneroot, true, false);
+        let name = self.add_with_persistence(&title, None, &paneroot, true, false, false);
         tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
         name
+    }
+
+    pub(crate) fn pin(&self, tab: &str, pinned: bool) -> Result<(), hl_extension::HostError> {
+        let mut entries = self.window.entries.borrow_mut();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.name == tab)
+            .ok_or_else(|| hl_extension::HostError::Absent(tab.to_owned()))?;
+        let Some(pin) = entry.pin.as_ref() else {
+            return Err(hl_extension::HostError::Conflict(
+                "the overview tab is always protected".into(),
+            ));
+        };
+        entry.pinned = pinned;
+        pin.set_active(pinned);
+        pin.set_tooltip_text(Some(if pinned { "Unpin tab" } else { "Pin tab" }));
+        if let Some(close) = &entry.close {
+            close.set_visible(!pinned);
+        }
+        drop(entries);
+        WindowSession::new(self.window)
+            .save()
+            .map_err(|error| hl_extension::HostError::Failed(error.to_string()))
     }
 }
 
@@ -734,6 +794,14 @@ impl<'a> Page<'a> {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    pub(crate) fn pinned(&self) -> bool {
+        self.window
+            .entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.name == self.name && entry.pinned)
     }
 
     pub(crate) fn select(&self) {
@@ -784,6 +852,9 @@ impl<'a> Page<'a> {
         let tw = self.window;
         let name = self.name.as_str();
         if tw.entries.borrow().first().map(|e| e.name.as_str()) == Some(name) {
+            return;
+        }
+        if self.pinned() {
             return;
         }
         for p in tw.pids.borrow_mut().remove(name).unwrap_or_default() {
@@ -1076,6 +1147,29 @@ mod focus_ownership_tests {
             assert!(!persisted, "attachment tabs must not enter session restore state");
             Page::new(&tw, &tab).close();
             assert!(tw.entries.borrow().iter().all(|entry| entry.name != tab));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn pinned_tab_hides_close_and_refuses_page_close() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("pin-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let overview = gtk::Label::new(Some("overview"));
+            Tabs::new(&tw).add("overview", None, &overview, false);
+            let page = gtk::Label::new(Some("pinned"));
+            let tab = Tabs::new(&tw).add_persisted("notes", None, &page, true, true);
+            let entries = tw.entries.borrow();
+            let entry = entries.iter().find(|entry| entry.name == tab).unwrap();
+            assert!(entry.pinned);
+            assert!(!entry.close.as_ref().unwrap().is_visible());
+            drop(entries);
+            Page::new(&tw, &tab).close();
+            assert!(tw.entries.borrow().iter().any(|entry| entry.name == tab));
             tw.closing.set(true);
         });
         if !ran {

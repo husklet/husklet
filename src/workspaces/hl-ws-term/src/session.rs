@@ -132,6 +132,8 @@ impl PaneNode {
 #[derive(Clone, PartialEq, Debug)]
 pub struct SessionTab {
     pub title: String,
+    /// Whether the tab is protected from closing until explicitly unpinned.
+    pub pinned: bool,
     pub root: PaneNode,
 }
 
@@ -154,9 +156,10 @@ impl Session {
     /// Serialize to the prefix-notation text format.
     #[must_use]
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# hl session layout\nversion 1\n");
+        let mut out = String::from("# hl session layout\nversion 2\n");
         for tab in &self.tabs {
             out.push_str("tab ");
+            out.push_str(if tab.pinned { "pinned " } else { "loose " });
             out.push_str(&Layout::escape(&tab.title));
             out.push(' ');
             tab.root.write(&mut out);
@@ -178,20 +181,25 @@ impl Session {
             .flat_map(|l| l.split_whitespace())
             .collect();
         let mut layout = Layout::new(&toks);
-        if layout.next() != Some("version") || layout.next() != Some("1") {
-            return Err(Layout::invalid("missing supported `version 1` header"));
+        if layout.next() != Some("version") || layout.next() != Some("2") {
+            return Err(Layout::invalid("missing supported `version 2` header"));
         }
         let mut tabs = Vec::new();
         while layout.peek().is_some() {
             if layout.next() != Some("tab") {
                 return Err(Layout::invalid("expected `tab`"));
             }
+            let pinned = match layout.next() {
+                Some("pinned") => true,
+                Some("loose") => false,
+                _ => return Err(Layout::invalid("tab is missing `pinned` or `loose` state")),
+            };
             let title = layout
                 .next()
                 .map(Layout::unescape)
                 .ok_or_else(|| Layout::invalid("tab is missing its title"))?;
             let root = layout.node()?;
-            tabs.push(SessionTab { title, root });
+            tabs.push(SessionTab { title, pinned, root });
         }
         Ok(Session { tabs })
     }

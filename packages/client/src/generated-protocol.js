@@ -268,6 +268,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "terminal_topology": "topology",
   "pane_list": "panes",
   "terminal_open_tab": "identity",
+  "terminal_pin_tab": "done",
   "terminal_split": "identity",
   "terminal_split_observed": "identity",
   "terminal_spawn": "done",
@@ -374,6 +375,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_topology": "terminals:read",
   "pane_list": "panes:observe",
   "terminal_open_tab": "terminals:control",
+  "terminal_pin_tab": "terminals:control",
   "terminal_split": "terminals:control",
   "terminal_split_observed": "terminals:control",
   "terminal_spawn": "terminals:control",
@@ -4142,6 +4144,13 @@ const definitions = {
         }
       },
       {
+        "name": "pinned",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
         "name": "panes",
         "optional": false,
         "schema": {
@@ -4170,6 +4179,13 @@ const definitions = {
         "optional": false,
         "schema": {
           "kind": "string"
+        }
+      },
+      {
+        "name": "pinned",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
         }
       },
       {
@@ -7869,6 +7885,28 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_pin_tab",
+        "payload": {
+          "fields": [
+            {
+              "name": "tab",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "pinned",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
               }
             }
           ],

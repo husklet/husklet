@@ -77,6 +77,7 @@ fn characterize(panes: usize) {
     let session = Session {
         tabs: vec![SessionTab {
             title: format!("{panes} panes"),
+            pinned: false,
             root: layout(panes, 0),
         }],
     };
