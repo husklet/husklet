@@ -1178,6 +1178,68 @@ mod focus_ownership_tests {
     }
 
     #[test]
+    fn pane_chooser_switches_a_stable_slot_to_an_extension_and_back() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("chooser-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let gallery = screens::workspace::extensions::Gallery::new();
+            Window::exhibit(&tw, gallery.clone());
+
+            let interface = gtk::Label::new(Some("Top resource view"));
+            let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            home.append(&interface);
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let recorded = selections.clone();
+            let provider = hl_extension::PaneProvider {
+                id: hl_extension::ExtensionName::new("resources").unwrap(),
+                title: "Resources".into(),
+                icon: Some("applications-system-symbolic".into()),
+            };
+            let generation = gallery.enrol(
+                "top",
+                &interface,
+                &home,
+                &[provider],
+                Rc::new(move |selection| recorded.borrow_mut().push(selection)),
+            );
+            gallery.enrol_semantics(
+                "top",
+                Rc::new(|_| Err(hl_extension::HostError::Unsupported("test fixture".into()))),
+                Rc::new(|_, _| Ok(())),
+            );
+            gallery.ready("top", generation);
+
+            let (terminal, _slave) = terminal_with_pty();
+            let slot = Slots::new(&tw).allocate();
+            Slots::new(&tw).hold(&terminal, slot.clone());
+            let chrome = PaneChrome::wrap(&tw, &terminal);
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            page.append(&chrome);
+            Tabs::new(&tw).add("terminal", None, &page, true);
+
+            assert!(PaneChooser::provider_in(&tw, Some(&slot), "top", "resources"));
+            let pane = Panes::at(&tw, &slot).expect("provider still occupies the pane slot");
+            assert_eq!(pane.occupant, hl_extension::port::Occupant::Surface);
+            assert_eq!(
+                Slots::new(&tw).surface(&pane.content),
+                Some((slot.clone(), "top".into(), Some("resources".into())))
+            );
+            assert_eq!(selections.borrow().len(), 1);
+            assert_eq!(selections.borrow()[0].slot, slot);
+            assert_eq!(selections.borrow()[0].pane_provider.as_str(), "resources");
+
+            assert!(PaneChooser::terminal_in(&tw, Some(&slot)));
+            let restored = Panes::at(&tw, &slot).expect("terminal restored into the pane slot");
+            assert_eq!(restored.occupant, hl_extension::port::Occupant::Terminal);
+            assert_eq!(restored.content, terminal.upcast::<gtk::Widget>());
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
     fn removed_page_clears_only_focus_owned_by_that_page() {
         assert!(page_owns_focus(Some(&2), &[1, 2, 3]));
         assert!(!page_owns_focus(Some(&4), &[1, 2, 3]));
