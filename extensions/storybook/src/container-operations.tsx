@@ -1,7 +1,6 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useState } from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction, Heading,
+  Button, Card, CardActions, CardContent, CardHeader, CodeView, Column, ConfirmAction, Heading,
   InlineMessage, List, ListItemButton, LogView, Row, Table, TableBody, TableCell,
   TableHead, TableRow, Text,
 } from '@husklet/react';
@@ -12,15 +11,35 @@ export const CONTAINER_LIMIT = 8;
 export const PROCESS_LIMIT = 8;
 export const LOG_LIMIT = 1_024;
 
-const text = (value, limit) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, limit);
+export interface ProcessInput { pid?: unknown; command?: unknown; user?: unknown; }
+export interface ContainerInput {
+  id?: unknown;
+  name?: unknown;
+  image?: unknown;
+  state?: unknown;
+  logs?: unknown;
+  processes?: readonly ProcessInput[];
+}
+export interface BoundedContainer {
+  id: string;
+  name: string;
+  image: string;
+  state: 'running' | 'stopped' | 'paused' | 'unknown';
+  logs: string;
+  processes: Array<{ pid: number; command: string; user: string }>;
+}
 
-export function boundedContainers(containers) {
+const text = (value: unknown, limit: number) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, limit);
+const containerState = (value: unknown): BoundedContainer['state'] =>
+  value === 'running' || value === 'stopped' || value === 'paused' ? value : 'unknown';
+
+export function boundedContainers(containers: readonly ContainerInput[]): BoundedContainer[] {
   return containers.slice(0, CONTAINER_LIMIT).map((container) => ({
     id: text(container.id, 80), name: text(container.name, 64), image: text(container.image, 120),
-    state: ['running', 'stopped', 'paused'].includes(container.state) ? container.state : 'unknown',
+    state: containerState(container.state),
     logs: text(container.logs, LOG_LIMIT),
     processes: (container.processes ?? []).slice(0, PROCESS_LIMIT).map((process) => ({
-      pid: Number.isSafeInteger(process.pid) && process.pid >= 0 ? process.pid : 0,
+      pid: typeof process.pid === 'number' && Number.isSafeInteger(process.pid) && process.pid >= 0 ? process.pid : 0,
       command: text(process.command, 160), user: text(process.user, 48),
     })),
   })).filter(({ id, name }) => id && name);
@@ -32,7 +51,7 @@ const sample = boundedContainers([
   { id: 'sha256:db-generation-7', name: 'database', image: 'postgres:16-alpine', state: 'running', logs: 'database system is ready\n', processes: [{ pid: 1, user: 'postgres', command: 'postgres' }] },
 ]);
 
-export function ContainerOperationsStory({ containers = sample }) {
+export function ContainerOperationsStory({ containers = sample }: { containers?: readonly ContainerInput[] }) {
   const inventory = boundedContainers(containers);
   const [selectedId, setSelectedId] = useState(inventory[0]?.id ?? '');
   const [inspected, setInspected] = useState(false);
@@ -46,20 +65,24 @@ export function ContainerOperationsStory({ containers = sample }) {
         label={'Immutable container identity stays visible across inspection and control. Destructive stop requires a separate confirmation.'}
         wrap={true} />
       <Row gap={2} wrap={true} grow={true}>
-        <List label={'Workspace containers'}>
-          {inventory.map((container) => <ListItemButton
-            key={container.id}
-            label={`${container.name} · ${container.state}`}
-            selected={container.id === selected?.id}
-            onInvoke={() => { setSelectedId(container.id); setInspected(false); setStatus(`Selected ${container.name}.`); }} />)}
-        </List>
+        <Column gap={1}>
+          <Heading label={'Workspace containers'} scale={'body'} />
+          <List>
+            {inventory.map((container) => <ListItemButton
+              key={container.id}
+              label={`${container.name} · ${container.state}`}
+              variant={container.id === selected?.id ? 'filled' : 'plain'}
+              onInvoke={() => { setSelectedId(container.id); setInspected(false); setStatus(`Selected ${container.name}.`); }} />)}
+          </List>
+        </Column>
         {selected ? <Card label={selected.name} variant={'outline'} grow={true}>
           <CardHeader label={selected.name} detail={selected.state} />
           <CardContent gap={2}>
             <Text label={selected.image} />
-            <Text label={selected.id} monospace={true} color={'text-dim'} wrap={true} />
+            <CodeView value={selected.id} monospace={true} />
             {inspected ? <Column gap={2}>
-              <Table label={'Initial processes'}>
+              <Heading label={'Initial processes'} scale={'body'} />
+              <Table>
                 <TableHead>
                   <TableRow>
                     <TableCell label={'PID'} />

@@ -1,28 +1,49 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useState } from 'react';
-import { Button, Card, CardContent, Column, Heading, InlineMessage, Progress, Row, Select, Text } from '@husklet/react';
+import { Button, Card, CardContent, CodeView, Column, Heading, InlineMessage, Progress, Row, Select, Text } from '@husklet/react';
 
 
 export const IMAGE_PULL_STORY = 'Multi-platform image pull';
 export const LAYER_LIMIT = 12;
 export const REFERENCE_LIMIT = 256;
 export const STATUS_LIMIT = 256;
-export const PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64']);
+export const PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64'] as const);
+export type Platform = typeof PLATFORMS[number];
+export type PullState = 'resolving' | 'pulling' | 'complete' | 'cancelled' | 'failed';
+export interface PullLayerInput { id?: unknown; current?: unknown; total?: unknown; }
+export interface PullInput {
+  job?: unknown;
+  reference?: unknown;
+  platform?: unknown;
+  state?: unknown;
+  digest?: unknown;
+  error?: unknown;
+  layers?: readonly PullLayerInput[];
+}
+export interface BoundedPull {
+  job: string;
+  reference: string;
+  platform: Platform;
+  state: PullState;
+  digest: string;
+  error: string;
+  layers: Array<{ id: string; current: number; total: number }>;
+}
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-const clean = (value, limit) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, limit);
-const bytes = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const clean = (value: unknown, limit: number) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, limit);
+const bytes = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
-export function boundedPull(pull) {
+export function boundedPull(pull: PullInput): BoundedPull {
   const layers = (pull.layers ?? []).slice(0, LAYER_LIMIT).map((layer) => {
     const total = bytes(layer.total);
     return { id: clean(layer.id, 80), current: Math.min(bytes(layer.current), total), total };
   }).filter(({ id, total }) => id && total > 0);
   return {
-    job: /^[1-9][0-9]{0,19}$/.test(pull.job ?? '') ? pull.job : '',
+    job: /^[1-9][0-9]{0,19}$/.test(String(pull.job ?? '')) ? String(pull.job) : '',
     reference: clean(pull.reference, REFERENCE_LIMIT),
-    platform: PLATFORMS.includes(pull.platform) ? pull.platform : PLATFORMS[0],
-    state: ['resolving', 'pulling', 'complete', 'cancelled', 'failed'].includes(pull.state) ? pull.state : 'failed',
-    digest: DIGEST.test(pull.digest ?? '') ? pull.digest : '',
+    platform: PLATFORMS.includes(pull.platform as Platform) ? pull.platform as Platform : PLATFORMS[0],
+    state: (['resolving', 'pulling', 'complete', 'cancelled', 'failed'].includes(String(pull.state))
+      ? pull.state : 'failed') as PullState,
+    digest: DIGEST.test(String(pull.digest ?? '')) ? String(pull.digest) : '',
     error: clean(pull.error, STATUS_LIMIT),
     layers,
   };
@@ -41,7 +62,7 @@ const initial = boundedPull({
 export function ImagePullStory() {
   const [pull, setPull] = useState(initial);
   const [message, setMessage] = useState('Job 42 is pulling a manifest-selected platform with bounded layer progress.');
-  const choosePlatform = (platform) => {
+  const choosePlatform = (platform: Platform) => {
     setPull({ ...initial, platform });
     setMessage(`Resolved ${initial.reference} for ${platform}; no other platform is downloaded.`);
   };
@@ -68,19 +89,15 @@ export function ImagePullStory() {
       <Select
         value={pull.platform}
         choices={PLATFORMS.map((platform) => ({ value: platform, label: platform }))}
-        onChange={({ value }) => choosePlatform(PLATFORMS.includes(value) ? value : PLATFORMS[0])} />
+        onChange={({ value }) => choosePlatform(PLATFORMS.includes(value as Platform) ? value as Platform : PLATFORMS[0])} />
       <Card label={pull.reference} variant={'outline'}>
         <CardContent gap={2}>
-          <Text
-            label={`${pull.state} · ${pull.platform} · job ${pull.job}`}
-            monospace={true} />
+          <CodeView value={`${pull.state} · ${pull.platform} · job ${pull.job}`} monospace={true} />
           {pull.layers.map((layer) => <Column key={layer.id} gap={1}>
-            <Text
-              label={`${layer.id} · ${layer.current}/${layer.total} bytes`}
-              monospace={true} />
+            <CodeView value={`${layer.id} · ${layer.current}/${layer.total} bytes`} monospace={true} />
             <Progress fraction={layer.current / layer.total} />
           </Column>)}
-          {pull.digest ? [<Text key={'digest'} label={pull.digest} monospace={true} wrap={true} />] : []}
+          {pull.digest ? [<CodeView key={'digest'} value={pull.digest} monospace={true} />] : []}
           {pull.error ? [<InlineMessage key={'error'} label={pull.error} tone={'danger'} />] : []}
         </CardContent>
       </Card>

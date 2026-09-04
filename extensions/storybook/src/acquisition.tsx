@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 // The complete end-user image-acquisition state model, shown together so
 // progress wording and available actions can be reviewed without a registry.
 
@@ -22,7 +21,19 @@ const { useState } = React;
 
 export const ACQUISITION_STORY = 'Extension acquisition';
 
-export const acquisitionStates = [
+type Tone = 'neutral' | 'positive' | 'danger';
+type Activity = 'spinner' | 'progress';
+export interface AcquisitionStateModel {
+  key: string;
+  title: string;
+  status: string;
+  activity?: Activity;
+  fraction?: number;
+  tone?: Tone;
+  actions: readonly string[];
+}
+
+export const acquisitionStates: readonly AcquisitionStateModel[] = [
   { key: 'checking', title: 'Checking', status: 'checking local images', activity: 'spinner', actions: ['Cancel download'] },
   {
     key: 'pulling-indeterminate',
@@ -86,7 +97,10 @@ export function AcquisitionProgressStory() {
   );
 }
 
-function AcquisitionState({ state, onAction }) {
+function AcquisitionState({ state, onAction }: {
+  state: AcquisitionStateModel;
+  onAction: (label: string) => void;
+}) {
   const activity =
     state.activity === 'progress'
       ? <Progress key={'activity'} fraction={state.fraction} tooltip={state.status} />

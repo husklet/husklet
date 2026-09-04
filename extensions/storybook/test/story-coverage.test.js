@@ -198,7 +198,7 @@ test('extension lifecycle bounds authority and controls the selected immutable g
   assert(stage.surface.dispatch({ trigger: 'Invoke', node: stop, id: `${stop}:Invoke` }));
   const changed = stage.since(before);
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Start extension'));
-  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped top at sha256:manager-generation-14.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped top at sha256:top-generation-14.'));
 });
 
 test('workspace file review independently bounds paths, content, and interactive writes', () => {
