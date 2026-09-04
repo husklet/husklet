@@ -13,6 +13,15 @@ fn aarch64_successful_terminal_outcomes_are_explicitly_retired() {
     }
 }
 
+#[test]
+fn aarch64_diagnostics_off_loop_has_no_census_operation() {
+    let source = std::fs::read_to_string("src/native/translator/guest/aarch64/interp/dispatch.c").unwrap();
+    let off = source.split("if (!hl_backend_tree_steps_enabled())").nth(1).expect("off loop");
+    let off = off.split("} else {").next().expect("diagnostic loop boundary");
+    assert!(off.contains("interp_step(cpu)"));
+    assert!(!off.contains("major") && !off.contains("census") && !off.contains("body_retired"));
+}
+
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
