@@ -85,6 +85,22 @@ impl Domain {
         self.directory.join("domain.sock")
     }
 
+    /// Returns the socket of an already-running domain without starting one.
+    ///
+    /// Teardown callers use this boundary after Continue-later has stopped the
+    /// domain. Reaching an offline workspace there is ordinary and must not
+    /// restore its checkpoint merely to perform cleanup.
+    pub fn live_socket(&self) -> io::Result<Option<PathBuf>> {
+        match std::os::unix::net::UnixStream::connect(self.socket()) {
+            Ok(connection) => {
+                drop(connection);
+                Ok(Some(self.socket()))
+            }
+            Err(error) if Peer::offline(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     fn control(&self) -> PathBuf {
         self.directory.join("control.sock")
     }

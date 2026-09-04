@@ -157,6 +157,21 @@ impl Workspace {
         Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())
     }
 
+    /// Connects to the workspace daemon only when it is already live.
+    ///
+    /// Host teardown follows workspace checkpoint shutdown, so it must never
+    /// use the start-capable bridge and restore the domain it is closing.
+    fn live_bridge(&self) -> Result<Option<Arc<Bridge>>, String> {
+        let domain = crate::runtime::domain::Domain::new(&self.config);
+        let Some(socket) = domain.live_socket().map_err(|error| error.to_string())? else {
+            return Ok(None);
+        };
+        Bridge::new(socket)
+            .map(Arc::new)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
     /// What the extension's image says about how to run it.
     fn image(bridge: &Bridge, record: &Record) -> Result<Image, String> {
         let client = bridge.client();
@@ -236,12 +251,97 @@ impl Supply for Workspace {
     }
 
     fn halt(&self, plan: &Plan) {
-        let Ok(bridge) = self.bridge() else {
+        let Ok(Some(bridge)) = self.live_bridge() else {
             return;
         };
         if let Err(error) = Sidecar::new(bridge).stop_owned(&plan.spec) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "extension {}: {error}", plan.record.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod halt_tests {
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Resources, PROTOCOL};
+
+    use super::{Image, Plan, SidecarSpec, Supply as _, Workspace};
+
+    fn plan(socket: std::path::PathBuf) -> Plan {
+        let manifest = Manifest {
+            name: ExtensionName::new("checkpoint-sidecar").expect("name"),
+            display_name: "Checkpoint sidecar".to_owned(),
+            version: "1.0.0".to_owned(),
+            protocol: PROTOCOL,
+            capabilities: Grant::new([Capability::Interface]),
+            entrypoint: None,
+            activation: hl_extension::Activation::default(),
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: Resources::default(),
+            filesystem_roots: Vec::new(),
+        };
+        let record = Record {
+            name: manifest.name.clone(),
+            image_digest: "sha256:offline-checkpoint".to_owned(),
+            version: manifest.version.clone(),
+            granted: manifest.capabilities.clone(),
+            enabled: true,
+            installed_at: 1,
+            pane_providers: Vec::new(),
+            declaration: Some(manifest.clone()),
+        };
+        let spec = SidecarSpec::new(
+            &manifest,
+            &record.granted,
+            &Image {
+                reference: "extension:test".to_owned(),
+                digest: record.image_digest.clone(),
+                entrypoint: vec!["/extension".to_owned()],
+                user: "1000:1000".to_owned(),
+            },
+            socket,
+        );
+        Plan {
+            record,
+            manifest,
+            spec,
+            workspace: "offline-halt".to_owned(),
+        }
+    }
+
+    #[test]
+    fn halting_an_offline_checkpointed_workspace_never_starts_or_changes_its_checkpoint() {
+        let root = tempfile::tempdir().expect("state root");
+        let storage = root.path().join("offline-halt");
+        let checkpoint = storage.join("checkpoints/current/MANIFEST");
+        std::fs::create_dir_all(checkpoint.parent().expect("checkpoint parent")).expect("checkpoint directory");
+        std::fs::write(&checkpoint, b"committed checkpoint inventory").expect("checkpoint fixture");
+
+        let mut config = crate::config::WorkspaceConfig::new("offline-halt", "alpine:3.20", hl_ws::Arch::Amd64);
+        config.storage = Some(storage.clone());
+        let workspace = Workspace::new(&config);
+        let plan = plan(storage.join("extensions/checkpoint-sidecar.sock"));
+        let before = crate::workspace_lifecycle::revision();
+
+        workspace.halt(&plan);
+
+        let changes = crate::workspace_lifecycle::since(before);
+        assert!(
+            changes.iter().all(|change| !matches!(
+                change.action,
+                hl_extension::WorkspaceLifecycleAction::Start | hl_extension::WorkspaceLifecycleAction::Restart
+            )),
+            "offline halt emitted a start-class lifecycle change: {changes:?}"
+        );
+        assert_eq!(
+            std::fs::read(&checkpoint).expect("checkpoint remains"),
+            b"committed checkpoint inventory",
+            "offline host teardown changed the published checkpoint inventory"
+        );
+        assert!(
+            !crate::runtime::domain::Domain::new(&config).socket().exists(),
+            "offline host teardown created or restored a workspace domain"
+        );
     }
 }
 
