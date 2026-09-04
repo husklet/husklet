@@ -342,6 +342,10 @@ mod halt_tests {
             !crate::runtime::domain::Domain::new(&config).socket().exists(),
             "offline host teardown created or restored a workspace domain"
         );
+        assert!(
+            !storage.join("runtime").exists(),
+            "offline host teardown entered the domain start path"
+        );
     }
 }
 
