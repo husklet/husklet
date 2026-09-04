@@ -122,7 +122,6 @@ impl Host {
     fn container() -> ContainerSummary {
         ContainerSummary {
             id: "c1".into(),
-            generation: 0,
             name: "api".into(),
             image: "husklet/api:1".into(),
             state: "running".into(),
