@@ -4,7 +4,7 @@
 //! belong in this runner until it owns a production checkpoint controller: phase markers alone would be
 //! a fake boundary that proves no process state was captured.
 
-use super::{evidence::Measurement, identity};
+use super::{evidence::Measurement, identity, perf::{Counters, parse as parse_perf}};
 use crate::suite::Error;
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -175,14 +175,6 @@ struct Row {
     backend_receipt: String,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-struct Counters {
-    duration_ns: u64,
-    task_clock_ms: f64,
-    instructions: u64,
-    cycles: u64,
-    page_faults: u64,
-}
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {
     validate_options(&options)?;
@@ -569,38 +561,6 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
     )?;
     let counters = parse_perf(&fs::read_to_string(&path)?)?;
     fs::remove_file(path)?;
-    Ok(counters)
-}
-
-fn parse_perf(text: &str) -> Result<Counters, Error> {
-    let value = |event: &str| -> Result<&str, Error> {
-        text.lines()
-            .filter(|line| !line.starts_with('#'))
-            .find_map(|line| {
-                let fields = line.split('\t').collect::<Vec<_>>();
-                fields
-                    .iter()
-                    .any(|field| field.trim() == event)
-                    .then(|| fields[0].trim())
-            })
-            .ok_or_else(|| format!("perf output omitted {event}").into())
-    };
-    let counters = Counters {
-        duration_ns: value("duration_time")?.parse()?,
-        task_clock_ms: value("task-clock")?.parse()?,
-        instructions: value("instructions")?.parse()?,
-        cycles: value("cycles")?.parse()?,
-        page_faults: value("page-faults")?.parse()?,
-    };
-    if counters.duration_ns == 0
-        || !counters.task_clock_ms.is_finite()
-        || counters.task_clock_ms <= 0.0
-        || counters.instructions == 0
-        || counters.cycles == 0
-        || counters.page_faults == 0
-    {
-        return Err("perf output contains an absent or zero counter".into());
-    }
     Ok(counters)
 }
 

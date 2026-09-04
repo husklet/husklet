@@ -8,6 +8,7 @@ mod floor;
 mod identity;
 mod ledger;
 mod options;
+pub(crate) mod perf;
 mod schedule;
 mod stage;
 mod verdict;
