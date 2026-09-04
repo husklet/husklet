@@ -252,7 +252,8 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
-#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
+#if (defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)) ||                                      \
+    (defined(__linux__) && defined(HL_HOST_CPU_X86_64))
 #define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 1
 #else
 #define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 0
@@ -369,6 +370,14 @@ static void e_ldp_q(int rt, int rt2, int rn, int off) {
 #include "../../translator/guest/aarch64/stubs.c"
 // transliterate + mangle + §B + LSE + depth-gate
 #include "../../translator/guest/aarch64/translate.c"
+#elif defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+/*
+ * Keep the cross-ISA host seam explicit.  The first x86-64 code generator is
+ * built behind this include. Putting the seam here lets that backend publish
+ * through this target's cache and reuse its Linux ABI, signal and checkpoint
+ * lifecycle instead of growing a second execution path around them.
+ */
+#include "../../translator/guest/aarch64/dbt_x86_64.c"
 #else
 #include "../../translator/guest/aarch64/interp.c"
 #endif
