@@ -185,6 +185,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
     toText: async () => ({ kind: 'terminal', text: '$ ready', snapshot: { slot: 'pane-1', generation: 7, revision: 11, lines: ['$ ready'], truncated: false } }),
     splitAndWait: async (...args) => { calls.push(['split', ...args]); return { changed: true, pane: {} }; },
     retitleAndWait: async (...args) => { calls.push(['retitle', ...args]); return { changed: true, pane: {} }; },
+    ratioAndWait: async (...args) => { calls.push(['ratio', ...args]); return { changed: true, actual: args[3], pane: {} }; },
     closeAndWait: async (...args) => { calls.push(['close', ...args]); return { changed: true, slot: args[0] }; },
     pinTab: async () => {}, focus: async () => {},
   };
@@ -197,6 +198,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
   invoke(stage, 'Inspect pane-1'); await settled(); await settled();
   invoke(stage, 'Split beside'); await settled(); await settled();
   invoke(stage, 'Split below'); await settled(); await settled();
+  change(stage, 'Pane share % (5–95)', '60'); invoke(stage, 'Set pane share'); await settled(); await settled();
   change(stage, 'New pane title', 'Build logs'); invoke(stage, 'Rename pane'); await settled(); await settled();
   invoke(stage, 'Close pane'); await settled();
   assert.equal(calls.some(([kind]) => kind === 'close'), false, 'opening close confirmation has no authority');
@@ -204,6 +206,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
   assert.deepEqual(calls.filter(([kind]) => kind !== 'reload'), [
     ['split', 'pane-1', 7, 11, 'beside'],
     ['split', 'pane-1', 7, 11, 'below'],
+    ['ratio', 'pane-1', 7, 11, 0.6],
     ['retitle', 'pane-1', 7, 11, 'Build logs'],
     ['close', 'pane-1', 7, 11],
   ]);

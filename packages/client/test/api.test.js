@@ -31,6 +31,28 @@ test('resizeGridAndWait verifies the requested grid after an observed cursor adv
   ]);
 });
 
+test('ratioAndWait verifies a second-child share through authoritative topology', async () => {
+  const calls = []; let publish;
+  const api = workspace({ granted: [], call() { throw new Error('raw call was not stubbed'); }, onEvent() { return () => {}; } });
+  api.watchPaneChanges = async (listener) => { publish = listener; calls.push('subscribe'); return async () => calls.push('unsubscribe'); };
+  api.terminal.ratioObserved = async (...args) => {
+    calls.push(['ratio', ...args]);
+    publish({ slot: 'pane-2', kind: 'terminal', generation: 3, revision: 8, coalesced: 0 });
+  };
+  const pane = { slot: 'pane-2', generation: 3, revision: 8, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: false };
+  api.terminal.panes = async () => ({ panes: [pane], truncated: false });
+  api.terminal.topology = async () => ({ active_tab: 'tab-1', tabs: [{ id: 'tab-1', title: 'Shell', root: {
+    kind: 'split', division: 'beside', ratio_per_mille: 400,
+    first: { kind: 'pane', pane: { slot: 'pane-1' }, grid: null, focused: true },
+    second: { kind: 'pane', pane: { slot: 'pane-2' }, grid: null, focused: false },
+  } }] });
+  assert.deepEqual(await api.terminal.ratioAndWait('pane-2', 3, 7, 0.6), {
+    changed: true, ratio: 0.6, actual: 0.6, pane,
+  });
+  assert.deepEqual(calls, ['subscribe', ['ratio', 'pane-2', 3, 7, 0.6], 'unsubscribe']);
+  await assert.rejects(api.terminal.ratioAndWait('pane-2', 3, 7, 0.01), /0.05/);
+});
+
 async function pair(options) {
   const server = net.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

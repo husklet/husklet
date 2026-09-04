@@ -20,6 +20,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [command, setCommand] = React.useState('');
   const [columns, setColumns] = React.useState('');
   const [rows, setRows] = React.useState('');
+  const [ratio, setRatio] = React.useState('50');
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -113,6 +114,29 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (!result.changed) throw new Error(`Pane ${slot} did not reach the requested ${nextColumns}×${nextRows} grid; refresh before retrying.`);
       if (requested !== paneRevision.current) return;
       setReadable({ kind: 'terminal', text: result.after.lines.join('\n'), snapshot: result.after });
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
+  const resizeSplit = async () => {
+    if (!cursor || !selected) return;
+    if (!/^(?:[5-9]|[1-8][0-9]|9[0-5])$/.test(ratio)) {
+      setError(new TypeError('Pane share must be an integer percentage from 5 to 95.'));
+      return;
+    }
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    const share = Number(ratio) / 100;
+    setBusy(`ratio:${slot}`); setError(null);
+    try {
+      const result = await api.terminal.ratioAndWait(slot, cursor.generation, cursor.revision, share);
+      if (!result.changed) throw new Error(`Pane ${slot} did not reach the requested ${ratio}% split share; refresh before retrying.`);
+      const next = await api.terminal.toText(slot, { lines: 200 });
+      if (requested !== paneRevision.current) return;
+      setReadable(next);
+      setRatio(String(Math.round(result.actual * 100)));
     } catch (cause) {
       if (requested === paneRevision.current) setError(cause);
     } finally {
@@ -227,6 +251,10 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
                   onInvoke={() => { void mutatePane('split-beside'); }} />
                 <Button label="Split below" enabled={busy === '' && Boolean(cursor)}
                   onInvoke={() => { void mutatePane('split-below'); }} />
+                <Entry value={ratio} placeholder="Pane share % (5–95)" enabled={busy === '' && Boolean(cursor)}
+                  onChange={(event) => setRatio(String(event.value ?? ''))} />
+                <Button label="Set pane share" enabled={busy === '' && Boolean(cursor) && ratio.length > 0}
+                  onInvoke={() => { void resizeSplit(); }} />
               </Row>
               <Row gap={1} wrap>
                 <Entry value={title} placeholder="New pane title" grow enabled={busy === '' && Boolean(cursor)}

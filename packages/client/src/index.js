@@ -70,6 +70,20 @@ function exactPaneTitle(title) {
   throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
 }
 
+function exactPaneRatio(ratio) {
+  if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio < 0.05 || ratio > 0.95) {
+    throw new RangeError('terminal pane ratio must be a finite number within 0.05..=0.95');
+  }
+  return ratio;
+}
+
+function paneRatio(node, slot) {
+  if (!node || node.kind !== 'split') return null;
+  if (node.first?.kind === 'pane' && node.first.pane?.slot === slot) return node.ratio_per_mille / 1000;
+  if (node.second?.kind === 'pane' && node.second.pane?.slot === slot) return 1 - node.ratio_per_mille / 1000;
+  return paneRatio(node.first, slot) ?? paneRatio(node.second, slot);
+}
+
 function exactOccupantTarget(target) {
   const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
   const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
@@ -413,12 +427,12 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal retitle requires nonnegative safe integer generation and revision');
         return done('terminal_retitle_pane_observed', { slot, generation, revision, title: exactPaneTitle(title) });
       },
-      ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio }),
+      ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio: exactPaneRatio(ratio) }),
       ratioObserved: (slot, generation, revision, ratio) => {
         if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
           throw new TypeError('terminal ratio requires nonnegative safe integer generation and revision');
         }
-        return done('terminal_ratio_observed', { slot, generation, revision, ratio });
+        return done('terminal_ratio_observed', { slot, generation, revision, ratio: exactPaneRatio(ratio) });
       },
       switchOccupant: (slot, generation, target) => {
         if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
@@ -1035,6 +1049,43 @@ export function workspace(session, { signal } = {}) {
       if (pane.generation !== generation) throw new Error('focused pane slot was replaced before verification');
       if (pane.revision === revision || !pane.focused) throw new Error('pane changed without receiving focus');
       return { changed: true, pane };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
+  api.terminal.ratioAndWait = async (slot, generation, revision, ratio, { timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal ratio requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal ratio requires nonnegative safe integer generation and revision');
+    }
+    const wanted = exactPaneRatio(ratio);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal ratio wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      await api.terminal.ratioObserved(slot, generation, revision, wanted);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, ratio: wanted, after: { generation, revision } };
+      const inventory = await api.terminal.panes();
+      const pane = inventory.panes.find((candidate) => candidate.slot === slot);
+      if (!pane) throw new Error(inventory.truncated ? 'resized split pane cannot be verified from a truncated inventory' : 'resized split pane disappeared');
+      if (pane.generation !== generation) throw new Error('resized split pane slot was replaced before verification');
+      if (pane.revision === revision) throw new Error('pane ratio event did not advance the inspected cursor');
+      const topology = await api.terminal.topology();
+      const actual = topology.tabs.map((tab) => paneRatio(tab.root, slot)).find((value) => value !== null);
+      if (actual == null) throw new Error('resized pane is not inside an observable split');
+      if (Math.abs(actual - wanted) > 0.05) throw new Error('pane changed without applying the requested split ratio');
+      return { changed: true, ratio: wanted, actual, pane };
     } finally {
       clearTimeout(timer);
       await stop();

@@ -423,6 +423,12 @@ export interface WorkspaceApi {
       >;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
+    /** Arm pane observation before a CAS ratio change, then verify its advanced pane and resulting topology. */
+    ratioAndWait(slot: string, generation: number, revision: number, ratio: number,
+      options?: { timeoutMs?: number }): Promise<
+        | { changed: true; ratio: number; actual: number; pane: InspectablePane }
+        | { changed: false; ratio: number; after: { generation: number; revision: number } }
+      >;
     switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
     switchOccupantObserved(slot: string, generation: number, revision: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
     /** Arm observation, perform an observed switch, and verify the exact resulting occupant. */
