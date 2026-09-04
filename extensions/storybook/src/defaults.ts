@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 // What a component looks like the moment it is selected.
 //
 // A blank preview teaches nothing, so every component opens with enough
@@ -9,15 +8,19 @@
 
 import { component, tags } from './catalogue.js';
 
+type StoryValue = string | number | boolean | { value: string; label: string }[];
+export type StoryChild = { tag: string; props: Record<string, StoryValue> };
+export type StoryDefaults = { props: Record<string, StoryValue>; children: StoryChild[] };
+
 /** Children a container opens with, so an empty box is never shown as one. */
-const SAMPLE = [
+const SAMPLE: StoryChild[] = [
   { tag: 'Text', props: { label: 'One' } },
   { tag: 'Text', props: { label: 'Two' } },
   { tag: 'Text', props: { label: 'Three' } },
 ];
 
 /** What a family wants beyond its label, before any per-component taste. */
-const BY_FAMILY = {
+const BY_FAMILY: Record<string, Record<string, StoryValue>> = {
   layout: { gap: 2, pad: 2 },
   surface: { pad: 2 },
   display: {},
@@ -34,7 +37,7 @@ const BY_FAMILY = {
 };
 
 /** The components whose point is not a label. */
-const BY_TAG = {
+const BY_TAG: Record<string, Record<string, StoryValue>> = {
   Icon: { icon: 'star' },
   Avatar: { label: 'HK' },
   Image: { uri: 'https://example.invalid/picture.png' },
@@ -104,7 +107,7 @@ const BY_TAG = {
  * Returns children as plain descriptors rather than elements, so the default
  * set can be inspected and tested without React and without a host.
  */
-export function defaults(name) {
+export function defaults(name: string): StoryDefaults {
   const tag = component(name);
   const props = { ...(BY_FAMILY[tag.family] ?? {}), ...(BY_TAG[name] ?? {}) };
   if (props.label === undefined && !tag.acceptsChildren) props.label = spaced(name);
@@ -119,12 +122,12 @@ export function defaults(name) {
 const LABELLESS = new Set(['layout']);
 
 /** `CardHeader` reads as `Card header` in a preview. */
-export function spaced(name) {
+export function spaced(name: string): string {
   return name.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
 /** Every component's default set, for tests and for a first selection. */
-export function all() {
+export function all(): Map<string, StoryDefaults> {
   return new Map(tags.map((tag) => [tag.name, defaults(tag.name)]));
 }
 
