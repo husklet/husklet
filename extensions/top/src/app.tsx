@@ -10,9 +10,11 @@ import {
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
 import { Terminals } from './terminals.js';
+import { Processes } from './processes.js';
 
 export { Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
+export { Processes } from './processes.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -30,7 +32,6 @@ type TopProps = {
   }>;
 };
 const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
-const PROCESS_SAMPLING_CONCURRENCY = 8;
 
 function StructuredDetail({ value }: { value: unknown }) {
   return (
@@ -731,107 +732,6 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
           onInvoke={() => onOpenExecution(execution.id)} /> : null}
       </Row> : null}
     </CardContent>
-  );
-}
-
-export function Processes({ api, resource }) {
-  const [snapshots, setSnapshots] = useState([]);
-  const [failures, setFailures] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const loadRevision = useRef(0);
-  const load = useCallback(async () => {
-    const revision = ++loadRevision.current;
-    setLoading(true);
-    try {
-      const containers = resource.data ?? [];
-      const groups = new Array(containers.length);
-      let cursor = 0;
-      const worker = async () => {
-        while (cursor < containers.length) {
-          const index = cursor; cursor += 1;
-          const container = containers[index];
-          try { groups[index] = { container, rows: await api.containers.processes(container.id), error: null }; }
-          catch (cause) { groups[index] = { container, rows: null, error: cause }; }
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(PROCESS_SAMPLING_CONCURRENCY, containers.length) }, worker));
-      if (revision !== loadRevision.current) return;
-      const available = groups.filter(({ rows }) => rows !== null);
-      const unavailable = groups.filter(({ error: cause }) => cause !== null);
-      setSnapshots(available);
-      setFailures(unavailable);
-      setError(available.length === 0 && unavailable.length > 0 ? unavailable[0].error : null);
-    } finally { if (revision === loadRevision.current) setLoading(false); }
-  }, [api, resource.data]);
-  useEffect(() => {
-    void load();
-    return () => { loadRevision.current += 1; };
-  }, [load]);
-  const processes = snapshots.flatMap(({ container, rows }) => processRows(rows, container.name || shortId(container.id)));
-  const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
-  const completeNamespace = snapshots.length > 0 && snapshots.every(({ rows }) => rows.scope === 'namespace');
-  const view = bounded(processes);
-  const failure = error ?? resource.error;
-  const state = loading || resource.loading ? 'loading' : failure ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
-  return (
-    <Page
-      title={'Processes'}
-      subtitle={'A bounded snapshot across all visible containers.'}>
-      <Toolbar loading={state === 'loading'} onRefresh={load} />
-      <ResourceState
-        state={state}
-        loadingLabel={'Reading processes…'}
-        emptyLabel={'No running processes'}
-        emptyDetail={'Start a container to see its process snapshot here.'}
-        error={failure?.message ?? String(failure ?? '')}
-        retryLabel={'Retry processes'}
-        onRetry={resource.error ? resource.reload : load}>
-        <Text
-          label={completeNamespace
-            ? 'Full container namespace snapshots; PIDs identify only this observation and may be reused.'
-            : 'Initial processes only; PIDs identify this snapshot and may be reused.'}
-          color={'text-dim'}
-          wrap={true} />
-        {observed > 0 ? <Text label={`Observed ${new Date(observed).toISOString()}`} color={'text-dim'} /> : null}
-        {view.records.map((process, index) => {
-          const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
-          const command = process.cells.CMD ?? process.cells.Command ?? process.cells.COMMAND ?? process.values.at(-1) ?? 'Process';
-          const detail = Object.entries(process.cells).filter(([key]) => !['PID', 'Pid', 'pid', 'CMD', 'Command', 'COMMAND'].includes(key)).map(([key, value]) => `${key} ${value}`).join(' · ');
-          return (
-            <Card key={`${process.container}:${pid}:${index}`} variant={'outline'}>
-              <CardHeader label={command} detail={process.container} />
-              <CardContent>
-                <Row gap={2}>
-                  <Badge label={`PID ${pid}`} />
-                  <Text label={detail} color={'text-dim'} />
-                </Row>
-              </CardContent>
-            </Card>
-          );
-        })}
-        <Omitted count={view.omitted} />
-        {snapshots.some(({ rows }) => rows.truncated)
-          ? <Text
-          label={'The host process snapshot was truncated at its safety limit.'}
-          color={'warning'}
-          wrap={true} /> : null}
-      </ResourceState>
-      {snapshots.length > 0 && failures.length > 0 ? <Column gap={1}>
-        <Text
-          label={`${failures.length} container process snapshot${failures.length === 1 ? '' : 's'} unavailable; available containers remain visible.`}
-          color={'warning'}
-          wrap={true} />
-        {failures.slice(0, 8).map(({ container, error: cause }) => <Text
-          key={container.id}
-          label={`${container.name || shortId(container.id)}: ${String(cause?.message ?? cause).slice(0, 256)}`}
-          color={'text-dim'}
-          wrap={true} />)}
-        {failures.length > 8 ? <Text
-          label={`${failures.length - 8} more failures omitted.`}
-          color={'text-dim'} /> : null}
-      </Column> : null}
-    </Page>
   );
 }
 
