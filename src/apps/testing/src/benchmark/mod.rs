@@ -50,6 +50,10 @@ pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
     Ok(())
 }
 
+pub(crate) fn artifact_identity(path: &std::path::Path) -> Result<String, Error> {
+    identity::artifact_identity(path)
+}
+
 pub(crate) fn stage(options: StageOptions) -> Result<(), Error> {
     stage::run(options)
 }

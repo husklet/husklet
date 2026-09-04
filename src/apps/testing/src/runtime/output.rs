@@ -694,7 +694,7 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
+pub(crate) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
     if product_backend_shape(stderr) {
         let shape = backend_shape_product(stderr, true)?.expect("product-shape detection established one record");
         if shape.get("translation_codegen_available") == Some(&0) {
