@@ -333,6 +333,56 @@ fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
 }
 
 #[test]
+fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "(instruction & 0xFF000010u) == 0x54000000u",
+        "for (unsigned nzcv = 0; nzcv < 16u; ++nzcv)",
+        "condition_cpu.nzcv = (uint64_t)nzcv << 28",
+        "interp_cond_holds(&condition_cpu, instruction & 15u)",
+        "truth |= (uint16_t)(1u << nzcv)",
+        "bt %rax,%rcx",
+        "(instruction & 0x7E000000u) == 0x34000000u",
+        "((instruction >> 24) & 1u) ? 5u : 4u",
+        "(instruction & 0x7E000000u) == 0x36000000u",
+        "((instruction >> 31) & 1u) << 5",
+        "interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4",
+        "cpu->pc == header->branch_target",
+        "exit_kind = HL_BACKEND_SHAPE_T_COND_TAKEN",
+        "HL_BACKEND_SHAPE_T_COND_NOT_TAKEN",
+        "cpu->pc == header->branch_fallthrough",
+        "interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4",
+        "count < 64u",
+    ] {
+        assert!(source.contains(contract), "missing stage-three contract {contract}");
+    }
+    let run = source
+        .split_once("static void run_block(struct cpu *cpu, void *code) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void block_return"))
+        .map(|(body, _)| body)
+        .expect("AArch64 x86 DBT run_block body");
+    let classify = run.find("header->exit_kind == UINT64_MAX").expect("dynamic conditional classification");
+    let publish = run.find("hl_a64_x86_record_translated_exit(exit_kind)").expect("translated exit publication");
+    assert!(classify < publish, "conditional outcome was published before classification: {run}");
+    assert_eq!(run.matches("hl_a64_x86_record_translated_exit(exit_kind)").count(), 1, "{run}");
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
+    for instruction in [
+        "cbz x9,16f",
+        "cbnz x1,17f",
+        "tbnz x11,#63,18f",
+        "tbz x11,#31,19f",
+        "tbnz x11,#31,20f",
+        "b.hi 21f",
+        "b.ls 22f",
+        "b.lt 23f",
+        "b.ge 24f",
+        "cbz x12,25b",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
