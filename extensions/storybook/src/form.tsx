@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import {
   Banner,
@@ -18,6 +17,7 @@ import {
   ToggleButton,
   ValidationSummary,
 } from '@husklet/react';
+import type { Report } from '@husklet/react';
 
 const { useState } = React;
 
@@ -39,7 +39,7 @@ export function ValidatedSettingsFormStory() {
   const [tags, setTags] = useState(['backend', 'managed']);
   const [reviewed, setReviewed] = useState(false);
   const invalid = attempted && name.trim().length < 3;
-  const changeName = (event) => {
+  const changeName = (event: Report) => {
     setName(String(event.value ?? ''));
     setSaved(false);
   };

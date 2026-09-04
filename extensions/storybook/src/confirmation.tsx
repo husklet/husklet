@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useState } from 'react';
 import { Column, ConfirmAction, Heading, InlineMessage, Text } from '@husklet/react';
 

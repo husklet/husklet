@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Accordion, AccordionDetails, AccordionSummary, Button, Column, CommandPalette, Heading, InlineMessage, Menu, MenuItem, Popover, Row, Text } from '@husklet/react';
 
@@ -37,7 +36,7 @@ export function NavigationDialogsStory() {
         label={'Deployment details'}
         expanded={expanded}
         onExpand={(next) => {
-          const value = Boolean(next.expanded ?? next.value);
+          const value = Boolean(next.value);
           setExpanded(value);
           setEvent(value ? 'Deployment details expanded.' : 'Deployment details collapsed.');
         }}>
