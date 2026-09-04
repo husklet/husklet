@@ -19,6 +19,7 @@
 
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
+#define HL_BACKEND_EXECUTED_STEP_FORM_TOP 64u
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
 #define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
@@ -2609,6 +2610,10 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t executed_form_unique;
     _Atomic uint64_t executed_form_overflow;
     struct hl_backend_executed_form executed_forms[HL_BACKEND_EXECUTED_FORM_SLOTS];
+    _Atomic uint64_t executed_step_form_total;
+    _Atomic uint64_t executed_step_form_unique;
+    _Atomic uint64_t executed_step_form_overflow;
+    struct hl_backend_executed_form executed_step_forms[HL_BACKEND_EXECUTED_FORM_SLOTS];
     _Atomic uint64_t reason[HL_BACKEND_TREE_REASON_COUNT];
     _Atomic uint64_t reason_other;
     _Atomic uint64_t translated_exit[HL_BACKEND_SHAPE_T_COUNT];
@@ -2709,20 +2714,27 @@ static inline void hl_backend_tree_executed_form(uint64_t key) {
                                     NULL);
 }
 
-static void hl_backend_executed_form_top(struct hl_backend_mixed_sse_shared *census,
-                                         uint64_t keys[HL_BACKEND_EXECUTED_FORM_TOP],
-                                         uint64_t counts[HL_BACKEND_EXECUTED_FORM_TOP]) {
+static inline void hl_backend_tree_executed_step_form(uint64_t key) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || g_backend_mixed_sse_self == NULL) return;
+    hl_backend_executed_form_record(census->executed_step_forms, &census->executed_step_form_total,
+                                    &census->executed_step_form_unique, &census->executed_step_form_overflow, key,
+                                    NULL, NULL, NULL);
+}
+
+static void hl_backend_executed_form_top(struct hl_backend_executed_form forms[HL_BACKEND_EXECUTED_FORM_SLOTS],
+                                         uint64_t *keys, uint64_t *counts, unsigned top) {
     for (unsigned slot = 0; slot < HL_BACKEND_EXECUTED_FORM_SLOTS; ++slot) {
-        struct hl_backend_executed_form *form = &census->executed_forms[slot];
+        struct hl_backend_executed_form *form = &forms[slot];
         if (atomic_load_explicit(&form->state, memory_order_acquire) != 2) continue;
         uint64_t key = form->key;
         uint64_t count = atomic_load_explicit(&form->count, memory_order_relaxed);
         unsigned rank = 0;
-        while (rank < HL_BACKEND_EXECUTED_FORM_TOP &&
+        while (rank < top &&
                (counts[rank] > count || (counts[rank] == count && keys[rank] <= key)))
             ++rank;
-        if (rank == HL_BACKEND_EXECUTED_FORM_TOP) continue;
-        for (unsigned move = HL_BACKEND_EXECUTED_FORM_TOP - 1; move > rank; --move) {
+        if (rank == top) continue;
+        for (unsigned move = top - 1; move > rank; --move) {
             keys[move] = keys[move - 1];
             counts[move] = counts[move - 1];
         }
@@ -3173,7 +3185,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     --formatted;
     uint64_t form_keys[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
     uint64_t form_counts[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
-    hl_backend_executed_form_top(census, form_keys, form_counts);
+    hl_backend_executed_form_top(census->executed_forms, form_keys, form_counts, HL_BACKEND_EXECUTED_FORM_TOP);
     {
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted,
                              " executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu",
@@ -3409,6 +3421,52 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
+    }
+    {
+        uint64_t step_keys[HL_BACKEND_EXECUTED_STEP_FORM_TOP] = {0};
+        uint64_t step_counts[HL_BACKEND_EXECUTED_STEP_FORM_TOP] = {0};
+        uint64_t keyed = 0, top_cumulative = 0;
+        for (unsigned slot = 0; slot < HL_BACKEND_EXECUTED_FORM_SLOTS; ++slot) {
+            struct hl_backend_executed_form *form = &census->executed_step_forms[slot];
+            if (atomic_load_explicit(&form->state, memory_order_acquire) == 2)
+                keyed += atomic_load_explicit(&form->count, memory_order_relaxed);
+        }
+        hl_backend_executed_form_top(census->executed_step_forms, step_keys, step_counts,
+                                     HL_BACKEND_EXECUTED_STEP_FORM_TOP);
+        char detail[8192];
+        uint64_t total = atomic_load_explicit(&census->executed_step_form_total, memory_order_relaxed);
+        uint64_t unique = atomic_load_explicit(&census->executed_step_form_unique, memory_order_relaxed);
+        uint64_t overflow = atomic_load_explicit(&census->executed_step_form_overflow, memory_order_relaxed);
+        uint64_t interpreted = atomic_load_explicit(&census->interpreted_steps, memory_order_relaxed);
+        int detail_len = snprintf(
+            detail, sizeof detail,
+            "[diag] x86-executed-step-form version=1 tree_complete=%d total=%llu keyed=%llu overflow=%llu"
+            " unique=%llu interpreted_steps=%llu reconcile=%u interpreted_reconcile=%u top_n=%u",
+            available, (unsigned long long)total, (unsigned long long)keyed, (unsigned long long)overflow,
+            (unsigned long long)unique, (unsigned long long)interpreted, keyed + overflow == total,
+            total == interpreted, HL_BACKEND_EXECUTED_STEP_FORM_TOP);
+        if (detail_len <= 0 || (size_t)detail_len >= sizeof detail) return;
+        for (unsigned rank = 0; rank < HL_BACKEND_EXECUTED_STEP_FORM_TOP; ++rank) {
+            top_cumulative += step_counts[rank];
+            int added = snprintf(detail + detail_len, sizeof detail - (size_t)detail_len,
+                                 " top%u_key=%llu top%u_count=%llu", rank,
+                                 (unsigned long long)step_keys[rank], rank,
+                                 (unsigned long long)step_counts[rank]);
+            if (added <= 0 || (size_t)added >= sizeof detail - (size_t)detail_len) return;
+            detail_len += added;
+        }
+        int added = snprintf(detail + detail_len, sizeof detail - (size_t)detail_len,
+                             " top_cumulative=%llu top_reconcile=%u\n", (unsigned long long)top_cumulative,
+                             top_cumulative <= keyed);
+        if (added <= 0 || (size_t)added >= sizeof detail - (size_t)detail_len) return;
+        detail_len += added;
+        size_t detail_offset = 0;
+        while (detail_offset < (size_t)detail_len) {
+            int64_t written =
+                hl_linux_write(box, STDERR_FILENO, detail + detail_offset, (size_t)detail_len - detail_offset);
+            if (written <= 0 || (uint64_t)written > (uint64_t)detail_len - detail_offset) return;
+            detail_offset += (size_t)written;
+        }
     }
     for (uint32_t slot = 0; slot < HL_BACKEND_JCC_INVALID_SITES; ++slot) {
         struct hl_backend_jcc_invalid_site *site = &census->jcc_invalid_sites[slot];

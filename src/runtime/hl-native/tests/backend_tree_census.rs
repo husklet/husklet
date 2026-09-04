@@ -25,6 +25,56 @@ fn aarch64_diagnostics_off_loop_has_no_census_operation() {
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn x86_interpreter_step_forms_have_one_diagnostics_only_writer() {
+    let source = include_str!("../src/native/translator/guest/x86_64/interp.c");
+    let writer = "hl_backend_tree_executed_step_form(translit_unsupported_key(&insn));";
+    assert_eq!(source.matches(writer).count(), 1, "step-form writer must have one authoritative site");
+    let guarded = source
+        .split_once("if (census_steps && step != STEP_END) {")
+        .and_then(|(_, tail)| tail.split_once("\n        }"))
+        .map(|(body, _)| body)
+        .expect("interpreted-step census guard");
+    assert!(guarded.contains("g_dispatch_census_interp_steps++;"), "{guarded}");
+    assert!(guarded.contains("hl_backend_tree_executed_form(translit_unsupported_key(&insn));"), "{guarded}");
+    assert!(guarded.contains(writer), "{guarded}");
+    assert!(guarded.contains("#if !defined(HL_NATIVE_TEST_HOOKS)"), "{guarded}");
+}
+
+#[test]
+fn x86_step_form_record_is_versioned_bounded_and_reconciled() {
+    let source = include_str!("../src/native/engine/backend_tree.c");
+    for contract in [
+        "#define HL_BACKEND_EXECUTED_STEP_FORM_TOP 64u",
+        "[diag] x86-executed-step-form version=1",
+        "keyed + overflow == total",
+        "total == interpreted",
+        "top_cumulative <= keyed",
+        "executed_step_form_total",
+        "executed_step_form_overflow",
+        "executed_step_forms[HL_BACKEND_EXECUTED_FORM_SLOTS]",
+    ] {
+        assert!(source.contains(contract), "missing step-form census contract: {contract}");
+    }
+    assert_eq!(source.matches("[diag] x86-executed-step-form version=1").count(), 1);
+}
+
+#[test]
+fn x86_step_form_record_preserves_the_compatible_mixed_table() {
+    let source = include_str!("../src/native/engine/backend_tree.c");
+    for field in [
+        "executed_form_total=%llu",
+        "executed_form_unique=%llu",
+        "executed_form_overflow=%llu",
+        "executed_form_top0_key=%llu",
+    ] {
+        assert!(source.contains(field), "mixed executed-form field disappeared: {field}");
+    }
+    assert!(source.contains(
+        "hl_backend_executed_form_top(census->executed_forms, form_keys, form_counts, HL_BACKEND_EXECUTED_FORM_TOP);"
+    ));
+}
+
+#[test]
 fn fatal_signal_census_tail_is_atomic_only() {
     let source = include_str!("../src/native/linux_abi/signal.c");
     let body = source

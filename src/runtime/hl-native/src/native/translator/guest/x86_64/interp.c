@@ -634,6 +634,7 @@ static void interp_execute(hl_x86_hot_context *context, struct cpu *cpu) {
             g_dispatch_census_interp_steps++;
 #if !defined(HL_NATIVE_TEST_HOOKS)
             hl_backend_tree_executed_form(translit_unsupported_key(&insn));
+            hl_backend_tree_executed_step_form(translit_unsupported_key(&insn));
 #endif
         }
 #if defined(HL_NATIVE_TEST_HOOKS)
