@@ -433,6 +433,7 @@ static void *translit_test_gap_writer(void *unused) {
 static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // Pick up writes made through another MAP_SHARED alias before reading an emulated executable view.
     uint64_t source_page = gpc & ~UINT64_C(0xfff);
+    if (g_prof) (void)__atomic_fetch_add(&translit_build_refresh_calls, 1, __ATOMIC_RELAXED);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
     HL_LOGF(&g_jit_log, HL_LOG_TAG_TRANSLATE, "isa=x86_64 interp guest_pc=%#llx", (unsigned long long)gpc);
     // The compact unresolved-JCC path is optional. If its generation-owned
@@ -440,6 +441,7 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // ordinary dispatcher path; this function must still return its unique
     // interpreter descriptor.
     if (translit_enabled()) {
+        if (g_prof) (void)__atomic_fetch_add(&translit_build_stub_checks, 2, __ATOMIC_RELAXED);
         (void)translit_jcc_ibtc_stub_init();
         (void)translit_direct_jmp_ibtc_stub_init();
     }
@@ -489,6 +491,7 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     // host == body (no prologue to skip). SOURCE range [gpc, guest_end) so SMC invalidation finds it by
     // address -- a transliterated block caches guest BYTES and so owns the range it copied, where an
     // interpreted one re-decodes and needs only its entry.
+    if (g_prof) (void)__atomic_fetch_add(&translit_build_map_puts, 1, __ATOMIC_RELAXED);
     if (map_put(gpc, block->guest_start, block->guest_end, block, block) != MAP_PUT_OK) {
         static const char message[] = "translation map is full";
         (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
