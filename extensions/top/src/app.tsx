@@ -8,6 +8,7 @@ import {
 } from '@husklet/react';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 import { ContainerRename } from './container-rename.js';
+import { ContainerCreate, type ContainerCreateDraft } from './container-create.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
@@ -24,6 +25,7 @@ export { Images } from './images.js';
 export { Volumes } from './volumes.js';
 export { Networks } from './networks.js';
 export { ContainerRename } from './container-rename.js';
+export { ContainerCreate } from './container-create.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -151,7 +153,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   );
 }
 
-function containerCreateOptions(draft) {
+function containerCreateOptions(draft: ContainerCreateDraft) {
   const bytes = (value) => new TextEncoder().encode(value).byteLength;
   const hostname = draft.hostname;
   if (hostname && (bytes(hostname) > 253 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(hostname))) {
@@ -291,12 +293,6 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
-  const [draft, setDraft] = useState({
-    image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
-  });
-  const [created, setCreated] = useState(null);
-  const [creationError, setCreationError] = useState(null);
-  const [creationNotice, setCreationNotice] = useState('');
   const currentContainers = useRef(new Map());
   currentContainers.current = new Map((resource.data ?? []).map((container) => [container.id, container.state]));
   const act = async (verb, id, ...args) => {
@@ -331,27 +327,6 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     }
     void inspect(item);
   };
-  const createAndStart = async () => {
-    setBusy('create'); setCreationError(null); setCreationNotice('');
-    let target = created;
-    try {
-      if (!target) {
-        const id = await api.containers.create({
-          image: draft.image.trim(), name: draft.name.trim(), ...containerCreateOptions(draft),
-        });
-        target = { id, name: draft.name.trim() };
-        setCreated(target);
-      }
-      await api.containers.start(target.id);
-      setCreationNotice(`Created and started ${target.name}.`);
-      setCreated(null); setDraft({
-        image: '', name: '', hostname: '', user: '', labels: '', network: '', entrypoint: '', command: '', environment: '', workingDirectory: '', memoryMb: '', cpus: '', pidsLimit: '', mounts: '', ports: '',
-      });
-      await resource.reload();
-    } catch (cause) { setCreationError(cause); } finally { setBusy(''); }
-  };
-  let configurationError = '';
-  try { containerCreateOptions(draft); } catch (error) { configurationError = error.message; }
   const remove = async (item) => {
     if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
       throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
@@ -372,119 +347,12 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     <Page
       title={'Containers'}
       subtitle={'Lifecycle, process inspection, logs, and execution.'}>
-      <Card variant={'outline'}>
-        <CardHeader
-          label={'Create a container'}
-          detail={'Uses a local image and starts it after durable creation.'} />
-        <CardContent gap={1}>
-          <Heading label={'Identity and image'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.image}
-              placeholder={'Image reference'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, image: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.name}
-              placeholder={'Container name'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, name: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.hostname}
-              placeholder={'Hostname (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, hostname: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.user}
-              placeholder={'Run as user (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, user: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.labels}
-              placeholder={'Labels JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, labels: String(event.value ?? '') }))} />
-          </Row>
-          <Text
-            label={'Labels use JSON [name, value] pairs, for example [["role","worker"]].'}
-            color={'text-dim'}
-            wrap={true} />
-          <Heading label={'Process'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.entrypoint}
-              placeholder={'Entrypoint argv JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, entrypoint: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.command}
-              placeholder={'Command argv JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, command: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.environment}
-              placeholder={'Environment pairs JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, environment: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.workingDirectory}
-              placeholder={'Working directory (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, workingDirectory: String(event.value ?? '') }))} />
-          </Row>
-          <Text
-            label={'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.'}
-            color={'text-dim'}
-            wrap={true} />
-          <Heading label={'Resources and connectivity'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.memoryMb}
-              placeholder={'Memory limit MiB (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, memoryMb: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.cpus}
-              placeholder={'CPU limit (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, cpus: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.pidsLimit}
-              placeholder={'PID limit (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, pidsLimit: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.network}
-              placeholder={'Initial network (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, network: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.mounts}
-              placeholder={'Named volume mounts JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, mounts: String(event.value ?? '') }))} />
-            <Entry
-              value={draft.ports}
-              placeholder={'Published ports JSON (optional)'}
-              enabled={!created && busy !== 'create'}
-              onChange={(event) => setDraft((value) => ({ ...value, ports: String(event.value ?? '') }))} />
-          </Row>
-          <Text
-            label={'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'}
-            color={'text-dim'}
-            wrap={true} />
-        </CardContent>
-        <CardActions>
-          {busy === 'create' ? <Spinner /> : null}
-          <Button
-            label={created ? 'Retry start' : busy === 'create' ? 'Creating…' : 'Create and start'}
-            enabled={busy === '' && (created !== null || (draft.image.trim().length > 0 && draft.name.trim().length > 0 && !configurationError))}
-            onInvoke={createAndStart} />
-        </CardActions>
-        {configurationError ? <Text label={configurationError} color={'danger'} wrap={true} /> : null}
-        <ErrorText error={creationError} />
-        {creationNotice ? <Text label={creationNotice} color={'positive'} wrap={true} /> : null}
-      </Card>
+      <ContainerCreate
+        api={api}
+        blocked={busy !== ''}
+        onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
+        reload={resource.reload}
+        options={containerCreateOptions} />
       <Toolbar loading={resource.loading} onRefresh={resource.reload} />
       <ResourceState
         state={state}
