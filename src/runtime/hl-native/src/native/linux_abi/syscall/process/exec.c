@@ -93,6 +93,71 @@ static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *im
     return image != NULL && hl_vfs_cursor_origin_is_lower(&image->origin, lower);
 }
 
+static int exec_image_open_guest(const char *guest, exec_image *image);
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+static int exec_origin_write_image(const char *path) {
+    uint8_t bytes[4096] = {0};
+    memcpy(bytes, "\177ELF\2\1\1", 7);
+    uint16_t type = 2, machine = HL_EXEC_ELF_MACHINE, ehsize = 64, phentsize = 56, phnum = 1;
+    uint32_t version = 1, load = 1, flags = 5;
+    uint64_t entry = UINT64_C(0x400100), phoff = 64, offset = 0, address = UINT64_C(0x400000);
+    uint64_t image_size = sizeof bytes, alignment = 4096;
+    memcpy(bytes + 16, &type, 2); memcpy(bytes + 18, &machine, 2); memcpy(bytes + 20, &version, 4);
+    memcpy(bytes + 24, &entry, 8); memcpy(bytes + 32, &phoff, 8); memcpy(bytes + 52, &ehsize, 2);
+    memcpy(bytes + 54, &phentsize, 2); memcpy(bytes + 56, &phnum, 2); memcpy(bytes + 64, &load, 4);
+    memcpy(bytes + 68, &flags, 4); memcpy(bytes + 72, &offset, 8); memcpy(bytes + 80, &address, 8);
+    memcpy(bytes + 88, &address, 8); memcpy(bytes + 96, &image_size, 8); memcpy(bytes + 104, &image_size, 8);
+    memcpy(bytes + 112, &alignment, 8);
+    int destination = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0700);
+    ssize_t written = destination >= 0 ? write(destination, bytes, sizeof bytes) : -1;
+    if (destination >= 0) close(destination);
+    return written == (ssize_t)sizeof bytes ? 0 : -1;
+}
+
+static int exec_origin_basic_matrix_child(void) {
+    char root[] = "/tmp/hl-exec-origin-XXXXXX";
+    if (mkdtemp(root) == NULL) return 1;
+    char upper[4200], lower[4200], upper_bin[4200], lower_bin[4200], upper_file[4200], lower_file[4200];
+    snprintf(upper, sizeof upper, "%s/upper", root); snprintf(lower, sizeof lower, "%s/lower", root);
+    snprintf(upper_bin, sizeof upper_bin, "%s/bin", upper); snprintf(lower_bin, sizeof lower_bin, "%s/bin", lower);
+    snprintf(upper_file, sizeof upper_file, "%s/upper", upper_bin);
+    snprintf(lower_file, sizeof lower_file, "%s/lower", lower_bin);
+    if (mkdir(upper, 0700) != 0 || mkdir(lower, 0700) != 0 || mkdir(upper_bin, 0700) != 0 ||
+        mkdir(lower_bin, 0700) != 0 || exec_origin_write_image(upper_file) != 0 ||
+        exec_origin_write_image(lower_file) != 0)
+        return 2;
+    g_rootfs = upper;
+    snprintf(g_rootfs_canon, sizeof g_rootfs_canon, "%s", upper);
+    g_rootfs_canon_len = strlen(g_rootfs_canon);
+    g_root_fd = open(upper, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    g_nlower = 0;
+    add_lower(lower);
+    exec_image image;
+    int upper_error = exec_image_open_guest("/bin/upper", &image);
+    int upper_exact = upper_error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER;
+    if (upper_error == 0) exec_image_release(&image);
+    int lower_error = exec_image_open_guest("/bin/lower", &image);
+    int lower_exact = lower_error == 0 && exec_image_has_lower_origin(&image, 0);
+    if (lower_error == 0) exec_image_release(&image);
+    hl_vfs_lower_state_clear();
+    if (g_root_fd >= 0) close(g_root_fd);
+    unlink(upper_file); unlink(lower_file);
+    rmdir(upper_bin); rmdir(lower_bin); rmdir(upper); rmdir(lower); rmdir(root);
+    return upper_exact && lower_exact ? 0 : 3;
+}
+
+static int exec_origin_basic_matrix_test(void) {
+    pid_t child = fork();
+    if (child < 0) return 4;
+    if (child == 0) _exit(exec_origin_basic_matrix_child());
+    int status = 0;
+    return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 5;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+static int exec_origin_basic_matrix_test(void) { return 0; }
+#endif
+
 static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *capabilities) {
     unsigned char bytes[24];
     *capabilities = (hl_exec_file_capabilities){0};

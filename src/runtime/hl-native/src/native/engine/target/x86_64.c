@@ -1962,7 +1962,8 @@ HL_API int hl_x86_64_stw_cpu_slot_lifecycle_test(void) {
    consulted about it.  Both target TUs export the probe because both compile that syscall layer. */
 HL_API int hl_x86_64_imported_path_guard_test(void) {
     int result = hl_linux_imported_path_guard_probe();
-    return result == 0 ? hl_vfs_cursor_origin_preservation_test() : result;
+    if (result == 0) result = hl_vfs_cursor_origin_preservation_test();
+    return result == 0 ? exec_origin_basic_matrix_test() : result;
 }
 
 HL_API int hl_x86_64_clone3_extended_args_test(uint32_t scenario) {
