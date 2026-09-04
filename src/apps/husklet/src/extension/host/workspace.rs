@@ -6,7 +6,7 @@
 //! are not mixed in one file.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hl_extension::port::{
     Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceConfiguration, WorkspaceControl,
@@ -54,6 +54,10 @@ pub struct Workspace {
     /// which case an extension asking is told so plainly.
     terminal: Option<Arc<dyn TerminalSurface + Send + Sync>>,
     events: super::Events,
+    /// One host speaks to one workspace daemon for its whole lifetime. Reusing
+    /// this bridge keeps startup health observation to a cheap local inspect
+    /// instead of re-entering domain setup on every bounded poll.
+    bridge: Mutex<Option<Arc<Bridge>>>,
 }
 
 impl Workspace {
@@ -65,6 +69,7 @@ impl Workspace {
             wanted: None,
             terminal: None,
             events: super::Events::default(),
+            bridge: Mutex::new(None),
         }
     }
 
@@ -80,6 +85,7 @@ impl Workspace {
             wanted: Some(name.clone()),
             terminal: None,
             events: super::Events::default(),
+            bridge: Mutex::new(None),
         }
     }
 
@@ -153,9 +159,15 @@ impl Workspace {
 
     /// The workspace's own container daemon, started if it is not up.
     fn bridge(&self) -> Result<Arc<Bridge>, String> {
+        let mut held = self.bridge.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(bridge) = held.as_ref() {
+            return Ok(Arc::clone(bridge));
+        }
         let domain = crate::runtime::domain::Domain::new(&self.config);
         let socket = domain.ensure(&self.config).map_err(|error| error.to_string())?;
-        Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())
+        let bridge = Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())?;
+        held.replace(Arc::clone(&bridge));
+        Ok(bridge)
     }
 
     /// What the extension's image says about how to run it.
