@@ -135,6 +135,7 @@ mod unix {
         realized_window.set_child(Some(&root));
         realized_window.present();
         settle_toolkit();
+        capture_story(&realized_window, story);
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
@@ -154,7 +155,6 @@ mod unix {
                 );
             }
         }
-        capture_story(&realized_window, story);
         if story == "DataTable" {
             settle_toolkit();
             let requests = surface.requests(1);
@@ -252,8 +252,7 @@ mod unix {
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
         if story == "Extension acquisition" {
             assert!(
-                find::<gtk::Label>(&root, |label| label.text() == "Cancel download invoked for checking.")
-                    .is_visible(),
+                find::<gtk::Label>(&root, |label| label.text() == "Cancel download invoked for checking.").is_visible(),
                 "cancellation did not produce visible, state-specific acknowledgement"
             );
         }
@@ -315,7 +314,8 @@ mod unix {
             edit.version = hl_gui::Version::new(1);
             edit.value = "stale overwrite".to_owned();
             let stale = hl_gui::Event::Edit { node, id, edit };
-            let payload = codec::interaction(&stale, Some("storybook-main")).expect("stale edit has a wire representation");
+            let payload =
+                codec::interaction(&stale, Some("storybook-main")).expect("stale edit has a wire representation");
             wire.send(&Frame::new(ChannelId::new(98), Kind::Event, payload))
                 .expect("stale native edit returns to Node");
             let rejected = receive_rejected_edit(&mut wire);

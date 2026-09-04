@@ -107,6 +107,7 @@ fn geometry_is_what_the_description_asked_for() {
     a_removed_child_closes_the_hole_it_left();
     a_wrapping_row_moves_a_child_onto_a_second_line();
     a_wrapping_row_shares_spare_width_between_growing_children();
+    a_wrapping_row_gives_a_growing_child_the_available_height();
     every_wrapped_line_distributes_its_own_spare_width();
     a_wrapping_column_shares_spare_height_between_growing_children();
     a_wrapping_row_follows_right_to_left_order();
@@ -295,6 +296,23 @@ fn a_wrapping_row_shares_spare_width_between_growing_children() {
     assert_eq!(panes[1].width(), 300);
 }
 
+/// A wrapping row is still a full two-dimensional container. A child that
+/// grows vertically must receive the host height, not the line's natural
+/// height; otherwise full-height panes collapse to their headings.
+fn a_wrapping_row_gives_a_growing_child_the_available_height() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    let pane = stage.producer.create(Tag::Scroll);
+    stage.producer.set(pane, Prop::Height, PropValue::Length(Length::Fill));
+    stage.producer.append(row, pane);
+    stage.draw();
+    stage.allocate(600, 400);
+
+    assert_eq!(stage.tagged(Tag::Scroll).height(), 400);
+}
+
 fn every_wrapped_line_distributes_its_own_spare_width() {
     let mut stage = Stage::new();
     let row = stage.producer.create(Tag::Row);
@@ -348,8 +366,16 @@ fn a_wrapping_row_follows_right_to_left_order() {
     stage.allocate(100, 100);
 
     let children = offspring(&widget);
-    assert_eq!(children[0].allocation().x(), 52, "the first child starts at the right edge");
-    assert_eq!(children[1].allocation().x(), 4, "the second child follows toward the left");
+    assert_eq!(
+        children[0].allocation().x(),
+        52,
+        "the first child starts at the right edge"
+    );
+    assert_eq!(
+        children[1].allocation().x(),
+        4,
+        "the second child follows toward the left"
+    );
 }
 
 /// One property, four sides, each landing where it was named.
