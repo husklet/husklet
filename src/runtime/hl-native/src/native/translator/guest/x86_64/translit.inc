@@ -279,6 +279,18 @@ enum translit_jcc_ibtc_counter {
     TL_JCC_IBTC_COUNT_SUPPRESSED,
     TL_JCC_IBTC_COUNT_INVALID_REFUSAL,
 };
+
+static void translit_emit_x86_jcc_route_count(hl_x64_asm *a, unsigned kind) {
+    uintptr_t counter = hl_backend_tree_x86_jcc_route_counter_address(kind);
+    if (counter != 0) hl_x64_atomic_inc_abs(a, counter);
+}
+
+static uint8_t *translit_emit_jmp_patch(hl_x64_asm *a) {
+    hl_x64_u8(a, 0xe9);
+    uint8_t *slot = a->cursor;
+    hl_x64_u32(a, 0);
+    return slot;
+}
 #if !defined(HL_NATIVE_TEST_HOOKS)
 _Static_assert(TL_JCC_IBTC_COUNT_EMITTED == HL_BACKEND_JCC_IBTC_EMITTED &&
                    TL_JCC_IBTC_COUNT_HIT == HL_BACKEND_JCC_IBTC_HIT &&
@@ -2042,6 +2054,9 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
        unavailable after restore.  Emit that cold stub after the non-fallthrough JMP; it costs code bytes,
        never hot-path instructions. */
     if (target > source) {
+        uintptr_t known_taken = hl_backend_tree_x86_jcc_route_counter_address(
+            HL_BACKEND_X86_JCC_ROUTE_KNOWN_TAKEN);
+        if (known_taken != 0) hl_x64_atomic_inc_abs(a, known_taken);
         uint8_t *chain = a->cursor;
         hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
         if (__builtin_expect(g_pcache, 0)) {
@@ -2062,6 +2077,9 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     uintptr_t shape_counter = hl_backend_tree_jcc_link_counter_address();
     if (shape_counter != 0) hl_x64_atomic_inc_abs(a, shape_counter);
 #endif
+    uintptr_t known_taken = hl_backend_tree_x86_jcc_route_counter_address(
+        HL_BACKEND_X86_JCC_ROUTE_KNOWN_TAKEN);
+    if (known_taken != 0) hl_x64_atomic_inc_abs(a, known_taken);
     translit_emit_reload(a);
     uint8_t *chain = a->cursor;
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
@@ -2072,6 +2090,8 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif
+    uintptr_t route_irq = hl_backend_tree_x86_jcc_route_counter_address(HL_BACKEND_X86_JCC_ROUTE_IRQ);
+    if (route_irq != 0) hl_x64_atomic_inc_abs(a, route_irq);
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     translit_emit_return(a, R_BRANCH);
@@ -2324,6 +2344,15 @@ static int translit_jcc_ibtc_stub_init(void) {
     hl_x64_asm a = {entry, g_cache + CACHE_EMIT_HEADROOM, 0, 0};
     uint8_t *rsp_canonical = NULL, *flags_canonical = NULL;
     translit_emit_spill_after_rax(&a, &rsp_canonical, &flags_canonical);
+    uintptr_t route_attempts = hl_backend_tree_x86_jcc_route_counter_address(
+        HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS);
+    /* spill_after_rax leaves host RAX holding flags, so observed execution
+       reloads the committed target before its attempt counter clobbers RAX.
+       The unobserved arm retains the established post-IRQ reload byte order. */
+    if (route_attempts != 0) {
+        hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP);
+        hl_x64_atomic_inc_abs(&a, route_attempts);
+    }
     hl_x64_cmp_gs_imm8(&a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(&a, 5);
     hl_x64_load_gs(&a, HL_X64_RAX, OFF_IBTC);
@@ -2331,7 +2360,7 @@ static int translit_jcc_ibtc_stub_init(void) {
     // Hashing remains the established direct-map formula, so load the exact
     // slot selected by the target constant at each source.  A shared stub cannot
     // bake that displacement: compute it from target in RCX.
-    hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP);
+    if (route_attempts == 0) hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP);
     hl_x64_mov_reg(&a, HL_X64_RDX, HL_X64_RCX);
     hl_x64_shr_imm8(&a, HL_X64_RDX, 2);
     hl_x64_and_imm32(&a, HL_X64_RDX, IBTC_N - 1);
@@ -2345,6 +2374,15 @@ static int translit_jcc_ibtc_stub_init(void) {
     hl_x64_movq_xmm_to_reg(&a, HL_X64_RAX, 0);
     hl_x64_test_reg(&a, HL_X64_RAX);
     uint8_t *miss_body = hl_x64_jcc_rel32(&a, 4);
+    hl_x64_mov_reg(&a, HL_X64_RDX, HL_X64_RAX);
+    hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, 0);
+    uint8_t *route_hit = hl_x64_jcc_rel32(&a, 4);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_STATE_REFUSAL);
+    uint8_t *route_classified = translit_emit_jmp_patch(&a);
+    hl_x64_patch_rel32(&a, route_hit, a.cursor);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_HIT);
+    hl_x64_patch_rel32(&a, route_classified, a.cursor);
+    hl_x64_mov_reg(&a, HL_X64_RAX, HL_X64_RDX);
     hl_x64_store_gs(&a, HL_X64_RAX, TL_MM_ENTRY);
     hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_RET_IBTC_MISS);
     uint8_t *jcc_hit = hl_x64_jcc_rel32(&a, 5);
@@ -2392,7 +2430,17 @@ static int translit_jcc_ibtc_stub_init(void) {
     hl_x64_jmp_gs_indirect(&a, TL_MM_ENTRY);
 
     hl_x64_patch_rel32(&a, miss_key, a.cursor);
+    hl_x64_test_reg(&a, HL_X64_RDX);
+    uint8_t *route_collision = hl_x64_jcc_rel32(&a, 5);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_EMPTY);
+    uint8_t *route_miss_classified = translit_emit_jmp_patch(&a);
+    hl_x64_patch_rel32(&a, route_collision, a.cursor);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_COLLISION);
+    hl_x64_patch_rel32(&a, route_miss_classified, a.cursor);
+    uint8_t *after_null_classification = translit_emit_jmp_patch(&a);
     hl_x64_patch_rel32(&a, miss_body, a.cursor);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_EMPTY);
+    hl_x64_patch_rel32(&a, after_null_classification, a.cursor);
     hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_RET_IBTC_MISS);
     uint8_t *jcc_miss = hl_x64_jcc_rel32(&a, 5);
     uintptr_t ret_miss_counter = translit_ret_fast_ibtc_dynamic_counter(TL_RET_FAST_IBTC_MISS);
@@ -2439,6 +2487,7 @@ static int translit_jcc_ibtc_stub_init(void) {
     translit_emit_return(&a, R_BRANCH); // cpu->rip already names the target
 
     hl_x64_patch_rel32(&a, irq, a.cursor);
+    translit_emit_x86_jcc_route_count(&a, HL_BACKEND_X86_JCC_ROUTE_IRQ);
     hl_x64_cmp_gs_imm8(&a, OFF_JCC_IBTC_MISS, TL_RET_IBTC_MISS);
     uint8_t *jcc_irq = hl_x64_jcc_rel32(&a, 5);
     uintptr_t ret_irq_counter = translit_ret_fast_ibtc_dynamic_counter(TL_RET_FAST_IBTC_IRQ);
@@ -3726,6 +3775,13 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(233));
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 231;
+    }
+    if (scenario == 234) {
+        pid_t child = fork();
+        if (child < 0) return 234;
+        if (child == 0) _exit(translit_jcc_ibtc_fixture_test(234));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 234;
     }
     if (scenario == 232) return translit_jcc_late_eligible_census_test();
     const uint64_t lo = UINT64_C(0x400000), hi = UINT64_C(0x500000), bias = UINT64_C(0x100000000);
@@ -5853,6 +5909,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                         translit_emit_jcc_dispatcher(a, target);
                     }
                     hl_x64_patch_rel32(a, fall, a->cursor);
+                    uintptr_t known_fallthrough = hl_backend_tree_x86_jcc_route_counter_address(
+                        HL_BACKEND_X86_JCC_ROUTE_KNOWN_FALLTHROUGH);
+                    if (known_fallthrough != 0) hl_x64_atomic_inc_abs(a, known_fallthrough);
                     translit_shape_exit(a, HL_BACKEND_SHAPE_T_OTHER, (unsigned)direct_jmp_stitched,
                                         (unsigned)(jcc_fall_stitched + 1), source_page_delta);
                     if (a->overflow) {
@@ -8948,6 +9007,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
 
 static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     unsigned requested_scenario = scenario;
+    hl_backend_x86_jcc_route_test_enabled = scenario == 234;
     translit_test_jcc_guard = 0;
     if (scenario >= 208 && scenario <= 216) {
         static const uint8_t guard_scenarios[] = {90, 92, 93, 94, 95, 99, 98, 90, 90};
@@ -8958,6 +9018,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         scenario = 94;
         translit_test_jcc_guard = 1;
     }
+    if (scenario == 234) scenario = 90;
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0, 0}, a_off = {off, off + sizeof off, 0, 0};
@@ -9171,6 +9232,99 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
 
+    if (requested_scenario == 234) {
+        ibtc_clear_lazy();
+        for (unsigned kind = 0; kind < HL_BACKEND_X86_JCC_ROUTE_COUNT; ++kind)
+            atomic_store_explicit(&hl_backend_x86_jcc_route_test[kind], 0, memory_order_relaxed);
+        ibtc_ent *cell = &g_ibtc[ibtc_index(target)];
+#define TL_RUN_ROUTE(marker, pending)                                                                                  \
+        do {                                                                                                           \
+            cpu = (struct cpu){0};                                                                                     \
+            cpu.rip = source;                                                                                          \
+            cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);                                                 \
+            cpu.ibtc_base = (uint64_t)g_ibtc;                                                                          \
+            cpu.jcc_ibtc_miss = (marker);                                                                              \
+            cpu.irq = (pending);                                                                                       \
+            run_block(context, &cpu, source_block);                                                                    \
+        } while (0)
+        memset(cell, 0, sizeof *cell);
+        TL_RUN_ROUTE(0, 0);
+        ibtc_publish(cell, target + ((uint64_t)IBTC_N << 2), (void *)(uintptr_t)UINT64_C(0x1234));
+        ibtc_ent collision_pair = ibtc_snapshot(cell);
+        TL_RUN_ROUTE(0, 0);
+        ibtc_publish(cell, target, NULL);
+        ibtc_ent null_pair = ibtc_snapshot(cell);
+        TL_RUN_ROUTE(0, 0);
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        ibtc_ent first_valid_pair = ibtc_snapshot(cell);
+        TL_RUN_ROUTE(TL_DIRECT_CALL_IBTC_MISS, 0);
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+        translit_jcc_ibtc_fill(&cpu, target_block, 0);
+        ibtc_ent second_valid_pair = ibtc_snapshot(cell);
+        TL_RUN_ROUTE(0, 0);
+        TL_RUN_ROUTE(0, 1);
+#undef TL_RUN_ROUTE
+        uint64_t linked_taken = source + 128;
+        guest_bytes[128] = 0x31;
+        guest_bytes[129] = 0xc0;
+        guest_bytes[130] = 0x74;
+        guest_bytes[131] = (uint8_t)(target - (linked_taken + 4));
+        guest_bytes[132] = 0x0f;
+        guest_bytes[133] = 0x0b;
+        struct interp_block *taken_block = translit_jcc_ibtc_test_build(context, linked_taken);
+        cpu = (struct cpu){.rip = linked_taken, .ibtc_base = (uint64_t)g_ibtc};
+        cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        if (taken_block != NULL) run_block(context, &cpu, taken_block);
+
+        uint64_t linked_fall = source + 160;
+        guest_bytes[160] = 0x31;
+        guest_bytes[161] = 0xc0;
+        guest_bytes[162] = 0x75;
+        guest_bytes[163] = (uint8_t)(target - (linked_fall + 4));
+        guest_bytes[164] = 0x0f;
+        guest_bytes[165] = 0x0b;
+        struct interp_block *fall_block = translit_jcc_ibtc_test_build(context, linked_fall);
+        cpu = (struct cpu){.rip = linked_fall, .ibtc_base = (uint64_t)g_ibtc};
+        cpu.r[4] = (uint64_t)(uintptr_t)(arena + arena_size - 64);
+        if (fall_block != NULL) run_block(context, &cpu, fall_block);
+        uint64_t route[HL_BACKEND_X86_JCC_ROUTE_COUNT];
+        for (unsigned kind = 0; kind < HL_BACKEND_X86_JCC_ROUTE_COUNT; ++kind)
+            route[kind] = atomic_load_explicit(&hl_backend_x86_jcc_route_test[kind], memory_order_relaxed);
+        char record[256];
+        int formatted = hl_backend_x86_jcc_route_format(record, sizeof record, route);
+        uint64_t classified = route[HL_BACKEND_X86_JCC_ROUTE_HIT] + route[HL_BACKEND_X86_JCC_ROUTE_EMPTY] +
+                              route[HL_BACKEND_X86_JCC_ROUTE_COLLISION] +
+                              route[HL_BACKEND_X86_JCC_ROUTE_STATE_REFUSAL];
+        int setup_exact = collision_pair.target != 0 && collision_pair.body != NULL &&
+                          null_pair.target == target && null_pair.body == NULL &&
+                          first_valid_pair.target == target && first_valid_pair.body != NULL &&
+                          second_valid_pair.target == target && second_valid_pair.body != NULL;
+        if (!setup_exact)
+            fprintf(stderr, "route fixture setup collision=%llx/%p null=%llx/%p valid=%llx/%p,%llx/%p\n",
+                    (unsigned long long)collision_pair.target, collision_pair.body,
+                    (unsigned long long)null_pair.target, null_pair.body,
+                    (unsigned long long)first_valid_pair.target, first_valid_pair.body,
+                    (unsigned long long)second_valid_pair.target, second_valid_pair.body);
+        result = setup_exact && route[HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS] == 6 &&
+                         classified + route[HL_BACKEND_X86_JCC_ROUTE_IRQ] == 6 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_HIT] == 1 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_EMPTY] == 2 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_COLLISION] == 1 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_STATE_REFUSAL] == 1 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_IRQ] == 1 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_KNOWN_TAKEN] == 1 &&
+                         route[HL_BACKEND_X86_JCC_ROUTE_KNOWN_FALLTHROUGH] == 1 &&
+                         taken_block != NULL && fall_block != NULL && formatted > 0 &&
+                         strstr(record, "[diag] x86-jcc-route version=1 attempts=6 hit=1 empty=2 "
+                                        "collision=1 state_refusal=1 irq=1 known_taken=1 known_fallthrough=1\n") != NULL
+                     ? 0
+                     : 234;
+        goto done_ibtc;
+    }
+
     if (requested_scenario == 233) {
         ibtc_ent *cell = &g_ibtc[ibtc_index(target)];
         g_prof = 1;
@@ -9378,6 +9532,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                  : 143;
 
 done_ibtc:
+    hl_backend_x86_jcc_route_test_enabled = 0;
     translit_test_body_bytes = 0;
     translit_test_jcc_guard = -1;
     translit_test_jcc_ibtc_stub_fail = 0;

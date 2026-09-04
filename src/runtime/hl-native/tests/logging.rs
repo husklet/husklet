@@ -12,6 +12,12 @@ fn forward_jcc_link_emits_only_a_live_state_jump() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(233), 0);
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[test]
+fn x86_jcc_route_partitions_every_loaded_pair_and_irq_bypass() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(234), 0);
+}
+
 #[test]
 fn sampling_exit_flush_joins_translation_serialization() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");

@@ -20,6 +20,32 @@
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
 #define HL_BACKEND_EXECUTED_STEP_FORM_TOP 64u
+enum hl_backend_x86_jcc_route_counter {
+    HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS,
+    HL_BACKEND_X86_JCC_ROUTE_HIT,
+    HL_BACKEND_X86_JCC_ROUTE_EMPTY,
+    HL_BACKEND_X86_JCC_ROUTE_COLLISION,
+    HL_BACKEND_X86_JCC_ROUTE_STATE_REFUSAL,
+    HL_BACKEND_X86_JCC_ROUTE_IRQ,
+    HL_BACKEND_X86_JCC_ROUTE_KNOWN_TAKEN,
+    HL_BACKEND_X86_JCC_ROUTE_KNOWN_FALLTHROUGH,
+    HL_BACKEND_X86_JCC_ROUTE_COUNT,
+};
+
+static int hl_backend_x86_jcc_route_format(char *record, size_t capacity, const uint64_t *route) {
+    return snprintf(record, capacity,
+                    "[diag] x86-jcc-route version=1 attempts=%llu hit=%llu empty=%llu collision=%llu "
+                    "state_refusal=%llu irq=%llu known_taken=%llu known_fallthrough=%llu\n",
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_HIT],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_EMPTY],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_COLLISION],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_STATE_REFUSAL],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_IRQ],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_KNOWN_TAKEN],
+                    (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_KNOWN_FALLTHROUGH]);
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
 #define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
@@ -1069,6 +1095,14 @@ static inline void hl_backend_tree_direct_edge(unsigned family, int same_page) {
 // even on the narrow fixed-pcache fork path that preserves an arena.
 static inline uintptr_t hl_backend_tree_jcc_link_counter_address(void) {
     return g_backend_tree == NULL ? 0 : (uintptr_t)&g_backend_tree->jcc_links;
+}
+
+static _Atomic uint64_t hl_backend_x86_jcc_route_test[HL_BACKEND_X86_JCC_ROUTE_COUNT];
+static int hl_backend_x86_jcc_route_test_enabled;
+static inline uintptr_t hl_backend_tree_x86_jcc_route_counter_address(unsigned kind) {
+    return hl_backend_x86_jcc_route_test_enabled && kind < HL_BACKEND_X86_JCC_ROUTE_COUNT
+               ? (uintptr_t)&hl_backend_x86_jcc_route_test[kind]
+               : 0;
 }
 
 static inline void hl_backend_tree_direct_edge_resolution(unsigned family, unsigned resolution,
@@ -2639,6 +2673,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t jcc_ibtc_fill_collision;
     _Atomic uint64_t jcc_ibtc_fill_irq;
     _Atomic uint64_t jcc_ibtc_fill_same_key;
+    _Atomic uint64_t x86_jcc_route[HL_BACKEND_X86_JCC_ROUTE_COUNT];
     _Atomic uint64_t jcc_late[HL_BACKEND_JCC_LATE_REASON_COUNT];
     _Atomic uint64_t jcc_late_site_first;
     _Atomic uint64_t jcc_late_site_repeated;
@@ -2686,6 +2721,7 @@ struct hl_backend_mixed_sse_shared {
     /* Immutable after root initialization and before any guest fork. */
     uint32_t jcc_ibtc_enabled;
     uint32_t direct_jmp_ibtc_enabled;
+    uint32_t x86_jcc_route_enabled;
     struct hl_backend_tree_slot slots[HL_BACKEND_MIXED_SSE_SLOTS];
 };
 
@@ -2705,6 +2741,13 @@ _Static_assert(sizeof(struct hl_backend_mixed_sse_shared) <= 64u * 1024u * 1024u
 
 static struct hl_backend_mixed_sse_shared *g_backend_mixed_sse;
 static struct hl_backend_tree_slot *g_backend_mixed_sse_self;
+
+static inline uintptr_t hl_backend_tree_x86_jcc_route_counter_address(unsigned kind) {
+    return g_backend_mixed_sse != NULL && g_backend_mixed_sse->x86_jcc_route_enabled &&
+                   kind < HL_BACKEND_X86_JCC_ROUTE_COUNT
+               ? (uintptr_t)&g_backend_mixed_sse->x86_jcc_route[kind]
+               : 0;
+}
 
 static inline void hl_backend_tree_executed_form(uint64_t key) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
@@ -2795,6 +2838,7 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     g_backend_mixed_sse->jcc_ibtc_enabled = !hl_option_flag_value("HL_TRANSLIT_JCC_IBTC_DISABLE", 0);
     g_backend_mixed_sse->direct_jmp_ibtc_enabled =
         !hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0);
+    g_backend_mixed_sse->x86_jcc_route_enabled = hl_option_flag_value("HL_PCACHE_OBSERVE", 0);
     g_backend_mixed_sse_self = hl_backend_mixed_sse_claim(self);
 }
 
@@ -3421,6 +3465,19 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
+    }
+    if (census->x86_jcc_route_enabled) {
+        uint64_t route[HL_BACKEND_X86_JCC_ROUTE_COUNT];
+        for (unsigned kind = 0; kind < HL_BACKEND_X86_JCC_ROUTE_COUNT; ++kind)
+            route[kind] = atomic_load_explicit(&census->x86_jcc_route[kind], memory_order_relaxed);
+        formatted = hl_backend_x86_jcc_route_format(record, sizeof record, route);
+        if (formatted <= 0 || (size_t)formatted >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
+        offset = 0;
+        while (offset < (size_t)formatted) {
+            int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+            if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
+            offset += (size_t)written;
+        }
     }
     if (atomic_load_explicit(&census->executed_step_form_total, memory_order_relaxed) != 0) {
         uint64_t step_keys[HL_BACKEND_EXECUTED_STEP_FORM_TOP] = {0};
