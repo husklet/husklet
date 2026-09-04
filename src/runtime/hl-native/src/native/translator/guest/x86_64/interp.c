@@ -71,7 +71,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     range[0][0] = lo;
     range[0][1] = hi;
     int invalidated = map_invalidate_source_ranges((const uint64_t (*)[2])range, 1);
-    if (g_pcache) {
+    if (g_pcache && invalidated) {
         g_x64_pc_exec_poisoned = 1;
         if (g_coldprof)
             fprintf(stderr, "[pcache] poison range=%llx-%llx invalidated=%d\n",
