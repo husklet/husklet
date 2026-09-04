@@ -8,7 +8,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     path::Path,
-    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -46,18 +45,35 @@ fn sample_kind(
     let guest = &workload.commands[&step.layout];
     let executable = campaign.guest(&step.arm, step.profile, Path::new(&guest[0]))?;
     let argv = sample_argv(&arm.command, &executable, &guest[1..], kind)?;
-    let mut command = HostProcess::standard(&argv[0]);
-    command.args(&argv[1..]).stdin(Stdio::null());
     let started = Instant::now();
-    let output = bounded_output(&mut command, Duration::from_secs(workload.timeout_seconds))?;
+    let output = HostProcess::bounded_capture(&argv[0], &argv[1..], Duration::from_secs(workload.timeout_seconds))?;
     let wall_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX).max(1);
-    if !output.status.success() || (kind == SampleKind::Timed && !output.stderr.is_empty()) {
+    match output.outcome {
+        hl_process::Outcome::Exited(Some(0)) => {}
+        hl_process::Outcome::TimedOut => {
+            return Err(format!("benchmark sample exceeded {} seconds", workload.timeout_seconds).into());
+        }
+        hl_process::Outcome::OutputLimit => {
+            return Err("benchmark sample exceeded its bounded output limit".into());
+        }
+        outcome => {
+            return Err(format!(
+                "benchmark {}/{}/{} failed: outcome={outcome:?} stderr={}",
+                step.workload,
+                step.layout,
+                step.arm,
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+    }
+    if kind == SampleKind::Timed && !output.stderr.is_empty() {
         return Err(format!(
-            "benchmark {}/{}/{} failed: status={} stderr={}",
+            "benchmark {}/{}/{} failed: outcome={:?} stderr={}",
             step.workload,
             step.layout,
             step.arm,
-            output.status,
+            output.outcome,
             String::from_utf8_lossy(&output.stderr)
         )
         .into());
@@ -98,7 +114,15 @@ fn sample_kind(
         };
         Ok((phases, identity, frame, diagnostic))
     })();
-    parsed.map_err(|error| parse_failure(step, output.status.to_string(), &output.stdout, &output.stderr, error))
+    parsed.map_err(|error| {
+        parse_failure(
+            step,
+            format!("{:?}", output.outcome),
+            &output.stdout,
+            &output.stderr,
+            error,
+        )
+    })
 }
 
 fn sample_argv(
@@ -263,23 +287,6 @@ fn counter_metadata(line: &str) -> Option<Result<(), Error>> {
             .and_then(|_| divisor.parse::<u32>().map(|_| ()))
             .map_err(|_| "malformed counter-frequency metadata".into()),
     )
-}
-
-fn bounded_output(command: &mut Command, timeout: Duration) -> Result<std::process::Output, Error> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            let _ = child.wait();
-            return Err(format!("benchmark sample exceeded {} seconds", timeout.as_secs()).into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 
 pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {

@@ -71,8 +71,12 @@ fn decode_process_count(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> io::
 #[cfg(test)]
 mod tests {
     use super::{HostProcess, decode_process_count};
+    use fs2::FileExt as _;
     use hl_process::Outcome;
-    use std::time::{Duration, Instant};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn process_count_requires_a_valid_success_or_no_match_result() {
@@ -95,5 +99,116 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, Outcome::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn benchmark_timeout_contains_reexec_session_and_holds_outer_lock_until_settled() {
+        let directory = tempfile::tempdir().unwrap();
+        let lock = directory.path().join("box.lock");
+        let ready = directory.path().join("descendant.ready");
+        let settled = directory.path().join("runner.settled");
+        let executable = std::env::current_exe().unwrap();
+        let mut runner = std::process::Command::new(&executable)
+            .args(["--exact", "platform::tests::benchmark_containment_runner", "--ignored"])
+            .env("HL_PROCESS_BENCH_LOCK", &lock)
+            .env("HL_PROCESS_BENCH_READY", &ready)
+            .env("HL_PROCESS_BENCH_SETTLED", &settled)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "detached re-exec descendant did not become ready");
+
+        let contender = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock)
+            .unwrap();
+        while !settled.exists() {
+            assert!(
+                contender.try_lock_exclusive().is_err(),
+                "box lock released before descendants settled"
+            );
+            assert!(
+                runner.try_wait().unwrap().is_none(),
+                "runner exited before publishing settlement"
+            );
+            assert!(Instant::now() < deadline, "containment runner did not settle");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(runner.wait().unwrap().success());
+        contender.try_lock_exclusive().unwrap();
+        contender.unlock().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "executed as the lock-owning benchmark containment runner"]
+    fn benchmark_containment_runner() {
+        let lock = std::env::var_os("HL_PROCESS_BENCH_LOCK").unwrap();
+        let ready = std::env::var_os("HL_PROCESS_BENCH_READY").unwrap();
+        let settled = std::env::var_os("HL_PROCESS_BENCH_SETTLED").unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let script = "exec >/dev/null 2>&1; trap '' TERM; exec \"$1\" --exact platform::tests::benchmark_containment_descendant --ignored";
+        let arguments = vec![
+            "--wait".to_owned(),
+            "sh".to_owned(),
+            "-c".to_owned(),
+            script.to_owned(),
+            "fixture".to_owned(),
+            executable.to_string_lossy().into_owned(),
+        ];
+        let outcome = HostProcess::bounded_capture("setsid", &arguments, Duration::from_millis(250))
+            .unwrap()
+            .outcome;
+        assert_eq!(outcome, Outcome::TimedOut);
+        let identity = fs::read_to_string(&ready).unwrap();
+        let (pid, started) = identity.trim().split_once(' ').unwrap();
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat"));
+        if let Ok(stat) = stat {
+            let live_started = stat
+                .rsplit_once(") ")
+                .unwrap()
+                .1
+                .split_ascii_whitespace()
+                .nth(19)
+                .unwrap();
+            assert_ne!(
+                live_started, started,
+                "exact detached descendant identity remained live"
+            );
+        }
+        fs::write(settled, b"settled\n").unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "executed as a detached re-exec descendant"]
+    fn benchmark_containment_descendant() {
+        let ready = std::env::var_os("HL_PROCESS_BENCH_READY").unwrap();
+        let pid = std::process::id();
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let started = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split_ascii_whitespace()
+            .nth(19)
+            .unwrap();
+        fs::write(ready, format!("{pid} {started}\n")).unwrap();
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
