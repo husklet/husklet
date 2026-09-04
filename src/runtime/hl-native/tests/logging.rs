@@ -60,6 +60,7 @@ fn restored_chains_preserve_fixed_edges_and_defer_dso_edges() {
         .split("static void translit_emit_jcc_link(")
         .nth(1)
         .and_then(|source| source.split("static void ").next())
+        .and_then(|source| source.split("translit_emit_spill(a);").nth(1))
         .expect("backward JCC chain body");
     let reload = backward.find("translit_emit_reload(a);").expect("guest-state reload");
     let chain = backward.find("uint8_t *chain = a->cursor;").expect("direct chain site");
