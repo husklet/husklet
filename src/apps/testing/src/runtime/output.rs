@@ -997,8 +997,9 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
             return Err("backend-shape product JCC IBTC fill causes do not reconcile".into());
         }
         let repeated = fields["jcc_late_site_stable"].checked_add(fields["jcc_late_site_changed"]);
-        let first = fields["jcc_late_site_current"].checked_add(fields["jcc_late_site_retired"]);
-        if repeated != Some(fields["jcc_late_site_repeated"]) || first != Some(fields["jcc_late_site_first"]) {
+        let successful = fields["jcc_late_site_first"].checked_add(fields["jcc_late_site_repeated"]);
+        let generations = fields["jcc_late_site_current"].checked_add(fields["jcc_late_site_retired"]);
+        if repeated != Some(fields["jcc_late_site_repeated"]) || generations != successful {
             return Err("backend-shape product JCC late-site partitions do not reconcile".into());
         }
         let unique = fields["jcc_late_site_unique"];
@@ -1417,7 +1418,8 @@ mod tests {
                 "jcc_late_site_repeated" => 3,
                 "jcc_late_site_stable" => 2,
                 "jcc_late_site_changed" => 1,
-                "jcc_late_site_current" | "jcc_late_site_retired" => 1,
+                "jcc_late_site_current" => 4,
+                "jcc_late_site_retired" => 1,
                 "jcc_late_site_abandoned" => 1,
                 "jcc_late_site_overflow" => 1,
                 "jcc_late_site_max" => 3,
@@ -1548,6 +1550,16 @@ mod tests {
                 "changing {partition} did not break its late-site partition"
             );
         }
+        let mut repeated_observation = set_product_field(&exact, "jcc_late_site_repeated", 4);
+        repeated_observation = set_product_field(&repeated_observation, "jcc_late_site_stable", 3);
+        repeated_observation = set_product_field(&repeated_observation, "jcc_late_eligible", 7);
+        assert!(
+            backend_shape_product(repeated_observation.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("late-site partitions do not reconcile"),
+            "a repeated observation omitted from the generation partition did not fail"
+        );
         for (bound, value) in [
             ("jcc_late_site_unique", 3),
             ("jcc_late_site_overflow", 7),
@@ -1565,7 +1577,7 @@ mod tests {
         }
         let mut over_capacity = set_product_field(&exact, "jcc_late_site_first", 524_289);
         over_capacity = set_product_field(&over_capacity, "jcc_late_site_unique", 524_289);
-        over_capacity = set_product_field(&over_capacity, "jcc_late_site_current", 524_288);
+        over_capacity = set_product_field(&over_capacity, "jcc_late_site_current", 524_291);
         over_capacity = set_product_field(&over_capacity, "jcc_late_eligible", 524_293);
         assert!(
             backend_shape_product(over_capacity.as_bytes(), true)
