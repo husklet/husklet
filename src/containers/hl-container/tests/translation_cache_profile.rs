@@ -990,7 +990,11 @@ int main(void) {
         let repeat = ContainerSpec::new(repeat_root, repeat_process)
             .name("pcache-profile-repeat")
             .guest(Guest::X86_64)
-            .execution(Execution::native(false))
+            .execution(if mode == Mode::CacheNestedToolchain {
+                Execution::Auto
+            } else {
+                Execution::native(false)
+            })
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 read_only_root: false,
