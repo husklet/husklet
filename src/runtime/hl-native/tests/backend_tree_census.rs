@@ -234,6 +234,10 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "count < 64u",
         "uint64_t exit_kind;",
         "HL_A64_X86_BACKEDGE_BUDGET = 8",
+        "HL_A64_X86_MAX_BLOCK_INSNS +",
+        "at most one direct backedge",
+        "Forward edges remain ordinary dispatcher exits",
+        "guest NZCV remains canonical in cpu",
         "decoded_target >= guest_pc && decoded_target < cursor",
         "direct_target = host_for_instruction[(decoded_target - guest_pc) / 4]",
         "header->loop_steps = direct_target == NULL ? 0",
@@ -256,6 +260,14 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
     ] {
         assert!(fixture.contains(instruction), "fixture omitted {instruction}");
     }
+    let signal_fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/backedge_signal.S");
+    assert!(signal_fixture.contains("cbnz x0,1b"), "signal fixture lost generated backedge");
+    let smc_fixture = include_str!("../../../../tests/runtime/memory/source/aarch64_smctargeted.c");
+    for contract in ["0x54ffffc1u", "loop[2] = 0x11000800u", "publish_lines(loop, 1)"] {
+        assert!(smc_fixture.contains(contract), "SMC fixture lost stage-four contract {contract}");
+    }
+    let checkpoint = include_str!("../../../../tests/runtime/checkpoint-translated/test.yaml");
+    assert!(checkpoint.contains("container-checkpoint-cycles: 2"), "checkpoint fixture lost two-cycle gate");
 }
 
 #[test]

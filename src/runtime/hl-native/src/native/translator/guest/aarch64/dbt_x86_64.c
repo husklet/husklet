@@ -372,6 +372,11 @@ static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target)
 enum { HL_A64_X86_BACKEDGE_BUDGET = 8 };
 _Static_assert(HL_A64_X86_BACKEDGE_BUDGET == 8,
                "AArch64 x86 DBT poll budget must match dispatcher redispatch budget");
+enum { HL_A64_X86_MAX_BLOCK_INSNS = 64 };
+_Static_assert(HL_A64_X86_MAX_BLOCK_INSNS +
+                       (HL_A64_X86_BACKEDGE_BUDGET - 1) * HL_A64_X86_MAX_BLOCK_INSNS <=
+                   UINT16_MAX,
+               "AArch64 x86 DBT dynamic retired count must not overflow");
 
 static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
                                                  uint64_t cursor, uint64_t *target_out,
@@ -424,7 +429,9 @@ static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t 
     if (!assembler->overflow) hl_a64_x86_patch_rel32(taken_patch, assembler->cursor);
     *target_out = cursor + (uint64_t)displacement;
     if (direct_target != NULL) {
-        /* One direct cycle is complete. Escape on the same eight-edge budget
+        /* The condition's host flags are consumed by taken_patch before this
+         * counter compare changes them; guest NZCV remains canonical in cpu.
+         * Escape on the same eight-edge budget
          * used by dispatcher redispatch so IRQ, signal, checkpoint and SMC
          * invalidation observe a safepoint within a bounded interval. */
         hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xFE);
@@ -478,7 +485,7 @@ static void *translate_block(uint64_t guest_pc) {
         .overflow = 0,
     };
     uint64_t cursor = guest_pc;
-    uint8_t *host_for_instruction[64] = {0};
+    uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     /* r14 is callee-saved by the entry trampoline and unused by the ALU
      * lowering. It counts only completed direct backedges. */
     hl_x64_u8(&assembler, 0x45); hl_x64_u8(&assembler, 0x31); hl_x64_u8(&assembler, 0xF6); /* xor %r14d,%r14d */
@@ -486,7 +493,10 @@ static void *translate_block(uint64_t guest_pc) {
     /* A generated prefix is published only when a supported terminal is present.
      * Otherwise rewind the arena and let the interpreter translate the
      * ORIGINAL PC; no emitted prefix has executed or retired. */
-    for (unsigned count = 0; count < 64u; ++count, cursor += 4) {
+    /* Translation stops at the first terminal, so a published body has at
+     * most one direct backedge even when its target lies inside a nested guest
+     * loop. Forward edges remain ordinary dispatcher exits. */
+    for (unsigned count = 0; count < HL_A64_X86_MAX_BLOCK_INSNS; ++count, cursor += 4) {
         host_for_instruction[count] = assembler.cursor;
         int fetch_ok = 0;
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);

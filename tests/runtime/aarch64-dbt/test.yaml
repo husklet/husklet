@@ -6,6 +6,17 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
 cases:
+  - id: runtime/aarch64-dbt/backedge-signal-bound
+    status: !oracle-excluded
+      reason: "the compatibility contract requires the container lifecycle stop API, which a direct QEMU process cannot referee"
+      evidence: "tests/runtime/aarch64-dbt/EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/backedge_signal.S, output: backedge-signal, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/backedge-signal }
+    run: []
+    timeout: 3
+    orchestration: { stop-after-ms: 100 }
+    expect: { exit: 0, signal: 15, stdout_empty: true, stderr: [" r0=*", " fall_total=*"] }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
