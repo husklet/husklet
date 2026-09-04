@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction,
-  EmptyState, Entry, Heading, InlineMessage, Row, Scroll, Spinner, Switch, Text,
+  Entry, Heading, InlineMessage, ResourceState, Row, Scroll, Spinner, Switch, Text,
   type ExtensionAcquisitionStatus, type ExtensionCapability, type ExtensionSummary, type WorkspaceApi,
 } from '@husklet/react';
 
@@ -9,6 +9,9 @@ type Change = { value?: unknown };
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
+  const [inventoryState, setInventoryState] = React.useState<'loading' | 'empty' | 'error' | 'ready'>('loading');
+  const [inventoryError, setInventoryError] = React.useState('');
+  const [watchError, setWatchError] = React.useState('');
   const [reference, setReference] = React.useState('');
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
@@ -18,15 +21,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
+  const inventoryEpoch = React.useRef(0);
 
   const reload = React.useCallback(async () => {
-    try { setInstalled(await api.extensions.list()); setError(''); }
-    catch (cause) { setError(message(cause)); }
+    const epoch = ++inventoryEpoch.current;
+    setInventoryState('loading'); setInventoryError('');
+    try {
+      const listing = await api.extensions.list();
+      if (inventoryEpoch.current !== epoch) return;
+      setInstalled(listing); setInventoryState(listing.length === 0 ? 'empty' : 'ready');
+    } catch (cause) {
+      if (inventoryEpoch.current !== epoch) return;
+      setInstalled([]); setInventoryError(message(cause)); setInventoryState('error');
+    }
   }, [api]);
   React.useEffect(() => { void reload(); }, [reload]);
   React.useEffect(() => {
     let dispose: (() => Promise<void>) | undefined;
-    void api.watchExtensions((listing) => setInstalled(listing)).then((stop) => { dispose = stop; }).catch(() => {});
+    void api.watchExtensions((listing) => {
+      ++inventoryEpoch.current; setInstalled(listing); setInventoryState(listing.length === 0 ? 'empty' : 'ready'); setInventoryError('');
+    }).then((stop) => { dispose = stop; setWatchError(''); })
+      .catch((cause) => setWatchError(`Live extension updates are unavailable: ${message(cause)} Refresh to read the current inventory.`));
     return () => { void dispose?.(); };
   }, [api]);
 
@@ -58,7 +73,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const publish = async () => {
     if (!acquisition?.candidate || acquisition.state !== 'ready' || busy) return;
     const updating = Boolean(acquisition.candidate.installed_image_digest);
-    setBusy(updating ? 'update' : 'install');
+    setBusy(updating ? 'update' : 'install'); setError(''); setNotice(null);
     try {
       const result = await api.extensions[updating ? 'updateAndWait' : 'installAndWait'](acquisition.job, acquisition.revision, granted);
       setAcquisition(null); setReference(''); await reload();
@@ -134,8 +149,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         </Card>
         {error && <InlineMessage label={error} tone="danger" />}
         {notice && <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />}
-        <Heading label="Installed" scale="title" />
-        {installed.length === 0 && <EmptyState label="No extensions installed" detail="Install an OCI extension above." />}
+        <Row gap={2} align="center"><Heading label="Installed" scale="title" /><Button label="Refresh" enabled={!busy && inventoryState !== 'loading'} onInvoke={reload} /></Row>
+        {watchError && <InlineMessage label={watchError} tone="warning" />}
+        <ResourceState state={inventoryState} loadingLabel="Loading installed extensions…" emptyLabel="No extensions installed"
+          emptyDetail="Install an OCI extension above." error={inventoryError || 'Installed extensions could not be loaded.'} onRetry={reload}>
         {installed.map((extension) => (
           <Card key={`${extension.name}:${extension.image_digest}`} variant="outline">
             <CardHeader label={extension.name} detail={extension.version ?? extension.image_digest} />
@@ -157,6 +174,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </CardActions>
           </Card>
         ))}
+        </ResourceState>
       </Column>
     </Scroll>
   );

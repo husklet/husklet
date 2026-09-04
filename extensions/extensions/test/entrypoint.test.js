@@ -14,6 +14,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
   let peer;
   let acquisitions = 0;
   let cancelled = false;
+  let responses = Promise.resolve();
   let installed = [
     { name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'duty', version: '0.1.0', enabled: true, pane_providers: [] },
     { name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`, status: 'fault:3', version: '0.1.0', enabled: true, pane_providers: [] },
@@ -30,6 +31,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       const call = frame.payload?.call;
       if (!call) continue;
       calls.push(frame.payload);
+      const firstList = call === 'extension_list' && calls.filter(({ call: seen }) => seen === 'extension_list').length === 1;
       if (call === 'extension_acquisition_start') acquisitions += 1;
       if (call === 'extension_acquisition_cancel') cancelled = true;
       if (call === 'extension_disable') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'standby', enabled: false } : item);
@@ -54,10 +56,13 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
         : call === 'interface_open_tab'
           ? { reply: 'identity', with: 'extensions-catalogue' }
           : { reply: 'done' };
-      socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload }));
-      if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_remove', 'extension_update'].includes(call)) {
-        socket.write(encode({ channel: 30, kind: KIND.event, payload: { snapshot: 'extensions', of: installed } }));
-      }
+      const respond = () => {
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload }));
+        if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_remove', 'extension_update'].includes(call)) {
+          socket.write(encode({ channel: 30, kind: KIND.event, payload: { snapshot: 'extensions', of: installed } }));
+        }
+      };
+      responses = responses.then(async () => { if (firstList) await new Promise((resolve) => setTimeout(resolve, 80)); respond(); });
     } });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
@@ -73,7 +78,12 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       throw new Error(`${error.message}; calls=${JSON.stringify(calls.map(({ call }) => call))}; stderr=${JSON.stringify(stderr)}`);
     }
     assert.ok(renderedLabels(calls).includes('Extensions'));
+    assert.ok(renderedLabels(calls).includes('Loading installed extensions…'));
+    assert.equal(renderedLabels(calls).includes('No extensions installed'), false, 'loading never claims the inventory is empty');
+    try { await until(() => renderedLabels(calls).includes('resources')); }
+    catch (cause) { throw new Error(`${cause.message}; calls=${JSON.stringify(calls.map(({ call }) => call))}; stderr=${JSON.stringify(stderr)}`); }
     assert.ok(renderedLabels(calls).includes('resources'));
+    assert.ok(renderedLabels(calls).includes('Refresh'));
     assert.ok(renderedLabels(calls).includes('Disable'), 'a duty extension can be disabled');
     assert.ok(renderedLabels(calls).includes('Retry'), 'a faulted extension can be retried');
     assert.ok(renderedLabels(calls).includes('Enable'), 'a standby extension can be enabled');
