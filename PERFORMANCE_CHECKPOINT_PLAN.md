@@ -85,10 +85,10 @@ simply launching a fresh shell:
 2. Create both horizontal and vertical splits with stable pane identities.
 3. In separate panes, set distinct working directories and environment state.
 4. Produce enough terminal output to require scrollback/history restoration.
-5. Start a long-running `sleep` and a process tree or pipeline; record guest PIDs and
+5. Start a long-running `sleep` and a multi-generation process tree or pipeline; record guest PIDs and
    progress/state that distinguish continuation from relaunch.
 6. Start every normal container belonging to the workspace.
-7. Start installed extension containers, place at least one extension surface in a
+7. Start every installed extension host and sidecar, place at least one extension surface in a
    pane, and exercise an extension request that produces durable observable state.
 8. Record the selected tab, focused pane, pane sizes, split orientations, tab order,
    terminal dimensions, cwd, visible grid, scrollback tail, container inventory,
@@ -98,6 +98,9 @@ Drive the same close action a user invokes. Closing must checkpoint all workspac
 containers as one coordinated workspace operation, including extension containers;
 it must not hang up processes first, silently relaunch them, or publish a partial
 workspace image. Measure click-to-window-closed and checkpoint publication latency.
+From the close click through the closed/offline receipt, lifecycle events and
+container observations must prove that no domain, container, extension host, or
+sidecar was started or restarted.
 
 Reopen the workspace through the real manager UI. Measure click-to-window-visible,
 click-to-terminal-usable, and total restore completion. Then prove:
@@ -110,6 +113,8 @@ click-to-terminal-usable, and total restore completion. Then prove:
   output match and continue;
 - extension surfaces return to their prior panes and their container/session state
   continues;
+- every extension host and sidecar returns exactly once with its prior session
+  identity and no duplicate member;
 - no duplicate shell, container, extension host, or restored member was launched;
 - closing/reopening repeatedly remains correct for at least two checkpoint cycles;
 - a forced member failure produces a visible refusal and leaves no partial image.
