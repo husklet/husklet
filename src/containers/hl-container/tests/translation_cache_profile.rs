@@ -795,7 +795,7 @@ int main(void) {
     } else if mode == Mode::CacheNestedToolchain {
         Process::new("/bin/sh").args([
             "-c",
-            "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && gcc -B/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/ -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain",
+            "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && gcc -B/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/ -B/usr/bin/ -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain",
         ])
     } else if mode == Mode::CacheNestedToolchainUpper {
         Process::new("/bin/sh").args([
