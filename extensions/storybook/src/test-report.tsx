@@ -1,10 +1,16 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Column, Heading, InlineMessage, TestReportView, Text } from '@husklet/react';
 export const TEST_REPORT_STORY = 'Inspect test report'; export const CASE_LIMIT = 256; export const FAILURE_LIMIT = 512;
-export function boundedCases(cases) {
-  const clean = (value) => String(value).replace(/[\t\r\n]/g, ' ');
-  return cases.filter(({ suite, name, status, durationMs }) => typeof suite === 'string' && suite.trim() && typeof name === 'string' && name.trim() && ['passed', 'failed', 'skipped'].includes(status) && Number.isSafeInteger(durationMs) && durationMs >= 0).slice(0, CASE_LIMIT).map(({ suite, name, status, durationMs, failure = '' }) => `${clean(suite)}\t${clean(name)}\t${status}\t${durationMs}\t${[...clean(failure)].slice(0, FAILURE_LIMIT).join('')}`).join('\n');
+type TestCase = { suite: string; name: string; status: 'passed' | 'failed' | 'skipped'; durationMs: number; failure?: unknown };
+export function boundedCases(cases: readonly unknown[]): string {
+  const clean = (value: unknown): string => String(value).replace(/[\t\r\n]/g, ' ');
+  return cases.filter((entry): entry is TestCase => {
+    if (entry === null || typeof entry !== 'object') return false;
+    const { suite, name, status, durationMs } = entry as Record<string, unknown>;
+    return typeof suite === 'string' && Boolean(suite.trim()) && typeof name === 'string' && Boolean(name.trim())
+      && (status === 'passed' || status === 'failed' || status === 'skipped')
+      && Number.isSafeInteger(durationMs) && Number(durationMs) >= 0;
+  }).slice(0, CASE_LIMIT).map(({ suite, name, status, durationMs, failure = '' }) => `${clean(suite)}\t${clean(name)}\t${status}\t${durationMs}\t${[...clean(failure)].slice(0, FAILURE_LIMIT).join('')}`).join('\n');
 }
 export function TestReportStory() {
   const value = boundedCases([

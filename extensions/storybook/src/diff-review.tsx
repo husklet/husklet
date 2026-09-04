@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Button, Column, DiffLine, DiffViewer, Heading, Row, Text } from '@husklet/react';
 
@@ -13,7 +12,7 @@ export function DiffReviewStory() {
     ['-', '  api: image: app:v1', 'danger'],
     ['+', '  api: image: app:v2', 'positive'],
     ['+', '  api: replicas: 3', 'positive'],
-  ];
+  ] as const;
   return (
     <Column gap={2}>
       <Heading label={'Review configuration diff'} scale={'title'} />

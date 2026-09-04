@@ -270,11 +270,12 @@ test('network waterfall validates, caps, sanitizes, and exposes typed hierarchy'
 test('coverage inspection bounds rows and source independently with visible truncation', () => {
   const lines = Array.from({ length: COVERAGE_LIMIT + 4 }, (_, index) => ({ line: index + 1, hits: index % 2, source: 'x'.repeat(SOURCE_LIMIT + 9) })); const value = boundedCoverage(lines, 900);
   assert.equal(value.split('\n').length, COVERAGE_LIMIT + 1); assert.equal(value.split('\n')[0].split('\t')[2].length, SOURCE_LIMIT); assert(value.endsWith(`… showing ${COVERAGE_LIMIT} of 900 lines …`));
+  assert.equal(boundedCoverage([null, { line: -1, hits: 0 }]), '…\t\t… showing 0 of 2 lines …');
 });
 
 test('test report bounds cases and failure detail independently', () => {
   const cases = Array.from({ length: CASE_LIMIT + 3 }, (_, index) => ({ suite: 'api', name: `case-${index}`, status: 'failed', durationMs: index, failure: 'x'.repeat(FAILURE_LIMIT + 20) }));
-  cases.splice(1, 0, { suite: '', name: 'invalid', status: 'passed', durationMs: 1, failure: '' }); const value = boundedCases(cases);
+  cases.splice(1, 0, null, { suite: '', name: 'invalid', status: 'passed', durationMs: 1, failure: '' }); const value = boundedCases(cases);
   assert.equal(value.split('\n').length, CASE_LIMIT); assert(!value.includes('invalid')); assert.equal(value.split('\n')[0].split('\t')[4].length, FAILURE_LIMIT);
 });
 
