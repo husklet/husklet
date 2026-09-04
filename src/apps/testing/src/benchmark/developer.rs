@@ -23,7 +23,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v6";
+const SCHEMA: &str = "husklet-developer-benchmark-v7";
 const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
@@ -671,7 +671,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         .into_inner()?;
     let phase_ns = validate_phases(&marks, elapsed)?;
     let stderr = String::from_utf8(stderr)?;
-    let receipt = backend_receipt(backend, guest_isa, &stderr)?;
+    let receipt = backend_receipt(backend, guest_isa, &stderr, &measured, root)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
     let stderr_sha256 = hex(Sha256::digest(stderr.as_bytes()));
     atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
@@ -757,6 +757,8 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
         execution_backend(host_isa(), mode, guest_isa),
         guest_isa,
         &String::from_utf8(output.stderr)?,
+        &measured,
+        root,
     )?;
     let counters = parse_perf(&fs::read_to_string(&path)?)?;
     fs::remove_file(path)?;
@@ -783,14 +785,40 @@ fn validate_phases(marks: &[(String, u128)], end: u128) -> Result<Vec<(String, u
     Ok(result)
 }
 
-fn backend_receipt(backend: ExecutionBackend, guest_isa: GuestIsa, stderr: &str) -> Result<String, Error> {
+fn backend_receipt(
+    backend: ExecutionBackend,
+    guest_isa: GuestIsa,
+    stderr: &str,
+    measured: &[OsString],
+    root: &Path,
+) -> Result<String, Error> {
     let evidence: String = match backend {
-        ExecutionBackend::HostNative => "host-native".into(),
+        ExecutionBackend::HostNative => {
+            if measured.first().and_then(|value| value.to_str()) != Some("chroot")
+                || measured.get(1).map(OsString::as_os_str) != Some(root.as_os_str())
+            {
+                return Err("host-native arm did not execute chroot against its cloned root".into());
+            }
+            let mut argv = Sha256::new();
+            for value in measured {
+                let bytes = value.as_encoded_bytes();
+                argv.update((bytes.len() as u64).to_le_bytes());
+                argv.update(bytes);
+            }
+            let root_path_sha256 = hex(Sha256::digest(root.as_os_str().as_encoded_bytes()));
+            format!("host-native argv_sha256={} root_path_sha256={root_path_sha256}", hex(argv.finalize()))
+        }
         ExecutionBackend::NativeSupervised => stderr
             .lines()
-            .find(|line| line.starts_with("[hl-native-supervised]") && line.contains("selected=1"))
+            .find(|line| {
+                line.starts_with("[hl-native-supervised]")
+                    && line.split_ascii_whitespace().any(|field| field == "selected=1")
+                    && line.split_ascii_whitespace().any(|field| field == "translated_abi=0")
+            })
             .map(str::to_owned)
-            .ok_or_else(|| -> Error { "native-supervised arm did not prove selected=1".into() })?,
+            .ok_or_else(|| -> Error {
+                "native-supervised arm did not prove selected=1 with translated_abi=0".into()
+            })?,
         ExecutionBackend::X86Transliterator
         | ExecutionBackend::Aarch64Transliterator
         | ExecutionBackend::Aarch64DbtWithInterpreterFallback => {
@@ -1078,13 +1106,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_identity_cannot_resume_as_v6() {
+    fn legacy_identity_cannot_resume_as_v7() {
         let error = serde_json::from_str::<Identity>(r#"{"schema":"husklet-developer-benchmark-v3"}"#)
             .err()
             .unwrap()
             .to_string();
         assert!(error.contains("host_manifest"), "{error}");
-        assert_eq!(SCHEMA, "husklet-developer-benchmark-v6");
+        assert_eq!(SCHEMA, "husklet-developer-benchmark-v7");
     }
 
     #[test]
@@ -1106,39 +1134,77 @@ mod tests {
 
     #[test]
     fn backend_receipts_cannot_be_vacuous() {
+        let receipt = |backend, guest, stderr| backend_receipt(backend, guest, stderr, &[], Path::new("/root"));
         assert_eq!(
-            backend_receipt(
+            receipt(
                 ExecutionBackend::NativeSupervised,
                 GuestIsa::X86_64,
-                "[hl-native-supervised] selected=1 reason=eligible"
+                "[hl-native-supervised] selected=1 translated_abi=0 reason=eligible"
             )
             .unwrap(),
-            "guest_isa=x86_64 backend=NativeSupervised [hl-native-supervised] selected=1 reason=eligible"
+            "guest_isa=x86_64 backend=NativeSupervised [hl-native-supervised] selected=1 translated_abi=0 reason=eligible"
         );
-        assert!(backend_receipt(
+        assert!(receipt(
+            ExecutionBackend::NativeSupervised,
+            GuestIsa::X86_64,
+            "[hl-native-supervised] selected=1 translated_abi=1"
+        )
+        .is_err());
+        assert!(receipt(
             ExecutionBackend::NativeSupervised,
             GuestIsa::X86_64,
             "[hl-native-supervised] selected=0"
         )
         .is_err());
-        assert!(backend_receipt(
+        assert!(receipt(
             ExecutionBackend::X86Transliterator,
             GuestIsa::X86_64,
             "[prof] translit: blocks=9 entries=4"
         )
         .is_err());
-        assert!(backend_receipt(
+        assert!(receipt(
             ExecutionBackend::Aarch64Interpreter,
             GuestIsa::Aarch64,
             "[diag] backend-tree crossings=19 translated_entries=0 interpreted_entries=19"
         )
         .is_err());
-        assert!(backend_receipt(
+        assert!(receipt(
             ExecutionBackend::Aarch64Interpreter,
             GuestIsa::Aarch64,
             "[prof] translit: blocks=9 entries=4"
         )
         .is_err());
+    }
+
+    #[test]
+    fn host_native_receipt_binds_the_exact_chroot_argv_and_root() {
+        let root = Path::new("/results/root-2-5");
+        let argv = ["chroot".into(), root.as_os_str().to_owned(), "/bin/sh".into()];
+        let receipt = backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &argv, root).unwrap();
+        assert!(receipt.contains("backend=HostNative host-native argv_sha256="), "{receipt}");
+        assert!(receipt.contains(" root_path_sha256="), "{receipt}");
+        let wrong = ["env".into(), root.as_os_str().to_owned(), "/bin/sh".into()];
+        assert!(backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &wrong, root).is_err());
+        assert!(backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &argv,
+                                Path::new("/results/other-root")).is_err());
+    }
+
+    #[test]
+    fn native_supervised_producer_refuses_a_translated_abi_before_its_receipt() {
+        let source = include_str!(
+            "../../../../runtime/hl-native/src/native/engine/native_supervised.c"
+        );
+        let run = source
+            .split_once("static int32_t hl_native_supervised_run(")
+            .and_then(|(_, tail)| tail.split_once("static int32_t hl_native_supervised_run("))
+            .map_or_else(
+                || source.split_once("static int32_t hl_native_supervised_run(").map(|(_, tail)| tail),
+                |(production, _)| Some(production),
+            )
+            .expect("native-supervised production entry");
+        let guard = run.find("if (box != NULL) return 70;").expect("translated ABI guard");
+        let receipt = run.find("selected=1 translated_abi=%d").expect("selection receipt");
+        assert!(guard < receipt, "translated ABI must be refused before selection is reported");
     }
 
     #[test]
