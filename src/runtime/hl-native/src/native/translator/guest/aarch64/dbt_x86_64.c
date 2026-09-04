@@ -149,6 +149,80 @@ static int hl_a64_x86_emit_add_sub_immediate(hl_x64_asm *assembler, uint32_t ins
     return 1;
 }
 
+enum hl_a64_x86_alu_helper {
+    HL_A64_X86_ALU_IMMEDIATE,
+    HL_A64_X86_ALU_REGISTER,
+};
+
+/* Stage two deliberately calls the already-audited interpreter ALU leaf for
+ * flag-setting and shifted forms. The generated block still owns fetch,
+ * decode, retirement and its terminal; the leaf touches only canonical cpu
+ * registers/NZCV and cannot fault or exit. This keeps NZCV byte-identical to
+ * signal/checkpoint state while later stages can replace individual calls
+ * with inline host flag materialization without changing the boundary. */
+static void hl_a64_x86_emit_alu_helper(hl_x64_asm *assembler, uint32_t instruction,
+                                       enum hl_a64_x86_alu_helper helper) {
+    uintptr_t target = helper == HL_A64_X86_ALU_IMMEDIATE ? (uintptr_t)interp_exec_dp_immediate
+                                                           : (uintptr_t)interp_exec_dp_register_arithmetic;
+    hl_x64_u8(assembler, 0x4C); /* mov %r15,%rdi */
+    hl_x64_u8(assembler, 0x89);
+    hl_x64_u8(assembler, 0xFF);
+    hl_x64_u8(assembler, 0xBE); /* mov $instruction,%esi */
+    hl_x64_u32(assembler, instruction);
+    hl_x64_u8(assembler, 0x48); /* align the SysV stack before call */
+    hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xEC);
+    hl_x64_u8(assembler, 8);
+    hl_x64_mov_imm64(assembler, HL_A64_X86_VALUE_REG, target);
+    hl_x64_u8(assembler, 0xFF); /* call *%rax */
+    hl_x64_u8(assembler, 0xD0);
+    hl_x64_u8(assembler, 0x48);
+    hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xC4);
+    hl_x64_u8(assembler, 8);
+}
+
+static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruction) {
+    unsigned sf = instruction >> 31;
+    unsigned amount = (instruction >> 10) & 0x3Fu;
+
+    /* ADDS/SUBS immediate. Rn names SP, Rd names ZR; the oracle leaf owns
+     * precisely that distinction and canonical N:Z:C:V placement. */
+    if ((instruction & 0x3F000000u) == 0x31000000u) {
+        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_IMMEDIATE);
+        return 1;
+    }
+
+    /* Logical immediate, including ANDS. DecodeBitMasks rejects reserved
+     * element shapes before any generated prefix can be published. */
+    if ((instruction & 0x1F800000u) == 0x12000000u) {
+        uint64_t ignored;
+        if (!interp_bit_masks(sf, (instruction >> 22) & 1u, (instruction >> 10) & 0x3Fu,
+                              (instruction >> 16) & 0x3Fu, 1, &ignored, NULL))
+            return 0;
+        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_IMMEDIATE);
+        return 1;
+    }
+
+    /* ADD/SUB shifted register only: bit21 distinguishes the deliberately
+     * deferred extended-register family, and ROR is architecturally invalid. */
+    if ((instruction & 0x1F200000u) == 0x0B000000u) {
+        unsigned shift_type = (instruction >> 22) & 3u;
+        if (shift_type == 3u || (!sf && (amount & 0x20u))) return 0;
+        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_REGISTER);
+        return 1;
+    }
+
+    /* Non-inverting AND/ORR/EOR/ANDS shifted register. BIC/ORN/EON/BICS
+     * remain interpreter-owned until their own measured stage. */
+    if ((instruction & 0x1F200000u) == 0x0A000000u) {
+        if (!sf && (amount & 0x20u)) return 0;
+        hl_a64_x86_emit_alu_helper(assembler, instruction, HL_A64_X86_ALU_REGISTER);
+        return 1;
+    }
+    return 0;
+}
+
 static int hl_a64_x86_emit_mov_wide(hl_x64_asm *assembler, uint32_t instruction) {
     if ((instruction & 0x1F800000u) != 0x12800000u) return 0;
     unsigned sf = instruction >> 31;
@@ -241,6 +315,7 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_mov_wide(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
+        if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
         unsigned exit_kind;
         if (hl_a64_x86_is_svc(instruction)) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
@@ -293,8 +368,9 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
      * begin with an eight-byte descriptor magic. Generated blocks begin with
-     * either movabs (48 b8: MOV-wide/ADR) or a cpu-record load (49 8b:
-     * ADD/SUB immediate), while a terminal-only block also begins with movabs.
+     * either movabs (48 b8: MOV-wide/ADR), a cpu-record load (49 8b:
+     * ADD/SUB immediate), or mov-r15-to-rdi (4c 89: an ALU oracle leaf),
+     * while a terminal-only block also begins with movabs.
      * None can equal descriptor magic (little-endian 54 42), and reading the
      * first word is within the published source object in either case. */
     const struct interp_block *descriptor = (const struct interp_block *)code;
@@ -309,9 +385,10 @@ static void run_block(struct cpu *cpu, void *code) {
             cpu->reason = R_BRANCH;
             return;
         }
-        /* MOV-wide touches registers and the two terminal stores touch only
-         * the always-live cpu record. There is no guest-memory instruction in
-         * this slice, hence no synchronous-fault provenance interval to add. */
+        /* Every lowered instruction touches only registers/NZCV and the two
+         * terminal stores touch only the always-live cpu record. There is no
+         * guest-memory instruction, hence no synchronous-fault provenance
+         * interval to add. */
         hl_backend_tree_run_begin(1, header->retired_steps);
         hl_a64_x86_dbt_enter(cpu, code);
         hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);

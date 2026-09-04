@@ -263,6 +263,50 @@ fn aarch64_x86_unsupported_census_is_observation_gated_and_at_the_rejection_seam
 }
 
 #[test]
+fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "(instruction & 0x3F000000u) == 0x31000000u",
+        "(instruction & 0x1F800000u) == 0x12000000u",
+        "interp_bit_masks(sf, (instruction >> 22) & 1u",
+        "(instruction & 0x1F200000u) == 0x0B000000u",
+        "shift_type == 3u || (!sf && (amount & 0x20u))",
+        "(instruction & 0x1F200000u) == 0x0A000000u",
+        "(uintptr_t)interp_exec_dp_immediate",
+        "(uintptr_t)interp_exec_dp_register_arithmetic",
+        "mov %r15,%rdi",
+        "align the SysV stack before call",
+    ] {
+        assert!(source.contains(contract), "missing stage-two contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
+    for instruction in [
+        "orr x2,xzr,#0x7fffffffffffffff",
+        "adds x3,x2,x1",
+        "b.vs 5f",
+        "b.mi 6f",
+        "cmp x1,x1",
+        "b.eq 8f",
+        "b.cs 9f",
+        "sub w4,wzr,w1,lsl #1",
+        "add w7,wzr,w1,lsl #2",
+        "adds w5,w4,w1,lsl #1",
+        "b.cs 92f",
+        "tst w5,#0xff",
+        "b.cc 12f",
+        "b.vc 13f",
+        "mov x6,x1",
+        "eor x6,x6,x1,lsl #1",
+        "and x6,x6,x1",
+        "orr sp,xzr,#0xff",
+        "cmp sp,#0xff",
+        "cmn sp,#0",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
