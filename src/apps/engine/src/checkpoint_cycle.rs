@@ -205,6 +205,29 @@ fn construct(isa: GuestIsa, plan: RuntimePlan, image: Arc<Image>) -> Result<Arc<
     )?))
 }
 
+fn wait_until(engine: &Arc<Engine>, deadline: Instant, phase: &str) -> Result<EngineExit, Failure> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = Arc::clone(engine);
+    let thread = std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let result = match receiver.recv_timeout(remaining) {
+        Ok(result) => result.map_err(Failure::from),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let _ = engine.stop(StopRequest::Force);
+            Err(Failure::Request(format!("checkpoint cycle timed out during {phase}")))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(Failure::Request(format!("checkpoint wait disconnected during {phase}")))
+        }
+    };
+    thread
+        .join()
+        .map_err(|_| Failure::Request(format!("checkpoint wait panicked during {phase}")))?;
+    result
+}
+
 pub(super) fn run(
     isa: GuestIsa,
     base: RuntimePlan,
@@ -236,7 +259,7 @@ pub(super) fn run(
     wait_contains(&output, "READY leader=", deadline)?;
     wait_contains(&state, "5", deadline)?;
     fresh.capture_checkpoint_until(deadline)?;
-    let captured_exit = fresh.wait()?;
+    let captured_exit = wait_until(&fresh, deadline, "capture reap")?;
     fresh.destroy()?;
     if captured_exit.guest_status != 0 {
         return Err(Failure::Request(format!(
@@ -252,7 +275,7 @@ pub(super) fn run(
         .map_err(|error| Failure::Request(format!("cannot continue first restore: {error}")))?;
     wait_contains(&output, "CYCLE 1 progress=", Instant::now() + TIMEOUT)?;
     killed.stop(StopRequest::Force)?;
-    let killed_exit = killed.wait()?;
+    let killed_exit = wait_until(&killed, Instant::now() + TIMEOUT, "forced-stop reap")?;
     killed.destroy()?;
     let _ = std::fs::remove_file(control.join("cycle1"));
 
@@ -266,7 +289,7 @@ pub(super) fn run(
     wait_contains(&output, "CYCLE 2 progress=", Instant::now() + TIMEOUT)?;
     std::fs::write(control.join("stop"), [])
         .map_err(|error| Failure::Request(format!("cannot stop final restore: {error}")))?;
-    let exit = restored.wait()?;
+    let exit = wait_until(&restored, Instant::now() + TIMEOUT, "final continuation reap")?;
     restored.destroy()?;
     if exit.guest_status != 0 {
         return Err(Failure::Request(format!("restored probe exited {}", exit.guest_status)));
