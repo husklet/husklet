@@ -4,8 +4,78 @@ let
   lib = pkgs.lib;
   # APK_HASHES_START -- updated only by nix/update-developer-rootfs-apks.py output.
   payloadHashes = {
-    arm64 = { };
-    amd64 = { };
+    arm64 = {
+      "libgcc" = "sha256-Npqqbp0JmnN7rW3T5sL+e7FUfKJtIrlO4EESKPcJtAM=";
+      "jansson" = "sha256-oTgi9coXcsztS7fT0XjsXe53DYrMultIFrLdxBPm8FU=";
+      "libstdc++" = "sha256-IwLnZtTkkmA47BZuy4WDfuiEV2EVI23bVl46X8pKEdc=";
+      "zstd-libs" = "sha256-K7UTbIn1sLvhVUyJFaO1INWqY64qUdTYIeuBaY21qBg=";
+      "binutils" = "sha256-usSgDnMpbf6/X1h8KzBLfREOfeZYzSsFSR+HwrIoQgw=";
+      "libmagic" = "sha256-vNIz8opvHAfNeJxH3yI06zXSusKVqiI+oszvF9dc4PA=";
+      "file" = "sha256-+xzMUgwugMsdO3OVAIJs7fSzW4pD/3iqaDxva9SN0+U=";
+      "libgcc-static" = "sha256-LsPcS+lT2ELMURkySDZ9hoKe1pmh7QlPtRSbGz/GKRk=";
+      "libgomp" = "sha256-kFdqiJnFYNOYO4rIRCtbdZV6kXvBxOlQ4AWUUID4aC8=";
+      "libatomic" = "sha256-MaRf7AU8Q6AGNw+DI48W+VmDippwP78mv9GjbaT1OLI=";
+      "gmp" = "sha256-TatuhrhQ/htbwM8vrBfvpNf2SL6kTz2QGWlMweHLErc=";
+      "isl26" = "sha256-wZXqJpKa2iu55mt7xtZLNAEjWRuPTI7RWGk+TawJI9g=";
+      "mpfr4" = "sha256-gcsnbB4FATj+2QyPHvWEz1v84mc5czdT/OE4/AoJKzU=";
+      "mpc1" = "sha256-xOA5I88blYug02ZRlvUhoA+wkRMuecOUkymAGftZrmA=";
+      "gcc" = "sha256-/z/s/DLJob7UpHoyzP7m9vV1cIJY+RLCGNzo7Q2JIiE=";
+      "libstdc++-dev" = "sha256-g4XIEdk7ZO4YdwBaVHPN6Our6C00YwHysVP/jLanFRA=";
+      "musl-dev" = "sha256-ynK4T06zw2u77ATZGesQFZ1BTHpDQTzCJThB0wH6lIY=";
+      "g++" = "sha256-3Ba6vW/dcVTs4mPKYl/4MrA1KNWPUGD56SyjsLwMB5o=";
+      "make" = "sha256-CixsP6DZC2UruurDYtG/5Ut1quV2Maa0SIJvi1HIUXA=";
+      "fortify-headers" = "sha256-cr8qd0dfJVCnNFaDx3s5SH7pTsvCyhHtUxQWHzuSfXY=";
+      "patch" = "sha256-xse/Cl16mgbW1uTb9Eq2sxMIRyug4VyhsSDyKBs1zwo=";
+      "build-base" = "sha256-x8p3a03EBE00qfCJ1MeKx4f7yTdIX3aA1Dtu30wis4Y=";
+      "brotli-libs" = "sha256-4OeniS8oMmqfGOCWB7Gupyuu3aRwvE49KxEmK5rl3aM=";
+      "c-ares" = "sha256-aJYD0wDcVvC5njE1BuTXs6P/uHzsU2Mk+KMGvCGK/mc=";
+      "libunistring" = "sha256-WKv8vOJFkHHFBXcaVyp5lT1gQ9crZD7Q1Shco5za+Fw=";
+      "libidn2" = "sha256-0C/9pFEGUvicX7ic0uf/chr7DHTn11R2rWC+vnrAriA=";
+      "nghttp2-libs" = "sha256-EOyVD8pSbbh7vcBwK6Yj/KZjnfFau0gin1SNaBJWOzM=";
+      "libpsl" = "sha256-sx6RNxQl1fgMHbXLoqhJlWtlyAKt0LSd6ESyypYaqNo=";
+      "libcurl" = "sha256-y+yDCmOIi+VwwG0g2HyFZJr/HbOMO03MF4hLFEceOeM=";
+      "libexpat" = "sha256-yhvlvjaYWoNw9Kjp4zoleIrJUmApVxjhsLchoWuyqmE=";
+      "pcre2" = "sha256-DopCXsI/yhtUnoN1izhecYagcFl+jcAUFjRi+WAHkWc=";
+      "git" = "sha256-6kHi+Dfx9qi2bnKl7OD8dcykT3b0nPVQDUZ/xWJ9Crc=";
+      "git-init-template" = "sha256-utFj2zC/2QyZ+G+sVOesCCBAAk0hTA4dDH2YpPWn7bU=";
+      "ripgrep" = "sha256-G/Z8+kRkvJHh3RpPU3xAZkxHPOkr8W67pkvHlo11Res=";
+    };
+    amd64 = {
+      "libgcc" = "sha256-OT3NMmKfBtfYVAnCctFC0MCCdy0QuH71XugvR9475jc=";
+      "jansson" = "sha256-doG0FIbh8rLvzhGHXIOVM0ZK6IV9MPxJEw8AOcZYX9s=";
+      "libstdc++" = "sha256-FMmHtVb1OFpdsYN254jHXzfYUyG43Bkg2SbqfarB1vY=";
+      "zstd-libs" = "sha256-I8YGWwBJskBkQVZLzwAyUVpD946A12/LhVNaOAPvXU4=";
+      "binutils" = "sha256-FWgoh0WdIWWF/rQ4u/t+xj4fM+d8RT9EY30tnYw1l30=";
+      "libmagic" = "sha256-GCCs0pkCVhmoSLGayYx5lv2SwGllJViYgAtqeQqLA6I=";
+      "file" = "sha256-RoHBU8UJrsEm4rnqLJWXMDCbJKeS1J/IzCb6X6h+j90=";
+      "libgcc-static" = "sha256-VjJEpWL1xIuSH38LSlceNzz8umUXX+LU91LF+XVzi80=";
+      "libgomp" = "sha256-5yBKrQDjHVROCjTqxafrfTWG0reyKv1uWQcYnE4DN8w=";
+      "libatomic" = "sha256-xexVDHPde06B4gb9/zz0xGsK4bKf7B21zU4S2IQWq78=";
+      "gmp" = "sha256-hTI+9bzo/yNHNtwtZZLqN669xjSKUx4nQwvf44Nk0lY=";
+      "isl26" = "sha256-MJmftm4pbI6nqhAsrQ0wlVGbMCKrtiLSlR3Sk2cxDqk=";
+      "mpfr4" = "sha256-k2IKgD1BbowFFQ+xRBN5bfFOo3AyLf9r0QZFXeqxVkY=";
+      "mpc1" = "sha256-wiR0OOFj8cEWRkKPB1ds6zzzFn+amlxlJgIfd413rbY=";
+      "gcc" = "sha256-0dSCRy7ZEkBzHGDbroF2vB4y4d+2lIVtpnWfbTJxYyU=";
+      "libstdc++-dev" = "sha256-Ys4wjNvxJ9ysbu4VIKT/7I3JizCXRlOQiEL+TMfZC0M=";
+      "musl-dev" = "sha256-aDHoueSCHa4skSHwZB+B5UP0rCfAMUTEh2mA7oTmmI8=";
+      "g++" = "sha256-NcOejTZn2GA/4gnbr+Z2gcZLHNpmv5yDa/tNBbGacf0=";
+      "make" = "sha256-qRZiaodvZMa2+zKmvw+pM1HQn64Kp2hBNWQjkNpkfmA=";
+      "fortify-headers" = "sha256-X/rr2fFBrD4/oMyZ95j2S0wKoW+wanp35o9j81D+I6o=";
+      "patch" = "sha256-cjwGHqPiw+YbRX+PYU8Lh3JK6uN1ZLpMG91BxyIRgYc=";
+      "build-base" = "sha256-OscudOlhUJlejXl7bDP8O0bWnjZnxHvQ/yXOifn8Tq8=";
+      "brotli-libs" = "sha256-8II958bUWFmutqf6z8XPvy2tuDrU8nx5TLbsx05XjO4=";
+      "c-ares" = "sha256-Ej/ercXsiEuJd4f5jYZUkr9wQCaXslHNHzWRoAuMnXM=";
+      "libunistring" = "sha256-OqYDDmA+NNlhknQvMnwFCfQJxnac4uexRjaF3t441xQ=";
+      "libidn2" = "sha256-fQOKxVjd5GSWSwM85RJt0ur4TMQU3BXnfFQkoyHQ6+4=";
+      "nghttp2-libs" = "sha256-fXcFzqRkOJmJ08prlQXb/OPPJc/KHusGcJqZCfk/TxE=";
+      "libpsl" = "sha256-7GZaNEtuiH8A8KRwFcxzLDooG2noRkHchmLqI0/ebNs=";
+      "libcurl" = "sha256-QLKo4VqNJLyVpfQqrrAYMTof9FfO5x2OFarxMo2nZeg=";
+      "libexpat" = "sha256-NPpB45lNmoRPUKfAHLQLsuJy+n9Qa5bpKitKILI6gbw=";
+      "pcre2" = "sha256-z/rtts9ARkdhmosDI5WNKT2c0kDo+IfBa99LCgOfmTo=";
+      "git" = "sha256-WixngndNLokfwvw/3FDDwnQ7jrLcfNpptrcjry7tz3g=";
+      "git-init-template" = "sha256-6AlKR7+m5mt9VQrhKnqLyrC8SvUCqs1dKm/GLSxeSI0=";
+      "ripgrep" = "sha256-BVsZc6Xy+s4AXRZ9h07vilNNSx7bIM5gHkbMJTAWsFE=";
+    };
   };
   # APK_HASHES_END
   requiredTools = [
@@ -78,8 +148,8 @@ let
         community = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/aarch64/APKINDEX.tar.gz"; sha256 = "cc6373bb1887941bdd1b7cade9f53455e3f2b4762ee072b020a36e691f6cd451"; };
       };
       # Set only after inspecting every fixed APK control stream for scripts/triggers.
-      scriptsAudited = false;
-      closureComplete = false;
+      scriptsAudited = true;
+      closureComplete = true;
       packages = map (package "arm64") closure;
     };
     amd64 = {
@@ -91,8 +161,8 @@ let
         community = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/APKINDEX.tar.gz"; sha256 = "d5fda4c2f0c2ed5c537a1a3aeeb7e642e5aabf7e22b2ae2be9d99d341f1fcef7"; };
       };
       # Set only after inspecting every fixed APK control stream for scripts/triggers.
-      scriptsAudited = false;
-      closureComplete = false;
+      scriptsAudited = true;
+      closureComplete = true;
       packages = map (package "amd64") closure;
     };
   };

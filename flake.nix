@@ -294,22 +294,22 @@
       developerRootfsManifestCheckFor = pkgs:
         let
           framework = developerRootfsFor pkgs;
-          armRefusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "arm64") true);
-          x86Refusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "amd64") true);
-          expected = map (package: "${package.name}.sha256") framework.manifests.arm64.packages;
+          armEvaluation = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "arm64") true);
+          x86Evaluation = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "amd64") true);
         in
         assert framework.requiredTools == [
           "bin/sh" "usr/bin/git" "usr/bin/gcc" "usr/bin/rg" "usr/bin/make"
           "usr/bin/ar" "bin/tar" "sbin/apk"
         ];
-        assert framework.missingFields framework.manifests.arm64 == expected;
-        assert framework.missingFields framework.manifests.amd64 == expected;
-        assert builtins.length expected == 34;
+        assert framework.missingFields framework.manifests.arm64 == [ ];
+        assert framework.missingFields framework.manifests.amd64 == [ ];
+        assert builtins.length framework.manifests.arm64.packages == 34;
+        assert builtins.length framework.manifests.amd64.packages == 34;
         assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.arm64.packages == 92831642;
         assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.amd64.packages == 103044688;
-        assert !framework.manifests.arm64.closureComplete && !framework.manifests.amd64.closureComplete;
-        assert !framework.manifests.arm64.scriptsAudited && !framework.manifests.amd64.scriptsAudited;
-        assert !armRefusal.success && !x86Refusal.success;
+        assert framework.manifests.arm64.closureComplete && framework.manifests.amd64.closureComplete;
+        assert framework.manifests.arm64.scriptsAudited && framework.manifests.amd64.scriptsAudited;
+        assert armEvaluation.success && x86Evaluation.success;
         pkgs.runCommand "developer-rootfs-manifest-framework" { nativeBuildInputs = [ pkgs.python3 ]; } ''
           ${./nix/update-developer-rootfs-apks.py} --self-test
           touch "$out"

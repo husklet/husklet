@@ -130,6 +130,8 @@ def self_test():
     text = SOURCE.read_text()
     packages, indexes = parse_source(text)
     assert len(packages) == 34 and len(indexes) == 4
+    text = text.replace("scriptsAudited = true;", "scriptsAudited = false;")
+    text = text.replace("closureComplete = true;", "closureComplete = false;")
     block, audited = render_hashes({"arm64": [("one", "sha256-a")], "amd64": [("one", "sha256-b")]}, True)
     changed = replace_block(text, block, audited)
     assert '"one" = "sha256-a";' in changed
