@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useEffect, useState } from 'react';
 import {
   Button, CodeView, Column, ConfirmAction, Heading, InlineMessage, List,
@@ -11,13 +10,16 @@ export const FILE_LIMIT = 16;
 export const PATH_LIMIT = 160;
 export const CONTENT_LIMIT = 4_096;
 
-const cleanText = (value, limit) => String(value ?? '').slice(0, limit);
-const confined = (value) => {
+export interface WorkspaceFileInput { path?: unknown; content?: unknown; }
+export interface WorkspaceFile { path: string; content: string; }
+
+const cleanText = (value: unknown, limit: number) => String(value ?? '').slice(0, limit);
+const confined = (value: unknown): boolean => {
   const path = cleanText(value, PATH_LIMIT).replace(/\\/g, '/');
-  return path && !path.startsWith('/') && path.split('/').every((part) => part && part !== '.' && part !== '..');
+  return Boolean(path) && !path.startsWith('/') && path.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..');
 };
 
-export function boundedFiles(files) {
+export function boundedFiles(files: readonly WorkspaceFileInput[]): WorkspaceFile[] {
   return files.slice(0, FILE_LIMIT).map((file) => ({
     path: cleanText(file.path, PATH_LIMIT),
     content: cleanText(file.content, CONTENT_LIMIT),
@@ -38,10 +40,12 @@ export function WorkspaceFileEditStory() {
   const [status, setStatus] = useState('Select a confined workspace-relative path.');
   useEffect(() => setDraft(selected?.content ?? ''), [selected?.path]);
   const save = () => {
+    if (!selected) return;
     setFiles((current) => current.map((file) => file.path === selected.path ? { ...file, content: draft } : file));
     setStatus(`Wrote ${draft.length} bounded bytes to ${selected.path}.`);
   };
   const rename = () => {
+    if (!selected) return;
     const next = selected.path.replace(/(\.[^./]+)?$/, '.review$1');
     setFiles((current) => current.map((file) => file.path === selected.path ? { ...file, path: next } : file));
     setSelectedPath(next);
@@ -55,13 +59,16 @@ export function WorkspaceFileEditStory() {
         label={'Every operation stays inside the selected workspace and uses a normalized relative path. Content and inventory are independently bounded.'}
         wrap={true} />
       <Row gap={2} wrap={true} grow={true}>
-        <List label={'Workspace files'}>
-          {files.map((file) => <ListItemButton
-            key={file.path}
-            label={`${file.path} · ${file.content.length} bytes`}
-            selected={file.path === selected.path}
-            onInvoke={() => { setSelectedPath(file.path); setStatus(`Read ${file.content.length} bounded bytes from ${file.path}.`); }} />)}
-        </List>
+        <Column gap={1}>
+          <Heading label={'Workspace files'} scale={'body'} />
+          <List>
+            {files.map((file) => <ListItemButton
+              key={file.path}
+              label={`${file.path} · ${file.content.length} bytes`}
+              variant={file.path === selected?.path ? 'filled' : 'plain'}
+              onInvoke={() => { setSelectedPath(file.path); setStatus(`Read ${file.content.length} bounded bytes from ${file.path}.`); }} />)}
+          </List>
+        </Column>
         {selected ? <Column gap={2} grow={true}>
           <Heading label={selected.path} scale={'body'} />
           <CodeView value={selected.content} monospace={true} grow={true} />

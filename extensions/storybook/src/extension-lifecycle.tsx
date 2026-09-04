@@ -1,7 +1,6 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React, { useState } from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Chip, Column, ConfirmAction,
+  Button, Card, CardActions, CardContent, CardHeader, Chip, CodeView, Column, ConfirmAction,
   Heading, InlineMessage, List, ListItemButton, Row, Text,
 } from '@husklet/react';
 
@@ -11,23 +10,46 @@ export const EXTENSION_LIMIT = 8;
 export const GRANT_LIMIT = 12;
 export const FIELD_LIMIT = 96;
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const clean = (value) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, FIELD_LIMIT);
+export type ExtensionStatus = 'running' | 'stopped' | 'failed';
+export interface ExtensionUpdateInput { version?: unknown; digest?: unknown; requested?: readonly unknown[]; }
+export interface ExtensionInput {
+  name?: string;
+  version?: unknown;
+  digest?: unknown;
+  status?: unknown;
+  grants?: readonly unknown[];
+  update?: ExtensionUpdateInput | null;
+}
+export interface BoundedExtension {
+  name: string;
+  version: string;
+  digest: string;
+  status: ExtensionStatus;
+  grants: string[];
+  update: { version: string; digest: string; requested: string[] } | null;
+}
 
-export function boundedExtensions(extensions) {
-  return extensions.slice(0, EXTENSION_LIMIT).map((extension) => ({
-    name: NAME.test(extension.name ?? '') ? extension.name : '',
-    version: clean(extension.version), digest: clean(extension.digest),
-    status: ['running', 'stopped', 'failed'].includes(extension.status) ? extension.status : 'failed',
-    grants: [...new Set((extension.grants ?? []).map(clean).filter(Boolean))].slice(0, GRANT_LIMIT),
-    update: extension.update ? {
-      version: clean(extension.update.version), digest: clean(extension.update.digest),
-      requested: [...new Set((extension.update.requested ?? []).map(clean).filter(Boolean))].slice(0, GRANT_LIMIT),
-    } : null,
-  })).filter(({ name, digest }) => name && digest.startsWith('sha256:'));
+const clean = (value: unknown) => String(value ?? '').replace(/[\r\n\t]/g, ' ').slice(0, FIELD_LIMIT);
+
+export function boundedExtensions(extensions: readonly ExtensionInput[]): BoundedExtension[] {
+  return extensions.slice(0, EXTENSION_LIMIT).map((extension) => {
+    const name = String(extension.name ?? '');
+    return {
+      name: NAME.test(name) ? name : '',
+      version: clean(extension.version), digest: clean(extension.digest),
+      status: (['running', 'stopped', 'failed'].includes(String(extension.status))
+        ? extension.status : 'failed') as ExtensionStatus,
+      grants: [...new Set((extension.grants ?? []).map(clean).filter(Boolean))].slice(0, GRANT_LIMIT),
+      update: extension.update ? {
+        version: clean(extension.update.version), digest: clean(extension.update.digest),
+        requested: [...new Set((extension.update.requested ?? []).map(clean).filter(Boolean))].slice(0, GRANT_LIMIT),
+      } : null,
+    };
+  }).filter(({ name, digest }) => name && digest.startsWith('sha256:'));
 }
 
 const initial = boundedExtensions([
-  { name: 'top', version: '1.4.0', digest: 'sha256:manager-generation-14', status: 'running', grants: ['workspaces:read', 'workspaces:control', 'containers:read'], update: { version: '1.5.0', digest: 'sha256:manager-generation-15', requested: ['workspaces:read', 'workspaces:control', 'containers:read', 'containers:control'] } },
+  { name: 'top', version: '1.4.0', digest: 'sha256:top-generation-14', status: 'running', grants: ['workspaces:read', 'workspaces:control', 'containers:read'], update: { version: '1.5.0', digest: 'sha256:top-generation-15', requested: ['workspaces:read', 'workspaces:control', 'containers:read', 'containers:control'] } },
   { name: 'storybook', version: '1.4.0', digest: 'sha256:storybook-generation-9', status: 'stopped', grants: ['interface:render'] },
 ]);
 
@@ -37,7 +59,8 @@ export function ExtensionLifecycleStory() {
   const [review, setReview] = useState(false);
   const [status, setStatus] = useState('Select an installed extension generation.');
   const selected = extensions.find(({ name }) => name === selectedName) ?? extensions[0];
-  const lifecycle = (next) => {
+  const lifecycle = (next: ExtensionStatus) => {
+    if (!selected) return;
     setExtensions((current) => current.map((extension) => extension.name === selected.name
       ? { ...extension, status: next } : extension));
     setStatus(`${next === 'running' ? 'Started' : 'Stopped'} ${selected.name} at ${selected.digest}.`);
@@ -50,23 +73,26 @@ export function ExtensionLifecycleStory() {
         label={'Inspect the running digest and recorded grants before lifecycle control. Updates never inherit newly requested authority.'}
         wrap={true} />
       <Row gap={2} wrap={true} grow={true}>
-        <List label={'Installed extensions'}>
-          {extensions.map((extension) => <ListItemButton
-            key={extension.name}
-            label={`${extension.name} · ${extension.status}`}
-            selected={extension.name === selected.name}
-            onInvoke={() => { setSelectedName(extension.name); setReview(false); setStatus(`Selected ${extension.name}.`); }} />)}
-        </List>
+        <Column gap={1}>
+          <Heading label={'Installed extensions'} scale={'body'} />
+          <List>
+            {extensions.map((extension) => <ListItemButton
+              key={extension.name}
+              label={`${extension.name} · ${extension.status}`}
+              variant={extension.name === selected?.name ? 'filled' : 'plain'}
+              onInvoke={() => { setSelectedName(extension.name); setReview(false); setStatus(`Selected ${extension.name}.`); }} />)}
+          </List>
+        </Column>
         {selected ? <Card label={selected.name} variant={'outline'} grow={true}>
           <CardHeader label={`${selected.name} ${selected.version}`} detail={selected.status} />
           <CardContent gap={2}>
-            <Text label={selected.digest} monospace={true} wrap={true} />
+            <CodeView value={selected.digest} monospace={true} />
             <Row gap={1} wrap={true}>
               {selected.grants.map((grant) => <Chip key={grant} label={grant} variant={'outline'} />)}
             </Row>
             {review && selected.update ? <Column gap={1}>
-              <Heading label={`Review update ${selected.update.version}`} scale={'section'} />
-              <Text label={selected.update.digest} monospace={true} wrap={true} />
+              <Heading label={`Review update ${selected.update.version}`} scale={'body'} />
+              <CodeView value={selected.update.digest} monospace={true} />
               <Text label={`Requested: ${selected.update.requested.join(', ')}`} wrap={true} />
               <InlineMessage
                 label={'containers:control is new and remains ungranted until explicit consent.'}
