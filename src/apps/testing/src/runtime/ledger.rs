@@ -4,7 +4,7 @@ use crate::{
     journal::{self, Attempt, Require as _, Schema},
     suite::{Error, Target},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Ledger = journal::Ledger<Runtime>;
 
@@ -19,6 +19,53 @@ pub(super) struct Row {
     /// Host load when the row was recorded, so a contended run is distinguishable from a real timeout.
     pub host_load: String,
     pub diagnostic: String,
+    pub campaign: CampaignEvidence,
+}
+
+/// Portable, content-bound evidence for one arm of a cross-ISA measurement pair.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CampaignEvidence {
+    pub host_identity: String,
+    pub artifact_sha256: String,
+    pub wall_ns: u64,
+    pub task_clock_ns: u64,
+    pub instructions: u64,
+    pub cycles: u64,
+    pub faults: u64,
+    pub semantic_output_sha256: String,
+    pub backend_digest: String,
+    pub pair: String,
+    pub arm: String,
+    pub order: u8,
+    pub sample: u32,
+}
+
+impl CampaignEvidence {
+    pub(super) fn unmeasured() -> Self {
+        Self {
+            host_identity: "-".into(), artifact_sha256: "-".into(), wall_ns: 0, task_clock_ns: 0,
+            instructions: 0, cycles: 0, faults: 0, semantic_output_sha256: "-".into(),
+            backend_digest: "-".into(), pair: "-".into(), arm: "-".into(), order: 0, sample: 0,
+        }
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        let safe = |value: &str| !value.is_empty() && !value.contains(['\t', '\n']);
+        let sha256 = |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+        [self.host_identity.as_str(), self.artifact_sha256.as_str(), self.semantic_output_sha256.as_str(),
+         self.backend_digest.as_str(), self.pair.as_str(), self.arm.as_str()]
+            .into_iter().all(safe).require("runtime campaign evidence contains an unsafe field")?;
+        if self.pair == "-" {
+            (self.arm == "-" && self.order == 0 && self.sample == 0)
+                .require("unpaired runtime row carries pair coordinates")?;
+        } else {
+            (sha256(&self.host_identity) && sha256(&self.artifact_sha256)
+                && sha256(&self.semantic_output_sha256) && self.backend_digest != "-"
+                && !self.arm.is_empty() && (1..=2).contains(&self.order) && self.sample > 0)
+                .require("paired runtime row has incomplete immutable evidence")?;
+        }
+        Ok(())
+    }
 }
 
 /// The result schema of a runtime compatibility run.
@@ -29,9 +76,9 @@ impl Schema for Runtime {
     type Row = Row;
 
     const KIND: &'static str = "runtime";
-    const HEADER: &'static str = "id\ttarget\tprofile\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
+    const HEADER: &'static str = "id\ttarget\tprofile\tstatus\telapsed_ms\thost_load\thost_identity\tartifact_sha256\twall_ns\ttask_clock_ns\tinstructions\tcycles\tfaults\tsemantic_output_sha256\tbackend_digest\tpair\tarm\torder\tsample\tdiagnostic\n";
     const ROW_LIMIT: usize = 16 * 1024;
-    const FIELDS: usize = 7;
+    const FIELDS: usize = 20;
 
     fn key(row: &Row) -> &WorkKey {
         &row.attempt.key
@@ -39,15 +86,19 @@ impl Schema for Runtime {
 
     /// Never fails on diagnostic shape: a truncated row is worth more than an aborted sweep.
     fn format(row: &Row) -> Result<String, Error> {
+        row.campaign.validate()?;
         (!row.attempt.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
         let load = super::load::sanitize(&row.host_load);
         let prefix = format!(
-            "{}\t{}\t{}\t{}\t{}\t{load}\t",
+            "{}\t{}\t{}\t{}\t{}\t{load}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t",
             row.attempt.key.id,
             row.attempt.key.target.name(),
             super::profile::PROFILE,
             row.attempt.status,
-            row.attempt.elapsed_ms
+            row.attempt.elapsed_ms, row.campaign.host_identity, row.campaign.artifact_sha256,
+            row.campaign.wall_ns, row.campaign.task_clock_ns, row.campaign.instructions, row.campaign.cycles,
+            row.campaign.faults, row.campaign.semantic_output_sha256, row.campaign.backend_digest,
+            row.campaign.pair, row.campaign.arm, row.campaign.order, row.campaign.sample
         );
         let diagnostic = row.diagnostic.replace(['\t', '\n'], " ");
         let room = Self::ROW_LIMIT.saturating_sub(prefix.len() + 1);
@@ -75,16 +126,41 @@ impl Schema for Runtime {
                 elapsed_ms: fields[4].parse()?,
             },
             host_load: fields[5].to_owned(),
-            diagnostic: fields[6].to_owned(),
+            campaign: CampaignEvidence {
+                host_identity: fields[6].into(), artifact_sha256: fields[7].into(), wall_ns: fields[8].parse()?,
+                task_clock_ns: fields[9].parse()?, instructions: fields[10].parse()?, cycles: fields[11].parse()?,
+                faults: fields[12].parse()?, semantic_output_sha256: fields[13].into(), backend_digest: fields[14].into(),
+                pair: fields[15].into(), arm: fields[16].into(), order: fields[17].parse()?, sample: fields[18].parse()?,
+            },
+            diagnostic: fields[19].to_owned(),
         }))
+    }
+
+    fn validate_complete(rows: &BTreeMap<WorkKey, Row>) -> Result<(), Error> {
+        let mut pairs: BTreeMap<(&str, u32), Vec<&CampaignEvidence>> = BTreeMap::new();
+        for row in rows.values() {
+            row.campaign.validate()?;
+            if row.campaign.pair != "-" {
+                pairs.entry((&row.campaign.pair, row.campaign.sample)).or_default().push(&row.campaign);
+            }
+        }
+        for evidence in pairs.values() {
+            (evidence.len() == 2).require("runtime campaign contains an incomplete pair")?;
+            let first = evidence[0]; let second = evidence[1];
+            (first.host_identity == second.host_identity
+                && first.semantic_output_sha256 == second.semantic_output_sha256 && first.arm != second.arm
+                && [first.order, second.order].into_iter().collect::<BTreeSet<_>>() == BTreeSet::from([1, 2]))
+                .require("runtime campaign pair evidence does not match")?;
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Attempt, Ledger, Row, WorkKey};
+    use super::{Attempt, CampaignEvidence, Ledger, Row, WorkKey};
     use crate::suite::Target;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::io::Write;
 
     fn key(id: &str) -> WorkKey {
@@ -110,6 +186,7 @@ mod tests {
                 },
                 host_load: "0.20/8".to_owned(),
                 diagnostic: String::new(),
+                campaign: CampaignEvidence::unmeasured(),
             })
             .unwrap();
         drop(opened);
@@ -125,6 +202,7 @@ mod tests {
                 },
                 host_load: "0.10/8".to_owned(),
                 diagnostic: String::new(),
+                campaign: CampaignEvidence::unmeasured(),
             })
             .unwrap();
         resumed.ledger.finish().unwrap();
@@ -144,10 +222,11 @@ mod tests {
             },
             host_load: "9.00/8".to_owned(),
             diagnostic: "x\ty\n".repeat(1 << 16),
+            campaign: CampaignEvidence::unmeasured(),
         };
         let text = super::Runtime::format(&row).unwrap();
         assert!(text.len() <= super::Runtime::ROW_LIMIT, "{}", text.len());
-        assert_eq!(text.matches('\t').count(), 6);
+        assert_eq!(text.matches('\t').count(), 19);
         assert!(text.contains(super::super::profile::PROFILE), "{text}");
         assert!(text.ends_with("truncated]\n"), "{text}");
     }
@@ -168,6 +247,7 @@ mod tests {
                 },
                 host_load: super::super::load::unmeasured(),
                 diagnostic: "BROKEN: retained".to_owned(),
+                campaign: CampaignEvidence::unmeasured(),
             })
             .unwrap();
         drop(opened);
@@ -190,5 +270,62 @@ mod tests {
         drop(file);
         assert!(Ledger::open(&report, "stamp", &keys, true).is_ok());
         assert!(Ledger::open(&report, "changed", &keys, true).is_err());
+    }
+
+    fn measured(pair: &str, arm: &str, order: u8) -> CampaignEvidence {
+        CampaignEvidence {
+            host_identity: "c".repeat(64),
+            artifact_sha256: "a".repeat(64),
+            wall_ns: 10,
+            task_clock_ns: 9,
+            instructions: 8,
+            cycles: 7,
+            faults: 6,
+            semantic_output_sha256: "b".repeat(64),
+            backend_digest: "backend-tree crossings=1".into(),
+            pair: pair.into(),
+            arm: arm.into(),
+            order,
+            sample: 1,
+        }
+    }
+
+    fn campaign_row(id: &str, evidence: CampaignEvidence) -> Row {
+        Row {
+            attempt: Attempt { key: key(id), status: super::PASS, elapsed_ms: 1 },
+            host_load: "0.10/8".into(),
+            diagnostic: String::new(),
+            campaign: evidence,
+        }
+    }
+
+    #[test]
+    fn complete_pairs_publish_and_round_trip_every_measurement_field() {
+        use crate::journal::Schema as _;
+        let rows = BTreeMap::from([
+            (key("runtime/a"), campaign_row("runtime/a", measured("p", "baseline", 1))),
+            (key("runtime/b"), campaign_row("runtime/b", measured("p", "candidate", 2))),
+        ]);
+        super::Runtime::validate_complete(&rows).unwrap();
+        let text = super::Runtime::format(&rows[&key("runtime/a")]).unwrap();
+        assert!(text.contains("\t10\t9\t8\t7\t6\t"), "{text}");
+        assert_eq!(text.matches('\t').count(), 19);
+        let fields = text.trim_end().split('\t').collect::<Vec<_>>();
+        let parsed = super::Runtime::parse(&fields, &BTreeSet::from([key("runtime/a")]))
+            .unwrap().unwrap();
+        assert_eq!(parsed.campaign, measured("p", "baseline", 1));
+    }
+
+    #[test]
+    fn incomplete_and_mismatched_pairs_are_refused() {
+        use crate::journal::Schema as _;
+        let one = campaign_row("runtime/a", measured("p", "baseline", 1));
+        assert!(super::Runtime::validate_complete(&BTreeMap::from([(key("runtime/a"), one.clone())])).is_err());
+        let mut other = measured("p", "candidate", 2);
+        other.semantic_output_sha256 = "c".repeat(64);
+        assert!(super::Runtime::validate_complete(&BTreeMap::from([
+            (key("runtime/a"), one),
+            (key("runtime/b"), campaign_row("runtime/b", other)),
+        ])).is_err());
     }
 }

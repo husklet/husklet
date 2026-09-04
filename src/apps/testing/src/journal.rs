@@ -45,6 +45,11 @@ pub(crate) trait Schema {
     fn key(row: &Self::Row) -> &Self::Key;
     fn format(row: &Self::Row) -> Result<String, Error>;
 
+    /// Reject a structurally incomplete result before its durable publication.
+    fn validate_complete(_rows: &BTreeMap<Self::Key, Self::Row>) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// Reads one row, or `None` when it records work the current run has superseded.
     fn parse(fields: &[&str], keys: &BTreeSet<Self::Key>) -> Result<Option<Self::Row>, Error>;
 }
@@ -145,6 +150,7 @@ impl<S: Schema> Ledger<S> {
         }
         let temporary = self.report.with_extension("tmp");
         let rows = self.rows.lock().map_err(|_| Self::poisoned("rows"))?;
+        S::validate_complete(&rows)?;
         let mut file = BufWriter::new(File::create(&temporary)?);
         file.write_all(S::HEADER.as_bytes())?;
         for row in rows.values() {

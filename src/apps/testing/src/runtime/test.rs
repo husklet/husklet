@@ -21,6 +21,7 @@ fn an_abort_records_every_unreached_case_rather_than_dropping_it() {
             },
             host_load: "0.10/8".to_owned(),
             diagnostic: String::new(),
+            campaign: ledger::CampaignEvidence::unmeasured(),
         })
         .unwrap();
     let rows = unattempted(&opened.ledger, Some(&"row limit".into())).unwrap();

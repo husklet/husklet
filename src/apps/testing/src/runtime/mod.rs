@@ -153,6 +153,7 @@ fn unattempted(ledger: &ledger::Ledger, aborted: Option<&Error>) -> Result<Vec<l
             },
             host_load: load::unmeasured(),
             diagnostic: reason.clone(),
+            campaign: ledger::CampaignEvidence::unmeasured(),
         })
         .collect())
 }
@@ -257,6 +258,7 @@ impl Completion {
             },
             host_load: self.host_load.clone(),
             diagnostic,
+            campaign: ledger::CampaignEvidence::unmeasured(),
         }
     }
 }
@@ -476,6 +478,7 @@ fn plan_case(
             },
             host_load: load::unmeasured(),
             diagnostic: format!("{kind}: {reason} [{evidence}]"),
+            campaign: ledger::CampaignEvidence::unmeasured(),
         });
         return;
     }
