@@ -385,3 +385,35 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
         );
     }
 }
+
+#[test]
+fn retired_extension_locations_and_uncompiled_sources_stay_absent() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..");
+    for retired in ["apps/storybook", "src/apps/storybook", "extensions/workspace-manager"] {
+        assert!(!root.join(retired).exists(), "retired extension location returned: {retired}");
+    }
+
+    fn inspect(directory: &std::path::Path) {
+        for entry in std::fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        {
+            let entry = entry.expect("extension source entry");
+            let path = entry.path();
+            if entry.file_type().expect("extension source type").is_dir() {
+                inspect(&path);
+            } else if matches!(path.extension().and_then(std::ffi::OsStr::to_str), Some("js" | "jsx")) {
+                panic!("production extension source must be TypeScript/TSX: {}", path.display());
+            }
+        }
+    }
+
+    for entry in std::fs::read_dir(root.join("extensions")).expect("extensions directory") {
+        let path = entry.expect("extension entry").path().join("src");
+        if path.is_dir() {
+            inspect(&path);
+        }
+    }
+}
