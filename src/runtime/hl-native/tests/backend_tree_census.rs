@@ -104,6 +104,20 @@ fn host_guest_pair_reports_whether_translation_codegen_exists() {
 }
 
 #[test]
+fn aarch64_x86_dbt_records_one_syscall_exit_per_generated_return() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    let body = source
+        .split_once("static void run_block(struct cpu *cpu, void *code) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void block_return"))
+        .map(|(body, _)| body)
+        .expect("AArch64 x86 DBT run_block body");
+    let publication = "hl_a64_x86_record_translated_exit(HL_BACKEND_SHAPE_T_SYSCALL);";
+    assert_eq!(body.matches(publication).count(), 1, "{body}");
+    let generated = body.split_once("} else {").map(|(_, generated)| generated).expect("generated arm");
+    assert!(generated.contains(publication), "{generated}");
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

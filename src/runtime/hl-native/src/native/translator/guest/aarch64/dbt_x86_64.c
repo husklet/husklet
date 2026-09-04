@@ -200,6 +200,14 @@ static void *translate_block(uint64_t guest_pc) {
     return hl_a64_interp_translate_block(guest_pc);
 }
 
+static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_backend_tree_translated_exit(kind, 0, 0);
+#else
+    hl_backend_tree_translated_exit_count(kind);
+#endif
+}
+
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
      * begin with an eight-byte descriptor magic, while generated blocks begin
@@ -224,6 +232,7 @@ static void run_block(struct cpu *cpu, void *code) {
          * this slice, hence no synchronous-fault provenance interval to add. */
         hl_backend_tree_run_begin(1, header->retired_steps);
         hl_a64_x86_dbt_enter(cpu, code);
+        hl_a64_x86_record_translated_exit(HL_BACKEND_SHAPE_T_SYSCALL);
         hl_backend_tree_reason(cpu->reason);
     }
 }
