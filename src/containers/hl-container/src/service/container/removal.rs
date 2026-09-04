@@ -81,9 +81,13 @@ impl Service {
                 Error::Corrupt("container has an image rootfs but no rootfs manager is configured".into())
             })?;
             let reference = reference.clone();
-            tokio::task::spawn_blocking(move || manager.release(&reference))
+            let released = tokio::task::spawn_blocking(move || manager.release(&reference))
                 .await
-                .map_err(|error| Error::Io(std::io::Error::other(error)))??;
+                .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+            match released {
+                Ok(()) | Err(hl_images::Error::NotOwned { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
         }
         if let Some(result) = completion {
             let mut exits = self.exits.lock().await;

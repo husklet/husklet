@@ -67,3 +67,41 @@ async fn image_rootfs_lease_survives_reopen_and_releases_on_remove() {
     reopened.remove("image").await.unwrap();
     assert!(reopened_manager.open(&reference).is_err());
 }
+
+#[tokio::test]
+async fn removal_forgets_a_container_whose_rootfs_lease_is_already_gone() {
+    use hl_images::LeaseStore as _;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let snapshots_path = temporary.path().join("images/snapshots");
+    let leases_path = temporary.path().join("images/leases");
+    let snapshots = hl_images::snapshot::Snapshots::open(&snapshots_path).unwrap();
+    let snapshot = hl_images::snapshot::Id::new("base").unwrap();
+    snapshots
+        .prepare(hl_images::snapshot::Id::new("prepare").unwrap(), None)
+        .unwrap()
+        .commit(snapshot.clone())
+        .unwrap();
+    let leases = hl_images::Leases::open(&leases_path).unwrap();
+    let manager = hl_images::rootfs::Roots::new(snapshots, leases.clone());
+    let reference = manager.pin(&snapshot).unwrap();
+    let containers = build_with(
+        Arc::new(Disk::open(temporary.path().to_owned()).await.unwrap()),
+        Arc::new(FakeRuntime::new(ExitStatus::Code(0))),
+        Some(manager),
+        None,
+        temporary.path().join("volumes"),
+        temporary.path().join("runtime"),
+    )
+    .await
+    .unwrap();
+    containers
+        .create(ContainerSpec::new(reference.clone(), Process::new("/bin/true")).name("stale"))
+        .await
+        .unwrap();
+    leases.delete(reference.lease_id()).unwrap();
+
+    containers.remove("stale").await.unwrap();
+
+    assert!(matches!(containers.inspect("stale").await, Err(Error::NotFound(_))));
+}
