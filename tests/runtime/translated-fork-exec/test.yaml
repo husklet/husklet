@@ -8,7 +8,7 @@ cases:
   - id: runtime/translated-fork-exec/vfork-exec
     status: active
     compat: { class: compatibility }
-    build: { source: vfork_exec.c, output: vfork-exec }
+    build: { source: vfork_exec.c, output: vfork-exec, flags: [-static-pie, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/vfork-exec }
     run: []
     timeout: 120
