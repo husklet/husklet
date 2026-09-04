@@ -115,7 +115,126 @@ const BACKEND_SHAPE_PRODUCT_V11_EXTRA: &[&str] = &[
     "duplicate_finalize_slot_pid",
 ];
 const BACKEND_SHAPE_PRODUCT_V12_EXTRA: &[&str] = &["duplicate_slot_first_caller", "duplicate_slot_first_actor"];
-const BACKEND_SHAPE_PRODUCT_V13_EXTRA: &[&str] = &["translation_codegen_available"];
+const BACKEND_SHAPE_PRODUCT_V13_EXTRA: &[&str] = &[
+    "translation_codegen_available",
+    "jcc_ibtc_fill_empty",
+    "jcc_ibtc_fill_collision",
+    "jcc_ibtc_fill_irq_cause",
+    "jcc_ibtc_fill_same_key",
+    "jcc_late_site_first",
+    "jcc_late_site_repeated",
+    "jcc_late_site_stable",
+    "jcc_late_site_changed",
+    "jcc_late_site_current",
+    "jcc_late_site_retired",
+    "jcc_late_site_unique",
+    "jcc_late_site_overflow",
+    "jcc_late_site_abandoned",
+    "jcc_late_site_max",
+];
+
+// Protocol v13 is the current production contract. Keep its wire order explicit: accepting the same
+// names in a different order would let a positional producer/argument mismatch survive this consumer.
+const BACKEND_SHAPE_PRODUCT_V13_ORDER: &[&str] = &[
+    "version",
+    "available",
+    "translation_codegen_available",
+    "lifecycle_settled",
+    "missing_claims",
+    "duplicate_finalize",
+    "reserved",
+    "live",
+    "claimed",
+    "first_finalize_caller",
+    "first_finalize_actor",
+    "first_finalize_slot_pid",
+    "duplicate_finalize_caller",
+    "duplicate_finalize_actor",
+    "duplicate_finalize_slot_pid",
+    "duplicate_slot_first_caller",
+    "duplicate_slot_first_actor",
+    "crossings",
+    "translated_entries",
+    "interpreted_entries",
+    "translated_steps",
+    "interpreted_steps",
+    "mixed_sse_executed",
+    "mixed_sse_executed_transitions",
+    "mixed_sse_disabled_boundaries",
+    "jcc_ibtc_enabled",
+    "jcc_ibtc_emitted",
+    "jcc_ibtc_hits",
+    "jcc_ibtc_misses",
+    "jcc_ibtc_irq",
+    "jcc_ibtc_fills",
+    "jcc_ibtc_suppressed",
+    "jcc_ibtc_invalid_refusals",
+    "jcc_ibtc_fill_empty",
+    "jcc_ibtc_fill_collision",
+    "jcc_ibtc_fill_irq_cause",
+    "jcc_ibtc_fill_same_key",
+    "jcc_taken_ibtc_misses",
+    "indirect_ibtc_misses",
+    "jcc_late_candidate",
+    "jcc_late_eligible",
+    "jcc_late_invalid",
+    "jcc_late_target_absent",
+    "jcc_late_page_generation",
+    "jcc_late_displacement",
+    "jcc_late_other",
+    "jcc_late_site_first",
+    "jcc_late_site_repeated",
+    "jcc_late_site_stable",
+    "jcc_late_site_changed",
+    "jcc_late_site_current",
+    "jcc_late_site_retired",
+    "jcc_late_site_unique",
+    "jcc_late_site_overflow",
+    "jcc_late_site_abandoned",
+    "jcc_late_site_max",
+    "jcc_invalid_null",
+    "jcc_invalid_magic",
+    "jcc_invalid_gpc",
+    "jcc_invalid_block_generation",
+    "jcc_invalid_entry_zero",
+    "jcc_invalid_length_zero",
+    "jcc_invalid_resolve",
+    "jcc_invalid_resolved_generation",
+    "jcc_invalid_entry_overflow",
+    "jcc_invalid_site_unique",
+    "jcc_invalid_site_overflow",
+    "direct_jmp_ibtc_enabled",
+    "direct_jmp_ibtc_emitted",
+    "direct_jmp_ibtc_hits",
+    "direct_jmp_ibtc_misses",
+    "direct_jmp_ibtc_irq",
+    "direct_jmp_ibtc_fills",
+    "direct_jmp_ibtc_suppressed",
+    "direct_jmp_ibtc_invalid_refusals",
+    "direct_call_ibtc_emitted",
+    "direct_call_ibtc_hits",
+    "direct_call_ibtc_misses",
+    "direct_call_ibtc_irq",
+    "direct_call_ibtc_fills",
+    "direct_call_ibtc_invalid_refusals",
+    "ret_ibtc_attempts",
+    "ret_ibtc_hits",
+    "ret_ibtc_key_misses",
+    "ret_ibtc_null_misses",
+    "ret_ibtc_irq",
+    "ret_ibtc_fills",
+    "ret_ibtc_collisions",
+    "ret_ibtc_unmapped",
+    "ret_ibtc_invalid_refusals",
+    "ret_fast_ibtc_hits",
+    "ret_fast_ibtc_misses",
+    "ret_fast_ibtc_irq",
+    "ret_fast_ibtc_fills",
+    "ret_fast_ibtc_invalid_refusals",
+    "executed_form_total",
+    "executed_form_unique",
+    "executed_form_overflow",
+];
 
 fn backend_shape_product_field(name: &str, version: u64) -> bool {
     if BACKEND_SHAPE_PRODUCT_FIELDS.contains(&name) {
@@ -155,6 +274,20 @@ fn backend_shape_product_field(name: &str, version: u64) -> bool {
         return false;
     };
     rank.parse::<u8>().is_ok_and(|rank| rank < 16) && matches!(kind, "key" | "count")
+}
+
+fn backend_shape_product_v13_order(fields: &[&str]) -> bool {
+    if fields.len() != BACKEND_SHAPE_PRODUCT_V13_ORDER.len() + 32
+        || fields[..BACKEND_SHAPE_PRODUCT_V13_ORDER.len()] != *BACKEND_SHAPE_PRODUCT_V13_ORDER
+    {
+        return false;
+    }
+    fields[BACKEND_SHAPE_PRODUCT_V13_ORDER.len()..]
+        .chunks_exact(2)
+        .enumerate()
+        .all(|(rank, pair)| {
+            pair[0] == format!("executed_form{rank}_key") && pair[1] == format!("executed_form{rank}_count")
+        })
 }
 const BACKEND_TREE_FIELDS: [&str; 33] = [
     "version",
@@ -754,6 +887,7 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
         .find_map(|field| field.strip_prefix("version=")?.parse::<u64>().ok())
         .unwrap_or(0);
     let mut fields = BTreeMap::new();
+    let mut field_order = Vec::new();
     for field in records[0].split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
             return Err(format!("backend-shape product diagnostic has malformed field {field:?}").into());
@@ -767,6 +901,7 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
         if fields.insert(name, value).is_some() {
             return Err(format!("backend-shape product diagnostic duplicates field {name:?}").into());
         }
+        field_order.push(name);
     }
     for name in BACKEND_SHAPE_PRODUCT_FIELDS {
         if !fields.contains_key(name) {
@@ -833,8 +968,59 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     if !matches!(fields["version"], 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12 | 13) {
         return Err("backend-shape product diagnostic has invalid version".into());
     }
+    if version == 13 && !backend_shape_product_v13_order(&field_order) {
+        return Err("backend-shape product v13 fields are out of order".into());
+    }
     if version >= 13 && fields["translation_codegen_available"] > 1 {
         return Err("backend-shape product translation codegen availability is not boolean".into());
+    }
+    if version >= 13 {
+        if fields["translation_codegen_available"] == 0 {
+            let codegen_activity = [
+                "translated_entries", "translated_steps", "jcc_ibtc_emitted", "jcc_ibtc_hits",
+                "jcc_ibtc_fills", "direct_jmp_ibtc_emitted", "direct_jmp_ibtc_hits",
+                "direct_jmp_ibtc_fills", "direct_call_ibtc_emitted", "direct_call_ibtc_hits",
+                "direct_call_ibtc_fills", "ret_fast_ibtc_hits", "ret_fast_ibtc_fills",
+                "executed_form_total", "executed_form_unique", "executed_form_overflow",
+            ];
+            if codegen_activity.iter().any(|name| fields[name] != 0)
+                || (0..16).any(|rank| fields[format!("executed_form{rank}_count").as_str()] != 0)
+            {
+                return Err("backend-shape product unavailable translation codegen has activity".into());
+            }
+        }
+        let fill_causes = fields["jcc_ibtc_fill_empty"]
+            .checked_add(fields["jcc_ibtc_fill_collision"])
+            .and_then(|value| value.checked_add(fields["jcc_ibtc_fill_irq_cause"]))
+            .and_then(|value| value.checked_add(fields["jcc_ibtc_fill_same_key"]));
+        if fill_causes != Some(fields["jcc_ibtc_fills"]) {
+            return Err("backend-shape product JCC IBTC fill causes do not reconcile".into());
+        }
+        let repeated = fields["jcc_late_site_stable"].checked_add(fields["jcc_late_site_changed"]);
+        let first = fields["jcc_late_site_current"].checked_add(fields["jcc_late_site_retired"]);
+        if repeated != Some(fields["jcc_late_site_repeated"]) || first != Some(fields["jcc_late_site_first"]) {
+            return Err("backend-shape product JCC late-site partitions do not reconcile".into());
+        }
+        let unique = fields["jcc_late_site_unique"];
+        let maximum = fields["jcc_late_site_max"];
+        if unique != fields["jcc_late_site_first"]
+            || unique > 524_288
+            || fields["jcc_late_site_overflow"] > fields["jcc_late_eligible"]
+            || fields["jcc_late_site_abandoned"] > fields["jcc_late_site_first"]
+            || (unique == 0 && maximum != 0)
+            || (unique != 0 && maximum == 0)
+            || fields["jcc_late_site_repeated"]
+                .checked_add(1)
+                .is_none_or(|upper| maximum > upper)
+        {
+            return Err("backend-shape product JCC late-site bounds are inconsistent".into());
+        }
+        let late_observations = fields["jcc_late_site_first"]
+            .checked_add(fields["jcc_late_site_repeated"])
+            .and_then(|value| value.checked_add(fields["jcc_late_site_overflow"]));
+        if late_observations != Some(fields["jcc_late_eligible"]) {
+            return Err("backend-shape product JCC late-site partitions do not reconcile".into());
+        }
     }
     if fields["available"] != 1 {
         if version >= 12 {
@@ -1206,6 +1392,281 @@ mod tests {
     const PRODUCT_SHAPE_OFF: &str = "[diag] backend-shape version=4 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=0 jcc_ibtc_emitted=1 jcc_ibtc_hits=0 jcc_ibtc_misses=2 jcc_ibtc_irq=0 jcc_ibtc_fills=0 jcc_ibtc_suppressed=2 jcc_ibtc_invalid_refusals=0 direct_jmp_ibtc_enabled=0 direct_jmp_ibtc_emitted=1 direct_jmp_ibtc_hits=0 direct_jmp_ibtc_misses=2 direct_jmp_ibtc_irq=0 direct_jmp_ibtc_fills=0 direct_jmp_ibtc_suppressed=2 direct_jmp_ibtc_invalid_refusals=0\n";
     const SHAPE: &str = "[diag] backend-shape version=1 translated_entries=2 translated_transfers=5 t_fallthrough=1 t_cond_taken=1 t_cond_not_taken=0 t_direct_jump=0 t_direct_call=0 t_return=0 t_indirect_branch=0 t_indirect_call=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0 fall_total=1 fall_cap=0 fall_decode=0 fall_normal_to_sse2=0 fall_sse2_to_normal=0 fall_normal_to_fs=0 fall_fs_to_normal=0 fall_sse2_to_fs=0 fall_fs_to_sse2=0 fall_tl_no=1 fall_displaced=0 fall_fetch=0 fall_riprel=0 fall_fs_transaction=0 fall_sse_riprel=0 fall_other=0 stitch_jmp=1 stitch_cond_fall=2 e_fall_total=1 e_fall_mapped=1 e_fall_unmapped=0 e_fall_interrupted=0 e_fall_chained=0 e_fall_dispatcher=1 e_jt_total=1 e_jt_mapped=1 e_jt_unmapped=0 e_jt_interrupted=0 e_jt_chained=0 e_jt_dispatcher=1 e_jn_total=0 e_jn_mapped=0 e_jn_unmapped=0 e_jn_interrupted=0 e_jn_chained=0 e_jn_dispatcher=0 e_jmp_total=0 e_jmp_mapped=0 e_jmp_unmapped=0 e_jmp_interrupted=0 e_jmp_chained=0 e_jmp_dispatcher=0 e_call_total=0 e_call_mapped=0 e_call_unmapped=0 e_call_interrupted=0 e_call_chained=0 e_call_dispatcher=0 jt_same_page=1 jt_cross_page=0 jt_target_translated=1 jt_target_interpreted=0 jt_generation_current=1 jt_generation_retired=0 jt_rel32=1 jt_rel32_unreachable=0 jt_eligible=1 jt_ineligible=0 interpreted_entries=3 i_disabled=0 i_image=0 i_decode=0 i_unsupported=2 i_authority=0 i_resource=0 i_emit=0 i_runtime_image=1 i_runtime_bind=0 i_other=0 s_fallthrough=0 s_cond_taken=0 s_cond_not_taken=0 s_direct_jump=0 s_direct_call=1 s_return=0 s_indirect_branch=0 s_indirect_call=0 s_syscall=0 s_irq=0 s_fault=1 s_service=1 s_other=0 fallback_total=2 fallback_unique=1 fallback_overflow=0 stop_total=3 stop_unique=3 stop_overflow=0 family_jmem=1 family_div_total=3 family_div_inline=1 family_div_service64=1 family_div_service64_completed=1 family_div_de=1 family_idiv_total=3 family_idiv_inline=1 family_idiv_service64=1 family_idiv_service64_completed=1 family_idiv_de=1 family_total=7 mixed_sse_executed=2 mixed_sse_executed_transitions=3 mixed_sse_disabled_boundaries=0 fallback0_key=17 fallback0_count=2 fallback1_key=0 fallback1_count=0 fallback2_key=0 fallback2_count=0 fallback3_key=0 fallback3_count=0 fallback4_key=0 fallback4_count=0 fallback5_key=0 fallback5_count=0 fallback6_key=0 fallback6_count=0 fallback7_key=0 fallback7_count=0 stop0_key=1 stop0_count=1 stop1_key=2 stop1_count=1 stop2_key=3 stop2_count=1 stop3_key=0 stop3_count=0 stop4_key=0 stop4_count=0 stop5_key=0 stop5_count=0 stop6_key=0 stop6_count=0 stop7_key=0 stop7_count=0 direct_call_ibtc_emitted=1 direct_call_ibtc_hits=2 direct_call_ibtc_misses=3 direct_call_ibtc_irq=1 direct_call_ibtc_fills=2 direct_call_ibtc_invalid_refusals=0 direct_call_ibtc_fast_redispatch=1\n";
 
+    fn product_v13() -> String {
+        let mut product = String::from(BACKEND_SHAPE_PREFIX);
+        for (index, name) in BACKEND_SHAPE_PRODUCT_V13_ORDER.iter().enumerate() {
+            if index != 0 {
+                product.push(' ');
+            }
+            let value = match *name {
+                "version" => 13,
+                "available" | "translation_codegen_available" | "lifecycle_settled" => 1,
+                "first_finalize_caller" | "first_finalize_actor" | "first_finalize_slot_pid" => 1,
+                "crossings" | "translated_entries" => 2,
+                "translated_steps" => 4,
+                "jcc_ibtc_enabled" => 1,
+                "jcc_ibtc_emitted" => 2,
+                "jcc_ibtc_hits" => 1,
+                "jcc_ibtc_misses" | "jcc_ibtc_fills" | "jcc_taken_ibtc_misses" => 4,
+                "jcc_ibtc_fill_empty"
+                | "jcc_ibtc_fill_collision"
+                | "jcc_ibtc_fill_irq_cause"
+                | "jcc_ibtc_fill_same_key" => 1,
+                "jcc_late_candidate" | "jcc_late_eligible" => 6,
+                "jcc_late_site_first" | "jcc_late_site_unique" => 2,
+                "jcc_late_site_repeated" => 3,
+                "jcc_late_site_stable" => 2,
+                "jcc_late_site_changed" => 1,
+                "jcc_late_site_current" | "jcc_late_site_retired" => 1,
+                "jcc_late_site_abandoned" => 1,
+                "jcc_late_site_overflow" => 1,
+                "jcc_late_site_max" => 3,
+                "executed_form_total" => 3,
+                "executed_form_unique" => 1,
+                _ => 0,
+            };
+            product.push_str(&format!("{name}={value}"));
+        }
+        for rank in 0..16 {
+            let (key, count) = if rank == 0 { (17, 3) } else { (0, 0) };
+            product.push_str(&format!(" executed_form{rank}_key={key} executed_form{rank}_count={count}"));
+        }
+        product.push_str(
+            "\n[diag] x86-exit-family version=1 translated_entries=2 total=2 \
+             t_fallthrough=2 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
+             t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n",
+        );
+        product
+    }
+
+    fn set_product_field(record: &str, name: &str, value: u64) -> String {
+        let start = record.find(&format!("{name}=")).unwrap_or_else(|| panic!("missing fixture field {name}"));
+        let value_start = start + name.len() + 1;
+        let value_end = record[value_start..]
+            .find(char::is_whitespace)
+            .map_or(record.len(), |end| value_start + end);
+        format!("{}{}{}", &record[..value_start], value, &record[value_end..])
+    }
+
+    fn unavailable_codegen_v13() -> String {
+        let mut record = product_v13();
+        for name in [
+            "translation_codegen_available",
+            "translated_entries",
+            "translated_steps",
+            "jcc_ibtc_emitted",
+            "jcc_ibtc_hits",
+            "jcc_ibtc_misses",
+            "jcc_ibtc_fills",
+            "jcc_ibtc_fill_empty",
+            "jcc_ibtc_fill_collision",
+            "jcc_ibtc_fill_irq_cause",
+            "jcc_ibtc_fill_same_key",
+            "jcc_taken_ibtc_misses",
+            "executed_form_total",
+            "executed_form_unique",
+            "executed_form0_count",
+        ] {
+            record = set_product_field(&record, name, 0);
+        }
+        for name in ["translated_entries", "total", "t_fallthrough"] {
+            let offset = record.find(X86_EXIT_FAMILY_PREFIX).expect("exit-family fixture");
+            let tail = set_product_field(&record[offset..], name, 0);
+            record.replace_range(offset.., &tail);
+        }
+        record
+    }
+
+    #[test]
+    fn product_v13_schema_order_and_codegen_invariant_are_exact() {
+        let exact = product_v13();
+        backend_shape_product(exact.as_bytes(), true).unwrap();
+
+        let omitted = exact.replacen(" jcc_ibtc_fill_empty=1", "", 1);
+        assert!(
+            backend_shape_product(omitted.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("omitted field \"jcc_ibtc_fill_empty\"")
+        );
+        let unknown = exact.replacen(" jcc_ibtc_fill_empty=1", " producer_only=1", 1);
+        assert!(
+            backend_shape_product(unknown.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field \"producer_only\"")
+        );
+        let reordered = exact.replacen(
+            " jcc_ibtc_fill_empty=1 jcc_ibtc_fill_collision=1",
+            " jcc_ibtc_fill_collision=1 jcc_ibtc_fill_empty=1",
+            1,
+        );
+        assert!(
+            backend_shape_product(reordered.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("fields are out of order")
+        );
+        let unavailable_codegen = exact.replacen(
+            " translation_codegen_available=1",
+            " translation_codegen_available=2",
+            1,
+        );
+        assert!(
+            backend_shape_product(unavailable_codegen.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("availability is not boolean")
+        );
+
+        for cause in [
+            "jcc_ibtc_fill_empty",
+            "jcc_ibtc_fill_collision",
+            "jcc_ibtc_fill_irq_cause",
+            "jcc_ibtc_fill_same_key",
+        ] {
+            let broken = set_product_field(&exact, cause, 2);
+            assert!(
+                backend_shape_product(broken.as_bytes(), true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("fill causes do not reconcile"),
+                "changing {cause} did not break the fill partition"
+            );
+        }
+        for (partition, value) in [
+            ("jcc_late_eligible", 7),
+            ("jcc_late_site_stable", 6),
+            ("jcc_late_site_current", 6),
+        ] {
+            let broken = set_product_field(&exact, partition, value);
+            assert!(
+                backend_shape_product(broken.as_bytes(), true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("late-site partitions do not reconcile"),
+                "changing {partition} did not break its late-site partition"
+            );
+        }
+        for (bound, value) in [
+            ("jcc_late_site_unique", 3),
+            ("jcc_late_site_overflow", 7),
+            ("jcc_late_site_abandoned", 3),
+            ("jcc_late_site_max", 5),
+        ] {
+            let broken = set_product_field(&exact, bound, value);
+            assert!(
+                backend_shape_product(broken.as_bytes(), true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("late-site bounds are inconsistent"),
+                "changing {bound} did not break its late-site bound"
+            );
+        }
+        let mut over_capacity = set_product_field(&exact, "jcc_late_site_first", 524_289);
+        over_capacity = set_product_field(&over_capacity, "jcc_late_site_unique", 524_289);
+        over_capacity = set_product_field(&over_capacity, "jcc_late_site_current", 524_288);
+        over_capacity = set_product_field(&over_capacity, "jcc_late_eligible", 524_293);
+        assert!(
+            backend_shape_product(over_capacity.as_bytes(), true)
+                .unwrap_err()
+                .to_string()
+                .contains("late-site bounds are inconsistent"),
+            "a unique-site census larger than the producer table did not fail"
+        );
+
+        let unavailable = unavailable_codegen_v13();
+        backend_shape_product(unavailable.as_bytes(), true).unwrap();
+        for activity in [
+            "translated_entries",
+            "translated_steps",
+            "jcc_ibtc_emitted",
+            "jcc_ibtc_hits",
+            "jcc_ibtc_fills",
+            "direct_jmp_ibtc_emitted",
+            "direct_jmp_ibtc_hits",
+            "direct_jmp_ibtc_fills",
+            "direct_call_ibtc_emitted",
+            "direct_call_ibtc_hits",
+            "direct_call_ibtc_fills",
+            "ret_fast_ibtc_hits",
+            "ret_fast_ibtc_fills",
+            "executed_form_total",
+            "executed_form_unique",
+            "executed_form_overflow",
+            "executed_form0_count",
+        ] {
+            let broken = set_product_field(&unavailable, activity, 1);
+            assert!(
+                backend_shape_product(broken.as_bytes(), true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unavailable translation codegen has activity"),
+                "changing {activity} did not break codegen polarity"
+            );
+        }
+    }
+
+    #[test]
+    fn product_v13_inventory_matches_the_native_producer_order() {
+        let source = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
+        let report = source
+            .split_once("static void hl_backend_mixed_sse_report(")
+            .and_then(|(_, tail)| tail.split_once("void hl_target_backend_tree_reap_report("))
+            .map(|(body, _)| body)
+            .expect("native backend-shape product reporter");
+        let format = report
+            .split_once("\"[diag] backend-shape ")
+            .and_then(|(_, tail)| tail.split_once("\n                             available,"))
+            .map(|(format, _)| format)
+            .expect("native backend-shape product format string");
+        let fields = format
+            .split_ascii_whitespace()
+            .filter_map(|token| {
+                let (name, value) = token.split_once('=')?;
+                (value.starts_with('%') || value.trim_end_matches('"').bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| name.trim_start_matches('"'))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields,
+            BACKEND_SHAPE_PRODUCT_V13_ORDER[..BACKEND_SHAPE_PRODUCT_V13_ORDER.len() - 3],
+            "native producer and product parser field order diverged"
+        );
+        assert!(report.contains(
+            " executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu"
+        ));
+        assert!(report.contains(" executed_form%u_key=%llu executed_form%u_count=%llu"));
+
+        let arguments = report
+            .split_once("\n                             available, HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE, settled,")
+            .map(|(_, arguments)| arguments)
+            .expect("native backend-shape product arguments");
+        let mut remaining = arguments;
+        for counter in [
+            "jcc_ibtc_fill_empty",
+            "jcc_ibtc_fill_collision",
+            "jcc_ibtc_fill_irq",
+            "jcc_ibtc_fill_same_key",
+            "jcc_late_site_first",
+            "jcc_late_site_repeated",
+            "jcc_late_site_stable",
+            "jcc_late_site_changed",
+            "jcc_late_site_current",
+            "jcc_late_site_retired",
+            "jcc_late_site_unique",
+            "jcc_late_site_overflow",
+            "jcc_late_site_abandoned",
+            "jcc_late_site_max",
+        ] {
+            let needle = format!("&census->{counter}");
+            remaining = remaining
+                .split_once(&needle)
+                .map(|(_, tail)| tail)
+                .unwrap_or_else(|| panic!("native argument for {counter} is absent or out of order"));
+        }
+    }
+
     #[test]
     fn native_backend_shape_field_inventory_is_exactly_the_parser_inventory() {
         let source = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
@@ -1559,16 +2020,7 @@ mod tests {
                 .contains("omitted field \"duplicate_slot_first_caller\"")
         );
 
-        let mut codegen_unavailable = product
-            .trim_end()
-            .replace("version=12 available=0", "version=13 available=1")
-            .replace(" duplicate_finalize=1", " duplicate_finalize=0")
-            .replace(" jcc_taken_ibtc_misses=0", " jcc_taken_ibtc_misses=1");
-        codegen_unavailable.push_str(
-            " translation_codegen_available=0\n[diag] x86-exit-family version=1 translated_entries=0 total=0 \
-             t_fallthrough=0 t_jcc_taken=0 t_jcc_fall=0 t_direct_jmp=0 t_direct_call=0 t_ret=0 \
-             t_jmp_reg=0 t_jmp_mem=0 t_call_reg=0 t_call_mem=0 t_syscall=0 t_irq=0 t_fault=0 t_other=0\n",
-        );
+        let codegen_unavailable = unavailable_codegen_v13();
         let error = validate_translated_execution(codegen_unavailable.as_bytes())
             .unwrap_err()
             .to_string();
