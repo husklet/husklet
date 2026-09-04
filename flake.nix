@@ -285,6 +285,35 @@
         };
       };
 
+      developerRootfsFor = pkgs:
+        import ./nix/developer-rootfs.nix {
+          inherit pkgs;
+          alpineArchives = alpineArchivesFor pkgs;
+        };
+
+      developerRootfsManifestCheckFor = pkgs:
+        let
+          framework = developerRootfsFor pkgs;
+          armRefusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "arm64") true);
+          x86Refusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "amd64") true);
+          expected = [
+            "build-base.version" "build-base.url" "build-base.sha256"
+            "git.version" "git.url" "git.sha256"
+            "ripgrep.version" "ripgrep.url" "ripgrep.sha256"
+          ];
+        in
+        assert framework.requiredTools == [
+          "bin/sh" "usr/bin/git" "usr/bin/gcc" "usr/bin/rg" "usr/bin/make"
+          "usr/bin/ar" "bin/tar" "sbin/apk"
+        ];
+        assert framework.missingFields framework.manifests.arm64 == expected;
+        assert framework.missingFields framework.manifests.amd64 == expected;
+        assert !framework.manifests.arm64.closureComplete && !framework.manifests.amd64.closureComplete;
+        assert !armRefusal.success && !x86Refusal.success;
+        pkgs.runCommand "developer-rootfs-manifest-framework" { } ''
+          touch "$out"
+        '';
+
       linuxAlpineFor =
         pkgs:
         let
@@ -1529,6 +1558,7 @@ WINDOWS_UNITS
           "lint-cases" = verification;
           "compat-fixtures" = verification;
           "native-test-hooks" = nativeHookVerificationFor pkgs;
+          "developer-rootfs-manifest-framework" = developerRootfsManifestCheckFor pkgs;
         }
         // lib.optionalAttrs pkgs.stdenv.isLinux {
           "alpine-compatibility" = alpineCompatibilityFor pkgs;
