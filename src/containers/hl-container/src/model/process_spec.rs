@@ -81,6 +81,9 @@ impl Resolver {
 /// Immutable launch definition persisted with a container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContainerSpec {
+    /// Ephemeral host-side destination for benchmark evidence; never part of durable container state.
+    #[serde(skip)]
+    pub benchmark_measurement: Option<PathBuf>,
     pub name: Option<String>,
     pub labels: BTreeMap<String, String>,
     /// OCI image name used to prepare this rootfs, independent from its snapshot path.
@@ -118,6 +121,7 @@ impl ContainerSpec {
     #[must_use]
     pub fn new(rootfs: hl_images::rootfs::Reference, process: Process) -> Self {
         Self {
+            benchmark_measurement: None,
             name: None,
             labels: BTreeMap::new(),
             image: None,
@@ -149,6 +153,7 @@ impl ContainerSpec {
     #[must_use]
     pub fn from_directory(rootfs: impl Into<PathBuf>, process: Process) -> Self {
         Self {
+            benchmark_measurement: None,
             name: None,
             labels: BTreeMap::new(),
             image: None,
@@ -200,6 +205,13 @@ impl ContainerSpec {
     #[must_use]
     pub const fn execution(mut self, value: Execution) -> Self {
         self.execution = value;
+        self
+    }
+
+    /// Carries an explicit benchmark collector destination to this launch only.
+    #[must_use]
+    pub fn benchmark_measurement(mut self, value: impl Into<PathBuf>) -> Self {
+        self.benchmark_measurement = Some(value.into());
         self
     }
 
@@ -554,3 +566,15 @@ mod tests {
         );
     }
 }
+    #[test]
+    fn benchmark_measurements_are_ephemeral_and_launch_local() {
+        let first = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+            .benchmark_measurement("/results/first.json");
+        let second = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+            .benchmark_measurement("/results/second.json");
+        assert_ne!(first.benchmark_measurement, second.benchmark_measurement);
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("benchmark_measurement"));
+        let restored: ContainerSpec = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.benchmark_measurement, None);
+    }

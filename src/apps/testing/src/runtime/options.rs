@@ -30,4 +30,7 @@ pub(crate) struct Options {
     /// Explicitly execute an exactly selected `!broken` case this many times per ISA without changing corpus policy.
     #[arg(long, value_name = "REPETITIONS", value_parser = clap::value_parser!(u16).range(1..=500))]
     pub(super) broken_soak: Option<u16>,
+    /// Directory receiving per-case engine-only benchmark evidence.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    pub(super) engine_measurements: Option<PathBuf>,
 }

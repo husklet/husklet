@@ -50,6 +50,9 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
+    if options.engine_measurements.as_ref().is_some_and(|path| !path.is_absolute()) {
+        return Err("--engine-measurements must be an absolute directory".into());
+    }
     if options.broken_soak.is_some() && options.selection.case.is_none() {
         return Err("--broken-soak requires one exact --case".into());
     }
@@ -172,6 +175,7 @@ async fn record_all(ledger: &Arc<ledger::Ledger>, rows: Vec<ledger::Row>) -> Res
 
 fn worker_work(app: String, case: String, target: Target, allow_broken: bool) -> Result<Work, Error> {
     let options = Options {
+        engine_measurements: None,
         app: Some(app),
         selection: crate::suite::Selection::exact(case.clone(), target),
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
@@ -223,12 +227,16 @@ struct Work {
     case_index: usize,
     target: Target,
     broken_soak: bool,
+    engine_measurement: Option<PathBuf>,
 }
 
 impl Work {
     async fn execute(self) -> Completion {
         let started = std::time::Instant::now();
-        let result = execution::run_case(Arc::clone(&self.app), self.case_index, self.target, self.broken_soak)
+        let result = execution::run_case(
+            Arc::clone(&self.app), self.case_index, self.target, self.broken_soak,
+            self.engine_measurement,
+        )
             .await
             .map_err(|error| error.to_string());
         Completion {
@@ -462,6 +470,7 @@ fn plan_case(
                     case_index,
                     target,
                     broken_soak: true,
+                    engine_measurement: measurement_path(options, case, target, Some(repetition)),
                 });
             }
             return;
@@ -491,7 +500,25 @@ fn plan_case(
         case_index,
         target,
         broken_soak: false,
+        engine_measurement: measurement_path(options, case, target, None),
     });
+}
+
+fn measurement_path(
+    options: &Options,
+    case: &definition::Workload,
+    target: Target,
+    repetition: Option<u16>,
+) -> Option<PathBuf> {
+    let directory = options.engine_measurements.as_ref()?;
+    let mut name = case.id.replace('/', "-");
+    name.push('-');
+    name.push_str(target.name());
+    if let Some(repetition) = repetition {
+        name.push_str(&format!("-{repetition:04}"));
+    }
+    name.push_str(".json");
+    Some(directory.join(name))
 }
 
 /// A selection with only inactive cases is a valid, fully recorded `NOT_RUN` sweep, not a failure.

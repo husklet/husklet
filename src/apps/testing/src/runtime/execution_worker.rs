@@ -41,6 +41,8 @@ pub(crate) struct Options {
     work_root: PathBuf,
     #[arg(long, hide = true)]
     allow_broken: bool,
+    #[arg(long, hide = true)]
+    engine_measurement: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -63,7 +65,9 @@ pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     )?;
     let root = runtime::work_root::WorkRoot::open()?;
     let retention = super::FailureRetention::new(root.failures(), options.token.clone());
-    let result = super::run_case_inner(work.app, work.case_index, work.target, Some(retention))
+    let result = super::run_case_inner(
+        work.app, work.case_index, work.target, Some(retention), options.engine_measurement,
+    )
         .await
         .map_err(|error| error.to_string());
     let text = serde_yaml::to_string(&Outcome {
@@ -84,13 +88,14 @@ pub(super) async fn run(
     timeout: Duration,
     assertions: &[Assertion],
     allow_broken: bool,
+    engine_measurement: Option<PathBuf>,
 ) -> Result<Report, Error> {
     let interrupts = Interrupts::new()?;
     let app = app.to_owned();
     let case = case.to_owned();
     let assertions = assertions.to_vec();
     let supervision = Supervision::spawn(move |cancelled| {
-        supervise(&app, &case, target, timeout, cancelled, &assertions, allow_broken)
+        supervise(&app, &case, target, timeout, cancelled, &assertions, allow_broken, engine_measurement)
     });
     interrupted(supervision, interrupts).await?.map_err(Into::into)
 }
@@ -286,6 +291,7 @@ fn supervise(
     cancelled: &AtomicBool,
     assertions: &[Assertion],
     allow_broken: bool,
+    engine_measurement: Option<PathBuf>,
 ) -> Result<Report, String> {
     let workers = runtime::work_root::WorkRoot::open()
         .map_err(|error| error.to_string())?
@@ -316,6 +322,9 @@ fn supervise(
     );
     if allow_broken {
         command.arg("--allow-broken");
+    }
+    if let Some(path) = engine_measurement {
+        command.arg("--engine-measurement").arg(path);
     }
     let capture = Capture {
         stdout: directory.path().join("stdout"),

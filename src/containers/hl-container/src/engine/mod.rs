@@ -291,6 +291,7 @@ mod tests {
 
     fn launch() -> ProcessConfig {
         ProcessConfig {
+            benchmark_measurement: None,
             member_terminals: Vec::new(),
             network_namespace: "container-test".to_owned(),
             rootfs: "/rootfs".into(),

@@ -47,7 +47,10 @@ pub struct Report {
     /// One `native counter=value ...` line, empty when the app does not emit diagnostics.
     pub counters: String,
 }
-pub async fn run_case(app: Arc<App>, case_index: usize, target: Target, allow_broken: bool) -> Result<Report, Error> {
+pub async fn run_case(
+    app: Arc<App>, case_index: usize, target: Target, allow_broken: bool,
+    engine_measurement: Option<std::path::PathBuf>,
+) -> Result<Report, Error> {
     let case = &app.cases[case_index];
     worker::run(
         &app.name,
@@ -56,6 +59,7 @@ pub async fn run_case(app: Arc<App>, case_index: usize, target: Target, allow_br
         case.declared_timeout(),
         &case.diagnostics,
         allow_broken,
+        engine_measurement,
     )
     .await
 }
@@ -69,6 +73,7 @@ async fn run_case_inner(
     case_index: usize,
     target: Target,
     retention: Option<FailureRetention>,
+    engine_measurement: Option<std::path::PathBuf>,
 ) -> Result<Vec<CaseResult>, Error> {
     let execution = app.execution.container()?;
     if let Some(unwired) = app.cases[case_index].engine_options.unwired() {
@@ -99,7 +104,7 @@ async fn run_case_inner(
         .images(fixture.images())
         .build()
         .await?;
-    let results = CaseExecution::new(&app, case, target, &containers, execution, retention.as_ref())
+    let results = CaseExecution::new(&app, case, target, &containers, execution, retention.as_ref(), engine_measurement)
         .run(&mut fixture, artifact.path())
         .await;
     fixture.release()?;
@@ -258,6 +263,7 @@ struct CaseExecution<'a> {
     containers: &'a Containers,
     execution: hl_container::Execution,
     retention: Option<&'a FailureRetention>,
+    engine_measurement: Option<std::path::PathBuf>,
 }
 
 impl<'a> CaseExecution<'a> {
@@ -268,6 +274,7 @@ impl<'a> CaseExecution<'a> {
         containers: &'a Containers,
         execution: hl_container::Execution,
         retention: Option<&'a FailureRetention>,
+        engine_measurement: Option<std::path::PathBuf>,
     ) -> Self {
         if let Some(plan) = &case.soak {
             let resources = plan.resources();
@@ -289,6 +296,7 @@ impl<'a> CaseExecution<'a> {
             containers,
             execution,
             retention,
+            engine_measurement,
         }
     }
 
@@ -396,6 +404,9 @@ impl<'a> CaseExecution<'a> {
             }))
             .network_mode(options.network_mode())
             .resources(options.resources());
+        if let Some(path) = &self.engine_measurement {
+            spec = spec.benchmark_measurement(path);
+        }
         if let Some(hostname) = options.hostname() {
             spec = spec.hostname(hostname);
         }

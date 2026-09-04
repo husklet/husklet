@@ -57,6 +57,7 @@ impl Service {
 
         self.runtime
             .start(ProcessConfig {
+                benchmark_measurement: None,
                 network_namespace: container.id.namespace(),
                 rootfs,
                 overlay,

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 pub(crate) fn run() -> Result<(), Error> {
     let options = Options {
+        engine_measurements: None,
         app: None,
         selection: crate::suite::Selection::all(),
         results: PathBuf::from("target/testing/runtime/inventory-unused.tsv"),
