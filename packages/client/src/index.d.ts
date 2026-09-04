@@ -325,13 +325,14 @@ export interface WorkspaceApi {
     exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
-  images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; prune(): Promise<ImagePruneResult> };
+  images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>; prune(): Promise<ImagePruneResult> };
   volumes: {
     inventory(): Promise<VolumeInventory>;
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
     remove(name: string, imageDigest: string): Promise<void>;
+    removeAndWait(name: string, generation: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; name: string; generation: string }>;
   };
   networks: {
     inventory(): Promise<NetworkInventory>;
@@ -339,6 +340,7 @@ export interface WorkspaceApi {
     inspect(reference: string): Promise<NetworkSummary>;
     create(name: string): Promise<string>;
     remove(reference: string): Promise<void>;
+    removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
     connect(reference: string, container: string, options?: { aliases?: readonly string[] }): Promise<void>;
     disconnect(reference: string, container: string): Promise<void>;
   };

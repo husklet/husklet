@@ -636,6 +636,60 @@ export function workspace(session, { signal } = {}) {
   api.watchVolumes = (listener) => api.watchVolumeInventory((inventory) => listener(inventory.volumes));
   api.watchNetworkInventory = (listener) => watch('networks', 'networks', listener, 'network inventory');
   api.watchNetworks = (listener) => api.watchNetworkInventory((inventory) => listener(inventory.networks));
+  api.images.removeAndWait = async (reference, { timeoutMs = 30_000 } = {}) => {
+    const digest = immutableDigest(reference, 'image');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('image remove wait timeout must be between 1 and 30000ms');
+    let removing = false; let timer; let finish;
+    const absent = new Promise((resolve) => { finish = resolve; });
+    const stopWatching = await api.watchImageInventory((inventory) => {
+      if (removing && !inventory.truncated && !inventory.images.some((image) => image.id === digest)) finish();
+    });
+    try {
+      removing = true;
+      await api.images.remove(digest);
+      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      return { changed, id: digest };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
+  api.volumes.removeAndWait = async (name, generation, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(generation, [32], 'volume generation');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('volume remove wait timeout must be between 1 and 30000ms');
+    let removing = false; let timer; let finish;
+    const absent = new Promise((resolve) => { finish = resolve; });
+    const stopWatching = await api.watchVolumeInventory((inventory) => {
+      if (removing && !inventory.truncated && !inventory.volumes.some((volume) => volume.name === name && volume.generation === identity)) finish();
+    });
+    try {
+      removing = true;
+      await api.volumes.remove(name, identity);
+      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      return { changed, name, generation: identity };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
+  api.networks.removeAndWait = async (reference, { timeoutMs = 30_000 } = {}) => {
+    const identity = immutableIdentity(reference, [32], 'network');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('network remove wait timeout must be between 1 and 30000ms');
+    let removing = false; let timer; let finish;
+    const absent = new Promise((resolve) => { finish = resolve; });
+    const stopWatching = await api.watchNetworkInventory((inventory) => {
+      if (removing && !inventory.truncated && !inventory.networks.some((network) => network.id === identity)) finish();
+    });
+    try {
+      removing = true;
+      await api.networks.remove(identity);
+      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      return { changed, id: identity };
+    } finally {
+      clearTimeout(timer);
+      await stopWatching();
+    }
+  };
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
   api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
@@ -1539,9 +1593,9 @@ export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
-    images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune'],
-    volumes: ['inventory', 'list', 'inspect', 'create', 'remove'],
-    networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'connect', 'disconnect'],
+    images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait'],
+    volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],
+    networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],

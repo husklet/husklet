@@ -68,10 +68,12 @@ export function Networks({ api, resource, networkDetails }: {
     const id = resourceReference(network);
     setRemovalNotice('');
     if (!requireCurrent(id)) return;
-    await api.networks.remove(id);
+    const removed = await api.networks.removeAndWait(id);
     if (inspection.id === id) setInspection(EMPTY_INSPECTION);
     await resource.reload();
-    setRemovalNotice(`Network ${id} was removed; refreshed bounded inventory.`);
+    setRemovalNotice(removed.changed
+      ? `Network ${id} was removed and its absence was verified.`
+      : `Network ${id} removal was accepted, but absence was not observed before the timeout.`);
   };
   const inspect = async (network: NetworkSummary) => {
     const id = resourceReference(network);

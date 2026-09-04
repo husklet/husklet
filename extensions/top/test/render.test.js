@@ -7,9 +7,9 @@ import { host } from './host.js';
 
 const api = {
   containers: { list: async () => [], processes: async () => [], executions: async () => ({ executions: [], truncated: false }) },
-  images: { list: async () => [], pull: async () => ({}), inspect: async () => ({}), remove: async () => {}, prune: async () => ({ deleted: 0, space_reclaimed: 0 }) },
-  volumes: { list: async () => [], inspect: async () => ({}), create: async () => ({}), remove: async () => {} },
-  networks: { list: async () => [], inspect: async () => ({}), create: async () => '', remove: async () => {}, connect: async () => {}, disconnect: async () => {} },
+  images: { list: async () => [], pull: async () => ({}), inspect: async () => ({}), remove: async () => {}, removeAndWait: async (id) => ({ changed: true, id }), prune: async () => ({ deleted: 0, space_reclaimed: 0 }) },
+  volumes: { list: async () => [], inspect: async () => ({}), create: async () => ({}), remove: async () => {}, removeAndWait: async (name, generation) => ({ changed: true, name, generation }) },
+  networks: { list: async () => [], inspect: async () => ({}), create: async () => '', remove: async () => {}, removeAndWait: async (id) => ({ changed: true, id }), connect: async () => {}, disconnect: async () => {} },
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
 };
 
@@ -449,7 +449,7 @@ test('image removal and prune require an explicit confirmation step', async () =
   const refreshedDigest = `sha256:${'b'.repeat(64)}`;
   const controlled = { images: {
     ...api.images,
-    remove: async (...args) => calls.push(['remove', ...args]),
+    removeAndWait: async (...args) => { calls.push(['remove', ...args]); return { changed: true, id: args[0] }; },
     prune: async () => { calls.push(['prune']); return { deleted: 0, space_reclaimed: 0 }; },
   } };
   const resource = { data: [{ id: originalDigest, reference: 'alpine:3.20', size: 7, created: 0 }], loading: false, error: null, reload: async () => {} };
@@ -473,7 +473,7 @@ test('image removal and prune require an explicit confirmation step', async () =
   assert.ok(labelled(stage, `Remove immutable image ${refreshedDigest}?`));
   invoke(stage, 'Confirm remove'); await settled();
   assert.deepEqual(calls, [['remove', refreshedDigest]]);
-  assert.ok(labelled(stage, `Image removal completed for ${refreshedDigest}; refreshed bounded inventory.`));
+  assert.ok(labelled(stage, `Image ${refreshedDigest} was removed and its absence was verified.`));
 
   const pruneStage = host();
   const pruneFrame = pruneStage.render(h(Images, { api: controlled, resource }));
@@ -1422,12 +1422,12 @@ test('volume and network mutations expose danger only on final confirm and cance
   const controlled = {
     volumes: {
       inspect: async () => ({}), create: async () => ({}),
-      remove: async (...args) => calls.push(['volume.remove', ...args]),
+      removeAndWait: async (...args) => { calls.push(['volume.remove', ...args]); return { changed: true, name: args[0], generation: args[1] }; },
     },
     networks: {
       inspect: async () => ({}), create: async () => '', connect: async () => {},
       disconnect: async (...args) => calls.push(['network.disconnect', ...args]),
-      remove: async (...args) => calls.push(['network.remove', ...args]),
+      removeAndWait: async (...args) => { calls.push(['network.remove', ...args]); return { changed: true, id: args[0] }; },
     },
   };
 
@@ -1446,7 +1446,7 @@ test('volume and network mutations expose danger only on final confirm and cance
   invoke(volumes, 'Confirm remove');
   await settled();
   assert.deepEqual(calls, [['volume.remove', 'cache', refreshedVolumeGeneration]]);
-  assert.ok(labelled(volumes, `Volume cache generation ${refreshedVolumeGeneration} was removed; refreshed bounded inventory.`));
+  assert.ok(labelled(volumes, `Volume cache generation ${refreshedVolumeGeneration} was removed and its absence was verified.`));
 
   const networks = host();
   const initialNetworks = resource([{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }]);
@@ -1473,14 +1473,14 @@ test('volume and network mutations expose danger only on final confirm and cance
   invoke(networks, 'Confirm remove');
   await settled(); await settled();
   assert.deepEqual(calls.at(-1), ['network.remove', refreshedNetworkId]);
-  assert.ok(labelled(networks, `Network ${refreshedNetworkId} was removed; refreshed bounded inventory.`));
+  assert.ok(labelled(networks, `Network ${refreshedNetworkId} was removed and its absence was verified.`));
 });
 
 test('shared volume confirmation disables both final actions while removal is pending', async () => {
   let release;
   const controlled = { volumes: {
     ...api.volumes,
-    remove: async () => new Promise((resolve) => { release = resolve; }),
+    removeAndWait: async () => new Promise((resolve) => { release = () => resolve({ changed: true, name: 'cache', generation: 'd'.repeat(32) }); }),
   } };
   const resource = {
     data: [{ name: 'cache', driver: 'local', generation: 'd'.repeat(32) }],
@@ -1627,7 +1627,7 @@ test('a failed final confirmation stays visible and retryable', async () => {
   let attempts = 0;
   const controlled = { volumes: {
     inspect: async () => ({}), create: async () => ({}),
-    remove: async () => { attempts += 1; throw new Error('volume remains in use'); },
+    removeAndWait: async () => { attempts += 1; throw new Error('volume remains in use'); },
   } };
   const resource = { data: [{ name: 'cache', driver: 'local', generation: 'e'.repeat(32) }], loading: false, error: null, reload: async () => {} };
   const stage = host();
@@ -1649,7 +1649,7 @@ test('stale volume generation refuses authority and remains visibly retryable', 
   const currentGeneration = 'e'.repeat(32);
   const controlled = { volumes: {
     inspect: async () => ({}), create: async () => ({}),
-    remove: async (...args) => calls.push(args),
+    removeAndWait: async (...args) => { calls.push(args); return { changed: true, name: args[0], generation: args[1] }; },
   } };
   const resource = { data: [
     { name: 'cache', driver: 'local', generation: oldGeneration },

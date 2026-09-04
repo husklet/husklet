@@ -124,11 +124,13 @@ export function Images({ api, resource, imageDetails }: {
 
   const remove = (item: ImageSummary) => run(`remove:${item.id}`, async () => {
     if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
-    await api.images.remove(item.id);
+    const removed = await api.images.removeAndWait(item.id);
     setConfirm('');
     if (detail?.id === item.id) setDetail(null);
     await resource.reload();
-    setNotice(`Image removal completed for ${item.id}; refreshed bounded inventory.`);
+    setNotice(removed.changed
+      ? `Image ${item.id} was removed and its absence was verified.`
+      : `Image ${item.id} removal was accepted, but absence was not observed before the timeout.`);
   });
   const prune = () => run('prune', async () => {
     const result = await api.images.prune();

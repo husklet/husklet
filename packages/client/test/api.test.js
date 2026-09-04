@@ -346,7 +346,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
   assert.deepEqual(protocolCoverage.available.images, [
-    'inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune',
+    'inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait',
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
   assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
@@ -825,6 +825,34 @@ test('volume and network facades preserve safe request shapes', async () => {
   ];
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   await Promise.all(operations);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('resource removal waits arm first and require non-truncated exact absence', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const image = `sha256:${'a'.repeat(64)}`; const generation = 'b'.repeat(32); const network = 'c'.repeat(32);
+  const cases = [
+    [() => api.images.removeAndWait(image), 'images', 'image_remove', { reference: image },
+      { snapshot: 'images', of: { images: [], truncated: false } }, { changed: true, id: image }],
+    [() => api.volumes.removeAndWait('cache', generation), 'volumes', 'volume_remove', { name: 'cache', generation },
+      { snapshot: 'volumes', of: { volumes: [], truncated: false } }, { changed: true, name: 'cache', generation }],
+    [() => api.networks.removeAndWait(network), 'networks', 'network_remove', { reference: network },
+      { snapshot: 'networks', of: { networks: [], truncated: false } }, { changed: true, id: network }],
+  ];
+  for (const [run, topic, call, argument, event, expected] of cases) {
+    const operation = run();
+    assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic } });
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    assert.deepEqual((await next()).payload, { call, with: argument });
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    stage.host.write(encode({ channel: 12, kind: KIND.event, payload: { ...event, of: { ...event.of, truncated: true } } }));
+    assert.equal((await next()).kind, KIND.credit);
+    stage.host.write(encode({ channel: 13, kind: KIND.event, payload: event }));
+    assert.equal((await next()).kind, KIND.credit);
+    assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic } });
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+    assert.deepEqual(await operation, expected);
+  }
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

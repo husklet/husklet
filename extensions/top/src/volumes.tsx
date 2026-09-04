@@ -56,10 +56,12 @@ export function Volumes({ api, resource, volumeDetails }: {
     if (currentVolumes.current.get(volume.name) !== volume.generation) {
       throw new Error(`Volume ${volume.name} changed generation; inspect and confirm again.`);
     }
-    await api.volumes.remove(volume.name, volume.generation);
+    const removed = await api.volumes.removeAndWait(volume.name, volume.generation);
     if (inspection.name === volume.name) setInspection(EMPTY_INSPECTION);
     await resource.reload();
-    setRemovalNotice(`Volume ${volume.name} generation ${volume.generation} was removed; refreshed bounded inventory.`);
+    setRemovalNotice(removed.changed
+      ? `Volume ${volume.name} generation ${volume.generation} was removed and its absence was verified.`
+      : `Volume ${volume.name} removal was accepted, but absence was not observed before the timeout.`);
   };
   const inspect = async (volume: VolumeSummary) => {
     const revision = ++inspectionRevision.current;
