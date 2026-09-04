@@ -568,7 +568,7 @@ function ContainerRename({ api, container, reload, blocked }) {
       </Row>
       {changed && validation ? <Text label={validation} color={'danger'} wrap={true} /> : null}
       {result.state === 'error' ? <Text
-        label={result.error?.message ?? String(result.error)}
+        label={boundedMessage(result.error)}
         color={'danger'}
         wrap={true} /> : null}
       {result.state === 'success' ? <Text
