@@ -16,6 +16,8 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [readable, setReadable] = React.useState<ReadablePane | null>(null);
   const [input, setInput] = React.useState('');
   const [title, setTitle] = React.useState('');
+  const [newTabTitle, setNewTabTitle] = React.useState('');
+  const [command, setCommand] = React.useState('');
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -24,6 +26,17 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
     setBusy(tab.id); setError(null);
     try {
       await api.terminal.pinTab(tab.id, !tab.pinned);
+      await resource.reload();
+    } catch (cause) { setError(cause); } finally { setBusy(''); }
+  };
+  const openTab = async () => {
+    const requestedTitle = newTabTitle.trim();
+    if (!requestedTitle || busy) return;
+    setBusy('open-tab'); setError(null);
+    try {
+      const result = await api.terminal.openTabAndWait(requestedTitle);
+      if (!result.changed) throw new Error(`Tab ${result.tab} was created, but its initial pane was not observed; refresh before acting on it.`);
+      setNewTabTitle('');
       await resource.reload();
     } catch (cause) { setError(cause); } finally { setBusy(''); }
   };
@@ -62,6 +75,24 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
+  const spawnCommand = async () => {
+    if (!cursor || readable?.kind !== 'terminal' || !selected || !command.trim()) return;
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    setBusy(`spawn:${slot}`); setError(null);
+    try {
+      const argv = commandArgv(command);
+      const result = await api.terminal.spawnAndWait(slot, cursor.generation, cursor.revision, argv, { lines: 200 });
+      if (!result.changed) throw new Error(`Pane ${slot} did not advance after spawning the command; refresh before retrying.`);
+      if (requested !== paneRevision.current) return;
+      setReadable({ kind: 'terminal', text: result.after.lines.join('\n'), snapshot: result.after });
+      setCommand('');
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
   const mutatePane = async (operation: 'split-beside' | 'split-below' | 'retitle' | 'close') => {
     if (!cursor || !selected) return;
     const slot = selected;
@@ -72,7 +103,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
         const result = await api.terminal.closeAndWait(slot, cursor.generation, cursor.revision);
         if (!result.changed) throw new Error(`Pane ${slot} did not close before the observation window ended; refresh and try again.`);
         if (requested !== paneRevision.current) return;
-        setSelected(''); setReadable(null); setInput(''); setTitle('');
+        setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand('');
       } else if (operation === 'retitle') {
         const requestedTitle = title.trim();
         if (!requestedTitle) return;
@@ -98,9 +129,15 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
     const present = (resource.data ?? []).some((tab) => tab.panes.some((pane) => pane.slot === selected));
     if (present) return;
     paneRevision.current += 1;
-    setSelected(''); setReadable(null); setInput(''); setTitle('');
+    setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand('');
   }, [resource.data, selected]);
   return <Page title="Terminal tabs" subtitle="Read terminal output or semantic UI text, send revision-bound input, focus panes, and pin tabs.">
+    <Row gap={1} wrap>
+      <Entry value={newTabTitle} placeholder="New tab title" grow enabled={busy === ''}
+        onChange={(event) => setNewTabTitle(String(event.value ?? ''))} onSubmit={() => { void openTab(); }} />
+      <Button label={busy === 'open-tab' ? 'Opening…' : 'Open tab'}
+        enabled={busy === '' && newTabTitle.trim().length > 0} onInvoke={() => { void openTab(); }} />
+    </Row>
     <Toolbar loading={resource.loading} onRefresh={resource.reload} />
     <ErrorText error={error} />
     <ResourceState
@@ -144,6 +181,13 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
                   onSubmit={() => { void sendLine(); }} />
                 <Button label="Send line" enabled={busy === '' && input.length > 0 && Boolean(cursor)} onInvoke={() => { void sendLine(); }} />
               </Row> : null}
+              {readable.kind === 'terminal' ? <Row gap={1} wrap>
+                <Entry value={command} placeholder={'Command argv, e.g. ["sh","-lc","make test"]'} grow
+                  enabled={busy === '' && Boolean(cursor)} onChange={(event) => setCommand(String(event.value ?? ''))}
+                  onSubmit={() => { void spawnCommand(); }} />
+                <Button label="Spawn command" enabled={busy === '' && Boolean(cursor) && command.trim().length > 0}
+                  onInvoke={() => { void spawnCommand(); }} />
+              </Row> : null}
               <Row gap={1} wrap>
                 <Button label="Split beside" enabled={busy === '' && Boolean(cursor)}
                   onInvoke={() => { void mutatePane('split-beside'); }} />
@@ -179,6 +223,20 @@ function paneCursor(snapshot: Pick<PaneText, 'generation' | 'revision'>): Termin
   return typeof snapshot.generation === 'number' && Number.isSafeInteger(snapshot.generation)
     && typeof snapshot.revision === 'number' && Number.isSafeInteger(snapshot.revision)
     ? { generation: snapshot.generation, revision: snapshot.revision } : null;
+}
+
+function commandArgv(value: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new TypeError('Command must be a JSON array of argument strings.'); }
+  const encoder = new TextEncoder();
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 64
+    || parsed.some((argument) => typeof argument !== 'string')
+    || parsed[0].length === 0
+    || parsed.some((argument) => argument.includes('\0') || encoder.encode(argument).length > 4_096)
+    || parsed.reduce((total, argument) => total + encoder.encode(argument).length, 0) > 32_768) {
+    throw new TypeError('Command must contain 1–64 NUL-free arguments, with a non-empty program, at most 4096 UTF-8 bytes each and 32768 bytes total.');
+  }
+  return parsed;
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {

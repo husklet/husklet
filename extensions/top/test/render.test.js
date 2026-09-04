@@ -227,6 +227,56 @@ test('an unobserved terminal mutation keeps the inspected pane and reports uncer
   assert.ok(labelled(stage, 'Terminal pane-1'), 'uncertain close retains the inspected pane');
 });
 
+test('terminal management opens tabs and spawns exact argv through observed operations', async () => {
+  const calls = [];
+  const terminal = {
+    openTabAndWait: async (...args) => { calls.push(['open', ...args]); return { changed: true, tab: 'tab-new', pane: { slot: 'pane-new' } }; },
+    toText: async () => ({ kind: 'terminal', text: '$ ready', snapshot: { slot: 'pane-1', generation: 7, revision: 11, lines: ['$ ready'], truncated: false } }),
+    spawnAndWait: async (...args) => {
+      calls.push(['spawn', ...args]);
+      return { changed: true, before: {}, after: { slot: args[0], generation: 7, revision: 12, lines: ['$ make test', 'ok'], truncated: false } };
+    },
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [{ slot: 'pane-1', occupant: 'terminal', provider: null }] }],
+    loading: false, error: null, reload: async () => calls.push(['reload']),
+  };
+  const stage = host(); stage.render(h(Terminals, { api: { terminal }, resource }));
+  change(stage, 'New tab title', ' Tests '); invoke(stage, 'Open tab'); await settled(); await settled();
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', '["make","test"]');
+  invoke(stage, 'Spawn command'); await settled(); await settled();
+  assert.deepEqual(calls, [
+    ['open', 'Tests'], ['reload'],
+    ['spawn', 'pane-1', 7, 11, ['make', 'test'], { lines: 200 }],
+  ]);
+  assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ make test\nok');
+  assert.equal(fieldValue(stage, 'Command argv, e.g. ["sh","-lc","make test"]'), '');
+});
+
+test('terminal command validation cannot send shell-like text as ambiguous argv', async () => {
+  const calls = [];
+  const terminal = {
+    toText: async () => ({ kind: 'terminal', text: '$ ready', snapshot: { slot: 'pane-1', generation: 7, revision: 11, lines: ['$ ready'], truncated: false } }),
+    spawnAndWait: async (...args) => calls.push(args), pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [{ slot: 'pane-1', occupant: 'terminal', provider: null }] }],
+    loading: false, error: null, reload: async () => {},
+  };
+  const stage = host(); stage.render(h(Terminals, { api: { terminal }, resource }));
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', 'rm -rf build'); invoke(stage, 'Spawn command');
+  await settled(); await settled();
+  assert.deepEqual(calls, []);
+  assert.ok(labelled(stage, 'Command must be a JSON array of argument strings.'));
+  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', JSON.stringify(Array(65).fill('x')));
+  invoke(stage, 'Spawn command'); await settled(); await settled();
+  assert.deepEqual(calls, []);
+  assert.ok(labelled(stage, 'Command must contain 1–64 NUL-free arguments, with a non-empty program, at most 4096 UTF-8 bytes each and 32768 bytes total.'));
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
