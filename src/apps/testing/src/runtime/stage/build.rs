@@ -43,8 +43,13 @@ pub(super) fn run(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Erro
     artifacts?.ok_or_else(|| "Cargo did not identify both the testing runner and hl-native library".into())
 }
 
-const fn cargo_feature_arguments(production: bool, hooks: bool) -> &'static [&'static str] {
-    if production && !hooks {
+const fn cargo_feature_arguments(_production: bool, hooks: bool) -> &'static [&'static str] {
+    // A hook-enabled staging runner deliberately stages its matching hook engine. Every
+    // other runner must ask Cargo for the production feature set explicitly: an empty
+    // argument list means "default features", not "the features of this executable",
+    // and therefore selects native-test-hooks even when this runner was itself built with
+    // --no-default-features.
+    if !hooks {
         &["--no-default-features", "--features", "production-runtime"]
     } else {
         &[]
@@ -176,6 +181,11 @@ mod tests {
     #[test]
     fn stage_feature_arguments_resolve_default_production_and_all_features() {
         assert!(cargo_feature_arguments(false, true).is_empty(), "default hook runner");
+        assert_eq!(
+            cargo_feature_arguments(false, false),
+            ["--no-default-features", "--features", "production-runtime"],
+            "a no-default-features runner must not let Cargo restore hook defaults"
+        );
         assert_eq!(
             cargo_feature_arguments(true, false),
             ["--no-default-features", "--features", "production-runtime"]
