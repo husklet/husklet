@@ -259,6 +259,7 @@ static const hl_host_services *effective_host_services(void) {
 #define HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE 0
 #endif
 #define HL_BACKEND_TREE_TEST_NAME hl_aarch64_backend_tree_census_test
+#define HL_BACKEND_A64_OPCODE_CENSUS 1
 #include "../backend_tree.c"
 #undef HL_BACKEND_TREE_TEST_NAME
 #undef HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE

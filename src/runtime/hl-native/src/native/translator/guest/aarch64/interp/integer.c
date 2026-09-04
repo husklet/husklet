@@ -489,7 +489,8 @@ static int interp_undefined(struct cpu *cpu, uint32_t insn, const char *class_na
 
 // Decode and execute.
 #define INTERP_NEXT 0 // instruction done, cpu->pc advanced; continue the block
-#define INTERP_END 1  // block ends here; cpu->reason and cpu->pc are final
+#define INTERP_END 1  // instruction did not retire; cpu->reason and cpu->pc are final
+#define INTERP_RETIRED_END 2 // instruction retired and ends the block
 
 #include "integer/immediate.c"
 #include "integer/register.c"

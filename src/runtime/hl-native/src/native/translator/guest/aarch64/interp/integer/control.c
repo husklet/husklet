@@ -73,7 +73,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         }
         cpu->pc = gpc + (uint64_t)offset;
         cpu->reason = R_BRANCH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     // B.cond, and BC.cond (the v8.8 hint: bit 4 apart, same architectural effect).
@@ -81,7 +81,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         int64_t offset = interp_sext((insn >> 5) & 0x7FFFFu, 19) << 2;
         cpu->pc = interp_cond_holds(cpu, insn & 0xFu) ? gpc + (uint64_t)offset : gpc + 4;
         cpu->reason = R_BRANCH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     if ((insn & 0x7E000000u) == 0x34000000u) {
@@ -91,7 +91,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         int is_zero = sf ? value == 0 : (uint32_t)value == 0;
         cpu->pc = (nonzero ? !is_zero : is_zero) ? gpc + (uint64_t)offset : gpc + 4;
         cpu->reason = R_BRANCH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     // TBZ / TBNZ: the bit position is b5:b40, so insn[31] is its high bit and not an sf field.
@@ -103,7 +103,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         int set = (int)((value >> bit) & 1);
         cpu->pc = (nonzero ? set : !set) ? gpc + (uint64_t)offset : gpc + 4;
         cpu->reason = R_BRANCH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     // BR / BLR / RET (the PAC/ERET forms are not modelled).
@@ -130,7 +130,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         default: return interp_undefined(cpu, insn, "branch register -- ERET/DRPS or unallocated opc");
         }
         cpu->reason = R_BRANCH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     if ((insn & 0xFF000000u) == 0xD4000000u) {
@@ -139,7 +139,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
             // The PC stays ON the svc; the dispatcher advances it unless the syscall set pc itself.
             cpu->pc = gpc;
             cpu->reason = R_SYSCALL;
-            return INTERP_END;
+            return INTERP_RETIRED_END;
         }
         // A GUEST event, not an engine gap: this must not reach interp_undefined (fatal, exit 70). BRK is
         // SIGTRAP/TRAP_BRKPT with the PC left ON it, so a handler that returns re-executes; HLT, HVC/SMC and
@@ -169,7 +169,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
             // BYTES come free from re-decoding, but the cached block EXTENT came from the old ones.
             cpu->pc = gpc + 4;
             cpu->reason = R_ICCOMMIT;
-            return INTERP_END;
+            return INTERP_RETIRED_END;
         }
         // DSB / DMB / SB / CLREX. Guest threads are host threads and guest accesses are ordinary C accesses
         // the host may reorder, so a guest barrier needs a real host one; SEQ_CST covers every ordering here.
@@ -188,7 +188,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         cpu->smc_va = interp_gpr(cpu, (int)(insn & 31));
         cpu->pc = gpc + 4;
         cpu->reason = R_ICFLUSH;
-        return INTERP_END;
+        return INTERP_RETIRED_END;
     }
 
     // DC ZVA zeroes the block size advertised in DCZID_EL0 (== 4, so 64 bytes), never the host's.

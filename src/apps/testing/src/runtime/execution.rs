@@ -480,7 +480,14 @@ impl<'a> CaseExecution<'a> {
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
         let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());
-        if self.execution.is_translated() {
+        let aarch64_interpreter_product = self.execution.diagnostics()
+            && self.execution.is_translated()
+            && self.target == Target::Arm64
+            && cfg!(target_arch = "x86_64");
+        profile_validation = profile_validation.and_then(|()| {
+            output::aarch64_opcode_product(&logs.stderr, aarch64_interpreter_product, false, true).map(|_| ())
+        });
+        if self.execution.is_translated() && !aarch64_interpreter_product {
             profile_validation = profile_validation.and_then(|()| output::validate_translated_execution(&logs.stderr));
         }
         if self.execution.diagnostics() {
@@ -548,7 +555,7 @@ impl<'a> CaseExecution<'a> {
             }
             let logs = self.containers.logs(name).await?;
             let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
-            validate_checkpoint_generation(&diagnostics, generation)?;
+            validate_checkpoint_generation(&diagnostics, generation, self.target)?;
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
@@ -563,7 +570,7 @@ impl<'a> CaseExecution<'a> {
         *observed = Some(status);
         let logs = self.containers.logs(name).await?;
         let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
-        validate_checkpoint_generation(&diagnostics, 2)?;
+        validate_checkpoint_generation(&diagnostics, 2, self.target)?;
         let text = std::fs::read_to_string(output)?;
         validate_daily_dev_protocol(&text)?;
         if status != ExitStatus::Code(0) {
@@ -649,13 +656,20 @@ fn checkpoint_generation_logs(logs: &hl_container::Logs, offsets: &mut (usize, u
     Ok(generation)
 }
 
-fn validate_checkpoint_generation(generation: &[u8], ordinal: usize) -> Result<(), Error> {
+fn validate_checkpoint_generation(generation: &[u8], ordinal: usize, target: Target) -> Result<(), Error> {
     output::validate_backend_tree(generation, true)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
-    output::validate_translated_execution(generation)
+    let aarch64_interpreter_product = target == Target::Arm64 && cfg!(target_arch = "x86_64");
+    output::aarch64_opcode_product(generation, aarch64_interpreter_product, true, true)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
-    output::validate_profile_or_product(generation)
-        .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    if !aarch64_interpreter_product {
+        output::validate_translated_execution(generation)
+            .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    }
+    if !aarch64_interpreter_product {
+        output::validate_profile_or_product(generation)
+            .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    }
     let receipt = output::backend_execution_digest(generation);
     if receipt.is_empty() {
         return Err("validated checkpoint generation has no backend-tree receipt".into());

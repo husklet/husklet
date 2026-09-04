@@ -1,14 +1,8 @@
 #include "../../../cache_abi.h"
 
-static int interp_step(struct cpu *cpu) {
-    uint32_t insn = 0;
-    if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
-        // Unreadable instruction: the JIT's R_FETCHFAULT; a guest SIGSEGV at this PC.
-        cpu->fault_addr = cpu->pc;
-        cpu->reason = R_FETCHFAULT;
-        return INTERP_END;
-    }
-    switch ((insn >> 25) & 0xF) {
+static int interp_step_decoded(struct cpu *cpu, uint32_t insn) {
+    unsigned major = (insn >> 25) & 0xF;
+    switch (major) {
     case 0x0:
         // op0 == 0000 is RESERVED and its only member, UDF, is PERMANENTLY undefined -- not a gap here, so
         // deliver a guest SIGILL instead of stopping the engine (SME and SVE below ARE allocated, stay fatal).
@@ -31,6 +25,27 @@ static int interp_step(struct cpu *cpu) {
     case 0xD: return interp_exec_dp_register(cpu, insn);
     default: return interp_exec_simd(cpu, insn);
     }
+}
+
+static int interp_step(struct cpu *cpu) {
+    uint32_t insn = 0;
+    if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
+        cpu->fault_addr = cpu->pc;
+        cpu->reason = R_FETCHFAULT;
+        return INTERP_END;
+    }
+    return interp_step_decoded(cpu, insn);
+}
+
+static int interp_step_census(struct cpu *cpu, unsigned *major_out) {
+    uint32_t insn = 0;
+    if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
+        cpu->fault_addr = cpu->pc;
+        cpu->reason = R_FETCHFAULT;
+        return INTERP_END;
+    }
+    *major_out = (insn >> 25) & 0xF;
+    return interp_step_decoded(cpu, insn);
 }
 
 // Must answer 1 wherever interp_step ends a block; more is only wasteful. The recorded range must never
@@ -161,19 +176,42 @@ static void run_block(struct cpu *cpu, void *code) {
     g_interp_marker_armed = 1;
 
     uint64_t executed = 0;
-    for (;;) {
-        // Poll AFTER one instruction retires: exiting with cpu->pc unchanged gets the same block forever.
-        if (executed && __atomic_load_n(&cpu->irq, __ATOMIC_RELAXED)) {
-            cpu->reason = R_BRANCH;
+    if (!hl_backend_tree_steps_enabled()) {
+        for (;;) {
+            if (executed && __atomic_load_n(&cpu->irq, __ATOMIC_RELAXED)) {
+                cpu->reason = R_BRANCH;
+                break;
+            }
+            if (cpu->pc < block->guest_start || cpu->pc >= block->guest_end) {
+                cpu->reason = R_BRANCH;
+                break;
+            }
+            int outcome = interp_step(cpu);
+            if (outcome == INTERP_NEXT) {
+                executed++;
+                continue;
+            }
+            if (outcome == INTERP_RETIRED_END) executed++;
             break;
         }
-        // Ordinary chain exit.
-        if (cpu->pc < block->guest_start || cpu->pc >= block->guest_end) {
-            cpu->reason = R_BRANCH;
-            break;
+    } else {
+        for (;;) {
+            if (executed && __atomic_load_n(&cpu->irq, __ATOMIC_RELAXED)) {
+                cpu->reason = R_BRANCH;
+                break;
+            }
+            if (cpu->pc < block->guest_start || cpu->pc >= block->guest_end) {
+                cpu->reason = R_BRANCH;
+                break;
+            }
+            unsigned major = 0;
+            int outcome = interp_step_census(cpu, &major);
+            if (outcome != INTERP_END) {
+                hl_backend_tree_a64_body_retired(major);
+                executed++;
+            }
+            if (outcome != INTERP_NEXT) break;
         }
-        if (interp_step(cpu) == INTERP_END) break;
-        executed++;
     }
 
     g_interp_marker_armed = 0;

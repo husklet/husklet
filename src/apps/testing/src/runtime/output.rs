@@ -4,6 +4,34 @@ use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
 const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
+const AARCH64_OPCODE_PREFIX: &str = "[diag] aarch64-opcode ";
+const AARCH64_OPCODE_FIELDS: &[&str] = &[
+    "version",
+    "available",
+    "body_retired",
+    "major0",
+    "major1",
+    "major2",
+    "major3",
+    "major4",
+    "major5",
+    "major6",
+    "major7",
+    "major8",
+    "major9",
+    "major10",
+    "major11",
+    "major12",
+    "major13",
+    "major14",
+    "major15",
+    "reserved",
+    "load_store",
+    "dp_register",
+    "dp_immediate",
+    "branch_system",
+    "simd_fp",
+];
 const X86_EXIT_FAMILY_PREFIX: &str = "[diag] x86-exit-family ";
 const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "version",
@@ -24,6 +52,91 @@ const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "t_fault",
     "t_other",
 ];
+
+pub(crate) fn aarch64_opcode_product(
+    stderr: &[u8],
+    required: bool,
+    require_nonzero: bool,
+    reconcile_shape: bool,
+) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+    let stderr = std::str::from_utf8(stderr).map_err(|_| "aarch64-opcode diagnostic is not UTF-8")?;
+    let records: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(AARCH64_OPCODE_PREFIX))
+        .collect();
+    if !required {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        return Err("aarch64-opcode diagnostic appeared while disabled".into());
+    }
+    if records.len() != 1 {
+        return Err(format!(
+            "aarch64-opcode diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut values = BTreeMap::new();
+    let mut order = Vec::new();
+    for field in records[0].split_ascii_whitespace() {
+        let (name, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("aarch64-opcode malformed field {field:?}"))?;
+        if !AARCH64_OPCODE_FIELDS.contains(&name) {
+            return Err(format!("aarch64-opcode unknown field {name:?}").into());
+        }
+        if values
+            .insert(
+                name,
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("aarch64-opcode field {name:?} is not an integer"))?,
+            )
+            .is_some()
+        {
+            return Err(format!("aarch64-opcode duplicate field {name:?}").into());
+        }
+        order.push(name);
+    }
+    if order != AARCH64_OPCODE_FIELDS {
+        return Err("aarch64-opcode fields are omitted or out of order".into());
+    }
+    if values["version"] != 1 || values["available"] != 1 {
+        return Err("aarch64-opcode version/availability is invalid".into());
+    }
+    let majors = (0..16).try_fold(0u64, |sum, i| {
+        sum.checked_add(values[format!("major{i}").as_str()])
+            .ok_or("aarch64-opcode major sum overflow")
+    })?;
+    let families = [
+        "reserved",
+        "load_store",
+        "dp_register",
+        "dp_immediate",
+        "branch_system",
+        "simd_fp",
+    ]
+    .into_iter()
+    .try_fold(0u64, |sum, name| {
+        sum.checked_add(values[name])
+            .ok_or("aarch64-opcode family sum overflow")
+    })?;
+    if majors != values["body_retired"] || families != values["body_retired"] {
+        return Err("aarch64-opcode counters do not reconcile".into());
+    }
+    if require_nonzero && values["body_retired"] == 0 {
+        return Err("aarch64-opcode dedicated fixture retired no instructions".into());
+    }
+    if reconcile_shape {
+        let shape =
+            backend_shape_product(stderr.as_bytes(), true)?.ok_or("aarch64-opcode product omitted backend-shape")?;
+        if shape["interpreted_steps"] != values["body_retired"] {
+            return Err("aarch64-opcode retired total differs from aggregated interpreted steps".into());
+        }
+    }
+    Ok(Some(values))
+}
 const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
     "version",
     "available",
@@ -977,11 +1090,22 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     if version >= 13 {
         if fields["translation_codegen_available"] == 0 {
             let codegen_activity = [
-                "translated_entries", "translated_steps", "jcc_ibtc_emitted", "jcc_ibtc_hits",
-                "jcc_ibtc_fills", "direct_jmp_ibtc_emitted", "direct_jmp_ibtc_hits",
-                "direct_jmp_ibtc_fills", "direct_call_ibtc_emitted", "direct_call_ibtc_hits",
-                "direct_call_ibtc_fills", "ret_fast_ibtc_hits", "ret_fast_ibtc_fills",
-                "executed_form_total", "executed_form_unique", "executed_form_overflow",
+                "translated_entries",
+                "translated_steps",
+                "jcc_ibtc_emitted",
+                "jcc_ibtc_hits",
+                "jcc_ibtc_fills",
+                "direct_jmp_ibtc_emitted",
+                "direct_jmp_ibtc_hits",
+                "direct_jmp_ibtc_fills",
+                "direct_call_ibtc_emitted",
+                "direct_call_ibtc_hits",
+                "direct_call_ibtc_fills",
+                "ret_fast_ibtc_hits",
+                "ret_fast_ibtc_fills",
+                "executed_form_total",
+                "executed_form_unique",
+                "executed_form_overflow",
             ];
             if codegen_activity.iter().any(|name| fields[name] != 0)
                 || (0..16).any(|rank| fields[format!("executed_form{rank}_count").as_str()] != 0)
@@ -1248,7 +1372,10 @@ pub(crate) fn executed_form_digest(stderr: &[u8]) -> String {
 
 pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
     for line in stderr.lines().filter(|line| {
-        valid_profile_line(line) || line.starts_with(BACKEND_TREE_PREFIX) || line.starts_with(BACKEND_SHAPE_PREFIX)
+        valid_profile_line(line)
+            || line.starts_with(BACKEND_TREE_PREFIX)
+            || line.starts_with(BACKEND_SHAPE_PREFIX)
+            || line.starts_with(AARCH64_OPCODE_PREFIX)
     }) {
         writeln!(output, "{line}")?;
     }
@@ -1336,6 +1463,94 @@ fn glob(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const A64_OPCODE: &str = "[diag] aarch64-opcode version=1 available=1 body_retired=12 major0=0 major1=0 major2=0 major3=0 major4=2 major5=1 major6=1 major7=1 major8=2 major9=1 major10=1 major11=0 major12=1 major13=0 major14=1 major15=1 reserved=0 load_store=5 dp_register=1 dp_immediate=3 branch_system=1 simd_fp=2\n";
+
+    #[test]
+    fn aarch64_opcode_census_is_strict_and_reconciled() {
+        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true, true, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed["body_retired"], 12);
+        assert!(parsed["load_store"] > 0);
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE.replace("body_retired=12", "body_retired=11").as_bytes(),
+                true,
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE
+                    .replace("major15=1", "major15=18446744073709551615")
+                    .as_bytes(),
+                true,
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE.replace(" major15=1", " unknown=1 major15=1").as_bytes(),
+                true,
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE
+                    .replace(" major8=2 major9=1", " major9=1 major8=2")
+                    .as_bytes(),
+                true,
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(aarch64_opcode_product(A64_OPCODE.as_bytes(), false, false, false).is_err());
+        assert!(aarch64_opcode_product(b"ordinary stderr\n", true, false, false).is_err());
+        let zero = A64_OPCODE
+            .split_ascii_whitespace()
+            .map(|field| {
+                field.split_once('=').map_or_else(
+                    || field.to_owned(),
+                    |(name, _)| {
+                        if matches!(name, "version" | "available") {
+                            field.to_owned()
+                        } else {
+                            format!("{name}=0")
+                        }
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            + "\n";
+        aarch64_opcode_product(zero.as_bytes(), true, false, false).unwrap();
+        assert!(aarch64_opcode_product(zero.as_bytes(), true, true, false).is_err());
+    }
+
+    #[test]
+    fn aarch64_opcode_census_reaches_worker_counter_assertions() {
+        let captured = format!("[diag] backend-shape crossings=8\n{A64_OPCODE}");
+        let mut forwarded = Vec::new();
+        forward_profile(&captured, &mut forwarded).unwrap();
+        assert_eq!(forwarded, captured.as_bytes());
+
+        let assertions: Vec<crate::runtime::definition::diagnostics::Assertion> = serde_yaml::from_str(
+            "- { counter: body_retired, equals: 12 }\n\
+             - { counter: major10, equals: 1 }\n\
+             - { counter: branch_system, equals: 1 }\n",
+        )
+        .unwrap();
+        assert!(crate::runtime::definition::diagnostics::violation(&assertions, &forwarded).is_none());
+    }
 
     #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
@@ -1431,7 +1646,9 @@ mod tests {
         }
         for rank in 0..16 {
             let (key, count) = if rank == 0 { (17, 3) } else { (0, 0) };
-            product.push_str(&format!(" executed_form{rank}_key={key} executed_form{rank}_count={count}"));
+            product.push_str(&format!(
+                " executed_form{rank}_key={key} executed_form{rank}_count={count}"
+            ));
         }
         product.push_str(
             "\n[diag] x86-exit-family version=1 translated_entries=2 total=2 \
@@ -1442,7 +1659,9 @@ mod tests {
     }
 
     fn set_product_field(record: &str, name: &str, value: u64) -> String {
-        let start = record.find(&format!("{name}=")).unwrap_or_else(|| panic!("missing fixture field {name}"));
+        let start = record
+            .find(&format!("{name}="))
+            .unwrap_or_else(|| panic!("missing fixture field {name}"));
         let value_start = start + name.len() + 1;
         let value_end = record[value_start..]
             .find(char::is_whitespace)
@@ -1645,9 +1864,7 @@ mod tests {
             BACKEND_SHAPE_PRODUCT_V13_ORDER[..BACKEND_SHAPE_PRODUCT_V13_ORDER.len() - 3],
             "native producer and product parser field order diverged"
         );
-        assert!(report.contains(
-            " executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu"
-        ));
+        assert!(report.contains(" executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu"));
         assert!(report.contains(" executed_form%u_key=%llu executed_form%u_count=%llu"));
 
         let arguments = report

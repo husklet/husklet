@@ -455,8 +455,10 @@ static void *translate_block(hl_x86_hot_context *context, uint64_t gpc) {
     block->host_entry_off = 0;
     block->host_len = 0;
     block->profile_insns = 0;
-    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, g_coldprof && translit_pcache_census_next != UINT16_MAX
+    INTERP_BLOCK_PCACHE_SET_ORDINAL(block, g_pcache && g_coldprof && translit_pcache_census_next != UINT16_MAX
                                               ? translit_pcache_census_next++ : UINT16_MAX);
+    if (g_coldprof && !g_pcache && INTERP_BLOCK_PCACHE_ORDINAL(block) != UINT16_MAX)
+        translit_pcache_census_emitted_while_disabled++;
 #if defined(HL_NATIVE_TEST_HOOKS)
     block->profile_jcc_fall_stitches = 0;
     block->profile_fallback_kind = HL_BACKEND_SHAPE_I_OTHER;

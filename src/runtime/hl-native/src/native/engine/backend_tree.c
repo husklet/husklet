@@ -988,6 +988,7 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->interpreted_steps, steps, memory_order_relaxed);
 }
+static inline void hl_backend_tree_a64_body_retired(unsigned major) { (void)major; }
 
 static inline void hl_backend_tree_reason(unsigned reason) {
     struct hl_backend_tree_slot *slot = g_backend_tree_self;
@@ -2572,6 +2573,7 @@ enum hl_backend_mixed_sse_lifecycle {
 };
 
 #define HL_BACKEND_MIXED_SSE_SLOTS 4096u
+#define HL_BACKEND_A64_MAJOR_COUNT 16u
 
 struct hl_backend_tree_slot {
     _Atomic int pid;
@@ -2601,6 +2603,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t interpreted_entries;
     _Atomic uint64_t translated_steps;
     _Atomic uint64_t interpreted_steps;
+    _Atomic uint64_t a64_major[HL_BACKEND_A64_MAJOR_COUNT];
     _Atomic uint64_t map_misses;
     _Atomic uint64_t executed_form_total;
     _Atomic uint64_t executed_form_unique;
@@ -3355,6 +3358,41 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     HL_APPEND_CALL_SIM("call_sim_decline_authority", call_sim_decline_authority);
 #undef HL_APPEND_CALL_SIM
 #undef HL_APPEND_CROSSING
+#if defined(HL_BACKEND_A64_OPCODE_CENSUS)
+    uint64_t major[HL_BACKEND_A64_MAJOR_COUNT];
+    uint64_t family[6] = {0};
+    uint64_t body_retired = 0;
+    for (unsigned i = 0; i < HL_BACKEND_A64_MAJOR_COUNT; ++i) {
+        major[i] = atomic_load_explicit(&census->a64_major[i], memory_order_relaxed);
+        body_retired += major[i];
+    }
+    static const unsigned char family_for_major[HL_BACKEND_A64_MAJOR_COUNT] = {
+        0, 0, 0, 0, 1, 2, 1, 5, 3, 3, 4, 4, 1, 2, 1, 5,
+    };
+    for (unsigned i = 0; i < HL_BACKEND_A64_MAJOR_COUNT; ++i)
+        family[family_for_major[i]] += major[i];
+    int a64_added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             "\n[diag] aarch64-opcode version=1 available=%d body_retired=%llu "
+                             "major0=%llu major1=%llu major2=%llu major3=%llu major4=%llu major5=%llu "
+                             "major6=%llu major7=%llu major8=%llu major9=%llu major10=%llu major11=%llu "
+                             "major12=%llu major13=%llu major14=%llu major15=%llu "
+                             "reserved=%llu load_store=%llu dp_register=%llu dp_immediate=%llu "
+                             "branch_system=%llu simd_fp=%llu",
+                             available, (unsigned long long)body_retired,
+                             (unsigned long long)major[0], (unsigned long long)major[1],
+                             (unsigned long long)major[2], (unsigned long long)major[3],
+                             (unsigned long long)major[4], (unsigned long long)major[5],
+                             (unsigned long long)major[6], (unsigned long long)major[7],
+                             (unsigned long long)major[8], (unsigned long long)major[9],
+                             (unsigned long long)major[10], (unsigned long long)major[11],
+                             (unsigned long long)major[12], (unsigned long long)major[13],
+                             (unsigned long long)major[14], (unsigned long long)major[15],
+                             (unsigned long long)family[0], (unsigned long long)family[1],
+                             (unsigned long long)family[2], (unsigned long long)family[3],
+                             (unsigned long long)family[4], (unsigned long long)family[5]);
+    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted) return;
+    formatted += a64_added;
+#endif
     if ((size_t)formatted + 1 >= sizeof record) return;
     record[formatted++] = '\n';
     size_t offset = 0;
@@ -3406,6 +3444,11 @@ static inline int hl_backend_tree_steps_enabled(void) { return g_backend_mixed_s
 static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
+}
+static inline void hl_backend_tree_a64_body_retired(unsigned major) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || major >= HL_BACKEND_A64_MAJOR_COUNT) return;
+    atomic_fetch_add_explicit(&census->a64_major[major], 1, memory_order_relaxed);
 }
 static inline void hl_backend_tree_map_miss(void) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
