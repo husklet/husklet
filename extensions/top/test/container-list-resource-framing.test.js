@@ -28,6 +28,7 @@ test('container catalogue removes stale authority across framed loading, failure
         if (!call) continue;
         let flags = 1;
         let payload = { reply: 'done' };
+        let observation = null;
         if (call === 'container_list') {
           attempts += 1;
           if (attempts === 2) {
@@ -41,9 +42,15 @@ test('container catalogue removes stale authority across framed loading, failure
         } else if (call === 'container_remove') {
           removals.push(frame.payload.with);
           removed = true;
+          observation = { containers: [], complete: true };
+        } else if (call === 'event_subscribe' && frame.payload.with?.topic === 'container-inventory') {
+          observation = { containers: [{ id, name: 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 }], complete: true };
         }
         const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
-        setTimeout(() => socket.write(response), call === 'container_list' ? 20 : 0);
+        setTimeout(() => {
+          socket.write(response);
+          if (observation) socket.write(encode({ channel: 97, kind: KIND.event, payload: { snapshot: 'container_inventory', of: observation } }));
+        }, call === 'container_list' ? 20 : 0);
       }
     });
   });
@@ -92,6 +99,7 @@ test('container catalogue removes stale authority across framed loading, failure
     invoke(stage, 'Confirm remove');
     await until(() => removals.length === 1 && labelled(stage, 'No containers'));
     assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');
+    await until(() => labelled(stage, 'Container removal completed and its absence was verified.'));
   } finally {
     stage?.render(null);
     await new Promise((resolve) => setTimeout(resolve, 30));

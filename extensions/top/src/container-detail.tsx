@@ -16,7 +16,7 @@ export type Inspection = {
   error: unknown;
 };
 export type LifecycleVerb = 'start' | 'restart' | 'pause' | 'unpause' | 'stop' | 'kill';
-export type LifecycleAction = (verb: LifecycleVerb, id: string, signal?: string) => Promise<void>;
+export type LifecycleAction = (verb: LifecycleVerb, id: string, signal?: string, generation?: number) => Promise<void>;
 
 function StructuredDetail({ value }: { value: unknown }) {
   return (
@@ -99,7 +99,7 @@ export function ContainerDetail({ api, container, act, inspection, onRetry, onOp
           confirmLabel={'Confirm kill'}
           pendingLabel={'Confirm kill'}
           question={`Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`}
-          onConfirm={() => act('kill', container.id, 'SIGKILL')} />
+          onConfirm={() => act('kill', container.id, 'SIGKILL', container.generation)} />
       </Row>
       {logs === null ? null : <Text label={logs || 'No log output.'} wrap={true} />}
       <Separator />
@@ -163,4 +163,3 @@ export function ContainerDetail({ api, container, act, inspection, onRetry, onOp
     </CardContent>
   );
 }
-

@@ -6,7 +6,7 @@ import {
 } from '@husklet/react';
 import { ContainerDetailsSource, bounded, boundedMessage, shortId } from './model.js';
 import { ContainerCreate } from './container-create.js';
-import { ContainerDetail, type Inspection, type LifecycleAction } from './container-detail.js';
+import { ContainerDetail, type Inspection, type LifecycleAction, type LifecycleVerb } from './container-detail.js';
 import { ContainerRename } from './container-rename.js';
 import type { Resource } from './overview.js';
 
@@ -23,17 +23,32 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState<{ tone: 'positive' | 'warning' | 'danger'; label: string } | null>(null);
   const [inspection, setInspection] = useState<Inspection>({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
   const currentContainers = useRef(new Map<string, string>());
   currentContainers.current = new Map((resource.data ?? []).map((container) => [container.id, container.state]));
-  const act: LifecycleAction = async (verb, id, signal) => {
+  const act: LifecycleAction = async (verb, id, signal, generation) => {
     setBusy(`${verb}:${id}`);
+    setNotice(null);
     try {
-      if (verb === 'kill') await api.containers.kill(id, signal ?? 'SIGKILL');
+      let verified: boolean | null = null;
+      if (verb === 'start') verified = (await api.containers.startAndWait(id)).changed;
+      else if (verb === 'stop') verified = (await api.containers.stopAndWait(id)).changed;
+      else if (verb === 'restart') {
+        if (generation === undefined) throw new Error(`Container ${id} has no observable generation; refresh before restarting it.`);
+        verified = (await api.containers.restartAndWait(id, generation)).changed;
+      } else if (verb === 'kill') await api.containers.kill(id, signal ?? 'SIGKILL');
       else await api.containers[verb](id);
       await resource.reload();
+      setNotice(verified === false
+        ? { tone: 'warning', label: `${lifecycleLabel(verb)} was sent, but the requested transition was not observed before the deadline.` }
+        : { tone: 'positive', label: verified === true
+          ? `${lifecycleLabel(verb)} completed and was verified.`
+          : `${lifecycleLabel(verb)} was accepted; refreshed current container state.` });
+    } catch (cause) {
+      setNotice({ tone: 'danger', label: boundedMessage(cause) });
     } finally { setBusy(''); }
   };
   const inspect = async (item: ContainerSummary) => {
@@ -70,13 +85,19 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
       throw new Error(`Container ${item.id} changed or is no longer created or exited; refresh and confirm again.`);
     }
     setBusy(`remove:${item.id}`);
+    setNotice(null);
     try {
-      await api.containers.remove(item.id);
+      const removed = await api.containers.removeAndWait(item.id);
       inspectionRevision.current += 1;
       setSelected(null);
       setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
       await detailsSource.replace(null);
       await resource.reload();
+      setNotice(removed.changed
+        ? { tone: 'positive', label: 'Container removal completed and its absence was verified.' }
+        : { tone: 'warning', label: 'Removal was sent, but container absence was not observed before the deadline.' });
+    } catch (cause) {
+      setNotice({ tone: 'danger', label: boundedMessage(cause) });
     } finally { setBusy(''); }
   };
   const view = bounded(resource.data);
@@ -91,6 +112,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
         onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
         reload={resource.reload} />
       <Toolbar loading={resource.loading} onRefresh={resource.reload} />
+      {notice ? <Text label={notice.label} color={notice.tone} wrap /> : null}
       <ResourceState
         state={state}
         loadingLabel={'Reading containers…'}
@@ -143,12 +165,12 @@ function containerActions(
       key={'start'}
       label={active ? 'Restart' : 'Start'}
       enabled={!blocked && (active || startable)}
-      onInvoke={() => act(active ? 'restart' : 'start', item.id)} />,
+      onInvoke={() => act(active ? 'restart' : 'start', item.id, undefined, item.generation)} />,
     <Button
       key={'pause'}
       label={item.state === 'paused' ? 'Resume' : 'Pause'}
       enabled={!blocked && (running || item.state === 'paused')}
-      onInvoke={() => act(item.state === 'paused' ? 'unpause' : 'pause', item.id)} />,
+      onInvoke={() => act(item.state === 'paused' ? 'unpause' : 'pause', item.id, undefined, item.generation)} />,
     <ConfirmAction
       key={'stop'}
       label={'Stop'}
@@ -157,7 +179,7 @@ function containerActions(
       authorityKey={`container:${item.id}:stop`}
       question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
       enabled={!blocked && (active || item.state === 'restarting')}
-      onConfirm={() => act('stop', item.id)} />,
+      onConfirm={() => act('stop', item.id, undefined, item.generation)} />,
     <ConfirmAction
       key={'remove'}
       label={'Remove'}
@@ -192,3 +214,6 @@ function Omitted({ count }: { count: number }) { return count > 0 ? <Text
 
 function stateTone(state: string): 'positive' | 'warning' | 'neutral' { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
 function removable(state: string | undefined): boolean { return state === 'created' || state === 'exited'; }
+function lifecycleLabel(verb: LifecycleVerb): string {
+  return verb === 'unpause' ? 'Resume' : verb.charAt(0).toUpperCase() + verb.slice(1);
+}

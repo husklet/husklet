@@ -685,7 +685,7 @@ test('container stop and kill cannot call the API before final confirmation', as
   const controlled = {
     containers: {
       inspect: async (id) => ({ id, name: 'api', image: 'alpine', state: 'running', created: 0 }),
-      stop: async (...args) => calls.push(['stop', ...args]),
+      stopAndWait: async (...args) => { calls.push(['stop', ...args]); return { changed: true, container: { id: immutable, state: 'exited' } }; },
       kill: async (...args) => calls.push(['kill', ...args]),
       exec: async () => {}, logs: async () => new Uint8Array(),
     },
@@ -1156,6 +1156,56 @@ test('container controls follow the real daemon lifecycle states', () => {
   stage.render(h(Containers, { api, resource: inventory('restarting') }));
   assert.equal(isEnabled(stage, 'Start'), false, 'a restarting container cannot be started twice');
   assert.equal(isEnabled(stage, 'Stop'), true, 'a restart loop can be stopped');
+});
+
+test('container lifecycle controls report only observation-backed completion', async () => {
+  const id = 'c'.repeat(32);
+  const calls = [];
+  const controlled = { containers: {
+    startAndWait: async (...args) => { calls.push(['start', ...args]); return { changed: true, container: { id, state: 'running' } }; },
+    stopAndWait: async (...args) => { calls.push(['stop', ...args]); return { changed: false, id, state: 'exited' }; },
+    restartAndWait: async (...args) => { calls.push(['restart', ...args]); return { changed: true, container: { id, state: 'running', generation: 8 } }; },
+    removeAndWait: async (...args) => { calls.push(['remove', ...args]); return { changed: true, id }; },
+  } };
+  const reload = async () => calls.push(['reload']);
+  const stage = host();
+  const render = (state, generation = 7) => stage.render(h(Containers, {
+    api: controlled,
+    resource: { data: [{ id, name: 'worker', image: 'alpine', state, generation }], loading: false, error: null, reload },
+  }));
+
+  render('created');
+  invoke(stage, 'Start'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Start completed and was verified.'));
+  assert.deepEqual(calls, [['start', id], ['reload']]);
+
+  render('running');
+  invoke(stage, 'Restart'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Restart completed and was verified.'));
+  assert.deepEqual(calls.slice(-2), [['restart', id, 7], ['reload']]);
+
+  invoke(stage, 'Stop');
+  invoke(stage, 'Confirm stop'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Stop was sent, but the requested transition was not observed before the deadline.'));
+  assert.deepEqual(calls.slice(-2), [['stop', id], ['reload']]);
+
+  render('exited', 8);
+  invoke(stage, 'Remove');
+  invoke(stage, 'Confirm remove'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Container removal completed and its absence was verified.'));
+  assert.deepEqual(calls.slice(-2), [['remove', id], ['reload']]);
+});
+
+test('restart refuses a container without an observed generation', async () => {
+  const calls = [];
+  const stage = host();
+  stage.render(h(Containers, {
+    api: { containers: { restartAndWait: async (...args) => calls.push(args) } },
+    resource: { data: [{ id: 'old', name: 'worker', image: 'alpine', state: 'running' }], loading: false, error: null, reload: async () => calls.push(['reload']) },
+  }));
+  invoke(stage, 'Restart'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Container old has no observable generation; refresh before restarting it.'));
+  assert.deepEqual(calls, []);
 });
 
 test('container execution preserves argv and exposes the exact inspectable identity', async () => {
