@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, Progress, ResourceState, Row, Scroll, Separator, Spinner, Text,
+  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
 } from '@husklet/react';
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
@@ -130,7 +130,7 @@ function Navigation({ section, onSelect }) {
         {SECTIONS.map((name) => <ListItemButton
           key={name}
           label={title(name)}
-          selected={section === name}
+          variant={section === name ? 'filled' : 'ghost'}
           onInvoke={() => onSelect(name)} />)}
       </List>
     </Column>
@@ -1152,7 +1152,7 @@ export function Images({ api, resource, imageDetails }) {
         <CardContent gap={1}>
           {pull.total > 0 ? <Meter
             fraction={Math.min(1, pull.current / pull.total)}
-            value={`${pull.current} / ${pull.total} bytes`} /> : pull.state === 'pulling' || pull.state === 'starting' ? <Progress busy={true} /> : null}
+            value={`${pull.current} / ${pull.total} bytes`} /> : pull.state === 'pulling' || pull.state === 'starting' ? <Spinner /> : null}
           {pull.layer ? <Text label={`Layer ${pull.layer}`} color={'text-dim'} /> : null}
           {pull.error ? <Text label={pull.error} color={'danger'} wrap={true} /> : null}
         </CardContent>
@@ -1666,7 +1666,7 @@ export function Terminals({ api, resource }) {
                 label={readable.kind === 'terminal' ? `Terminal ${selected}` : `Interface ${selected}`}
                 detail={readable.kind === 'terminal' ? 'Bounded live screen text' : 'Bounded semantic XML'} />
               <CardContent gap={1}>
-                <LogView label={readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) || 'Pane is empty.'} />
+                <LogView value={readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) || 'Pane is empty.'} />
                 {readable.kind === 'terminal' ? <Row gap={1}>
                   <Entry
                     value={input}

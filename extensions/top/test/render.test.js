@@ -18,6 +18,7 @@ test('the test host receives overview and every resource navigation choice', () 
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
   for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
+  assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -124,14 +125,14 @@ test('terminal management reads every pane as text and writes against the inspec
   stage.render(h(Terminals, { api: { terminal }, resource }));
   invoke(stage, 'Inspect pane-1'); await settled(); await settled();
   assert.deepEqual(calls, [['read', 'pane-1']]);
-  assert.ok(labelled(stage, '$ ready'));
+  assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready');
   change(stage, 'Send a line to this terminal', 'printf hello');
   invoke(stage, 'Send line'); await settled(); await settled();
   assert.deepEqual(calls[1], ['write', 'pane-1', 7, 11, 'printf hello\n', { lines: 200 }]);
-  assert.ok(labelled(stage, '$ ready\nhello'));
+  assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready\nhello');
   assert.equal(fieldValue(stage, 'Send a line to this terminal'), '');
   invoke(stage, 'Inspect pane-ui'); await settled(); await settled();
-  assert.ok(labelled(stage, '<pane><button label="Deploy"/></pane>'));
+  assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '<pane><button label="Deploy"/></pane>');
   assert.ok(labelled(stage, 'Interface pane-ui'));
   assert.deepEqual(calls.filter(([kind]) => kind === 'write').length, 1, 'reading semantic XML never writes terminal bytes');
 });
@@ -1378,6 +1379,20 @@ function isEnabled(stage, label) {
   return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
     'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Enabled').at(-1)?.SetProp.value?.Flag;
 }
+
+function property(stage, label, prop) {
+  const node = labelled(stage, label)?.SetProp.id;
+  return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
+    'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === prop).at(-1)?.SetProp.value;
+}
+
+function latestPropertyForTag(stage, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const nodes = new Set(patches.filter((patch) => patch.Create?.tag === tag).map((patch) => patch.Create.id));
+  return patches.filter((patch) => patch.SetProp?.prop === prop && nodes.has(patch.SetProp.id)).at(-1)?.SetProp.value;
+}
+
+function stageFromFrame(frame) { return { frames: [frame] }; }
 
 function fieldValue(stage, placeholder) {
   const node = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
