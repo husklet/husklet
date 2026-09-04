@@ -514,7 +514,7 @@ fn x86_aarch64_other_subcensus_is_diagnostics_only_and_reconciles_to_other() {
 
     let classifier = source
         .split_once("static enum hl_x86_a64_other hl_x86_a64_other(const struct insn *instruction) {")
-        .and_then(|(_, tail)| tail.split_once("\n}\nstatic enum hl_x86_a64_family"))
+        .and_then(|(_, tail)| tail.split_once("static enum hl_x86_a64_family"))
         .map(|(body, _)| body)
         .expect("other classifier");
     for detail in ["OTHER_STACK", "OTHER_MOVE", "OTHER_ADDRESS", "OTHER_SYSTEM", "OTHER_UNKNOWN"] {
@@ -541,7 +541,22 @@ fn x86_aarch64_route_census_is_diagnostics_gated_and_reconciled() {
         .map(|(body, _)| body)
         .expect("route commit body");
     assert!(commit.trim_start().starts_with("if (!g_prof) return;"), "{commit}");
-    assert_eq!(commit.matches("atomic_fetch_add_explicit").count(), 4, "{commit}");
+    for publication in [
+        "&g_x86_a64_route_total",
+        "&g_x86_a64_route_count[route]",
+        "&g_x86_a64_family_route_count[g_x86_a64_family_current][route]",
+        "&g_x86_a64_family_route_words[g_x86_a64_family_current][route]",
+        "&g_x86_a64_other_count[g_x86_a64_other_current]",
+        "&g_x86_a64_other_words[g_x86_a64_other_current]",
+    ] {
+        assert_eq!(commit.matches(publication).count(), 1, "missing or duplicate publication {publication}: {commit}");
+    }
+    let other = commit
+        .split_once("if (g_x86_a64_family_current == HL_X86_A64_FAMILY_OTHER) {")
+        .map(|(_, body)| body)
+        .expect("other-family publication guard");
+    assert!(other.contains("g_x86_a64_other_count"), "{other}");
+    assert!(other.contains("g_x86_a64_other_words"), "{other}");
 
     let report = translator
         .split_once("static int hl_x86_a64_route_report(char *out, size_t size) {")
