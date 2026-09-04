@@ -282,7 +282,7 @@ fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
     ] {
         assert!(source.contains(contract), "missing stage-two contract {contract}");
     }
-    assert!(!source.contains("interp_exec_dp_immediate\n"), "supported ALU emitted a C helper call");
+    assert!(!source.contains("hl_a64_x86_emit_alu_helper"), "supported ALU emitted a C helper call");
     let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
     for instruction in [
         "orr x2,xzr,#0x7fffffffffffffff",
