@@ -299,12 +299,12 @@ mod tests {
     fn summary_exposes_enabled_digest_bound_provider_declarations() {
         let provider = hl_extension::PaneProvider {
             id: ExtensionName::new("main").unwrap(),
-            title: "Workspace manager".into(),
+            title: "Top".into(),
             icon: Some("applications-system-symbolic".into()),
         };
         let value = summary(super::super::roster::Entry {
-            name: ExtensionName::new("manager").unwrap(),
-            display_name: "Manager".into(),
+            name: ExtensionName::new("top").unwrap(),
+            display_name: "Top".into(),
             interface: None,
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
