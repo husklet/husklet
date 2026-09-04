@@ -1,13 +1,18 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Column, Heading, InlineMessage, MemoryMap, Text } from '@husklet/react';
 
 export const MEMORY_STORY = 'Inspect process memory';
 export const REGION_LIMIT = 128;
+type MemoryRegion = { start: number; end: number; permissions: string; mapping?: unknown };
 
-export function boundedRegions(regions) {
+export function boundedRegions(regions: readonly unknown[]): string {
   return regions
-    .filter(({ start, end, permissions }) => Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && start < end && /^[rwxps-]{1,4}$/.test(permissions))
+    .filter((region): region is MemoryRegion => {
+      if (region === null || typeof region !== 'object') return false;
+      const { start, end, permissions } = region as Record<string, unknown>;
+      return Number.isSafeInteger(start) && Number.isSafeInteger(end) && Number(start) >= 0
+        && Number(start) < Number(end) && typeof permissions === 'string' && /^[rwxps-]{1,4}$/.test(permissions);
+    })
     .slice(0, REGION_LIMIT)
     .map(({ start, end, permissions, mapping = '' }) => `${start.toString(16).padStart(16, '0')}-${end.toString(16).padStart(16, '0')}\t${permissions}\t${end - start}\t${String(mapping).replace(/[\t\r\n]/g, ' ')}`)
     .join('\n');

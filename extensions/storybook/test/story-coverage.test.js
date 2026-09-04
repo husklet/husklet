@@ -280,22 +280,23 @@ test('test report bounds cases and failure detail independently', () => {
 
 test('timeline view rejects blank events and enforces its hard ceiling', () => {
   const events = Array.from({ length: TIMELINE_LIMIT + 5 }, (_, index) => ({ timestampMs: index, category: 'runtime', label: `event-${index}`, detail: 'observed' }));
-  events.splice(1, 0, { timestampMs: 1, category: 'runtime', label: '', detail: 'blank' });
+  events.splice(1, 0, null, { timestampMs: 1, category: 'runtime', label: '', detail: 'blank' });
   const value = boundedEvents(events); assert.equal(value.split('\n').length, TIMELINE_LIMIT); assert(!value.includes('blank')); assert(value.startsWith('0\truntime\tevent-0\tobserved'));
 });
 
 test('disassembly inspection rejects invalid instructions and enforces its hard ceiling', () => {
   const instructions = Array.from({ length: INSTRUCTION_LIMIT + 7 }, (_, index) => ({ address: index, bytes: [0xc3], mnemonic: 'ret', operands: '' }));
-  instructions.splice(1, 0, { address: 2, bytes: [], mnemonic: 'bad', operands: '' });
+  instructions.splice(1, 0, null, { address: 2, bytes: [], mnemonic: 'bad', operands: '' }, { address: 3, bytes: [256], mnemonic: 'wide', operands: '' });
   const value = boundedInstructions(instructions);
   assert.equal(value.split('\n').length, INSTRUCTION_LIMIT);
   assert(!value.includes('\t\tbad\t'));
+  assert(!value.includes('\twide\t'));
   assert(value.startsWith('0000000000000000\tc3\tret\t'));
 });
 
 test('memory inspection rejects invalid regions and enforces its hard ceiling', () => {
   const regions = Array.from({ length: REGION_LIMIT + 9 }, (_, index) => ({ start: index * 4096, end: (index + 1) * 4096, permissions: 'r-xp', mapping: `segment-${index}` }));
-  regions.splice(1, 0, { start: 4, end: 4, permissions: 'rw-p', mapping: 'empty' });
+  regions.splice(1, 0, null, { start: 4, end: 4, permissions: 'rw-p', mapping: 'empty' });
   const value = boundedRegions(regions);
   assert.equal(value.split('\n').length, REGION_LIMIT);
   assert(!value.includes('empty'));
@@ -304,7 +305,7 @@ test('memory inspection rejects invalid regions and enforces its hard ceiling', 
 
 test('profile inspection rejects invalid frames and enforces its hard ceiling', () => {
   const frames = Array.from({ length: FRAME_LIMIT + 17 }, (_, index) => ({ label: `frame-${index}`, samples: index + 1 }));
-  frames.splice(2, 0, { label: 'idle', samples: 0 }, { label: '', samples: 4 });
+  frames.splice(2, 0, null, { label: 'idle', samples: 0 }, { label: '', samples: 4 });
   const value = boundedFrames(frames);
   assert.equal(value.split('\n').length, FRAME_LIMIT);
   assert(!value.includes('idle'));

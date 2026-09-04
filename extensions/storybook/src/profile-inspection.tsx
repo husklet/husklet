@@ -1,14 +1,18 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Column, FlameGraph, Heading, InlineMessage, Text } from '@husklet/react';
 
 
 export const PROFILE_STORY = 'Inspect sampled profile';
 export const FRAME_LIMIT = 64;
+type ProfileFrame = { label: string; samples: number };
 
-export function boundedFrames(frames) {
+export function boundedFrames(frames: readonly unknown[]): string {
   return frames
-    .filter(({ label, samples }) => typeof label === 'string' && label.trim() && Number.isSafeInteger(samples) && samples > 0)
+    .filter((frame): frame is ProfileFrame => {
+      if (frame === null || typeof frame !== 'object') return false;
+      const { label, samples } = frame as Record<string, unknown>;
+      return typeof label === 'string' && Boolean(label.trim()) && Number.isSafeInteger(samples) && Number(samples) > 0;
+    })
     .slice(0, FRAME_LIMIT)
     .map(({ label, samples }) => `${samples}\t${label.replace(/[\t\r\n]/g, ' ')}`)
     .join('\n');

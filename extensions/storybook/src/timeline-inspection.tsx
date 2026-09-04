@@ -1,11 +1,15 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Column, Heading, InlineMessage, Text, TimelineView } from '@husklet/react';
 export const TIMELINE_VIEW_STORY = 'Inspect incident timeline';
 export const TIMELINE_LIMIT = 256;
-export function boundedEvents(events) {
-  const clean = (value) => String(value).replace(/[\t\r\n]/g, ' ');
-  return events.filter(({ timestampMs, label }) => Number.isSafeInteger(timestampMs) && typeof label === 'string' && label.trim()).slice(0, TIMELINE_LIMIT).map(({ timestampMs, category = '', label, detail = '' }) => `${timestampMs}\t${clean(category)}\t${clean(label)}\t${clean(detail)}`).join('\n');
+type TimelineEvent = { timestampMs: number; category?: unknown; label: string; detail?: unknown };
+export function boundedEvents(events: readonly unknown[]): string {
+  const clean = (value: unknown): string => String(value).replace(/[\t\r\n]/g, ' ');
+  return events.filter((event): event is TimelineEvent => {
+    if (event === null || typeof event !== 'object') return false;
+    const { timestampMs, label } = event as Record<string, unknown>;
+    return Number.isSafeInteger(timestampMs) && typeof label === 'string' && Boolean(label.trim());
+  }).slice(0, TIMELINE_LIMIT).map(({ timestampMs, category = '', label, detail = '' }) => `${timestampMs}\t${clean(category)}\t${clean(label)}\t${clean(detail)}`).join('\n');
 }
 export function TimelineInspectionStory() {
   const value = boundedEvents([
