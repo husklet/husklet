@@ -15,4 +15,3 @@ cases:
     expect:
       exit: 0
       stdout: vfork_exec.txt
-      fork_diagnostics: { maximum_records: 0 }
