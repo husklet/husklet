@@ -33,6 +33,8 @@ test('key/value inspection keeps logical metadata and wire windows independently
   assert.equal(source.generated, KEY_VALUE_WINDOW_LIMIT);
   assert.equal(KEY_VALUE_RECORDS, 256);
   assert.deepEqual(window.rows[0].cells, [{ Text: 'manifest.field.4' }, { Code: 'value-4' }]);
+  assert.equal(source.answer(null), null);
+  assert.equal(source.answer({ source: KEY_VALUE_SOURCE, version: 1, id: 10, range: { start: 0, count: -1 } }), null);
 });
 
 test('key/value inspector is selectable and refresh is visibly acknowledged', () => {

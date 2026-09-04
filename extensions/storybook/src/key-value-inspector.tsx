@@ -1,6 +1,6 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Button, Column, Heading, InlineMessage, KeyValueTable, Row, Text } from '@husklet/react';
+import type { ColumnSpec, InterfaceSourceMutation } from '@husklet/react';
 
 const { useState } = React;
 
@@ -8,14 +8,33 @@ export const KEY_VALUE_STORY = 'Bounded key/value inspector';
 export const KEY_VALUE_SOURCE = 102;
 export const KEY_VALUE_RECORDS = 256;
 export const KEY_VALUE_WINDOW_LIMIT = 32;
-export const KEY_VALUE_SCHEMA = Object.freeze([
+export const KEY_VALUE_SCHEMA: readonly ColumnSpec[] = Object.freeze([
   { key: 'key', title: 'Property', width: { chars: 22 } },
   { key: 'value', title: 'Value', width: 'fill' },
 ]);
 
+type SourceSender = (_call: string, argument: { mutation: InterfaceSourceMutation }) => Promise<void>;
+type WindowRequest = { source: number; version: number; id: number; range: { start: number; count: number } };
+
+function windowRequest(value: unknown): WindowRequest | null {
+  if (value === null || typeof value !== 'object') return null;
+  const request = value as Record<string, unknown>;
+  if (request.range === null || typeof request.range !== 'object') return null;
+  const range = request.range as Record<string, unknown>;
+  return Number.isSafeInteger(request.source) && Number.isSafeInteger(request.version)
+    && Number.isSafeInteger(request.id) && Number.isSafeInteger(range.start) && Number(range.start) >= 0
+    && Number.isSafeInteger(range.count) && Number(range.count) >= 0
+    ? request as WindowRequest
+    : null;
+}
+
 /** A manifest-like property supply which materializes only host-requested rows. */
 export class KeyValueSource {
-  constructor(send = async () => {}) {
+  readonly send: SourceSender;
+  readonly version: number;
+  generated: number;
+
+  constructor(send: SourceSender = async () => {}) {
     this.send = send;
     this.version = 1;
     this.generated = 0;
@@ -27,7 +46,9 @@ export class KeyValueSource {
     });
   }
 
-  answer(request) {
+  answer(value: unknown) {
+    const request = windowRequest(value);
+    if (!request) return null;
     if (request.source !== KEY_VALUE_SOURCE || request.version !== this.version) return null;
     const count = Math.min(request.range.count, KEY_VALUE_WINDOW_LIMIT,
       Math.max(0, KEY_VALUE_RECORDS - request.range.start));
@@ -40,7 +61,7 @@ export class KeyValueSource {
   }
 }
 
-export function KeyValueInspectorStory({ source }) {
+export function KeyValueInspectorStory({ source: _source }: { source: KeyValueSource }) {
   const [refreshes, setRefreshes] = useState(0);
   return (
     <Column gap={2} grow={true}>
