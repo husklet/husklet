@@ -296,11 +296,7 @@
           framework = developerRootfsFor pkgs;
           armRefusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "arm64") true);
           x86Refusal = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "amd64") true);
-          expected = [
-            "build-base.version" "build-base.url" "build-base.sha256"
-            "git.version" "git.url" "git.sha256"
-            "ripgrep.version" "ripgrep.url" "ripgrep.sha256"
-          ];
+          expected = map (package: "${package.name}.sha256") framework.manifests.arm64.packages;
         in
         assert framework.requiredTools == [
           "bin/sh" "usr/bin/git" "usr/bin/gcc" "usr/bin/rg" "usr/bin/make"
@@ -308,6 +304,9 @@
         ];
         assert framework.missingFields framework.manifests.arm64 == expected;
         assert framework.missingFields framework.manifests.amd64 == expected;
+        assert builtins.length expected == 34;
+        assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.arm64.packages == 92831642;
+        assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.amd64.packages == 103044688;
         assert !framework.manifests.arm64.closureComplete && !framework.manifests.amd64.closureComplete;
         assert !armRefusal.success && !x86Refusal.success;
         pkgs.runCommand "developer-rootfs-manifest-framework" { } ''
