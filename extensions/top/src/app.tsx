@@ -12,12 +12,14 @@ import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
 import { Executions } from './executions.js';
 import { Images } from './images.js';
+import { Volumes } from './volumes.js';
 
 export { Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
 export { Processes } from './processes.js';
 export { Executions } from './executions.js';
 export { Images } from './images.js';
+export { Volumes } from './volumes.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -735,129 +737,6 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
           onInvoke={() => onOpenExecution(execution.id)} /> : null}
       </Row> : null}
     </CardContent>
-  );
-}
-
-export function Volumes({ api, resource, volumeDetails }) {
-  const localDetails = useMemo(() => new VolumeDetailsSource(), []);
-  const detailsSource = volumeDetails ?? localDetails;
-  const [name, setName] = useState('');
-  const [inspection, setInspection] = useState({ name: '', state: 'idle', count: 0, detail: null, error: null });
-  const [creation, setCreation] = useState({ state: 'idle', name: '', error: null });
-  const inspectionRevision = useRef(0);
-  const inventoryRevision = useRef(resource.data);
-  const create = async () => {
-    const requested = name.trim();
-    if (!requested || creation.state === 'loading') return;
-    setCreation({ state: 'loading', name: requested, error: null });
-    try {
-      await api.volumes.create(requested);
-      await resource.reload();
-      setName('');
-      setCreation({ state: 'success', name: requested, error: null });
-    } catch (cause) {
-      setCreation({ state: 'error', name: requested, error: cause });
-    }
-  };
-  const currentVolumes = useRef(new Map());
-  currentVolumes.current = new Map((resource.data ?? []).map((volume) => [volume.name, volume.generation]));
-  const remove = async (volume) => {
-    if (currentVolumes.current.get(volume.name) !== volume.generation) {
-      throw new Error(`Volume ${volume.name} changed generation; inspect and confirm again.`);
-    }
-    await api.volumes.remove(volume.name, volume.generation);
-    if (inspection.name === volume.name) setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
-    await resource.reload();
-  };
-  const inspect = async (volume) => {
-    const revision = ++inspectionRevision.current;
-    setInspection({ name: volume.name, state: 'loading', count: 0, detail: null, error: null });
-    try {
-      const detail = await api.volumes.inspect(volume.name);
-      if (revision !== inspectionRevision.current) return;
-      const count = await detailsSource.replace(detail);
-      if (revision !== inspectionRevision.current) return;
-      setInspection({ name: volume.name, state: 'ready', count, detail, error: null });
-    } catch (error) { if (revision === inspectionRevision.current) setInspection({ name: volume.name, state: 'error', count: 0, detail: null, error }); }
-  };
-  useEffect(() => {
-    if (inventoryRevision.current === resource.data) return;
-    inventoryRevision.current = resource.data;
-    inspectionRevision.current += 1;
-    setInspection({ name: '', state: 'idle', count: 0, detail: null, error: null });
-  }, [resource.data]);
-  const view = bounded(resource.data);
-  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
-  return (
-    <Page
-      title={'Volumes'}
-      subtitle={'Bounded local volume inventory and safe, non-force lifecycle.'}>
-      <Row gap={1}>
-        <Entry
-          value={name}
-          placeholder={'Volume name'}
-          enabled={creation.state !== 'loading'}
-          onChange={(event) => { setName(String(event.value ?? '')); setCreation({ state: 'idle', name: '', error: null }); }} />
-        <Button
-          label={creation.state === 'loading' ? 'Creating…' : creation.state === 'error' ? 'Retry create' : 'Create'}
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => { void create(); }} />
-        <Button
-          label={'Refresh'}
-          enabled={creation.state !== 'loading'}
-          onInvoke={resource.reload} />
-      </Row>
-      {creation.state === 'loading' ? <Row gap={1} align={'center'}>
-        <Spinner />
-        <Text label={`Creating volume ${creation.name}…`} />
-      </Row> : null}
-      {creation.state === 'error' ? <Text label={boundedMessage(creation.error)} color={'danger'} wrap={true} /> : null}
-      {creation.state === 'success' ? <Text label={`Created volume ${creation.name}.`} color={'positive'} wrap={true} /> : null}
-      <ResourceState
-        state={inventoryState}
-        loadingLabel={'Reading volumes…'}
-        emptyLabel={'No volumes'}
-        emptyDetail={'Create a named volume above when a workload needs durable storage.'}
-        error={resource.error?.message ?? String(resource.error ?? '')}
-        retryLabel={'Retry volumes'}
-        onRetry={resource.reload}>
-        {view.records.map((volume) => <Card
-          key={`${volume.name}:${volume.generation}`}
-          variant={inspection.name === volume.name ? 'filled' : 'outline'}>
-          <CardHeader label={volume.name} detail={volume.driver} />
-          <CardActions gap={1}>
-            <Button
-              label={inspection.name === volume.name && inspection.state === 'error' ? 'Retry inspect' : 'Inspect'}
-              onInvoke={() => inspect(volume)} />
-            <ConfirmAction
-              authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
-              label={'Remove'}
-              confirmLabel={'Confirm remove'}
-              pendingLabel={'Confirm remove'}
-              question={`Remove volume ${volume.name} generation ${volume.generation}?`}
-              onConfirm={() => remove(volume)} />
-          </CardActions>
-          {inspection.name === volume.name ? <CardContent>
-            {inspection.state === 'loading'
-              ? <Row gap={1} align={'center'}>
-              <Spinner />
-              <Text label={'Reading volume details…'} />
-            </Row>
-              : inspection.state === 'error'
-                ? <Text
-              label={inspection.error?.message ?? String(inspection.error)}
-              color={'danger'}
-              wrap={true} />
-                : inspection.count === 0
-                  ? <EmptyState
-              label={'No volume details'}
-              detail={'The host returned no inspectable fields.'} />
-                  : <StructuredDetail value={inspection.detail} />}
-          </CardContent> : null}
-        </Card>)}
-        <Omitted count={view.omitted} />
-      </ResourceState>
-    </Page>
   );
 }
 
