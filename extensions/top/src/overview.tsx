@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Button, Card, CardActions, CardContent, CardHeader, Column, Heading, List, ListItemButton,
-  Row, Scroll, Text,
+  Row, Scroll, Spinner, Text,
   type ContainerSummary, type ExecutionSummary, type ImageSummary, type NetworkSummary, type TabSummary,
   type VolumeSummary,
 } from '@husklet/react';
@@ -32,11 +32,14 @@ export function Navigation({ section, onSelect }: { section: Section; onSelect: 
   </Column>;
 }
 
-export function Overview({ containers, executions, images, volumes, networks, terminals = { data: [], loading: false, error: null }, onOpen }: {
+export function Overview({ containers, executions, images, volumes, networks, terminals, onOpen }: {
   containers: Resource<ContainerSummary>; executions: Resource<ExecutionSummary>; images: Resource<ImageSummary>; volumes: Resource<VolumeSummary>;
-  networks: Resource<NetworkSummary>; terminals?: Pick<Resource<TabSummary>, 'data' | 'loading' | 'error'>;
+  networks: Resource<NetworkSummary>; terminals: Resource<TabSummary>;
   onOpen: (section: Section) => void;
 }) {
+  const resources = [containers, executions, images, volumes, networks, terminals];
+  const refreshing = resources.some((resource) => resource.loading);
+  const refreshAll = async () => { await Promise.all(resources.map((resource) => resource.reload())); };
   const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
   const executionsSummary = resourceSummary(executions, (records) => `${records.filter((item) => item.running).length} running`);
   const imagesSummary = resourceSummary(images, () => 'Available locally');
@@ -46,6 +49,10 @@ export function Overview({ containers, executions, images, volumes, networks, te
   return <Scroll grow height="fill"><Column pad={4} gap={3}>
     <Heading label="Resource overview" scale="title" />
     <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
+    <Row gap={1} align="center">
+      {refreshing ? <Spinner /> : null}
+      <Button label={refreshing ? 'Refreshing…' : 'Refresh all'} enabled={!refreshing} onInvoke={refreshAll} />
+    </Row>
     <Row gap={2} wrap>
       <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
       <Summary title="Processes" value="On demand" detail="Across running containers" onOpen={() => onOpen('processes')} />

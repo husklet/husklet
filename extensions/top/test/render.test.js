@@ -31,6 +31,7 @@ test('overview never presents stale inventory counts as current during loading o
     images: { data: stale, loading: false, error: new Error('image refresh failed') },
     volumes: { data: [], loading: false, error: null },
     networks: { data: [], loading: false, error: null },
+    terminals: { data: [], loading: false, error: null },
     onOpen: () => {},
   }));
   assert.ok(labelled(stage, '…'));
@@ -45,6 +46,22 @@ test('overview never presents stale inventory counts as current during loading o
   }
   assert.equal(labelled(stage, '1 running'), undefined, 'loading cannot retain stale running claims');
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
+});
+
+test('overview refreshes every authoritative inventory in one action', async () => {
+  const calls = [];
+  const inventory = (name) => ({
+    data: [], loading: false, error: null, replace() {}, reload: async () => calls.push(name),
+  });
+  const stage = host();
+  stage.render(h(Overview, {
+    containers: inventory('containers'), executions: inventory('executions'), images: inventory('images'),
+    volumes: inventory('volumes'), networks: inventory('networks'), terminals: inventory('terminals'),
+    onOpen() {},
+  }));
+  invoke(stage, 'Refresh all');
+  await settled();
+  assert.deepEqual(calls.sort(), ['containers', 'executions', 'images', 'networks', 'terminals', 'volumes']);
 });
 
 test('late inventory reloads cannot replace a newer authoritative snapshot', async () => {
