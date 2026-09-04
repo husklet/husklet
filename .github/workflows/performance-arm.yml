@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   developer-benchmark:
-    name: ARM to ARM and x86 to ARM developer benchmark
+    name: ARM to ARM and ARM to x86 developer benchmark
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     env:
@@ -155,7 +155,7 @@ jobs:
             --results "$root/results-arm-to-arm" \
             --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
 
-      - name: Measure x86 to ARM translation against ARM controls
+      - name: Measure ARM to x86 translation against ARM controls
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/physical-arm-performance"
@@ -169,14 +169,14 @@ jobs:
             --translated-engine "$artifacts/bin/hl-x86_64" \
             --translated-guest-isa x86_64 \
             --native-library "$artifacts/lib/libhl_native_engine.so" \
-            --results "$root/results-x86-to-arm" \
+            --results "$root/results-arm-to-x86" \
             --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
 
       - name: Require complete benchmark evidence
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/physical-arm-performance"
-          for results in "$root/results-arm-to-arm" "$root/results-x86-to-arm"; do
+          for results in "$root/results-arm-to-arm" "$root/results-arm-to-x86"; do
             test -s "$results/identity.json"
             test -s "$results/ledger.jsonl"
             test -s "$results/lock.receipt"
@@ -194,6 +194,83 @@ jobs:
           path: |
             ${{ runner.temp }}/physical-arm-performance/artifacts
             ${{ runner.temp }}/physical-arm-performance/results-arm-to-arm
-            ${{ runner.temp }}/physical-arm-performance/results-x86-to-arm
+            ${{ runner.temp }}/physical-arm-performance/results-arm-to-x86
+          if-no-files-found: error
+          retention-days: 30
+
+  x86-developer-benchmark:
+    name: x86 to x86 and x86 to ARM developer benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require an x86_64 Linux host
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+      - name: Prepare exact artifacts
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hosted-x86-performance"
+          artifacts="$root/artifacts"
+          build="$root/build"
+          mkdir -p "$artifacts/bin" "$artifacts/lib"
+          x86_root=$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths .#developer-rootfs-x86_64)
+          arm_root=$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths .#developer-rootfs-aarch64)
+          CARGO_TARGET_DIR="$build" nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo build -p engine --bin hl-x86_64 --bin hl-aarch64 -p testing --bin testing --locked --offline
+          cp "$build/debug/hl-x86_64" "$artifacts/bin/hl-x86_64"
+          cp "$build/debug/hl-aarch64" "$artifacts/bin/hl-aarch64"
+          cp "$build/debug/testing" "$artifacts/bin/testing"
+          mapfile -t libraries < <(find "$build/debug/build" -path '*/out/libhl_native_engine.so' -type f -print)
+          test "${#libraries[@]}" -eq 1
+          cp "${libraries[0]}" "$artifacts/lib/libhl_native_engine.so"
+          printf 'commit=%s\nkernel=' "$(git rev-parse HEAD)" > "$artifacts/host-manifest.txt"
+          uname -srv >> "$artifacts/host-manifest.txt"
+          lscpu >> "$artifacts/host-manifest.txt"
+          sha256sum "$artifacts/bin/testing" "$artifacts/bin/hl-x86_64" "$artifacts/bin/hl-aarch64" \
+            "$artifacts/lib/libhl_native_engine.so" "$artifacts/host-manifest.txt" > "$artifacts/artifacts.sha256"
+          "$artifacts/bin/testing" --help > "$artifacts/testing-help.txt"
+          printf 'X86_ROOTFS=%s\nARM_ROOTFS=%s\n' "$x86_root" "$arm_root" >> "$GITHUB_ENV"
+      - name: Measure x86 to x86
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hosted-x86-performance"; artifacts="$root/artifacts"
+          sudo "$artifacts/bin/testing" benchmark-developer --host-manifest "$artifacts/host-manifest.txt" \
+            --rootfs "$X86_ROOTFS" --engine "$artifacts/bin/hl-x86_64" --guest-isa x86_64 \
+            --native-library "$artifacts/lib/libhl_native_engine.so" --results "$root/results-x86-to-x86" \
+            --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
+      - name: Measure x86 to ARM against x86 controls
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hosted-x86-performance"; artifacts="$root/artifacts"
+          sudo "$artifacts/bin/testing" benchmark-developer --host-manifest "$artifacts/host-manifest.txt" \
+            --rootfs "$X86_ROOTFS" --engine "$artifacts/bin/hl-x86_64" --guest-isa x86_64 \
+            --translated-rootfs "$ARM_ROOTFS" --translated-engine "$artifacts/bin/hl-aarch64" \
+            --translated-guest-isa aarch64 --native-library "$artifacts/lib/libhl_native_engine.so" \
+            --results "$root/results-x86-to-arm" --samples 5 --quiet-seconds 120 --lock-timeout 900 --max-load 1.0
+      - name: Require complete benchmark evidence
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hosted-x86-performance"
+          for results in "$root/results-x86-to-x86" "$root/results-x86-to-arm"; do
+            test -s "$results/identity.json" && test -s "$results/ledger.jsonl" && test -s "$results/lock.receipt"
+            test "$(wc -l < "$results/ledger.jsonl")" -eq 30
+            test "$(find "$results" -maxdepth 1 -name 'stderr-*.txt' -type f | wc -l)" -eq 30
+          done
+      - name: Upload hosted x86 benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hosted-x86-performance-${{ github.sha }}
+          path: ${{ runner.temp }}/hosted-x86-performance
           if-no-files-found: error
           retention-days: 30
