@@ -350,3 +350,70 @@ fn product_smc_completion_is_ordered_after_commit_and_before_resume() {
     let resume = arm.find("(c)->reason = R_BRANCH").unwrap();
     assert!(commit < census && census < resume, "{arm}");
 }
+
+#[test]
+fn x86_aarch64_route_census_commits_once_at_every_translation_outcome() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let loop_body = source
+        .split_once("if (hl_x86_decode(gpc, &I) < 0) {")
+        .and_then(|(_, tail)| tail.split_once("// IRQSLIM: the out-of-line poll exit stub"))
+        .map(|(body, _)| body)
+        .expect("x86 AArch64 translation loop");
+    assert_eq!(loop_body.matches("hl_x86_a64_route_begin();").count(), 1, "{loop_body}");
+    assert_eq!(loop_body.matches("hl_x86_a64_route_commit(0);").count(), 6, "{loop_body}");
+    assert_eq!(loop_body.matches("hl_x86_a64_route_commit(1);").count(), 1, "{loop_body}");
+    assert!(
+        loop_body.find("hl_x86_a64_route_commit(1);").unwrap()
+            < loop_body.find("report_unimpl(gpc, &I);").unwrap(),
+        "unimplemented attribution must precede the fatal emitter"
+    );
+}
+
+#[test]
+fn x86_aarch64_route_census_is_diagnostics_gated_and_reconciled() {
+    let translator = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let commit = translator
+        .split_once("static void hl_x86_a64_route_commit(int unimplemented) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic int hl_x86_a64_route_report"))
+        .map(|(body, _)| body)
+        .expect("route commit body");
+    assert!(commit.trim_start().starts_with("if (!g_prof) return;"), "{commit}");
+    assert_eq!(commit.matches("atomic_fetch_add_explicit").count(), 2, "{commit}");
+
+    let report = translator
+        .split_once("static int hl_x86_a64_route_report(char *out, size_t size) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nvoid hl_x86_legacy_jcc_spill"))
+        .map(|(body, _)| body)
+        .expect("route report body");
+    for field in [
+        "total=%llu", "direct=%llu", "avx=%llu", "sse3b=%llu", "repstr=%llu", "div=%llu",
+        "x87=%llu", "service=%llu", "trap=%llu", "unimpl=%llu", "sum=%llu", "reconcile=%u",
+    ] {
+        assert!(report.contains(field), "route report omits {field}: {report}");
+    }
+    assert!(report.contains("total == sum"), "{report}");
+}
+
+#[test]
+fn x86_aarch64_helper_exit_reasons_remain_route_classified() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let classifier = source
+        .split_once("static void hl_x86_a64_route_note_exit(uint64_t reason) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_x86_a64_route_commit"))
+        .map(|(body, _)| body)
+        .expect("route exit classifier");
+    for reason in [
+        "R_AVX", "R_SSE3B", "R_REPSTR", "R_DIV", "R_IDIV", "R_X87FLD", "R_X87FSTP",
+        "R_X87FUNC", "R_X87ENV", "R_CPUID", "R_CMPXCHG16", "R_FXSAVE", "R_FXRSTOR", "R_XSAVE",
+        "R_RCL", "R_SYSCALL", "R_TRAP",
+    ] {
+        assert_eq!(classifier.matches(reason).count(), 1, "missing or duplicated {reason}: {classifier}");
+    }
+    let emitter = include_str!("../src/native/translator/guest/x86_64/emit.c");
+    assert_eq!(emitter.matches("hl_x86_a64_route_note_exit(reason);").count(), 1);
+    let reporter = source
+        .split_once("void report_unimpl(uint64_t pc, struct insn *I) {")
+        .map(|(_, body)| body)
+        .expect("unimplemented emitter");
+    assert!(reporter.trim_start().starts_with("hl_x86_a64_route_note_unimplemented();"));
+}

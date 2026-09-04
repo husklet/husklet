@@ -7,6 +7,9 @@
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
 //  a few width-typed loads/stores the x86 front-end needs.)
 
+/* Defined by translate.c later in the AArch64-host unity translation unit. */
+static void hl_x86_a64_route_note_exit(uint64_t reason);
+
 void emit32(uint32_t in) {
     *(uint32_t *)g_cp = in;
     g_cp += 4;
@@ -1197,6 +1200,7 @@ static void emit_bus_guard_mem17(uint64_t size, int offset) {
 }
 
 void emit_exit_const(uint64_t rip, uint64_t reason) {
+    hl_x86_a64_route_note_exit(reason);
     // a plain R_SYSCALL exit skips the xmm spill WHEN cpu->V is current (cpu->vdirty==0); else
     // full. Runtime check (blocks chain without spilling). x16 is engine scratch here (guest is x0..x15).
     if (reason == R_SYSCALL && slimsys_on()) {

@@ -508,7 +508,10 @@ static int translit_enabled(void) {
 static void translit_profile_options_refresh(void) {}
 
 static int translit_report(char *out, size_t size) {
-    return snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
+    int written = snprintf(out, size, "[prof] translit: absent, this host takes the JIT\n");
+    if (written < 0 || (size_t)written >= size) return written;
+    int route = hl_x86_a64_route_report(out + written, size - (size_t)written);
+    return route < 0 ? route : written + route;
 }
 
 /* These observability values belong to the x86-on-x86 transliterator in

@@ -1414,7 +1414,19 @@ fn valid_profile_line(line: &str) -> bool {
                 })
             })
     });
-    summary || translit
+    let x86_a64_route = fields.strip_prefix("x86-a64-route: ").is_some_and(|fields| {
+        ["total", "direct", "avx", "sse3b", "repstr", "div", "x87", "service", "trap", "unimpl", "sum"]
+            .iter()
+            .all(|wanted| {
+                fields.split_whitespace().any(|field| {
+                    field
+                        .split_once('=')
+                        .is_some_and(|(name, value)| name == *wanted && value.parse::<u64>().is_ok())
+                })
+            })
+            && fields.split_whitespace().any(|field| field == "reconcile=1")
+    });
+    summary || translit || x86_a64_route
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -2531,6 +2543,12 @@ mod tests {
         ));
         assert!(!valid_profile_line(
             "[prof] translit: blocks=3 entries=4 declined=0 fs_load_bridge_admitted=forged"
+        ));
+        assert!(valid_profile_line(
+            "[prof] x86-a64-route: total=9 direct=1 avx=1 sse3b=1 repstr=1 div=1 x87=1 service=1 trap=1 unimpl=1 sum=9 reconcile=1"
+        ));
+        assert!(!valid_profile_line(
+            "[prof] x86-a64-route: total=9 direct=1 avx=1 sse3b=1 repstr=1 div=1 x87=1 service=1 trap=1 unimpl=1 sum=8 reconcile=0"
         ));
         assert!(!valid_profile_line("[prof] forged guest text"));
         assert_eq!(

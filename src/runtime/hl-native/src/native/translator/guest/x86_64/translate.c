@@ -21,6 +21,97 @@
 // ---------------- the translator ----------------
 void report_unimpl(uint64_t pc, struct insn *I);
 
+/*
+ * Translation-route census for the x86-64 guest on an AArch64 host.  This is
+ * deliberately a build census: one outcome is committed after the decoder has
+ * handed one instruction to the authoritative lowering chain.  It does not
+ * pretend that a built block was executed.  With diagnostics disabled the hot
+ * path is one predictable `g_prof` branch per decoded instruction and exit.
+ */
+enum hl_x86_a64_route {
+    HL_X86_A64_ROUTE_DIRECT,
+    HL_X86_A64_ROUTE_AVX,
+    HL_X86_A64_ROUTE_SSE3B,
+    HL_X86_A64_ROUTE_REPSTR,
+    HL_X86_A64_ROUTE_DIV,
+    HL_X86_A64_ROUTE_X87,
+    HL_X86_A64_ROUTE_SERVICE,
+    HL_X86_A64_ROUTE_TRAP,
+    HL_X86_A64_ROUTE_UNIMPL,
+    HL_X86_A64_ROUTE_COUNT,
+};
+
+static enum hl_x86_a64_route g_x86_a64_route_current;
+static _Atomic uint64_t g_x86_a64_route_total;
+static _Atomic uint64_t g_x86_a64_route_count[HL_X86_A64_ROUTE_COUNT];
+
+static void hl_x86_a64_route_begin(void) {
+    if (g_prof) g_x86_a64_route_current = HL_X86_A64_ROUTE_DIRECT;
+}
+
+static void hl_x86_a64_route_note_exit(uint64_t reason) {
+    if (!g_prof) return;
+    enum hl_x86_a64_route route = HL_X86_A64_ROUTE_DIRECT;
+    switch (reason) {
+    case R_AVX: route = HL_X86_A64_ROUTE_AVX; break;
+    case R_SSE3B: route = HL_X86_A64_ROUTE_SSE3B; break;
+    case R_REPSTR: route = HL_X86_A64_ROUTE_REPSTR; break;
+    case R_DIV:
+    case R_IDIV: route = HL_X86_A64_ROUTE_DIV; break;
+    case R_X87FLD:
+    case R_X87FSTP:
+    case R_X87FUNC:
+    case R_X87ENV: route = HL_X86_A64_ROUTE_X87; break;
+    case R_CPUID:
+    case R_CMPXCHG16:
+    case R_FXSAVE:
+    case R_FXRSTOR:
+    case R_XSAVE:
+    case R_RCL:
+    case R_SYSCALL: route = HL_X86_A64_ROUTE_SERVICE; break;
+    case R_TRAP: route = HL_X86_A64_ROUTE_TRAP; break;
+    default: return;
+    }
+    /* A guarded direct lowering may emit more than one cold exit.  The route is
+       an instruction outcome, not an exit-site count, so retain one category. */
+    if (g_x86_a64_route_current == HL_X86_A64_ROUTE_DIRECT || route == HL_X86_A64_ROUTE_TRAP)
+        g_x86_a64_route_current = route;
+}
+
+static void hl_x86_a64_route_commit(int unimplemented) {
+    if (!g_prof) return;
+    enum hl_x86_a64_route route =
+        unimplemented ? HL_X86_A64_ROUTE_UNIMPL : g_x86_a64_route_current;
+    atomic_fetch_add_explicit(&g_x86_a64_route_total, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_x86_a64_route_count[route], 1, memory_order_relaxed);
+}
+
+static void hl_x86_a64_route_note_unimplemented(void) {
+    if (g_prof) g_x86_a64_route_current = HL_X86_A64_ROUTE_UNIMPL;
+}
+
+static int hl_x86_a64_route_report(char *out, size_t size) {
+    uint64_t count[HL_X86_A64_ROUTE_COUNT], sum = 0;
+    for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route) {
+        count[route] = atomic_load_explicit(&g_x86_a64_route_count[route], memory_order_relaxed);
+        sum += count[route];
+    }
+    uint64_t total = atomic_load_explicit(&g_x86_a64_route_total, memory_order_relaxed);
+    return snprintf(out, size,
+                    "[prof] x86-a64-route: total=%llu direct=%llu avx=%llu sse3b=%llu repstr=%llu div=%llu"
+                    " x87=%llu service=%llu trap=%llu unimpl=%llu sum=%llu reconcile=%u\n",
+                    (unsigned long long)total, (unsigned long long)count[HL_X86_A64_ROUTE_DIRECT],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_AVX],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_SSE3B],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_REPSTR],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_DIV],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_X87],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_SERVICE],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_TRAP],
+                    (unsigned long long)count[HL_X86_A64_ROUTE_UNIMPL], (unsigned long long)sum,
+                    total == sum);
+}
+
 void hl_x86_legacy_jcc_spill(int kind) {
     if (kind == HL_X86_JCC_SPILL_LOGIC)
         e_nzcv_save_c1();
@@ -1307,6 +1398,7 @@ static void *translate_block(uint64_t gpc) {
             break;
         }
         uint64_t next = gpc + I.len;
+        hl_x86_a64_route_begin();
         g_emit_next = next;
         if (prov_mem) jit_instruction_map_put(prov_host, (uint64_t)g_cp, prov_guest); // close previous insn
         prov_host = (uint64_t)g_cp;
@@ -1315,10 +1407,14 @@ static void *translate_block(uint64_t gpc) {
         uint8_t op = I.op;
         int vector_result = lower_vector_family(&I, gpc, next, &crypto_state);
         if (vector_result == TX_NEXT) {
+            hl_x86_a64_route_commit(0);
             gpc = next;
             continue;
         }
-        if (vector_result == TX_BREAK) break;
+        if (vector_result == TX_BREAK) {
+            hl_x86_a64_route_commit(0);
+            break;
+        }
         hl_x86_integer_prepare_flags(&I, gpc, next, &trace_state);
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to
@@ -1330,15 +1426,28 @@ static void *translate_block(uint64_t gpc) {
             hl_x86_branch_region branch_region = {start,     body,          seen, &nseen,  &trace_blk, &ncond,
                                                   STITCH_OK, g_tier2_build, 0,    t2_slot, map_body};
             int one_byte_result = lower_one_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
-            if (one_byte_result == TX_NEXT) continue;
-            if (one_byte_result == TX_BREAK) break;
+            if (one_byte_result == TX_NEXT) {
+                hl_x86_a64_route_commit(0);
+                continue;
+            }
+            if (one_byte_result == TX_BREAK) {
+                hl_x86_a64_route_commit(0);
+                break;
+            }
         } else {
             hl_x86_branch_region branch_region = {start,     body,          seen, &nseen,  &trace_blk, &ncond,
                                                   STITCH_OK, g_tier2_build, 0,    t2_slot, map_body};
             int two_byte_result = lower_two_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
-            if (two_byte_result == TX_NEXT) continue;
-            if (two_byte_result == TX_BREAK) break;
+            if (two_byte_result == TX_NEXT) {
+                hl_x86_a64_route_commit(0);
+                continue;
+            }
+            if (two_byte_result == TX_BREAK) {
+                hl_x86_a64_route_commit(0);
+                break;
+            }
         }
+        hl_x86_a64_route_commit(1);
         report_unimpl(gpc, &I);
         break;
     }
@@ -1420,6 +1529,7 @@ static void tier2_promote(uint64_t gpc) {
 }
 
 void report_unimpl(uint64_t pc, struct insn *I) {
+    hl_x86_a64_route_note_unimplemented();
     const uint8_t *p = (const uint8_t *)pc;
     fprintf(stderr, "[hl] UNIMPL %s opcode 0x%02x at rip=%llx  bytes:", I->two ? "0F" : "1B", I->op,
             (unsigned long long)pc);
