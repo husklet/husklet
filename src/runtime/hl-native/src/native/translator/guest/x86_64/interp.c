@@ -2696,6 +2696,8 @@ static int pcache_load(uint64_t entry_jump) {
     if (!jit_wprot(0)) { free(fixed_chains); free(gpc_index); free(allocation); return 0; }
 #ifdef HL_PCACHE_DEFER_LIBRARY_BYTES_MUTATION
     memset(g_cache, 0, (size_t)arena);
+    uint64_t prefix = maps == 0 ? arena : x64_pc_get64(map_records + 24);
+    memcpy(g_cache, arena_bytes, (size_t)prefix);
     for (uint64_t i = 0; i < maps; i++) {
         const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
         uint64_t start = x64_pc_get64(record + 24), end = x64_pc_saved_map_end(map_records, maps, i, arena);
@@ -2805,39 +2807,6 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = fixed_chains; g_x64_pc_chain_count = fixed_chain_count;
-#if defined(HL_NATIVE_TEST_HOOKS)
-    if (hl_option_get("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN") != NULL) {
-        uint64_t selected = UINT64_MAX, before = UINT64_MAX, after = UINT64_MAX, fallback = UINT64_MAX;
-        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
-            int32_t displacement;
-            memcpy(&displacement, g_cache + g_x64_pc_chains[i].site_offset + 1, sizeof displacement);
-            uint64_t destination = g_x64_pc_chains[i].site_offset + 5 + (int64_t)displacement;
-            if (destination != g_x64_pc_chains[i].fallback_offset) {
-                selected = i;
-                before = destination;
-                fallback = g_x64_pc_chains[i].fallback_offset;
-                uint64_t dirty[1][2] = {{g_x64_pc_chains[i].target,
-                                         g_x64_pc_chains[i].target + 1}};
-                x64_pc_restored_unlink_targets(dirty[0][0], dirty[0][1]);
-                (void)map_invalidate_source_ranges((const uint64_t (*)[2])dirty, 1);
-                memcpy(&displacement, g_cache + g_x64_pc_chains[i].site_offset + 1, sizeof displacement);
-                after = g_x64_pc_chains[i].site_offset + 5 + (int64_t)displacement;
-                break;
-            }
-        }
-        char cache_path[1024], receipt[1024];
-        if (x64_pc_file(cache_path, sizeof cache_path)) {
-            int length = snprintf(receipt, sizeof receipt, "%s.chain-invalidate-%lld", cache_path,
-                                  (long long)getpid());
-            uint64_t state[5] = {g_x64_pc_chain_count, selected, before, after, fallback};
-            if (length > 0 && (size_t)length < sizeof receipt)
-                (void)x64_pc_artifact_store(receipt, state, sizeof state);
-        }
-        if (selected == UINT64_MAX || after != fallback) {
-            x64_pc_pristine_rewind(); free(gpc_index); free(allocation); return 0;
-        }
-    }
-#endif
     g_x64_pc_restored_maps = maps;
     g_x64_pc_restored_live = fixed_maps;
     g_x64_pc_activated_maps = 0;

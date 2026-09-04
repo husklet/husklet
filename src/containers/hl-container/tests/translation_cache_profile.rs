@@ -1459,6 +1459,18 @@ int main(void) {
                 )
             })
             .and_then(|()| {
+                require(
+                    entries.iter().any(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(19)
+                            .any(|part| part == b".library-activated-")
+                    }),
+                    "warm HIT did not publish authenticated restored DSO maps",
+                )
+            })
+            .and_then(|()| {
                 let stats = entries
                     .iter()
                     .find(|entry| {

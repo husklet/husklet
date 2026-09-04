@@ -22,6 +22,19 @@ fn restored_library_activation_publishes_metadata_without_reopening_code() {
         load.contains("memcpy(g_cache, arena_bytes, (size_t)arena)"),
         "initial restore must copy the complete authenticated arena"
     );
+    let mutation = load
+        .split("#ifdef HL_PCACHE_DEFER_LIBRARY_BYTES_MUTATION")
+        .nth(1)
+        .and_then(|source| source.split("#else").next())
+        .expect("deferred-library-byte mutation branch");
+    assert!(
+        mutation.contains("memcpy(g_cache, arena_bytes, (size_t)prefix)"),
+        "the DSO-byte mutation must preserve the helper/prologue prefix"
+    );
+    assert!(
+        mutation.contains("if (x64_pc_fixed(") && mutation.contains("memcpy(g_cache + start"),
+        "the DSO-byte mutation must preserve every fixed-image map span"
+    );
 }
 
 #[cfg(feature = "native-test-hooks")]

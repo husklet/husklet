@@ -349,11 +349,6 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
-        "HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
-        "test-only invalidate one restored direct-chain target before warm execution",
-        Flag
-    ),
-    internal!(
         "HL_TRANSLIT_PCACHE_PREFERRED_COLLISION_TEST",
         "test-only occupy the reusable fixed-image address",
         Flag

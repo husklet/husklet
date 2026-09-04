@@ -74,12 +74,6 @@ impl TryFrom<&ProcessConfig> for Spec {
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
-            "HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN",
-            std::env::var_os("HL_TRANSLIT_PCACHE_WARM_INVALIDATE_CHAIN").is_some(),
-        )?;
-        #[cfg(feature = "native-test-hooks")]
-        Self::flag(
-            &mut options,
             "HL_TRANSLIT_RIPREL_READONLY",
             std::env::var_os("HL_TRANSLIT_RIPREL_READONLY").is_some_and(|value| value == "1"),
         )?;
