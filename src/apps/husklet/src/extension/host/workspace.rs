@@ -208,6 +208,29 @@ impl Supply for Workspace {
             .map_err(|error| error.to_string())
     }
 
+    fn startup_failure(&self, plan: &Plan) -> Result<Option<String>, String> {
+        let bridge = self.bridge()?;
+        let client = bridge.client();
+        let container = bridge
+            .wait(client.containers().inspect(plan.spec.container()))
+            .map_err(|error| error.to_string())?;
+        if container.state.activity.running {
+            return Ok(None);
+        }
+        let state = &container.state;
+        let detail = if !state.error.is_empty() {
+            state.error.clone()
+        } else if state.exit_code != 0 {
+            format!("exit code {}", state.exit_code)
+        } else {
+            format!("status {}", state.status)
+        };
+        Ok(Some(format!(
+            "{} stopped before rendering its first interface: {detail}",
+            plan.record.name
+        )))
+    }
+
     /// # Errors
     /// Returns why the conversation ended early, including the failure to bind
     /// the ports it is served against.

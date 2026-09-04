@@ -50,6 +50,11 @@ pub const EVENTS: ChannelId = ChannelId::new(3);
 /// visible as lag on a click.
 const POLL: Duration = Duration::from_millis(20);
 
+/// How often startup asks the daemon whether a sidecar that has not connected
+/// is still alive. Container inspection is local but not free, so it should not
+/// run at the UI pump's 20 ms cadence.
+const HEALTH_POLL: Duration = Duration::from_millis(200);
+
 /// The longest a connected extension may hold a sidecar without producing its
 /// first interface frame.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -376,6 +381,14 @@ pub trait Supply: Send + Sync + 'static {
     /// sleep.
     fn ready_timeout(&self) -> Duration {
         READY_TIMEOUT
+    }
+
+    /// Reports a sidecar that stopped before opening a conversation.
+    ///
+    /// `None` means it is still viable. Supplies without a supervised process
+    /// need no health source and keep the default.
+    fn startup_failure(&self, _plan: &Plan) -> Result<Option<String>, String> {
+        Ok(None)
     }
 
     /// Takes the extension's container down.
@@ -754,7 +767,15 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
     }
     hall.duty();
     let extension = plan.record.name.to_string();
-    let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension);
+    let passage = pump(
+        hall,
+        &queue,
+        &voice,
+        &ended,
+        supply.ready_timeout(),
+        &extension,
+        || supply.startup_failure(plan),
+    );
     if matches!(passage, Passage::Unready(_)) {
         // Stop the process before joining the conversation that process owns;
         // reversing this order can make listener teardown wait on a peer that
@@ -826,8 +847,10 @@ fn pump(
     ended: &mpsc::Receiver<String>,
     ready_timeout: Duration,
     extension: &str,
+    mut startup_failure: impl FnMut() -> Result<Option<String>, String>,
 ) -> Passage {
     let ready_deadline = Instant::now() + ready_timeout;
+    let mut health_deadline = Instant::now();
     let mut ready = false;
     loop {
         ready |= collect(hall, queue);
@@ -839,6 +862,13 @@ fn pump(
             // shown rather than lost to the ending.
             collect(hall, queue);
             return Passage::End(reason);
+        }
+        if !ready && Instant::now() >= health_deadline {
+            match startup_failure() {
+                Ok(Some(reason)) | Err(reason) => return Passage::Unready(reason),
+                Ok(None) => (),
+            }
+            health_deadline = Instant::now() + HEALTH_POLL;
         }
         if !ready && Instant::now() >= ready_deadline {
             return Passage::Unready(format!(
@@ -1165,6 +1195,7 @@ tab_title = "Sample"
         peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
         token: Arc<()>,
         ready_timeout: Duration,
+        startup_failure: Option<String>,
         halts: AtomicUsize,
         live: Arc<Mutex<Vec<UnixStream>>>,
     }
@@ -1180,6 +1211,7 @@ tab_title = "Sample"
                 peers: Mutex::new(Vec::new()),
                 token: Arc::clone(token),
                 ready_timeout: READY_TIMEOUT,
+                startup_failure: None,
                 halts: AtomicUsize::new(0),
                 live: Arc::new(Mutex::new(Vec::new())),
             }
@@ -1187,6 +1219,11 @@ tab_title = "Sample"
 
         fn with_ready_timeout(mut self, ready_timeout: Duration) -> Self {
             self.ready_timeout = ready_timeout;
+            self
+        }
+
+        fn with_startup_failure(mut self, reason: &str) -> Self {
+            self.startup_failure = Some(reason.to_owned());
             self
         }
 
@@ -1244,6 +1281,10 @@ tab_title = "Sample"
 
         fn ready_timeout(&self) -> Duration {
             self.ready_timeout
+        }
+
+        fn startup_failure(&self, _plan: &Plan) -> Result<Option<String>, String> {
+            Ok(self.startup_failure.clone())
         }
 
         fn halt(&self, _plan: &Plan) {
@@ -1661,6 +1702,29 @@ tab_title = "Sample"
 
         host.close().expect("closed");
         assert!(!socket.exists(), "closing retires the replacement socket");
+    }
+
+    #[test]
+    fn a_sidecar_crash_is_reported_instead_of_waiting_for_the_render_timeout() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let token = Arc::new(());
+        let gallery = Gallery::default();
+        let bench = Bench::new(&socket, &[], &token)
+            .with_ready_timeout(Duration::from_secs(2))
+            .with_startup_failure("top stopped before rendering its first interface: terminated by signal 11");
+        let host = Host::open(bench, gallery.audience());
+
+        assert!(
+            until(|| gallery.losses().iter().any(|loss| loss.contains("terminated by signal 11"))),
+            "the durable container result becomes the visible failure"
+        );
+        assert!(
+            gallery.losses().iter().all(|loss| !loss.contains("did not render")),
+            "the generic deadline must not hide a known process exit"
+        );
+
+        host.close().expect("closed");
     }
 
     #[test]
