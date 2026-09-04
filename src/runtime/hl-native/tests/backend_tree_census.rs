@@ -391,6 +391,74 @@ fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting()
 }
 
 #[test]
+fn aarch64_x86_stage_four_backedge_model_matches_interpreter_retirement_and_terminals() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct Outcome {
+        entries: u64,
+        retired: u64,
+        taken_exits: u64,
+        fall_exits: u64,
+    }
+
+    fn direct(prefix: u64, loop_steps: u64, mut taken: u64, budget: u64) -> Outcome {
+        let mut outcome = Outcome { entries: 0, retired: 0, taken_exits: 0, fall_exits: 0 };
+        let mut first = true;
+        loop {
+            outcome.entries += 1;
+            let body = if first { prefix } else { loop_steps };
+            first = false;
+            if taken >= budget {
+                outcome.retired += body + (budget - 1) * loop_steps;
+                outcome.taken_exits += 1;
+                taken -= budget;
+            } else {
+                outcome.retired += body + taken * loop_steps;
+                outcome.fall_exits += 1;
+                return outcome;
+            }
+        }
+    }
+
+    fn interpreter_sampled(prefix: u64, loop_steps: u64, taken: u64, budget: u64) -> Outcome {
+        let retired = prefix + taken * loop_steps;
+        let taken_exits = taken / budget;
+        Outcome {
+            entries: taken_exits + 1,
+            retired,
+            taken_exits,
+            fall_exits: 1,
+        }
+    }
+
+    let translator = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    let dispatcher = include_str!("../src/native/engine/dispatch.c");
+    let direct_budget = translator
+        .split_once("HL_A64_X86_BACKEDGE_BUDGET = ")
+        .and_then(|(_, tail)| tail.split_once(' '))
+        .and_then(|(number, _)| number.parse::<u64>().ok())
+        .expect("direct backedge budget");
+    let dispatch_budget = dispatcher
+        .split_once("redispatch_chain >= ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .and_then(|(number, _)| number.parse::<u64>().ok())
+        .expect("dispatcher redispatch budget");
+    assert_eq!(direct_budget, dispatch_budget, "direct and dispatcher poll budgets drifted");
+    assert_eq!(direct_budget, 8, "the latency evidence is specifically bounded to eight bodies");
+
+    for taken in [0, 1, 7, 8, 9, 63, 64, 65, 1_000_000] {
+        for target_offset in 0..64_u64 {
+            let prefix = 64;
+            let loop_steps = prefix - target_offset;
+            assert_eq!(
+                direct(prefix, loop_steps, taken, direct_budget),
+                interpreter_sampled(prefix, loop_steps, taken, direct_budget),
+                "taken={taken} target_offset={target_offset}"
+            );
+        }
+    }
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
