@@ -242,15 +242,18 @@ static int exec_origin_basic_matrix_child(int scenario) {
 }
 
 static int exec_origin_basic_matrix_test(void) {
+    int failed = 0;
     for (int scenario = 0; scenario != 9; scenario++) {
         pid_t child = fork();
         if (child < 0) return 4;
         if (child == 0) _exit(exec_origin_basic_matrix_child(scenario));
         int status = 0;
-        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-            return 10 + scenario;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "exec origin scenario %d failed\n", scenario);
+            failed = 1;
+        }
     }
-    return 0;
+    return failed;
 }
 #elif defined(HL_NATIVE_TEST_HOOKS)
 static int exec_origin_basic_matrix_test(void) { return 0; }
