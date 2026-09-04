@@ -684,6 +684,7 @@ typedef struct exec_prepared {
     exec_image main_image;
     exec_image program_interpreter;
     int has_program_interpreter;
+    int cache_identity_authorized;
     hl_exec_environment_update environment;
     hl_exec_credential_result credentials;
 } exec_prepared;
@@ -805,6 +806,7 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
         exec_prepared_discard(prepared);
         return error;
     }
+    prepared->cache_identity_authorized = exec_prepared_cache_identity_authorized(prepared);
     prepared->credentials = cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
     if (prepared->credentials.error != 0) {
         error = -prepared->credentials.error;
@@ -859,8 +861,7 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     struct loaded main_loaded;
 #ifdef PCACHE_EXEC_HOOKS
-    int cache_identity_authorized = exec_prepared_cache_identity_authorized(prepared);
-    pcache_exec_force_main(cache_identity_authorized);
+    pcache_exec_force_main(prepared->cache_identity_authorized);
 #endif
     load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
     uint64_t jump = main_loaded.entry, at_base = 0;
@@ -883,7 +884,7 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     memset(g_ibtc, 0, sizeof g_ibtc);
 #ifdef PCACHE_EXEC_HOOKS
     pcache_exec_reload(prepared->main_image.identity, prepared->program_interpreter.identity,
-                       prepared->has_program_interpreter, cache_identity_authorized,
+                       prepared->has_program_interpreter, prepared->cache_identity_authorized,
                        prepared->arguments[0], jump);
 #endif
     exec_authority_rotate(&prepared->main_image, prepared->guest_executable);
