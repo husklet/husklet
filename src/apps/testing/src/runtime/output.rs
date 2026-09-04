@@ -4,6 +4,7 @@ use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
 const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
+const BACKEND_SHAPE_DETAIL_PREFIX: &str = "[diag] backend-shape-detail ";
 const AARCH64_OPCODE_PREFIX: &str = "[diag] aarch64-opcode ";
 const AARCH64_OPCODE_FIELDS: &[&str] = &[
     "version",
@@ -675,7 +676,7 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     if !enabled {
         let shapes = stderr
             .split(|byte| *byte == b'\n')
-            .filter(|line| line.starts_with(BACKEND_SHAPE_PREFIX.as_bytes()))
+            .filter(|line| line.starts_with(BACKEND_SHAPE_DETAIL_PREFIX.as_bytes()))
             .count();
         if shapes != 0 {
             return Err(format!("backend-shape diagnostic appeared {shapes} times, expected 0").into());
@@ -785,7 +786,13 @@ fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
 fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     let records = stderr
         .lines()
-        .filter_map(|line| line.strip_prefix(BACKEND_SHAPE_PREFIX))
+        .filter_map(|line| {
+            line.strip_prefix(BACKEND_SHAPE_DETAIL_PREFIX).or_else(|| {
+                /* Legacy unit fixtures predate the wire-prefix split. */
+                line.strip_prefix(BACKEND_SHAPE_PREFIX)
+                    .filter(|record| record.starts_with("version=1 "))
+            })
+        })
         .collect::<Vec<_>>();
     if records.len() != 1 {
         return Err(format!(
@@ -1375,6 +1382,7 @@ pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::
         valid_profile_line(line)
             || line.starts_with(BACKEND_TREE_PREFIX)
             || line.starts_with(BACKEND_SHAPE_PREFIX)
+            || line.starts_with(BACKEND_SHAPE_DETAIL_PREFIX)
             || line.starts_with(AARCH64_OPCODE_PREFIX)
     }) {
         writeln!(output, "{line}")?;
@@ -1909,6 +1917,23 @@ mod tests {
     }
 
     #[test]
+    fn detailed_and_product_shape_records_have_independent_cardinality() {
+        let detail = SHAPE.replacen(BACKEND_SHAPE_PREFIX, BACKEND_SHAPE_DETAIL_PREFIX, 1);
+        let product = product_v13();
+        for combined in [format!("{detail}{product}"), format!("{product}{detail}")] {
+            assert_eq!(backend_shape(&combined).unwrap()["translated_entries"], 2);
+            backend_shape_product(combined.as_bytes(), true).unwrap().unwrap();
+        }
+        assert!(backend_shape_product(detail.as_bytes(), true).is_err(), "missing product passed");
+        assert!(backend_shape_product(format!("{product}{product}").as_bytes(), true).is_err(),
+                "duplicate product passed");
+
+        let producer = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
+        assert!(producer.contains("[diag] backend-shape-detail version=1 translated_entries="));
+        assert!(!producer.contains("[diag] backend-shape version=1 translated_entries="));
+    }
+
+    #[test]
     fn native_backend_shape_field_inventory_is_exactly_the_parser_inventory() {
         let source = include_str!("../../../../runtime/hl-native/src/native/engine/backend_tree.c");
         let formatter = source
@@ -1935,7 +1960,7 @@ mod tests {
         );
 
         let exact = format!(
-            "{BACKEND_SHAPE_PREFIX}{}\n",
+            "{BACKEND_SHAPE_DETAIL_PREFIX}{}\n",
             fields
                 .iter()
                 .map(|name| format!("{name}={}", u8::from(*name == "version")))

@@ -1464,7 +1464,7 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         fall_stop_total += summary.translated_fall_stop[reason];
     return snprintf(
         record, capacity,
-        "[diag] backend-shape version=1 translated_entries=%llu translated_transfers=%llu "
+        "[diag] backend-shape-detail version=1 translated_entries=%llu translated_transfers=%llu "
         "t_fallthrough=%llu t_cond_taken=%llu t_cond_not_taken=%llu t_direct_jump=%llu "
         "t_direct_call=%llu t_return=%llu t_indirect_branch=%llu t_indirect_call=%llu t_syscall=%llu "
         "t_irq=%llu t_fault=%llu t_other=%llu fall_total=%llu fall_cap=%llu fall_decode=%llu "
