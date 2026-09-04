@@ -46,6 +46,13 @@ pub struct Report {
     pub results: Vec<CaseResult>,
     /// One `native counter=value ...` line, empty when the app does not emit diagnostics.
     pub counters: String,
+    pub measurement: Option<EngineMeasurement>,
+}
+
+pub struct EngineMeasurement {
+    pub case: String,
+    pub target: Target,
+    pub raw: String,
 }
 pub async fn run_case(
     app: Arc<App>, case_index: usize, target: Target, allow_broken: bool,
@@ -488,6 +495,19 @@ impl<'a> CaseExecution<'a> {
             self.wait(name, timeout).await?
         };
         *observed = Some(status);
+        let measured = self.containers.take_benchmark_measurement(name).await?;
+        match (&self.engine_measurement, measured) {
+            (Some(expected), Some(actual)) if actual.path == *expected && !actual.raw.is_empty() => {}
+            (Some(_), None) => return Err("engine measurement was requested but omitted".into()),
+            (None, Some(_)) => return Err("engine emitted an unrequested measurement".into()),
+            (Some(expected), Some(actual)) => {
+                return Err(format!(
+                    "engine measurement identity mismatched: expected={} actual={}",
+                    expected.display(), actual.path.display()
+                ).into());
+            }
+            (None, None) => {}
+        }
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
         let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());

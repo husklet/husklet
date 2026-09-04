@@ -87,6 +87,7 @@ impl Service {
         complete: tokio::sync::watch::Sender<bool>,
     ) -> Result<ExitStatus> {
         let logs = process.take_logs();
+        let measured = Arc::clone(&process);
         let (finished, receiver) = tokio::sync::watch::channel(false);
         let waiting = async {
             let result = process.wait().await;
@@ -95,6 +96,12 @@ impl Service {
             result
         };
         let (result, ()) = tokio::join!(waiting, self.drain(&journal, &io, logs, receiver));
+        if let Some(measurement) = measured.take_benchmark_measurement()? {
+            let mut measurements = self.measurements.lock().await;
+            if measurements.insert(journal.clone(), measurement).is_some() {
+                return Err(Error::Runtime("duplicate benchmark measurement".into()));
+            }
+        }
         let _ = complete.send(true);
         result
     }

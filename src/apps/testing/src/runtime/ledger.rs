@@ -41,6 +41,19 @@ pub(super) struct CampaignEvidence {
 }
 
 impl CampaignEvidence {
+    pub(super) fn from_engine(measurement: &super::execution::EngineMeasurement) -> Self {
+        let counters = crate::benchmark::perf::parse(&measurement.raw)
+            .expect("worker accepted only a complete engine measurement");
+        Self {
+            host_identity: "-".into(), artifact_sha256: "-".into(),
+            wall_ns: counters.duration_ns, task_clock_ns: (counters.task_clock_ms * 1_000_000.0) as u64,
+            instructions: counters.instructions, cycles: counters.cycles, faults: counters.page_faults,
+            semantic_output_sha256: "-".into(),
+            backend_digest: format!("engine-only:{}:{}", measurement.case, measurement.target.name()),
+            pair: "-".into(),
+            arm: "-".into(), order: 0, sample: 0,
+        }
+    }
     pub(super) fn unmeasured() -> Self {
         Self {
             host_identity: "-".into(), artifact_sha256: "-".into(), wall_ns: 0, task_clock_ns: 0,
@@ -380,5 +393,20 @@ mod tests {
         let mut unsafe_evidence = measured("p", "baseline", 1);
         unsafe_evidence.backend_digest = "backend\nforged".into();
         assert!(super::Runtime::format(&campaign_row("runtime/a", unsafe_evidence)).is_err());
+    }
+
+    #[test]
+    fn engine_measurement_populates_exact_unpaired_counters_and_identity() {
+        use crate::journal::Schema as _;
+        let raw = "11\t\tduration_time\n2.5\tmsec\ttask-clock\n31\t\tinstructions\n41\t\tcycles\n5\t\tpage-faults\n";
+        let evidence = CampaignEvidence::from_engine(&super::super::execution::EngineMeasurement {
+            case: "runtime/aarch64-dbt/alu-bench".into(),
+            target: crate::suite::Target::Arm64,
+            raw: raw.into(),
+        });
+        assert_eq!((evidence.wall_ns, evidence.task_clock_ns), (11, 2_500_000));
+        assert_eq!((evidence.instructions, evidence.cycles, evidence.faults), (31, 41, 5));
+        assert_eq!(evidence.backend_digest, "engine-only:runtime/aarch64-dbt/alu-bench:arm64");
+        assert!(super::Runtime::format(&campaign_row("runtime/aarch64-dbt/alu-bench", evidence)).is_ok());
     }
 }

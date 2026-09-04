@@ -266,7 +266,12 @@ impl Completion {
             },
             host_load: self.host_load.clone(),
             diagnostic,
-            campaign: ledger::CampaignEvidence::unmeasured(),
+            campaign: self
+                .result
+                .as_ref()
+                .ok()
+                .and_then(|report| report.measurement.as_ref())
+                .map_or_else(ledger::CampaignEvidence::unmeasured, ledger::CampaignEvidence::from_engine),
         }
     }
 }

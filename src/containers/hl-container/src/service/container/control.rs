@@ -3,6 +3,17 @@ use super::{
 };
 
 impl Service {
+    pub(crate) async fn take_benchmark_measurement(
+        &self,
+        reference: &str,
+    ) -> Result<Option<crate::BenchmarkMeasurement>> {
+        let container = self.resolve(reference).await?;
+        Ok(self
+            .measurements
+            .lock()
+            .await
+            .remove(&JournalId::container(container.id)))
+    }
     pub(crate) async fn wait(&self, reference: &str, condition: WaitCondition) -> Result<Option<ExitStatus>> {
         let mut exit = None;
         let initial = {

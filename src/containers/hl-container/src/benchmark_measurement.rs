@@ -27,6 +27,12 @@ pub(crate) struct Collector {
 impl Collector {
     pub(crate) fn prepare(path: &Path) -> Result<Self> {
         if path.exists() {
+            return Err(Error::Runtime("benchmark measurement output already exists".into()));
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if path.exists() {
             return Err(Error::Runtime(format!("benchmark measurement already exists: {}", path.display())));
         }
         if let Some(parent) = path.parent() {

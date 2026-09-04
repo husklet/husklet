@@ -26,6 +26,10 @@ pub trait LifecycleEvents: Send + Sync + 'static {
 }
 
 impl Containers {
+    /// Takes the ephemeral engine-only measurement for a completed container launch.
+    pub async fn take_benchmark_measurement(&self, reference: &str) -> Result<Option<crate::BenchmarkMeasurement>> {
+        self.service.take_benchmark_measurement(reference).await
+    }
     pub fn observe(&self, events: Arc<dyn LifecycleEvents>) {
         self.service.observe(events);
     }

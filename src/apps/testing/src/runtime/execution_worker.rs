@@ -93,11 +93,22 @@ pub(super) async fn run(
     let interrupts = Interrupts::new()?;
     let app = app.to_owned();
     let case = case.to_owned();
+    let measurement_case = case.clone();
     let assertions = assertions.to_vec();
+    let requested_measurement = engine_measurement.clone();
     let supervision = Supervision::spawn(move |cancelled| {
         supervise(&app, &case, target, timeout, cancelled, &assertions, allow_broken, engine_measurement)
     });
-    interrupted(supervision, interrupts).await?.map_err(Into::into)
+    let mut report = interrupted(supervision, interrupts).await?.map_err(Error::from)?;
+    report.measurement = requested_measurement
+        .map(|path| {
+            let raw = fs::read_to_string(&path)
+                .map_err(|error| format!("read engine measurement {}: {error}", path.display()))?;
+            crate::benchmark::perf::parse(&raw)?;
+            Ok::<_, Error>(super::EngineMeasurement { case: measurement_case, target, raw })
+        })
+        .transpose()?;
+    Ok(report)
 }
 
 /// Ends this process once `bound` elapses, whatever it is doing and whoever is still watching.
@@ -389,6 +400,7 @@ fn supervise(
     Ok(Report {
         results: judged(decoded.result?, case, assertions, &stderr),
         counters: diagnostics::digest(&stderr),
+        measurement: None,
     })
 }
 
