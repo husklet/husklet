@@ -567,6 +567,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
 static int x86_guest_fetch_exec_context(void *opaque, uint64_t guest, void *destination, size_t length);
 #include "../../translator/guest/x86_64/interp.c"
+#define HL_X86_SAME_ISA_PCACHE_TEST 1
 
 #define HL_BACKEND_TREE_FINALIZE_CPU(c) translit_jcc_ibtc_finalize_cpu(c)
 
@@ -1963,7 +1964,11 @@ HL_API int hl_x86_64_stw_cpu_slot_lifecycle_test(void) {
 HL_API int hl_x86_64_imported_path_guard_test(void) {
     int result = hl_linux_imported_path_guard_probe();
     if (result == 0) result = hl_vfs_cursor_origin_preservation_test();
-    return result == 0 ? exec_origin_basic_matrix_test() : result;
+    if (result == 0) result = exec_origin_basic_matrix_test();
+#if defined(HL_X86_SAME_ISA_PCACHE_TEST)
+    if (result == 0) result = x64_pc_nested_exec_policy_test();
+#endif
+    return result;
 }
 
 HL_API int hl_x86_64_clone3_extended_args_test(uint32_t scenario) {

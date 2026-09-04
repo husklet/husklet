@@ -2021,6 +2021,20 @@ static uint64_t g_x64_pc_deferred_count;
 static uint64_t g_x64_pc_load_generation;
 static int g_x64_pc_control_record_libraries;
 static int g_x64_pc_library_unsupported;
+
+static int x64_pc_launch_only_disables_nested(int launch_only, int identity_authorized) {
+    return launch_only && !identity_authorized;
+}
+
+static int x64_pc_exec_publication_authorized(int checkpoint_restore) {
+    return !g_x64_pc_forked && g_x64_pc_exec_identity_authorized && !g_x64_pc_exec_poisoned && !checkpoint_restore;
+}
+
+static void x64_pc_exec_epoch_authorize(int identity_authorized) {
+    g_x64_pc_forked = 0;
+    g_x64_pc_exec_identity_authorized = identity_authorized;
+    g_x64_pc_exec_poisoned = !identity_authorized;
+}
 static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
 static uint64_t g_x64_pc_observe_load_ns;
@@ -3165,8 +3179,7 @@ static void pcache_save(void) {
     if (!X64_PC_FIXED_IMAGE_SUPPORTED) return;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=save\n");
-    if (!g_pcache || g_prof || hl_option_get("HL_RESTORE") != NULL || !g_x64_pc_exec_identity_authorized ||
-        g_x64_pc_exec_poisoned ||
+    if (!g_pcache || g_prof || !x64_pc_exec_publication_authorized(hl_option_get("HL_RESTORE") != NULL) ||
         hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
         g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 ||
         !jit_guest_bus_active()) {
@@ -3725,7 +3738,9 @@ static void pcache_launch_only_disable(void) {
 }
 
 static void pcache_exec_force_main(int identity_authorized) {
-    if (g_pcache && !identity_authorized) pcache_launch_only_disable();
+    if (g_pcache && x64_pc_launch_only_disables_nested(hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL,
+                                                        identity_authorized))
+        pcache_launch_only_disable();
     if (g_pcache) g_force_base = PC_IMG_BASE;
 }
 
@@ -3760,10 +3775,8 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_x64_pc_observe_library_bytes = 0;
     g_x64_pc_observe_library_files = 0;
     g_pc_binid = pcache_exec_authorized_id(program, interpreter, interpreter_present, identity_authorized, argv0);
-    g_x64_pc_exec_identity_authorized = identity_authorized;
-    g_x64_pc_exec_poisoned = !identity_authorized;
+    x64_pc_exec_epoch_authorize(identity_authorized);
     g_pc_entry = jump;
-    g_x64_pc_forked = 0;
     g_x64_pc_exec_publish_generation = g_cache_gen;
     g_pcache_loaded = 0;
     x64_pc_restored_detach();
@@ -3780,6 +3793,42 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_x64_pc_library_unsupported = 0;
     (void)pcache_load(jump);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int x64_pc_nested_exec_policy_test(void) {
+    static const char *const names[] = {"driver", "cc1", "assembler", "link"};
+    hl_identity_digest keys[4];
+    for (size_t index = 0; index < 4; index++) {
+        hl_identity_digest content = hl_identity_image_digest(names[index], strlen(names[index]));
+        keys[index] = pcache_exec_authorized_id(content, (hl_identity_digest){0}, 0, 1, "tool");
+        if (hl_identity_digest_empty(&keys[index])) return 1;
+        for (size_t prior = 0; prior < index; prior++)
+            if (hl_identity_digest_equal(&keys[index], &keys[prior])) return 2;
+    }
+    hl_identity_digest repeated_content = hl_identity_image_digest(names[1], strlen(names[1]));
+    hl_identity_digest repeated = pcache_exec_authorized_id(repeated_content, (hl_identity_digest){0}, 0, 1, "tool");
+    if (!hl_identity_digest_equal(&keys[1], &repeated)) return 3;
+    if (x64_pc_launch_only_disables_nested(1, 1) || !x64_pc_launch_only_disables_nested(1, 0)) return 4;
+
+    int saved_forked = g_x64_pc_forked;
+    int saved_authorized = g_x64_pc_exec_identity_authorized;
+    int saved_poisoned = g_x64_pc_exec_poisoned;
+    g_x64_pc_forked = 1;
+    int exact = !x64_pc_exec_publication_authorized(0);
+    x64_pc_exec_epoch_authorize(1);
+    exact = exact && !g_x64_pc_forked && x64_pc_exec_publication_authorized(0);
+    g_x64_pc_exec_poisoned = 1;
+    exact = exact && !x64_pc_exec_publication_authorized(0);
+    x64_pc_exec_epoch_authorize(0);
+    exact = exact && !x64_pc_exec_publication_authorized(0);
+    x64_pc_exec_epoch_authorize(1);
+    exact = exact && !x64_pc_exec_publication_authorized(1);
+    g_x64_pc_forked = saved_forked;
+    g_x64_pc_exec_identity_authorized = saved_authorized;
+    g_x64_pc_exec_poisoned = saved_poisoned;
+    return exact ? 0 : 5;
+}
+#endif
 
 #define PCACHE_SAVE_HOOK pcache_save()
 #define PCACHE_FORK_HOOK x64_pc_after_fork()
