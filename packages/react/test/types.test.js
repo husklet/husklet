@@ -75,7 +75,7 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
 test('host events type the pane chooser identity as well as subscribed snapshots', () => {
   assert.match(clientDeclarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
   assert.match(clientDeclarations, /export type InterfaceEvent = WireUiEvent;/);
-  assert.match(clientDeclarations, /import type \{ WireUiEvent \} from '\.\/generated-protocol\.js';/);
+  assert.match(clientDeclarations, /import type \{[^}]*\bWireUiEvent\b[^}]*\} from '\.\/generated-protocol\.js';/);
   assert.match(generatedClientDeclarations, /\{ interaction: "key" \} & \{ "trigger": string; "node": number; "id": string; "slot"\?: string \| null; "key": string; "keycode": number; "modifiers": number; "pressed": boolean \}/);
   assert.match(generatedClientDeclarations, /export type UiPointerPhase = "enter" \| "motion" \| "leave" \| "press" \| "release";/);
   assert.match(generatedClientDeclarations, /"x"\?: number \| null; "y"\?: number \| null; "button": number; "modifiers": number/);

@@ -164,6 +164,7 @@ async function runPackedStarterDenied(consumer, starter) {
 }
 
 function packageStageFiles(dockerfile, destination) {
+  const repository = path.resolve(root, '../..');
   const packageStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\}$/m, 1)[0];
   for (const line of packageStage.matchAll(/^COPY ([^\n]+)$/gm)) {
     const fields = line[1].trim().split(/\s+/);
@@ -173,7 +174,7 @@ function packageStageFiles(dockerfile, destination) {
       const output = target === './'
         ? path.join(destination, path.basename(source))
         : path.join(destination, target.replace(/^\.\//, ''));
-      fs.cpSync(path.join(root, '..', source), output, { recursive: true });
+      fs.cpSync(path.join(repository, source), output, { recursive: true });
     }
   }
 }
@@ -204,8 +205,8 @@ try {
     cwd: path.join(root, '..', 'client'), encoding: 'utf8',
   }))[0].filename;
   const isolatedCache = path.join(scratch, 'npm-cache');
-  const imageRuntime = path.join(scratch, 'image-runtime');
-  fs.cpSync(path.join(root, 'image-runtime'), imageRuntime, { recursive: true });
+  const imageRuntime = path.join(scratch, 'base-runtime');
+  fs.cpSync(path.resolve(root, '../../extensions/base'), imageRuntime, { recursive: true });
   execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--cache', isolatedCache], {
     cwd: imageRuntime, stdio: 'pipe',
   });
@@ -226,7 +227,7 @@ try {
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
-  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.join(root, 'image-runtime/package.json'), 'utf8'));
+  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.resolve(root, '../../extensions/base/package.json'), 'utf8'));
   for (const field of ['cpu', 'os', 'libc']) {
     assert.equal(manifest[field], undefined, `React SDK gained an architecture restriction in ${field}`);
   }
@@ -373,22 +374,21 @@ try {
     }
     void ProviderView;
   `);
-  execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
+  execFileSync(path.resolve(root, '../../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
   ], { cwd: consumer, stdio: 'pipe' });
 
-  const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  const dockerfile = fs.readFileSync(path.resolve(root, '../../extensions/base/Dockerfile'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-alpine@sha256:[0-9a-f]{64}$/m);
   assert.match(dockerfile, /^ARG NODE_VERSION=22\.23\.2$/m);
   assert.match(dockerfile, /^ARG NPM_VERSION=10\.9\.8$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
-  assert.match(dockerfile, /COPY react\/image-runtime\/package\.json react\/image-runtime\/package-lock\.json \.\//);
-  assert.match(dockerfile, /npm ci --ignore-scripts --omit=dev/);
-  assert.match(dockerfile, /tar -xzf \/opt\/husklet-sdk\/husklet-client-\*\.tgz --strip-components=1/);
-  assert.match(dockerfile, /tar -xzf \/opt\/husklet-sdk\/husklet-react-\*\.tgz --strip-components=1/);
+  assert.match(dockerfile, /COPY extensions\/base\/package\.json extensions\/base\/package-lock\.json \.\//);
+  assert.match(dockerfile, /npm install --global --ignore-scripts/);
+  assert.match(dockerfile, /npm root --global/);
   assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /test "\$\(node --version\)" = "v\$\{NODE_VERSION\}"/);
@@ -397,7 +397,7 @@ try {
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
   assert.match(readme, /one published Husklet SDK base image/);
-  assert.match(readme, /repository's `extensions\/react\/Dockerfile` is release infrastructure/);
+  assert.match(readme, /repository's `extensions\/base\/Dockerfile` is release infrastructure/);
   assert.match(readme, /complete `examples\/starter` Docker context/);
   assert.match(readme, /pin that argument to a\s+registry digest/);
   assert.match(readme, /offline OCI build still requires.*base image to\s+already exist/s);

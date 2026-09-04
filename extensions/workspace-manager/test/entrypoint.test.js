@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { KIND, Reader, encode } from '../../react/src/wire.js';
+import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
 
 test('the production entrypoint handshakes and renders through a real Unix socket', { timeout: 8_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'husklet-workspace-manager-'));

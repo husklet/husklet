@@ -3468,9 +3468,9 @@ mod panes {
             .ancestors()
             .nth(3)
             .expect("repository root");
-        let script = root.join("extensions/client/test/native-socket-e2e.mjs");
+        let script = root.join("packages/client/test/native-socket-e2e.mjs");
         assert!(
-            root.join("extensions/client/src/index.js").exists(),
+            root.join("packages/client/src/index.js").exists(),
             "framework-neutral client source must exist"
         );
         let mut child = Command::new("node")

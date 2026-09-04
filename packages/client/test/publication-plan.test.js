@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { determinePublication } from '../../tools/publication-plan.js';
+import { determinePublication } from '../../../tools/npm/publication-plan.js';
 
 const local = { client: 'sha512-client', react: 'sha512-react' };
 
@@ -47,9 +47,9 @@ test('the release command emits a resumable GitHub Actions publication plan', ()
         process.exit(1);
       }
     `, { mode: 0o755 });
-    const extensions = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-    execFileSync(process.execPath, ['tools/publication-plan.js'], {
-      cwd: extensions,
+    const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+    execFileSync(process.execPath, ['tools/npm/publication-plan.js'], {
+      cwd: repository,
       env: {
         ...process.env,
         PATH: `${scratch}:${process.env.PATH}`,

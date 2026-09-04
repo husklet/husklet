@@ -2,7 +2,7 @@
   "name": "@husklet/client",
   "version": "0.1.0",
   "description": "Framework-neutral typed client for the Husklet extension socket",
-  "repository": { "type": "git", "url": "git+https://github.com/husklet/husklet.git", "directory": "extensions/client" },
+  "repository": { "type": "git", "url": "git+https://github.com/husklet/husklet.git", "directory": "packages/client" },
   "publishConfig": { "access": "public", "provenance": true },
   "type": "module",
   "main": "./src/index.js",

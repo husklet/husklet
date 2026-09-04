@@ -6,7 +6,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/husklet/husklet.git",
-    "directory": "extensions/react"
+    "directory": "packages/react"
   },
   "homepage": "https://github.com/husklet/husklet#readme",
   "bugs": "https://github.com/husklet/husklet/issues",

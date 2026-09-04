@@ -9,8 +9,8 @@ ARG HUSKLET_REACT_VERSION
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=10.9.8
 WORKDIR /source
-COPY client ./client
-COPY react ./react
+COPY packages/client ./client
+COPY packages/react ./react
 RUN test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(npm --version)" = "${NPM_VERSION}" \
     && test -n "${HUSKLET_REACT_VERSION}" \
@@ -37,16 +37,21 @@ ARG NPM_VERSION=10.9.8
 # prunes anything npm did not put there itself.
 WORKDIR /app
 COPY --from=package /out /opt/husklet-sdk
-COPY react/image-runtime/package.json react/image-runtime/package-lock.json ./
+COPY extensions/base/package.json extensions/base/package-lock.json ./
 RUN test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(npm --version)" = "${NPM_VERSION}" \
-    && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
-    && mkdir -p node_modules/@husklet/client node_modules/@husklet/react \
-    && tar -xzf /opt/husklet-sdk/husklet-client-*.tgz --strip-components=1 -C node_modules/@husklet/client \
-    && tar -xzf /opt/husklet-sdk/husklet-react-*.tgz --strip-components=1 -C node_modules/@husklet/react \
+    && npm install --global --ignore-scripts --no-audit --no-fund \
+       /opt/husklet-sdk/husklet-client-*.tgz \
+       /opt/husklet-sdk/husklet-react-*.tgz \
+       react@18.3.1 react-reconciler@0.29.2 \
+    && mkdir -p node_modules/@husklet \
+    && ln -s "$(npm root --global)/@husklet/client" node_modules/@husklet/client \
+    && ln -s "$(npm root --global)/@husklet/react" node_modules/@husklet/react \
+    && ln -s "$(npm root --global)/react" node_modules/react \
+    && ln -s "$(npm root --global)/react-reconciler" node_modules/react-reconciler \
     && test "$(node -p "require('@husklet/client/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
-    && npm cache clean --force
+    && npm cache verify
 
 WORKDIR /app
 ENV NODE_ENV=production

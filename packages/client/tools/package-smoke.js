@@ -461,7 +461,7 @@ try {
     void configuration; void container; void processes; void topology; void text; void input;
     void acted; void xml; void request; void rawInfo; void rawInspect; void event; void protocol; void lifecycle; void cancellable.info();
   `);
-  execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
+  execFileSync(path.resolve(root, '../../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
   ], { cwd: consumer, stdio: 'pipe' });

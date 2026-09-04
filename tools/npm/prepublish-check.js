@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (name) => JSON.parse(fs.readFileSync(path.join(root, name, 'package.json')));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const read = (name) => JSON.parse(fs.readFileSync(path.join(root, 'packages', name, 'package.json')));
 const client = read('client');
-const clientStarter = JSON.parse(fs.readFileSync(path.join(root, 'client/examples/starter/package.json')));
+const clientStarter = JSON.parse(fs.readFileSync(path.join(root, 'packages/client/examples/starter/package.json')));
 const react = read('react');
-const starter = JSON.parse(fs.readFileSync(path.join(root, 'react/examples/starter/package.json')));
+const starter = JSON.parse(fs.readFileSync(path.join(root, 'packages/react/examples/starter/package.json')));
 const expected = process.env.RELEASE_VERSION ?? client.version;
 for (const manifest of [client, react]) {
   assert.equal(manifest.version, expected);
@@ -23,7 +23,7 @@ assert.equal(starter.dependencies['@husklet/react'], expected);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-pack-'));
 try {
   const pack = (name) => {
-    const result = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { cwd: path.join(root, name), encoding: 'utf8' }))[0];
+    const result = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { cwd: path.join(root, 'packages', name), encoding: 'utf8' }))[0];
     assert.equal(result.name, `@husklet/${name}`);
     assert(result.integrity.startsWith('sha512-'));
     return path.join(scratch, result.filename);

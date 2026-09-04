@@ -43,7 +43,7 @@ client package. Neither Dockerfile resolves npm during its final image build.
 An offline OCI build still requires the selected Node or React base image to
 already exist in the builder's cache.
 
-The repository's `extensions/react/Dockerfile` is release infrastructure, not
+The repository's `extensions/base/Dockerfile` is release infrastructure, not
 a standalone file in the npm tarball: its build context deliberately requires
 the sibling client and React source trees. The npm package instead ships the
 complete `examples/starter` Docker context, which consumes the published base

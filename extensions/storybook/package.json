@@ -11,7 +11,7 @@
     "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > src/catalogue.json"
   },
   "dependencies": {
-    "@husklet/react": "file:../react",
+    "@husklet/react": "file:../../packages/react",
     "react": "^18.3.1"
   },
   "engines": { "node": ">=20" }

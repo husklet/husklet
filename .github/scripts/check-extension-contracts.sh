@@ -12,9 +12,9 @@ node -e '
   const fs = require("node:fs");
   const path = require("node:path");
   const root = process.argv[1];
-  const workspaces = JSON.parse(fs.readFileSync(path.join(root, "extensions/package.json"))).workspaces;
-  if (!Array.isArray(workspaces) || workspaces.filter((value) => value === "storybook").length !== 1) {
-    throw new Error("extensions/package.json must include the storybook workspace exactly once");
+  const workspaces = JSON.parse(fs.readFileSync(path.join(root, "package.json"))).workspaces;
+  if (!Array.isArray(workspaces) || workspaces.filter((value) => value === "extensions/storybook").length !== 1) {
+    throw new Error("package.json must include the Storybook extension workspace exactly once");
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "extensions/storybook/package.json")));
   if (manifest.name !== "@husklet/storybook") {
@@ -29,7 +29,7 @@ node -e '
 cargo check --locked --offline -q -p hl-extension
 cargo run --locked --offline -q -p hl-extension --bin hl-extension-spec -- \
   | cmp - "$specification"
-node "$root/extensions/client/tools/protocol-spec.js"
+node "$root/packages/client/tools/protocol-spec.js"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/husklet-extension-contracts.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 
@@ -39,8 +39,8 @@ declarations="$scratch/index.d.ts"
 cargo run --locked --offline -q --manifest-path "$root/Cargo.toml" \
   -p hl-gui --bin catalogue >"$catalogue"
 HUSKLET_CATALOGUE="$catalogue" HUSKLET_DECLARATIONS="$declarations" \
-  node "$root/extensions/react/tools/types.js"
+  node "$root/packages/react/tools/types.js"
 
-cmp "$catalogue" "$root/extensions/react/catalogue.json"
+cmp "$catalogue" "$root/packages/react/catalogue.json"
 cmp "$catalogue" "$root/extensions/storybook/src/catalogue.json"
-cmp "$declarations" "$root/extensions/react/src/index.d.ts"
+cmp "$declarations" "$root/packages/react/src/index.d.ts"
