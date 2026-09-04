@@ -143,6 +143,92 @@ impl Mode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileEvidence {
+    None,
+    Backend,
+    CacheMiss,
+    CacheHit,
+}
+
+fn profile_evidence(mode: Mode) -> ProfileEvidence {
+    match mode {
+        Mode::Translated => ProfileEvidence::Backend,
+        Mode::CacheCold => ProfileEvidence::CacheMiss,
+        Mode::CacheValid => ProfileEvidence::CacheHit,
+        _ => ProfileEvidence::None,
+    }
+}
+
+fn profile_execution(mode: Mode) -> Execution {
+    match profile_evidence(mode) {
+        ProfileEvidence::Backend => Execution::translated(true),
+        _ if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) => Execution::Interpreted,
+        _ => Execution::Auto,
+    }
+}
+
+fn require_profile_receipt(mode: Mode, stderr: &[u8]) -> Result<(), Error> {
+    let stderr = String::from_utf8_lossy(stderr);
+    match profile_evidence(mode) {
+        ProfileEvidence::None => Ok(()),
+        ProfileEvidence::Backend => {
+            let receipt = stderr
+                .lines()
+                .find(|line| line.starts_with("[prof] translit:"))
+                .ok_or("translated product run published no backend receipt")?;
+            require(
+                !receipt.ends_with("not selected"),
+                "translated product run selected the interpreter",
+            )?;
+            let entries = receipt
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("entries="))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            require(entries > 0, "translated product run executed no generated entries")?;
+            eprintln!("pcache-profile backend_receipt={receipt}");
+            Ok(())
+        }
+        expected => {
+            let outcome = if expected == ProfileEvidence::CacheMiss {
+                "MISS"
+            } else {
+                "HIT"
+            };
+            let receipt = stderr
+                .lines()
+                .find(|line| {
+                    line.starts_with("[pcache-v1]")
+                        && line
+                            .split_ascii_whitespace()
+                            .any(|field| field.strip_prefix("outcome=") == Some(outcome))
+                })
+                .ok_or("cache profile run published no matching pcache receipt")?;
+            eprintln!("pcache-profile cache_receipt={receipt}");
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn profile_evidence_modes_keep_cache_observation_separate_from_general_profiling() {
+    assert_eq!(profile_execution(Mode::Interpreter), Execution::Interpreted);
+    assert_eq!(profile_execution(Mode::Translated), Execution::translated(true));
+    assert_eq!(profile_execution(Mode::CacheCold), Execution::Auto);
+    assert_eq!(profile_execution(Mode::CacheValid), Execution::Auto);
+    assert_eq!(profile_evidence(Mode::CacheCold), ProfileEvidence::CacheMiss);
+    assert_eq!(profile_evidence(Mode::CacheValid), ProfileEvidence::CacheHit);
+}
+
+#[test]
+fn cache_profile_receipt_requirement_is_non_vacuous() {
+    assert!(require_profile_receipt(Mode::CacheCold, b"").is_err());
+    assert!(require_profile_receipt(Mode::CacheCold, b"[pcache-v1] outcome=MISS restored=0\n").is_ok());
+    assert!(require_profile_receipt(Mode::CacheValid, b"[pcache-v1] outcome=MISS restored=0\n").is_err());
+    assert!(require_profile_receipt(Mode::CacheValid, b"[pcache-v1] outcome=HIT restored=7\n").is_ok());
+}
+
 #[tokio::test]
 #[ignore = "profile only: the runner supplies an owned compiler fixture and one isolated process arm"]
 async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), Error> {
@@ -398,8 +484,12 @@ int main(void) {
     } else {
         config
     };
-    let config = config
-        .translation_cache_observability(std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"));
+    let config = config.translation_cache_observability(
+        matches!(
+            profile_evidence(mode),
+            ProfileEvidence::CacheMiss | ProfileEvidence::CacheHit
+        ) || std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1"),
+    );
     let config = match std::env::var_os("HL_PCACHE_PROFILE_SYMBOLS") {
         Some(directory) => config.translation_symbols(directory),
         None => config,
@@ -831,13 +921,7 @@ int main(void) {
     let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(
-            if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
-                Execution::Interpreted
-            } else {
-                Execution::Auto
-            },
-        )
+        .execution(profile_execution(mode))
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             read_only_root: false,
@@ -894,35 +978,7 @@ int main(void) {
         (waited, logs)
     };
     let elapsed = started.elapsed();
-    // The nested arm ends in its shell parent after two forked compiler children. The backend's
-    // process-local report belongs to those child exits and is not part of the parent's guest log;
-    // its cache-directory receipts below are the durable assertion for that lifecycle instead.
-    if mode.translated()
-        && !matches!(
-            mode,
-            Mode::CacheNestedLaunchOnly
-                | Mode::CacheNestedToolchain
-                | Mode::CacheNestedToolchainUpper
-                | Mode::CacheNestedToolchainSmc
-        )
-    {
-        let stderr = String::from_utf8_lossy(&logs.stderr);
-        let receipt = stderr
-            .lines()
-            .find(|line| line.starts_with("[prof] translit:"))
-            .ok_or("translated product run published no backend receipt")?;
-        require(
-            !receipt.ends_with("not selected"),
-            "translated product run selected the interpreter",
-        )?;
-        let entries = receipt
-            .split_ascii_whitespace()
-            .find_map(|field| field.strip_prefix("entries="))
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(0);
-        require(entries > 0, "translated product run executed no generated entries")?;
-        eprintln!("pcache-profile backend_receipt={receipt}");
-    }
+    require_profile_receipt(mode, &logs.stderr)?;
     containers.remove("pcache-profile").await?;
     let status = waited?;
     if status != ExitStatus::Code(0) {
