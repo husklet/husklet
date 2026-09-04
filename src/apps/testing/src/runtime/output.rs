@@ -1543,7 +1543,7 @@ mod tests {
         forward_profile(&captured, &mut forwarded).unwrap();
         assert_eq!(forwarded, captured.as_bytes());
 
-        let assertions = serde_yaml::from_str(
+        let assertions: Vec<crate::runtime::definition::diagnostics::Assertion> = serde_yaml::from_str(
             "- { counter: body_retired, equals: 12 }\n\
              - { counter: major10, equals: 1 }\n\
              - { counter: branch_system, equals: 1 }\n",
