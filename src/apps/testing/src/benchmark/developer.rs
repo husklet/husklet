@@ -19,7 +19,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v3";
+const SCHEMA: &str = "husklet-developer-benchmark-v4";
 const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
@@ -45,6 +45,9 @@ const ORDER: [Mode; 6] = [
 
 #[derive(Args)]
 pub(crate) struct Options {
+    /// Immutable description of the physical host or VM (CPU, kernel, hypervisor and allocation).
+    #[arg(long)]
+    host_manifest: PathBuf,
     /// Immutable baseline Linux rootfs containing sh, gcc, make, git, rg, tar, and apk metadata.
     #[arg(long)]
     rootfs: PathBuf,
@@ -144,6 +147,7 @@ struct ArmArtifacts<'a> {
 #[derive(Deserialize, Serialize)]
 struct Identity {
     schema: String,
+    host_manifest: String,
     rootfs: String,
     engine: String,
     native_library: String,
@@ -182,6 +186,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     let translated = arm_artifacts(&options, Mode::Translated);
     let expected = Identity {
         schema: SCHEMA.into(),
+        host_manifest: identity::artifact_identity(&options.host_manifest)?,
         rootfs: identity::artifact_identity(&options.rootfs)?,
         engine: identity::artifact_identity(&options.engine)?,
         native_library: identity::artifact_identity(&options.native_library)?,
@@ -221,7 +226,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
                 fs::remove_dir_all(&root)?;
             }
             clone_root(arm_artifacts(&options, mode).rootfs, &root)?;
-            stage_fixture(&root, fixture)?;
+            stage_fixture(&options, &root, mode, fixture)?;
             let result = execute(&options, &root, mode, sample, position);
             fs::remove_dir_all(&root)?;
             append(&ledger_path, &result?)?;
@@ -240,13 +245,17 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 
 fn validate_options(options: &Options) -> Result<(), Error> {
     let translated = arm_artifacts(options, Mode::Translated);
-    if !options.rootfs.is_dir()
+    if !options.host_manifest.is_file()
+        || !options.rootfs.is_dir()
         || !options.engine.is_file()
         || !translated.rootfs.is_dir()
         || !translated.engine.is_file()
         || !options.native_library.is_file()
     {
-        return Err("baseline/translated rootfs, worker, or native library has the wrong type".into());
+        return Err("host manifest, baseline/translated rootfs, worker, or native library has the wrong type".into());
+    }
+    if options.guest_isa != host_isa().guest() {
+        return Err("native and supervised controls require a baseline rootfs matching the host ISA".into());
     }
     Ok(())
 }
@@ -272,6 +281,15 @@ const fn host_isa() -> HostIsa {
         HostIsa::Aarch64
     } else {
         HostIsa::X86_64
+    }
+}
+
+impl HostIsa {
+    const fn guest(self) -> GuestIsa {
+        match self {
+            Self::Aarch64 => GuestIsa::Aarch64,
+            Self::X86_64 => GuestIsa::X86_64,
+        }
     }
 }
 
@@ -310,10 +328,36 @@ fn clone_root(source: &Path, destination: &Path) -> Result<(), Error> {
     }
 }
 
-fn stage_fixture(root: &Path, script: &str) -> Result<(), Error> {
+const STAGE_COMMAND: &str = "cd /work && git init -q && git config user.email bench@example.invalid && git config user.name Bench && git add . && git commit -qm seed && git clone -q --bare . /fixture.git";
+
+fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
+    let artifacts = arm_artifacts(options, mode);
+    if artifacts.guest_isa == host_isa().guest() {
+        return ["chroot".into(), root.as_os_str().to_owned(), "/bin/sh".into(), "-c".into(), STAGE_COMMAND.into()].into();
+    }
+    vec![
+        artifacts.engine.as_os_str().to_owned(),
+        "--report-exit".into(),
+        "--native-library".into(),
+        options.native_library.as_os_str().to_owned(),
+        "--guest-isa".into(),
+        artifacts.guest_isa.as_str().into(),
+        "--rootfs".into(),
+        root.as_os_str().to_owned(),
+        "--native-supervised=off".into(),
+        "--translit".into(),
+        "--".into(),
+        "bin/sh".into(),
+        "-c".into(),
+        STAGE_COMMAND.into(),
+    ]
+}
+
+fn stage_fixture(options: &Options, root: &Path, mode: Mode, script: &str) -> Result<(), Error> {
     let work = root.join("work");
     write_workload_tree(&work, script)?;
-    let status = Command::new("chroot").arg(root).args(["/bin/sh", "-c", "cd /work && git init -q && git config user.email bench@example.invalid && git config user.name Bench && git add . && git commit -qm seed && git clone -q --bare . /fixture.git"]).status()?;
+    let argv = stage_argv(options, root, mode);
+    let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
     if status.success() {
         Ok(())
     } else {
@@ -826,6 +870,7 @@ mod tests {
 
     fn cross_isa_options() -> Options {
         Options {
+            host_manifest: "/identity/host.json".into(),
             rootfs: "/roots/x86".into(),
             engine: "/workers/hl-x86_64".into(),
             guest_isa: GuestIsa::X86_64,
@@ -958,6 +1003,28 @@ mod tests {
         assert_eq!(supervised.rootfs, Path::new("/roots/x86"));
         assert_eq!(supervised.engine, Path::new("/workers/hl-x86_64"));
         assert_eq!(supervised.guest_isa, GuestIsa::X86_64);
+    }
+
+    #[test]
+    fn foreign_fixture_staging_runs_through_the_selected_guest_backend() {
+        let options = cross_isa_options();
+        let argv = stage_argv(&options, Path::new("/cloned-arm-root"), Mode::Translated);
+        let argv = argv.iter().map(|value| value.to_str().unwrap()).collect::<Vec<_>>();
+        assert_eq!(argv[0], "/workers/hl-aarch64");
+        assert!(argv.windows(2).any(|pair| pair == ["--guest-isa", "aarch64"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--rootfs", "/cloned-arm-root"]));
+        assert!(argv.contains(&"--native-supervised=off"));
+        assert_eq!(argv.last(), Some(&STAGE_COMMAND));
+    }
+
+    #[test]
+    fn native_control_is_defined_only_for_the_host_isa() {
+        assert_eq!(HostIsa::Aarch64.guest(), GuestIsa::Aarch64);
+        assert_eq!(HostIsa::X86_64.guest(), GuestIsa::X86_64);
+        let mut options = cross_isa_options();
+        options.guest_isa = host_isa().guest();
+        let argv = stage_argv(&options, Path::new("/cloned-x86-root"), Mode::Native);
+        assert_eq!(argv[0], "chroot");
     }
 
     #[test]
