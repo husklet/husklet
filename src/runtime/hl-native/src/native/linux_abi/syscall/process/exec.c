@@ -249,6 +249,13 @@ static int exec_origin_basic_matrix_child(int scenario) {
         exact = error == 0 && exec_cache_identity_pair_authorized(&image, &interpreter, 0) &&
                 exec_cache_identity_pair_authorized(&image, &interpreter, 1);
         if (error == 0) {
+#ifdef PCACHE_EXEC_HOOKS
+            hl_identity_digest absent = pcache_exec_authorized_id(image.identity, interpreter.identity, 0, 1, "tool");
+            hl_identity_digest present = pcache_exec_authorized_id(image.identity, interpreter.identity, 1, 1, "tool");
+            hl_identity_digest refused = pcache_exec_authorized_id(image.identity, interpreter.identity, 1, 0, "tool");
+            exact = exact && !hl_identity_digest_empty(&absent) && !hl_identity_digest_empty(&present) &&
+                    hl_identity_digest_empty(&refused) && !hl_identity_digest_equal(&absent, &present);
+#endif
             interpreter.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UPPER, 0};
             exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 1);
             interpreter.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_LOWER, 0};

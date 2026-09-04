@@ -56,6 +56,14 @@ static void pcache_exec_force_interp(void) {
     if (g_pcache) g_force_base = PC_INTERP_BASE;
 }
 
+static hl_identity_digest pcache_exec_authorized_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                                     int interpreter_present, int identity_authorized,
+                                                     const char *argv0) {
+    return identity_authorized
+               ? pcache_make_id(program, interpreter_present ? interpreter : (hl_identity_digest){0}, argv0)
+               : (hl_identity_digest){0};
+}
+
 static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, int interpreter_present,
                                int identity_authorized, const char *argv0, uint64_t jump) {
     if (!g_pcache) return;
@@ -77,9 +85,7 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_pc_nprov_defer = 0;
     g_pc_nlib = 0;
     __atomic_store_n(&g_pc_lib_next, PC_LIB_BASE, __ATOMIC_RELAXED);
-    g_pc_binid = identity_authorized
-                     ? pcache_make_id(program, interpreter_present ? interpreter : (hl_identity_digest){0}, argv0)
-                     : (hl_identity_digest){0};
+    g_pc_binid = pcache_exec_authorized_id(program, interpreter, interpreter_present, identity_authorized, argv0);
     g_pc_entry = jump;
     int hit = pcache_load(jump);
     if (g_coldprof) fprintf(stderr, "[pcache] exec %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
