@@ -76,6 +76,22 @@ impl Process {
             .ok_or_else(|| Error::Runtime("process result was already consumed".into()))
     }
 
+    fn finish_benchmark_collector(&self) -> Result<()> {
+        if let Some(collector) = self
+            .benchmark_collector
+            .lock()
+            .map_err(|_| Error::Runtime("benchmark collector lock is poisoned".into()))?
+            .take()
+        {
+            let measurement = collector.finish()?;
+            self.benchmark_measurement
+                .lock()
+                .map_err(|_| Error::Runtime("benchmark measurement lock is poisoned".into()))?
+                .replace(measurement);
+        }
+        Ok(())
+    }
+
     /// `None` once the guest has been reaped, which callers that tolerate a terminal guest use
     /// to stay a no-op instead of reporting a stop failure.
     fn live(&self) -> Result<Option<Arc<hl_engine::runtime::Engine>>> {
@@ -149,27 +165,25 @@ impl Running for Process {
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         let engine = self.engine()?;
-        let wait = wait_thread(format!("hl-engine-wait-{}", self.id), move || engine.wait())
-            .map_err(|error| Error::Runtime(format!("engine wait thread: {error}")))?;
-        let exit = wait
-            .await
-            .map_err(|_| Error::Runtime("engine wait thread ended without a result".into()))?;
+        let wait = match wait_thread(format!("hl-engine-wait-{}", self.id), move || engine.wait()) {
+            Ok(wait) => wait,
+            Err(error) => {
+                self.finish_benchmark_collector()?;
+                return Err(Error::Runtime(format!("engine wait thread: {error}")));
+            }
+        };
+        let exit = match wait.await {
+            Ok(exit) => exit,
+            Err(_) => {
+                self.finish_benchmark_collector()?;
+                return Err(Error::Runtime("engine wait thread ended without a result".into()));
+            }
+        };
         self.child
             .lock()
             .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
             .take();
-        if let Some(collector) = self
-            .benchmark_collector
-            .lock()
-            .map_err(|_| Error::Runtime("benchmark collector lock is poisoned".into()))?
-            .take()
-        {
-            let measurement = collector.finish()?;
-            self.benchmark_measurement
-                .lock()
-                .map_err(|_| Error::Runtime("benchmark measurement lock is poisoned".into()))?
-                .replace(measurement);
-        }
+        self.finish_benchmark_collector()?;
         let exit = exit.map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
         Ok(Self::status(exit))
     }

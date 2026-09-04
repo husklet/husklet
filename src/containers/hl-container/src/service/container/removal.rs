@@ -60,6 +60,7 @@ impl Service {
         self.networks.disconnect_container_locked(&container.id).await?;
         self.identity.remove(&container)?;
         self.containers.remove(&container.id).await?;
+        self.measurement_requests.lock().await.remove(&container.id);
         self.emit(crate::LifecycleAction::Destroy, &container);
         for name in container.spec.mounts.iter().filter_map(|mount| match &mount.source {
             crate::MountSource::Tmpfs(name) => Some(name.as_str()),

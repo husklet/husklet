@@ -136,4 +136,23 @@ mod tests {
         let start = source.find("engine\n            .start()").unwrap();
         assert!(members < prepare && prepare < enable && enable < start);
     }
+
+    #[test]
+    fn every_wait_setup_failure_finishes_the_collector() {
+        let source = include_str!("engine/process.rs");
+        let spawn_failure = source.find("engine wait thread: {error}").unwrap();
+        let channel_failure = source.find("engine wait thread ended without a result").unwrap();
+        for failure in [spawn_failure, channel_failure] {
+            let branch = &source[failure.saturating_sub(180)..failure];
+            assert!(branch.contains("finish_benchmark_collector()?"));
+        }
+    }
+
+    #[test]
+    fn removing_an_unstarted_container_discards_its_ephemeral_request() {
+        let source = include_str!("service/container/removal.rs");
+        let durable_remove = source.find("self.containers.remove(&container.id).await?").unwrap();
+        let ephemeral_remove = source.find("self.measurement_requests.lock().await.remove(&container.id)").unwrap();
+        assert!(durable_remove < ephemeral_remove);
+    }
 }
