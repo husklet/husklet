@@ -1,9 +1,8 @@
-// @ts-nocheck -- operational pages are migrated after the strict overview shell.
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
   ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
-  type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
+  type ContainerCreateSpec, type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
   type TabSummary, type VolumeSummary, type WorkspaceApi,
 } from '@husklet/react';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
@@ -71,7 +70,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   useEffect(() => {
     if (section !== 'executions' || typeof api.watchExecutions !== 'function') return undefined;
     let disposed = false;
-    let stop = null;
+    let stop: (() => void) | null = null;
     void api.watchExecutions((listing) => {
       if (disposed) return;
       setExecutionsTruncated(listing.truncated);
@@ -87,11 +86,11 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   }, [api, section, executions.replace]);
   useEffect(() => selections?.subscribe((event) => {
     if ('pane_provider' in event && SECTIONS.includes(event.pane_provider as Section)) setSection(event.pane_provider as Section);
-    if (event?.snapshot === 'containers') void containers.reload();
-    if (event?.snapshot === 'images') void images.reload();
-    if (event?.snapshot === 'volumes') void volumes.reload();
-    if (event?.snapshot === 'networks') void networks.reload();
-    if (event?.snapshot === 'terminal') void terminals.reload();
+    if ('snapshot' in event && event.snapshot === 'containers') void containers.reload();
+    if ('snapshot' in event && event.snapshot === 'images') void images.reload();
+    if ('snapshot' in event && event.snapshot === 'volumes') void volumes.reload();
+    if ('snapshot' in event && event.snapshot === 'networks') void networks.reload();
+    if ('snapshot' in event && event.snapshot === 'terminal') void terminals.reload();
   }), [selections, containers.reload, images.reload, volumes.reload, networks.reload, terminals.reload]);
   useEffect(() => {
     if (typeof api.subscribe !== 'function') return undefined;
@@ -123,7 +122,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     api={api}
     resource={containers}
     containerDetails={containerDetails}
-    onOpenExecution={async (id) => {
+    onOpenExecution={async (id: string) => {
           setRequestedExecution(id);
           await executions.reload();
           setSection('executions');
@@ -153,8 +152,8 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   );
 }
 
-function containerCreateOptions(draft: ContainerCreateDraft) {
-  const bytes = (value) => new TextEncoder().encode(value).byteLength;
+function containerCreateOptions(draft: ContainerCreateDraft): Omit<ContainerCreateSpec, 'image' | 'name'> {
+  const bytes = (value: string) => new TextEncoder().encode(value).byteLength;
   const hostname = draft.hostname;
   if (hostname && (bytes(hostname) > 253 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(hostname))) {
     throw new Error('Hostname must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 253 bytes.');
@@ -168,8 +167,8 @@ function containerCreateOptions(draft: ContainerCreateDraft) {
   if (labelsText) {
     try { labels = JSON.parse(labelsText); } catch { throw new Error('Labels must be valid JSON pairs, such as [["role","worker"]].'); }
     if (!Array.isArray(labels) || labels.length > 128
-      || labels.some((pair) => !Array.isArray(pair) || pair.length !== 2
-        || pair.some((value) => typeof value !== 'string')
+      || labels.some((pair: unknown) => !Array.isArray(pair) || pair.length !== 2
+        || pair.some((value: unknown) => typeof value !== 'string')
         || pair[0].length === 0 || pair[0].includes('\0') || bytes(pair[0]) > 256
         || pair[1].includes('\0') || bytes(pair[1]) > 4_096)
       || new Set(labels.map(([name]) => name)).size !== labels.length) {
@@ -218,7 +217,7 @@ function containerCreateOptions(draft: ContainerCreateDraft) {
   }
   const workingDirectory = draft.workingDirectory.trim();
   if (workingDirectory && (!workingDirectory.startsWith('/') || bytes(workingDirectory) > 4_096
-    || workingDirectory.includes('\0') || workingDirectory.split('/').some((part) => part === '.' || part === '..'))) {
+    || workingDirectory.includes('\0') || workingDirectory.split('/').some((part: string) => part === '.' || part === '..'))) {
     throw new Error('Working directory must be an absolute, NUL-free path without dot segments and at most 4096 bytes.');
   }
   const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
@@ -230,11 +229,11 @@ function containerCreateOptions(draft: ContainerCreateDraft) {
     try { mounts = JSON.parse(mountsText); } catch { throw new Error('Mounts must be valid JSON, such as [{"volume":"cache","target":"/cache","read_only":true}].'); }
     const allowed = new Set(['volume', 'target', 'read_only']);
     if (!Array.isArray(mounts) || mounts.length > 64
-      || mounts.some((mount) => !mount || typeof mount !== 'object' || Array.isArray(mount)
+      || mounts.some((mount: any) => !mount || typeof mount !== 'object' || Array.isArray(mount)
         || Object.keys(mount).some((key) => !allowed.has(key))
         || typeof mount.volume !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(mount.volume)
         || typeof mount.target !== 'string' || !mount.target.startsWith('/') || bytes(mount.target) > 4_096
-        || mount.target.includes('\0') || mount.target.split('/').some((part) => part === '.' || part === '..')
+        || mount.target.includes('\0') || mount.target.split('/').some((part: string) => part === '.' || part === '..')
         || (mount.read_only !== undefined && typeof mount.read_only !== 'boolean'))
       || new Set(mounts.map((mount) => mount.target)).size !== mounts.length) {
       throw new Error('Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.');
@@ -246,9 +245,9 @@ function containerCreateOptions(draft: ContainerCreateDraft) {
   if (portsText) {
     try { ports = JSON.parse(portsText); } catch { throw new Error('Ports must be valid JSON, such as [{"container":8080,"host":18080,"protocol":"tcp"}].'); }
     const allowed = new Set(['container', 'host', 'protocol']);
-    const validPort = (value) => Number.isInteger(value) && value >= 1 && value <= 65_535;
+    const validPort = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 65_535;
     if (!Array.isArray(ports) || ports.length > 64
-      || ports.some((port) => !port || typeof port !== 'object' || Array.isArray(port)
+      || ports.some((port: any) => !port || typeof port !== 'object' || Array.isArray(port)
         || Object.keys(port).some((key) => !allowed.has(key))
         || !validPort(port.container) || (port.host !== undefined && port.host !== null && !validPort(port.host))
         || !['tcp', 'udp'].includes(port.protocol))
@@ -274,7 +273,7 @@ function containerCreateOptions(draft: ContainerCreateDraft) {
   };
 }
 
-function optionalDecimalLimit(value, label, maximum) {
+function optionalDecimalLimit(value: string, label: string, maximum: number): number | null {
   const text = value.trim();
   if (!text) return null;
   if (!/^[0-9]+$/.test(text)) throw new Error(`${label} must be a whole decimal number from 1 to ${maximum}.`);
@@ -285,21 +284,41 @@ function optionalDecimalLimit(value, label, maximum) {
   return parsed;
 }
 
-export function Containers({ api, resource, containerDetails, onOpenExecution }) {
+type ContainersProps = {
+  api: WorkspaceApi;
+  resource: Resource<ContainerSummary>;
+  containerDetails?: ContainerDetailsSource;
+  onOpenExecution?: (id: string) => void | Promise<void>;
+};
+type Inspection = {
+  id: string;
+  state: 'idle' | 'loading' | 'ready' | 'error';
+  count: number;
+  detail: ContainerSummary | null;
+  error: unknown;
+};
+type LifecycleVerb = 'start' | 'restart' | 'pause' | 'unpause' | 'stop' | 'kill';
+type LifecycleAction = (verb: LifecycleVerb, id: string, signal?: string) => Promise<void>;
+
+export function Containers({ api, resource, containerDetails, onOpenExecution }: ContainersProps) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, detail: null, error: null });
+  const [inspection, setInspection] = useState<Inspection>({ id: '', state: 'idle', count: 0, detail: null, error: null });
   const inspectionRevision = useRef(0);
   const inventoryRevision = useRef(resource.data);
-  const currentContainers = useRef(new Map());
+  const currentContainers = useRef(new Map<string, string>());
   currentContainers.current = new Map((resource.data ?? []).map((container) => [container.id, container.state]));
-  const act = async (verb, id, ...args) => {
+  const act: LifecycleAction = async (verb, id, signal) => {
     setBusy(`${verb}:${id}`);
-    try { await api.containers[verb](id, ...args); await resource.reload(); } finally { setBusy(''); }
+    try {
+      if (verb === 'kill') await api.containers.kill(id, signal ?? 'SIGKILL');
+      else await api.containers[verb](id);
+      await resource.reload();
+    } finally { setBusy(''); }
   };
-  const inspect = async (item) => {
+  const inspect = async (item: ContainerSummary) => {
     const revision = ++inspectionRevision.current;
     setSelected(item.id);
     setInspection({ id: item.id, state: 'loading', count: 0, detail: null, error: null });
@@ -320,14 +339,14 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
     setSelected(null);
     setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });
   }, [resource.data]);
-  const toggleDetails = (item) => {
+  const toggleDetails = (item: ContainerSummary) => {
     if (selected === item.id && inspection.state !== 'error') {
       setSelected(null);
       return;
     }
     void inspect(item);
   };
-  const remove = async (item) => {
+  const remove = async (item: ContainerSummary) => {
     if (currentContainers.current.get(item.id) !== 'stopped' || item.state !== 'stopped') {
       throw new Error(`Container ${item.id} changed or is no longer stopped; refresh and confirm again.`);
     }
@@ -359,7 +378,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         loadingLabel={'Reading containers…'}
         emptyLabel={'No containers'}
         emptyDetail={'Create a container through an agent or extension, then refresh this page.'}
-        error={resource.error?.message ?? String(resource.error ?? '')}
+        error={boundedMessage(resource.error)}
         retryLabel={'Retry containers'}
         onRetry={resource.reload}>
         {view.records.map((item) => <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
@@ -391,7 +410,12 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
   );
 }
 
-function containerActions(item, busy, act, remove) {
+function containerActions(
+  item: ContainerSummary,
+  busy: string,
+  act: LifecycleAction,
+  remove: (item: ContainerSummary) => void | Promise<void>,
+): React.ReactNode[] {
   const blocked = busy !== '';
   const running = item.state === 'running';
   return [
@@ -426,11 +450,20 @@ function containerActions(item, busy, act, remove) {
   ];
 }
 
-function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecution }) {
+type ContainerDetailProps = {
+  api: WorkspaceApi;
+  container: ContainerSummary;
+  act: LifecycleAction;
+  inspection: Inspection;
+  onRetry: () => void | Promise<void>;
+  onOpenExecution?: (id: string) => void | Promise<void>;
+};
+
+function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecution }: ContainerDetailProps) {
   const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
-  const [execution, setExecution] = useState({ state: 'idle', id: '', error: null });
-  const [attachment, setAttachment] = useState({ state: 'idle', slot: '', error: null });
-  const [logs, setLogs] = useState(null);
+  const [execution, setExecution] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; id: string; error: unknown }>({ state: 'idle', id: '', error: null });
+  const [attachment, setAttachment] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; slot: string; error: unknown }>({ state: 'idle', slot: '', error: null });
+  const [logs, setLogs] = useState<string | null>(null);
   const run = async () => {
     setExecution({ state: 'loading', id: '', error: null });
     try {
@@ -450,7 +483,7 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
         ...(command.workingDirectory.trim() ? { workingDirectory: command.workingDirectory.trim() } : {}),
       });
       setExecution({ state: 'ready', id, error: null });
-    } catch (error) { setExecution({ state: 'error', id: '', error }); }
+    } catch (error: unknown) { setExecution({ state: 'error', id: '', error }); }
   };
   const readLogs = async () => setLogs(logText(await api.containers.logs(container.id, { stdout: true, stderr: true })).slice(-LOG_LIMIT * 160));
   const attach = async () => {
@@ -465,7 +498,7 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
       }
       const slot = await api.containers.attachTerminal(container.id, argv);
       setAttachment({ state: 'ready', slot, error: null });
-    } catch (error) { setAttachment({ state: 'error', slot: '', error }); }
+    } catch (error: unknown) { setAttachment({ state: 'error', slot: '', error }); }
   };
   return (
     <CardContent gap={2}>
@@ -474,7 +507,7 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
         loadingLabel={'Reading container details…'}
         emptyLabel={'No container details'}
         emptyDetail={'The host returned no inspectable fields.'}
-        error={inspection.error?.message ?? String(inspection.error ?? '')}
+        error={boundedMessage(inspection.error)}
         retryLabel={'Retry details'}
         onRetry={onRetry}>
         <StructuredDetail value={inspection.detail} />
@@ -530,7 +563,7 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
           onInvoke={attach} />
       </Row>
       {attachment.state === 'error' ? <Text
-        label={attachment.error?.message ?? String(attachment.error)}
+        label={boundedMessage(attachment.error)}
         color={'danger'}
         wrap={true} /> : null}
       {attachment.state === 'ready' ? <Text
@@ -538,7 +571,7 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
         color={'positive'}
         wrap={true} /> : null}
       {execution.state === 'error' ? <Text
-        label={execution.error?.message ?? String(execution.error)}
+        label={boundedMessage(execution.error)}
         color={'danger'}
         wrap={true} /> : null}
       {execution.state === 'ready' ? <Row gap={1} wrap={true} align={'center'}>
