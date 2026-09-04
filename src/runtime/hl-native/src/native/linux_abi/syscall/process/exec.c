@@ -94,6 +94,7 @@ static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *im
 }
 
 static int exec_image_open_guest(const char *guest, exec_image *image);
+static void exec_image_release(exec_image *image);
 
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 static int exec_origin_write_image(const char *path) {
