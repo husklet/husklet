@@ -27,7 +27,7 @@ _Static_assert(offsetof(struct cpu, nzcv) == OFF_NZCV, "AArch64 x86 DBT nzcv off
 _Static_assert(R_SYSCALL == 1, "AArch64 x86 DBT syscall reason drifted");
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-extern void hl_a64_x86_dbt_enter(struct cpu *cpu, void *code) __attribute__((visibility("hidden")));
+extern uint64_t hl_a64_x86_dbt_enter(struct cpu *cpu, void *code) __attribute__((visibility("hidden")));
 extern void hl_a64_x86_dbt_return(void) __attribute__((visibility("hidden")));
 
 __asm__(".pushsection .text\n.p2align 4\n"
@@ -336,6 +336,8 @@ struct hl_a64_x86_block_header {
     uint64_t reserved;
     uint64_t branch_target;
     uint64_t branch_fallthrough;
+    uint64_t loop_steps;
+    uint64_t reserved2;
 };
 _Static_assert(sizeof(struct hl_a64_x86_block_header) % 16u == 0, "AArch64 x86 DBT entry lost alignment");
 
@@ -344,6 +346,9 @@ _Static_assert(HL_A64_X86_MAX_BLOCK_BYTES <= CACHE_EMIT_HEADROOM,
                "AArch64 x86 DBT block exceeds dispatcher cache admission");
 
 static void hl_a64_x86_emit_return(hl_x64_asm *assembler) {
+    /* r14 counts completed in-body backedges and is the return value used to
+     * reconcile dynamically retired guest instructions. */
+    hl_x64_u8(assembler, 0x4C); hl_x64_u8(assembler, 0x89); hl_x64_u8(assembler, 0xF0); /* mov %r14,%rax */
     hl_x64_mov_imm64(assembler, 1, (uintptr_t)hl_a64_x86_dbt_return);
     hl_x64_u8(assembler, 0xFF);
     hl_x64_u8(assembler, 0xE1); /* jmp *%rcx */
@@ -364,8 +369,13 @@ static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target)
     memcpy(displacement, &encoded, sizeof encoded);
 }
 
+enum { HL_A64_X86_BACKEDGE_BUDGET = 8 };
+_Static_assert(HL_A64_X86_BACKEDGE_BUDGET == 8,
+               "AArch64 x86 DBT poll budget must match dispatcher redispatch budget");
+
 static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
-                                                 uint64_t cursor, uint64_t *target_out) {
+                                                 uint64_t cursor, uint64_t *target_out,
+                                                 uint8_t *direct_target) {
     int64_t displacement;
     unsigned branch_condition;
     if ((instruction & 0xFF000010u) == 0x54000000u ||
@@ -413,6 +423,20 @@ static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t 
     hl_a64_x86_emit_return(assembler);
     if (!assembler->overflow) hl_a64_x86_patch_rel32(taken_patch, assembler->cursor);
     *target_out = cursor + (uint64_t)displacement;
+    if (direct_target != NULL) {
+        /* One direct cycle is complete. Escape on the same eight-edge budget
+         * used by dispatcher redispatch so IRQ, signal, checkpoint and SMC
+         * invalidation observe a safepoint within a bounded interval. */
+        hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xFE);
+        hl_x64_u8(assembler, HL_A64_X86_BACKEDGE_BUDGET - 1); /* cmp $7,%r14 */
+        uint8_t *budget_patch = hl_a64_x86_emit_jcc32(assembler, 3); /* JAE external exit */
+        hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xC6); /* inc %r14 */
+        hl_x64_u8(assembler, 0xE9);
+        uint8_t *loop_patch = assembler->cursor;
+        hl_x64_u32(assembler, 0);
+        if (!assembler->overflow) hl_a64_x86_patch_rel32(loop_patch, direct_target);
+        if (!assembler->overflow) hl_a64_x86_patch_rel32(budget_patch, assembler->cursor);
+    }
     hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, *target_out);
     hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
     hl_a64_x86_emit_return(assembler);
@@ -454,11 +478,16 @@ static void *translate_block(uint64_t guest_pc) {
         .overflow = 0,
     };
     uint64_t cursor = guest_pc;
+    uint8_t *host_for_instruction[64] = {0};
+    /* r14 is callee-saved by the entry trampoline and unused by the ALU
+     * lowering. It counts only completed direct backedges. */
+    hl_x64_u8(&assembler, 0x45); hl_x64_u8(&assembler, 0x31); hl_x64_u8(&assembler, 0xF6); /* xor %r14d,%r14d */
 
     /* A generated prefix is published only when a supported terminal is present.
      * Otherwise rewind the arena and let the interpreter translate the
      * ORIGINAL PC; no emitted prefix has executed or retired. */
     for (unsigned count = 0; count < 64u; ++count, cursor += 4) {
+        host_for_instruction[count] = assembler.cursor;
         int fetch_ok = 0;
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);
         if (!fetch_ok) break;
@@ -473,8 +502,18 @@ static void *translate_block(uint64_t guest_pc) {
             continue; /* Both conditional outcomes are the next instruction. */
         uint64_t exit_kind;
         uint64_t conditional_target = 0;
+        uint8_t *direct_target = NULL;
+        uint64_t decoded_target = 0;
+        if ((instruction & 0xFF000010u) == 0x54000000u ||
+            (instruction & 0xFF000010u) == 0x54000010u ||
+            (instruction & 0x7E000000u) == 0x34000000u)
+            decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4);
+        else if ((instruction & 0x7E000000u) == 0x36000000u)
+            decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4);
+        if (decoded_target >= guest_pc && decoded_target < cursor && ((decoded_target - guest_pc) & 3u) == 0)
+            direct_target = host_for_instruction[(decoded_target - guest_pc) / 4];
         int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
-                                                                &conditional_target);
+                                                                &conditional_target, direct_target);
         if (conditional) {
             exit_kind = UINT64_MAX;
         } else if (hl_a64_x86_is_svc(instruction)) {
@@ -501,6 +540,8 @@ static void *translate_block(uint64_t guest_pc) {
         header->reserved = 0;
         header->branch_target = conditional_target;
         header->branch_fallthrough = conditional ? cursor + 4 : 0;
+        header->loop_steps = direct_target == NULL ? 0 : (cursor - decoded_target) / 4 + 1;
+        header->reserved2 = 0;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, cursor + 4, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
@@ -551,8 +592,15 @@ static void run_block(struct cpu *cpu, void *code) {
          * terminal stores touch only the always-live cpu record. There is no
          * guest-memory instruction, hence no synchronous-fault provenance
          * interval to add. */
-        hl_backend_tree_run_begin(1, header->retired_steps);
-        hl_a64_x86_dbt_enter(cpu, code);
+        uint64_t repetitions = hl_a64_x86_dbt_enter(cpu, code);
+        if (repetitions >= HL_A64_X86_BACKEDGE_BUDGET ||
+            (header->loop_steps == 0 && repetitions != 0)) {
+            static const char message[] = "AArch64 x86 DBT returned invalid backedge accounting";
+            (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
+            cpu->reason = R_BRANCH;
+            return;
+        }
+        hl_backend_tree_run_begin(1, header->retired_steps + repetitions * header->loop_steps);
         unsigned exit_kind = (unsigned)header->exit_kind;
         if (header->exit_kind == UINT64_MAX) {
             if (cpu->pc == header->branch_target)

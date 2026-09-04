@@ -233,6 +233,15 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "guest_pc >= UINT64_MAX - UINT64_C(0xFFF)",
         "count < 64u",
         "uint64_t exit_kind;",
+        "HL_A64_X86_BACKEDGE_BUDGET = 8",
+        "decoded_target >= guest_pc && decoded_target < cursor",
+        "direct_target = host_for_instruction[(decoded_target - guest_pc) / 4]",
+        "header->loop_steps = direct_target == NULL ? 0",
+        "repetitions * header->loop_steps",
+        "repetitions >= HL_A64_X86_BACKEDGE_BUDGET",
+        "header->loop_steps == 0 && repetitions != 0",
+        "cmp $7,%r14",
+        "mov %r14,%rax",
     ] {
         assert!(source.contains(contract), "missing stage-one contract {contract}");
     }
