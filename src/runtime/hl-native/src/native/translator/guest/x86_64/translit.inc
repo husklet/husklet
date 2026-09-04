@@ -2326,16 +2326,12 @@ static int translit_jcc_ibtc_stub_init(void) {
     translit_emit_spill_after_rax(&a, &rsp_canonical, &flags_canonical);
     hl_x64_cmp_gs_imm8(&a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(&a, 5);
-    /* Every source saves guest RAX before materializing and committing the
-       architectural target in host RAX.  Once spill_after_rax has made RCX
-       canonical in cpu state, retain that already-materialized value there;
-       reloading cpu->rip through GS on every hit is redundant.  Keep this
-       after the IRQ branch so the asynchronous exit path executes no added
-       instruction and continues to consume the committed cpu->rip. */
-    hl_x64_mov_reg(&a, HL_X64_RCX, HL_X64_RAX);
     hl_x64_load_gs(&a, HL_X64_RAX, OFF_IBTC);
-    // Hashing remains the established direct-map formula. A shared stub cannot
-    // bake the displacement, so compute it from the target retained in RCX.
+    // RAX no longer carries the target; the source published it in cpu->rip.
+    // Hashing remains the established direct-map formula, so load the exact
+    // slot selected by the target constant at each source.  A shared stub cannot
+    // bake that displacement: compute it from target in RCX.
+    hl_x64_load_gs(&a, HL_X64_RCX, OFF_RIP);
     hl_x64_mov_reg(&a, HL_X64_RDX, HL_X64_RCX);
     hl_x64_shr_imm8(&a, HL_X64_RDX, 2);
     hl_x64_and_imm32(&a, HL_X64_RDX, IBTC_N - 1);
