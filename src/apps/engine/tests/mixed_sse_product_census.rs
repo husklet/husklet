@@ -3,6 +3,7 @@
 use std::{collections::BTreeMap, path::Path, process::Command};
 
 const PREFIX: &str = "[diag] backend-shape ";
+const DETAIL_PREFIX: &str = "[diag] backend-shape-detail ";
 const FIELDS: [&str; 21] = [
     "version",
     "available",
@@ -316,6 +317,50 @@ fn build_fixture(root: &Path) {
         .status()
         .expect("compile child-only mixed-SSE fixture");
     assert!(status.success(), "fixture compiler exited {status}");
+}
+
+fn build_product_lifecycle_fixture(root: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/product_lifecycle.c");
+    let destination = root.join("bin/product-lifecycle");
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    let status = Command::new("x86_64-linux-gnu-gcc")
+        .args(["-O2", "-static-pie"])
+        .arg(source)
+        .arg("-o")
+        .arg(&destination)
+        .status()
+        .expect("compile product lifecycle fixture");
+    assert!(status.success(), "fixture compiler exited {status}");
+    std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn run_product_lifecycle(root: &Path, mode: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .args([
+            "--diagnostics", "--translit", "--rootfs", root.to_str().unwrap(),
+            "bin/product-lifecycle", mode,
+        ])
+        .output()
+        .expect("run production lifecycle worker")
+}
+
+fn assert_product_lifecycle(output: &std::process::Output, expect_success: bool) {
+    assert_eq!(output.status.success(), expect_success, "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.lines().filter(|line| line.starts_with(PREFIX)).count(), 1, "{stderr}");
+    assert!(stderr.lines().filter(|line| line.starts_with(DETAIL_PREFIX)).count() <= 1, "{stderr}");
+    assert!(!stderr.contains("[diag] backend-shape-error "), "{stderr}");
+}
+
+#[test]
+fn translated_process_lifecycle_emits_one_product_record_at_every_teardown() {
+    let root = tempfile::tempdir().unwrap();
+    build_product_lifecycle_fixture(root.path());
+    for (mode, success) in [("success", true), ("signal", false), ("exec", true), ("nested", true)] {
+        let output = run_product_lifecycle(root.path(), mode);
+        assert_product_lifecycle(&output, success);
+    }
 }
 
 fn build_map_failure_injection(root: &Path) -> std::path::PathBuf {

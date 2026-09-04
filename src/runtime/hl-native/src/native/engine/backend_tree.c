@@ -2937,6 +2937,12 @@ static struct hl_backend_mixed_sse_lifecycle_summary hl_backend_mixed_sse_lifecy
 }
 
 #define HL_BACKEND_PRODUCT_RECORD_CAPACITY 32768u
+#define HL_BACKEND_PRODUCT_FORMAT_FAIL(box)                                                                           \
+    do {                                                                                                               \
+        static const char failure[] = "[diag] backend-shape-error version=1 reason=record-overflow\n";                \
+        (void)hl_linux_write((box), STDERR_FILENO, failure, sizeof failure - 1);                                       \
+        return;                                                                                                        \
+    } while (0)
 
 static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *census, int available,
                                         int settled, struct hl_backend_mixed_sse_lifecycle_summary lifecycle,
@@ -3163,7 +3169,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->ret_fast_ibtc_invalid_refusals,
                                                                      memory_order_relaxed));
-    if (formatted <= 0 || (size_t)formatted >= sizeof record) return;
+    if (formatted <= 0 || (size_t)formatted >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     --formatted;
     uint64_t form_keys[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
     uint64_t form_counts[HL_BACKEND_EXECUTED_FORM_TOP] = {0};
@@ -3177,7 +3183,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                                      memory_order_relaxed),
                              (unsigned long long)atomic_load_explicit(&census->executed_form_overflow,
                                                                      memory_order_relaxed));
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         formatted += added;
     }
     for (unsigned rank = 0; rank < HL_BACKEND_EXECUTED_FORM_TOP; ++rank) {
@@ -3185,34 +3191,34 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              " executed_form%u_key=%llu executed_form%u_count=%llu", rank,
                              (unsigned long long)form_keys[rank], rank,
                              (unsigned long long)form_counts[rank]);
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         formatted += added;
     }
     uint64_t translated_return_total = 0;
     for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
         translated_return_total += atomic_load_explicit(&census->translated_exit[kind], memory_order_relaxed);
     uint64_t translated_entries = atomic_load_explicit(&census->translated_entries, memory_order_relaxed);
-    if ((size_t)formatted + 1 >= sizeof record) return;
+    if ((size_t)formatted + 1 >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     record[formatted++] = '\n';
     for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r%u=%llu", reason,
                              (unsigned long long)atomic_load_explicit(&census->reason[reason],
                                                                      memory_order_relaxed));
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         formatted += added;
     }
     {
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r_other=%llu",
                              (unsigned long long)atomic_load_explicit(&census->reason_other,
                                                                      memory_order_relaxed));
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         formatted += added;
     }
 #define HL_APPEND_CROSSING(name, array, kind)                                                                          \
     do {                                                                                                               \
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
                              (unsigned long long)atomic_load_explicit(&(array)[kind], memory_order_relaxed));           \
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);     \
         formatted += added;                                                                                           \
     } while (0)
     uint64_t interpreted_return_total = 0;
@@ -3232,7 +3238,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                          interpreted_entries >= interpreted_return_total
                              ? (long long)(interpreted_entries - interpreted_return_total)
                              : -(long long)(interpreted_return_total - interpreted_entries));
-    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += added;
     HL_APPEND_CROSSING("t_fallthrough", census->translated_exit, HL_BACKEND_SHAPE_T_FALLTHROUGH);
     HL_APPEND_CROSSING("t_jcc_taken", census->translated_exit, HL_BACKEND_SHAPE_T_COND_TAKEN);
@@ -3283,9 +3289,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                                                  memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&census->translated_exit[HL_BACKEND_SHAPE_T_OTHER],
                                                  memory_order_relaxed));
-    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += added;
-    if ((size_t)formatted + 1 >= sizeof record) return;
+    if ((size_t)formatted + 1 >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     record[formatted++] = '\n';
     uint64_t fall_total = 0;
     for (unsigned reason = 0; reason < HL_BACKEND_FALL_COUNT; ++reason)
@@ -3302,7 +3308,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                          : -(long long)(fall_total - atomic_load_explicit(
                                                         &census->translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
                                                         memory_order_relaxed)));
-    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += added;
 #define HL_APPEND_FALL(name, reason) HL_APPEND_CROSSING(name, census->translated_fall_stop, reason)
     HL_APPEND_FALL("fall_cap", HL_BACKEND_FALL_CAP);
@@ -3327,7 +3333,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                          &census->fallthrough_ibtc_fs_transaction_hits, memory_order_relaxed),
                      (unsigned long long)atomic_load_explicit(
                          &census->fallthrough_ibtc_normal_to_fs_hits, memory_order_relaxed));
-    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;
+    if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += added;
     HL_APPEND_CROSSING("i_fallthrough", census->interpreter_stop, HL_BACKEND_SHAPE_S_FALLTHROUGH);
     HL_APPEND_CROSSING("i_jcc_taken", census->interpreter_stop, HL_BACKEND_SHAPE_S_COND_TAKEN);
@@ -3348,7 +3354,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     do {                                                                                                               \
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " " name "=%llu",              \
                              (unsigned long long)atomic_load_explicit(&census->field, memory_order_relaxed));           \
-        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) return;                                  \
+        if (added <= 0 || (size_t)added >= sizeof record - (size_t)formatted) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);     \
         formatted += added;                                                                                           \
     } while (0)
     HL_APPEND_CALL_SIM("call_sim_eligible", call_sim_eligible);
@@ -3392,10 +3398,11 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
                              (unsigned long long)family[0], (unsigned long long)family[1],
                              (unsigned long long)family[2], (unsigned long long)family[3],
                              (unsigned long long)family[4], (unsigned long long)family[5]);
-    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted) return;
+    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
+        HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += a64_added;
 #endif
-    if ((size_t)formatted + 1 >= sizeof record) return;
+    if ((size_t)formatted + 1 >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     record[formatted++] = '\n';
     size_t offset = 0;
     while (offset < (size_t)formatted) {
