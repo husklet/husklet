@@ -58,9 +58,9 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       {field('Storage directory', configuration.storage ?? '', 'Husklet-managed when empty', (event) => change('storage', nullable(event.value)))}
       <Text label="Changing storage is refused while this workspace is running; other runtime settings are saved for the next restart." color="text-dim" wrap />
       {field('Default shell', configuration.shell ?? '', 'Automatic when empty', (event) => change('shell', nullable(event.value)))}
-      {field('CPU limit', numbers.cpus, 'Unlimited when empty', (event) => numeric('cpus', event.value))}
-      {field('Memory (MB)', numbers.memory, 'Unlimited when empty', (event) => numeric('memory', event.value))}
-      {field('Scrollback lines', numbers.scrollback, 'Unlimited when empty', (event) => numeric('scrollback', event.value))}
+      {field('CPU limit', numbers.cpus, 'CPU count or empty', (event) => numeric('cpus', event.value))}
+      {field('Memory (MB)', numbers.memory, 'Memory limit or empty', (event) => numeric('memory', event.value))}
+      {field('Scrollback lines', numbers.scrollback, 'Scrollback limit or empty', (event) => numeric('scrollback', event.value))}
       <Column gap={1}><Text label="Execution lifetime" /><Select value={configuration.execution_lifetime} choices={[
         { value: 'persisted', label: 'Persisted across restarts' }, { value: 'live', label: 'Live until shutdown' },
         { value: 'ephemeral', label: 'Ephemeral per execution' },
@@ -117,13 +117,14 @@ function nullable(value: unknown): string | null { const result = String(value ?
 function numberDraft(value: WorkspaceConfiguration): Numbers { return { cpus: text(value.cpus), memory: text(value.memory_mb), scrollback: text(value.scrollback), fontSize: text(value.terminal.font_size) }; }
 function text(value: number | null): string { return value === null ? '' : String(value); }
 function terminalSummary(value: WorkspaceConfiguration): string { return `${value.terminal.font_family ?? 'Host font'} · ${value.terminal.font_size ?? 'default size'} · ${value.terminal.cursor_shape ?? 'default cursor'}`; }
-function optionalInteger(value: string, label: string): number | null { if (!value.trim()) return null; const parsed = Number(value); if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive whole number or empty.`); return parsed; }
-function withNumbers(value: WorkspaceConfiguration, numbers: Numbers): WorkspaceConfiguration { return { ...value, cpus: optionalInteger(numbers.cpus, 'CPU limit'), memory_mb: optionalInteger(numbers.memory, 'Memory'), scrollback: optionalInteger(numbers.scrollback, 'Scrollback'), terminal: { ...value.terminal, font_size: optionalInteger(numbers.fontSize, 'Font size') } }; }
+function optionalInteger(value: string, label: string, maximum: number): number | null { if (!value.trim()) return null; const parsed = Number(value); if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) throw new Error(`${label} must be a whole number from 1 to ${maximum}, or empty.`); return parsed; }
+function withNumbers(value: WorkspaceConfiguration, numbers: Numbers): WorkspaceConfiguration { return { ...value, cpus: optionalInteger(numbers.cpus, 'CPU limit', 4_294_967_295), memory_mb: optionalInteger(numbers.memory, 'Memory', 4_294_967_295), scrollback: optionalInteger(numbers.scrollback, 'Scrollback', Number.MAX_SAFE_INTEGER), terminal: { ...value.terminal, font_size: optionalInteger(numbers.fontSize, 'Font size', 65_535) } }; }
 function validate(value: WorkspaceConfiguration) {
   if (!value.image.trim()) throw new Error('Workspace image must not be empty.');
   for (const [label, color] of [['Foreground', value.terminal.foreground], ['Background', value.terminal.background]] as const) if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error(`${label} must use #RRGGBB.`);
   const names = new Set<string>(); for (const [name] of value.environment) { if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error('Environment names must use letters, digits and underscores and cannot start with a digit.'); if (names.has(name)) throw new Error(`Environment variable ${name} is duplicated.`); names.add(name); }
-  const targets = new Set<string>(); for (const mount of value.mounts) { if (!mount.host.trim() || !mount.container.startsWith('/') || mount.container.includes('/../')) throw new Error('Every mount needs a host path and a normalized absolute container path.'); if (targets.has(mount.container)) throw new Error(`Mount target ${mount.container} is duplicated.`); targets.add(mount.container); }
+  const targets = new Set<string>(); for (const mount of value.mounts) { if (!mount.host.trim() || !normalizedMountTarget(mount.container)) throw new Error('Every mount needs a host path and a normalized absolute container path.'); if (targets.has(mount.container)) throw new Error(`Mount target ${mount.container} is duplicated.`); targets.add(mount.container); }
 }
+function normalizedMountTarget(path: string): boolean { if (path === '/') return true; if (!path.startsWith('/')) return false; const components = path.slice(1).split('/'); return components.length > 0 && components.every((component) => component !== '' && component !== '.' && component !== '..' && !component.includes('\0')); }
 function validationMessage(configuration: WorkspaceConfiguration, numbers: Numbers): string { try { validate(withNumbers(configuration, numbers)); return ''; } catch (cause) { return message(cause); } }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message.slice(0, 500) : String(cause).slice(0, 500); }

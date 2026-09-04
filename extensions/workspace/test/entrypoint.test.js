@@ -47,11 +47,32 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     assert.ok(renderedLabels(calls).includes('Storage directory'));
     assert.ok(renderedLabels(calls).includes('Environment variables'));
     assert.equal(expandedState(calls, 'Terminal appearance'), false);
+    peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'CPU count or empty', '4294967296') }));
+    await until(() => renderedLabels(calls).includes('CPU limit must be a whole number from 1 to 4294967295, or empty.'));
+    assert.equal(calls.some(({ call }) => call === 'workspace_update'), false);
+    peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'CPU count or empty', '4') }));
+    await until(() => !latestRenderedLabels(calls).includes('CPU limit must be a whole number from 1 to 4294967295, or empty.'));
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'Automatic when empty', '/bin/bash') }));
     peer.write(encode({ channel: 7, kind: KIND.event, payload: expand(calls, 'Terminal appearance') }));
     await until(() => expandedState(calls, 'Terminal appearance') === true);
     peer.write(encode({ channel: 8, kind: KIND.event, payload: changeTag(calls, 'ColorPicker', 0, '#112233') }));
     peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Use host default for cursor blink') }));
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: expand(calls, 'Filesystem mounts') }));
+    await until(() => expandedState(calls, 'Filesystem mounts') === true);
+    let renders = renderCount(calls);
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Add mount') }));
+    await until(() => renderCount(calls) > renders && renderedPlaceholders(calls).includes('Absolute container path'));
+    renders = renderCount(calls);
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: change(calls, 'Host path', '/tmp/project') }));
+    await until(() => renderCount(calls) > renders);
+    renders = renderCount(calls);
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: change(calls, 'Absolute container path', '/work/tree') }));
+    await until(() => renderCount(calls) > renders && !latestRenderedLabels(calls).includes('Every mount needs a host path and a normalized absolute container path.'));
+    renders = renderCount(calls);
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: change(calls, 'Absolute container path', '/work//tree') }));
+    await until(() => renderCount(calls) > renders && latestRenderedLabels(calls).includes('Every mount needs a host path and a normalized absolute container path.'));
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: change(calls, 'Absolute container path', '/work/tree') }));
+    await until(() => !latestRenderedLabels(calls).includes('Every mount needs a host path and a normalized absolute container path.'));
     await until(() => renderedLabels(calls).includes('Save workspace'));
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invoke(calls, 'Save workspace') }));
     await until(() => calls.some(({ call }) => call === 'workspace_update'));
@@ -59,6 +80,8 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     assert.equal(update.name, 'daily');
     assert.equal(update.generation, 'a'.repeat(32));
     assert.equal(update.configuration.shell, '/bin/bash');
+    assert.equal(update.configuration.cpus, 4);
+    assert.deepEqual(update.configuration.mounts, [{ host: '/tmp/project', container: '/work/tree', read_only: true }]);
     assert.equal(update.configuration.terminal.foreground, '#112233');
     assert.equal(update.configuration.terminal.cursor_blink, null);
     assert.equal(stderr, '');
@@ -83,6 +106,17 @@ function renderedLabels(calls) {
   return calls.filter(({ call }) => call === 'interface_render_at').flatMap(({ with: body }) => body.frame.patches)
     .flatMap((patch) => patch.SetProp?.prop === 'Label' ? [patch.SetProp.value?.Text] : []);
 }
+
+function latestRenderedLabels(calls) {
+  const render = calls.findLast(({ call }) => call === 'interface_render_at');
+  return render ? render.with.frame.patches.flatMap((patch) => patch.SetProp?.prop === 'Label' ? [patch.SetProp.value?.Text] : []) : [];
+}
+
+function renderedPlaceholders(calls) {
+  return renderedPatches(calls).flatMap((patch) => patch.SetProp?.prop === 'Placeholder' ? [patch.SetProp.value?.Text] : []);
+}
+
+function renderCount(calls) { return calls.filter(({ call }) => call === 'interface_render_at').length; }
 
 function change(calls, placeholder, value) {
   const patches = renderedPatches(calls);
