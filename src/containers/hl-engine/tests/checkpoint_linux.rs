@@ -908,6 +908,46 @@ fn dynamic_identity_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn pinned_interp_exec_fixture(directory: &Path) -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/checkpoint/pinned_interp_exec.S");
+    let interpreter = directory.join("checkpoint-pinned-interpreter-x86_64");
+    let interpreter_status = std::process::Command::new("x86_64-linux-gnu-gcc")
+        .args(["-nostdlib", "-shared", "-Wl,-e,_start", "-o"])
+        .arg(&interpreter)
+        .arg(&source)
+        .status()
+        .expect("compile pinned interpreter");
+    assert!(interpreter_status.success(), "pinned interpreter compiler failed: {interpreter_status}");
+    let output = directory.join("checkpoint-pinned-interp-exec-x86_64");
+    let status = std::process::Command::new("x86_64-linux-gnu-gcc")
+        .args(["-nostdlib", "-Wl,-e,_start", "-Wl,-dynamic-linker"])
+        .arg(&interpreter)
+        .args(["-o"])
+        .arg(&output)
+        .arg(&source)
+        .status()
+        .expect("compile pinned PT_INTERP fixture");
+    assert!(status.success(), "pinned PT_INTERP fixture compiler failed: {status}");
+    output
+}
+
+fn pinned_interp_exec_plan(executable: &Path, restore: bool) -> RuntimePlan {
+    let mut options = Options::default();
+    options
+        .set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true)
+        .unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    }
+}
+
 fn identity_churn_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-identity-churn-aarch64"),
@@ -3724,6 +3764,47 @@ fn x86_translator_round_trips_complete_tree_terminal_and_failure_contract() {
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     checkpoint_round_trip(GuestIsa::X86_64, &executable, None, true, &["HL_TRANSLIT"]);
+}
+
+/// Both exec transactions consume a dynamically linked image through its pinned descriptor. The first
+/// completes before capture; the second starts from restored guest state. Matching receipts prove that
+/// neither the borrowed main/PT_INTERP byte windows changed identity or outlived their transaction.
+#[test]
+fn pinned_pt_interp_exec_survives_checkpoint_restore_and_reexec() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executable = pinned_interp_exec_fixture(fixtures.path());
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    let store = Arc::new(Store::default());
+
+    let capture_port = Arc::new(TestTerminal::default());
+    let capture = Engine::with_checkpoint(
+        GuestIsa::X86_64,
+        pinned_interp_exec_plan(&executable, false),
+        StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    capture_port.wait_output(b"PINNED-INTERP-BEFORE-CAPTURE:5d0d8e2f");
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    let restore_port = Arc::new(TestTerminal::default());
+    let restore = Engine::with_checkpoint(
+        GuestIsa::X86_64,
+        pinned_interp_exec_plan(&executable, true),
+        StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+        store.clone(),
+        store,
+    )
+    .unwrap();
+    restore.start().unwrap();
+    restore_port.input(b"x\n");
+    restore_port.wait_output(b"PINNED-INTERP-AFTER-RESTORE:5d0d8e2f");
+    assert_eq!(restore.wait().unwrap().guest_status, 0);
 }
 
 #[test]
