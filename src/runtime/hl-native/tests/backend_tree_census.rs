@@ -447,6 +447,38 @@ fn x86_aarch64_family_classifier_covers_developer_hot_families_before_generic_me
     }
     assert!(classifier.find("FAMILY_SSE").unwrap() < classifier.find("instruction->is_mem").unwrap());
     assert!(classifier.find("FAMILY_BRANCH_CALL").unwrap() < classifier.find("instruction->is_mem").unwrap());
+    assert!(classifier.find("op == 0x8d").unwrap() < classifier.find("instruction->is_mem").unwrap());
+}
+
+#[test]
+fn x86_aarch64_other_subcensus_is_diagnostics_only_and_reconciles_to_other() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let begin = source
+        .split_once("static void hl_x86_a64_route_begin(const struct insn *instruction) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_x86_a64_route_note_exit"))
+        .map(|(body, _)| body)
+        .expect("route begin body");
+    assert!(begin.trim_start().starts_with("if (!g_prof) return;"), "{begin}");
+    assert!(begin.find("hl_x86_a64_other(instruction)").unwrap() > begin.find("if (!g_prof) return;").unwrap());
+
+    let classifier = source
+        .split_once("static enum hl_x86_a64_other hl_x86_a64_other(const struct insn *instruction) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\nstatic enum hl_x86_a64_family"))
+        .map(|(body, _)| body)
+        .expect("other classifier");
+    for detail in ["OTHER_STACK", "OTHER_MOVE", "OTHER_ADDRESS", "OTHER_SYSTEM", "OTHER_UNKNOWN"] {
+        assert!(classifier.contains(detail), "missing {detail}: {classifier}");
+    }
+
+    let report = source
+        .split_once("[prof] x86-a64-other:")
+        .map(|(_, report)| report)
+        .expect("other report");
+    for field in ["stack=", "move=", "address=", "system=", "unknown=", "reconcile=%u", "words_reconcile=%u"] {
+        assert!(report.contains(field), "missing {field}: {report}");
+    }
+    assert!(report.contains("other_sum == other_family_count"));
+    assert!(report.contains("other_words_sum == other_family_words"));
 }
 
 #[test]

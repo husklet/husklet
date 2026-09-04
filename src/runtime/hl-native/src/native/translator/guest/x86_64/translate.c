@@ -50,13 +50,45 @@ enum hl_x86_a64_family {
     HL_X86_A64_FAMILY_COUNT,
 };
 
+enum hl_x86_a64_other {
+    HL_X86_A64_OTHER_STACK,
+    HL_X86_A64_OTHER_MOVE,
+    HL_X86_A64_OTHER_ADDRESS,
+    HL_X86_A64_OTHER_SYSTEM,
+    HL_X86_A64_OTHER_UNKNOWN,
+    HL_X86_A64_OTHER_COUNT,
+};
+
 static enum hl_x86_a64_route g_x86_a64_route_current;
 static enum hl_x86_a64_family g_x86_a64_family_current;
+static enum hl_x86_a64_other g_x86_a64_other_current;
 static uint32_t *g_x86_a64_family_emit_begin;
 static _Atomic uint64_t g_x86_a64_route_total;
 static _Atomic uint64_t g_x86_a64_route_count[HL_X86_A64_ROUTE_COUNT];
 static _Atomic uint64_t g_x86_a64_family_route_count[HL_X86_A64_FAMILY_COUNT][HL_X86_A64_ROUTE_COUNT];
 static _Atomic uint64_t g_x86_a64_family_route_words[HL_X86_A64_FAMILY_COUNT][HL_X86_A64_ROUTE_COUNT];
+static _Atomic uint64_t g_x86_a64_other_count[HL_X86_A64_OTHER_COUNT];
+static _Atomic uint64_t g_x86_a64_other_words[HL_X86_A64_OTHER_COUNT];
+
+static enum hl_x86_a64_other hl_x86_a64_other(const struct insn *instruction) {
+    const uint8_t op = instruction->op;
+    if ((!instruction->two &&
+         ((op >= 0x50 && op <= 0x5f) || op == 0x68 || op == 0x6a || op == 0x8f || op == 0x9c ||
+          op == 0x9d || op == 0xc8 || op == 0xc9)) ||
+        (instruction->two && (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9)))
+        return HL_X86_A64_OTHER_STACK;
+    if ((!instruction->two &&
+         ((op >= 0x86 && op <= 0x8c) || (op >= 0x90 && op <= 0x97) || (op >= 0xa0 && op <= 0xa3) ||
+          (op >= 0xb0 && op <= 0xbf) || op == 0xc6 || op == 0xc7)) ||
+        (instruction->two &&
+         ((op >= 0x40 && op <= 0x4f) || op == 0xb6 || op == 0xb7 || op == 0xbe || op == 0xbf)))
+        return HL_X86_A64_OTHER_MOVE;
+    if (!instruction->two && op == 0x8d) return HL_X86_A64_OTHER_ADDRESS;
+    if ((!instruction->two && (op == 0xcc || op == 0xcd || op == 0xce || op == 0xf4 || op == 0xfa || op == 0xfb)) ||
+        (instruction->two && (op == 0x01 || op == 0x05 || op == 0x31 || op == 0x32 || op == 0xa2)))
+        return HL_X86_A64_OTHER_SYSTEM;
+    return HL_X86_A64_OTHER_UNKNOWN;
+}
 
 static enum hl_x86_a64_family hl_x86_a64_family(const struct insn *instruction) {
     const uint8_t op = instruction->op;
@@ -72,6 +104,8 @@ static enum hl_x86_a64_family hl_x86_a64_family(const struct insn *instruction) 
     if (!instruction->two && ((op < 0x40 && (op & 7) <= 5) || (op >= 0x80 && op <= 0x85) ||
                               op == 0xa8 || op == 0xa9 || op == 0xf6 || op == 0xf7))
         return HL_X86_A64_FAMILY_INTEGER_ALU;
+    /* LEA has an addressing operand but does not access memory. */
+    if (!instruction->two && op == 0x8d) return HL_X86_A64_FAMILY_OTHER;
     if (instruction->is_mem) return HL_X86_A64_FAMILY_MEMORY;
     return HL_X86_A64_FAMILY_OTHER;
 }
@@ -80,6 +114,8 @@ static void hl_x86_a64_route_begin(const struct insn *instruction) {
     if (!g_prof) return;
     g_x86_a64_route_current = HL_X86_A64_ROUTE_DIRECT;
     g_x86_a64_family_current = hl_x86_a64_family(instruction);
+    if (g_x86_a64_family_current == HL_X86_A64_FAMILY_OTHER)
+        g_x86_a64_other_current = hl_x86_a64_other(instruction);
     g_x86_a64_family_emit_begin = (uint32_t *)g_cp;
 }
 
@@ -123,6 +159,10 @@ static void hl_x86_a64_route_commit(int unimplemented) {
                               memory_order_relaxed);
     atomic_fetch_add_explicit(&g_x86_a64_family_route_words[g_x86_a64_family_current][route], words,
                               memory_order_relaxed);
+    if (g_x86_a64_family_current == HL_X86_A64_FAMILY_OTHER) {
+        atomic_fetch_add_explicit(&g_x86_a64_other_count[g_x86_a64_other_current], 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_x86_a64_other_words[g_x86_a64_other_current], words, memory_order_relaxed);
+    }
 }
 
 static void hl_x86_a64_route_note_unimplemented(void) {
@@ -131,7 +171,7 @@ static void hl_x86_a64_route_note_unimplemented(void) {
 
 static int hl_x86_a64_route_report(char *out, size_t size) {
     uint64_t count[HL_X86_A64_ROUTE_COUNT], family_route_sum[HL_X86_A64_ROUTE_COUNT] = {0};
-    uint64_t sum = 0, family_sum = 0, words_sum = 0;
+    uint64_t sum = 0, family_sum = 0, words_sum = 0, other_family_count = 0, other_family_words = 0;
     for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route) {
         count[route] = atomic_load_explicit(&g_x86_a64_route_count[route], memory_order_relaxed);
         sum += count[route];
@@ -172,7 +212,38 @@ static int hl_x86_a64_route_report(char *out, size_t size) {
         }
         family_sum += family_count;
         words_sum += family_words;
+        if (family == HL_X86_A64_FAMILY_OTHER) {
+            other_family_count = family_count;
+            other_family_words = family_words;
+        }
     }
+    uint64_t other_count[HL_X86_A64_OTHER_COUNT], other_words[HL_X86_A64_OTHER_COUNT];
+    uint64_t other_sum = 0, other_words_sum = 0;
+    for (unsigned other = 0; other < HL_X86_A64_OTHER_COUNT; ++other) {
+        other_count[other] = atomic_load_explicit(&g_x86_a64_other_count[other], memory_order_relaxed);
+        other_words[other] = atomic_load_explicit(&g_x86_a64_other_words[other], memory_order_relaxed);
+        other_sum += other_count[other];
+        other_words_sum += other_words[other];
+    }
+    if (written >= 0 && (size_t)written < size)
+        written += snprintf(
+            out + written, size - (size_t)written,
+            "[prof] x86-a64-other: stack=%llu stack_words=%llu move=%llu move_words=%llu address=%llu"
+            " address_words=%llu system=%llu system_words=%llu unknown=%llu unknown_words=%llu total=%llu"
+            " words=%llu family_total=%llu family_words=%llu reconcile=%u words_reconcile=%u\n",
+            (unsigned long long)other_count[HL_X86_A64_OTHER_STACK],
+            (unsigned long long)other_words[HL_X86_A64_OTHER_STACK],
+            (unsigned long long)other_count[HL_X86_A64_OTHER_MOVE],
+            (unsigned long long)other_words[HL_X86_A64_OTHER_MOVE],
+            (unsigned long long)other_count[HL_X86_A64_OTHER_ADDRESS],
+            (unsigned long long)other_words[HL_X86_A64_OTHER_ADDRESS],
+            (unsigned long long)other_count[HL_X86_A64_OTHER_SYSTEM],
+            (unsigned long long)other_words[HL_X86_A64_OTHER_SYSTEM],
+            (unsigned long long)other_count[HL_X86_A64_OTHER_UNKNOWN],
+            (unsigned long long)other_words[HL_X86_A64_OTHER_UNKNOWN], (unsigned long long)other_sum,
+            (unsigned long long)other_words_sum, (unsigned long long)other_family_count,
+            (unsigned long long)other_family_words, other_sum == other_family_count,
+            other_words_sum == other_family_words);
     unsigned route_reconcile = 1;
     for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route)
         route_reconcile &= family_route_sum[route] == count[route];
