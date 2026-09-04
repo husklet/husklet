@@ -35,6 +35,8 @@ pub(super) struct Process {
     /// The sessions of the members this launch restored, each holding the terminal created for it before
     /// the restore started. Empty for every launch that restored nothing.
     pub(super) members: Vec<Arc<super::member::MemberSession>>,
+    pub(super) benchmark_collector: Mutex<Option<crate::benchmark_measurement::Collector>>,
+    pub(super) benchmark_measurement: Mutex<Option<crate::BenchmarkMeasurement>>,
 }
 
 impl Process {
@@ -151,12 +153,24 @@ impl Running for Process {
             .map_err(|error| Error::Runtime(format!("engine wait thread: {error}")))?;
         let exit = wait
             .await
-            .map_err(|_| Error::Runtime("engine wait thread ended without a result".into()))?
-            .map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
+            .map_err(|_| Error::Runtime("engine wait thread ended without a result".into()))?;
         self.child
             .lock()
             .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
             .take();
+        if let Some(collector) = self
+            .benchmark_collector
+            .lock()
+            .map_err(|_| Error::Runtime("benchmark collector lock is poisoned".into()))?
+            .take()
+        {
+            let measurement = collector.finish()?;
+            self.benchmark_measurement
+                .lock()
+                .map_err(|_| Error::Runtime("benchmark measurement lock is poisoned".into()))?
+                .replace(measurement);
+        }
+        let exit = exit.map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
         Ok(Self::status(exit))
     }
 
@@ -213,6 +227,14 @@ impl Running for Process {
 
     fn take_logs(&self) -> Option<crate::service::LogReceiver> {
         self.logs.lock().ok()?.take()
+    }
+
+    fn take_benchmark_measurement(&self) -> Result<Option<crate::BenchmarkMeasurement>> {
+        Ok(self
+            .benchmark_measurement
+            .lock()
+            .map_err(|_| Error::Runtime("benchmark measurement lock is poisoned".into()))?
+            .take())
     }
 }
 
@@ -285,6 +307,8 @@ mod tests {
             logs: Mutex::new(None),
             domain: hl_engine::Domain::new().unwrap(),
             _domain_channel: None,
+            benchmark_collector: Mutex::new(None),
+            benchmark_measurement: Mutex::new(None),
         })
     }
 

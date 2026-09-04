@@ -178,6 +178,10 @@ pub(crate) trait Running: Send + Sync {
     async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()>;
     async fn resize(&self, size: Size) -> Result<()>;
     fn take_logs(&self) -> Option<LogReceiver>;
+    #[allow(dead_code)] // consumed by runtime ledger propagation in the next gated layer
+    fn take_benchmark_measurement(&self) -> Result<Option<crate::BenchmarkMeasurement>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]

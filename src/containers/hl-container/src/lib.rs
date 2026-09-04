@@ -54,6 +54,9 @@ mod service;
 mod storage;
 mod volume_size;
 mod volumes;
+mod benchmark_measurement;
+
+pub use benchmark_measurement::BenchmarkMeasurement;
 
 pub use checkpoint::{CheckpointError, CheckpointImage, CheckpointImages};
 pub use config::{Config, Persistence};

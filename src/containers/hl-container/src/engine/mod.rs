@@ -128,6 +128,14 @@ impl Runtime for Engine {
             .drain(..)
             .map(|member| MemberSession::open(&engine, member).map(Arc::new))
             .collect::<Result<Vec<_>>>()?;
+        let mut benchmark_collector = config
+            .benchmark_measurement
+            .as_deref()
+            .map(crate::benchmark_measurement::Collector::prepare)
+            .transpose()?;
+        if let Some(collector) = &mut benchmark_collector {
+            collector.enable()?;
+        }
         engine
             .start()
             .map_err(|error| Error::Runtime(format!("engine start: {error:?}")))?;
@@ -139,6 +147,8 @@ impl Runtime for Engine {
             domain: spec.domain,
             _domain_channel: domain_channel,
             members,
+            benchmark_collector: StdMutex::new(benchmark_collector),
+            benchmark_measurement: StdMutex::new(None),
         }))
     }
 }
