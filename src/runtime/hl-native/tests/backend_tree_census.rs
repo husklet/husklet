@@ -392,7 +392,7 @@ fn x86_aarch64_route_census_commits_once_at_every_translation_outcome() {
         .and_then(|(_, tail)| tail.split_once("// IRQSLIM: the out-of-line poll exit stub"))
         .map(|(body, _)| body)
         .expect("x86 AArch64 translation loop");
-    assert_eq!(loop_body.matches("hl_x86_a64_route_begin();").count(), 1, "{loop_body}");
+    assert_eq!(loop_body.matches("hl_x86_a64_route_begin(&I);").count(), 1, "{loop_body}");
     assert_eq!(loop_body.matches("hl_x86_a64_route_commit(0);").count(), 6, "{loop_body}");
     assert_eq!(loop_body.matches("hl_x86_a64_route_commit(1);").count(), 1, "{loop_body}");
     assert!(
@@ -400,6 +400,53 @@ fn x86_aarch64_route_census_commits_once_at_every_translation_outcome() {
             < loop_body.find("report_unimpl(gpc, &I);").unwrap(),
         "unimplemented attribution must precede the fatal emitter"
     );
+}
+
+#[test]
+fn x86_aarch64_expansion_census_is_diagnostics_only_and_exactly_reconciled() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let begin = source
+        .split_once("static void hl_x86_a64_route_begin(const struct insn *instruction) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_x86_a64_route_note_exit"))
+        .map(|(body, _)| body)
+        .expect("route begin body");
+    assert!(begin.trim_start().starts_with("if (!g_prof) return;"), "{begin}");
+    assert!(begin.contains("g_x86_a64_family_emit_begin = (uint32_t *)g_cp;"));
+
+    let commit = source
+        .split_once("static void hl_x86_a64_route_commit(int unimplemented) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_x86_a64_route_note_unimplemented"))
+        .map(|(body, _)| body)
+        .expect("route commit body");
+    assert!(commit.trim_start().starts_with("if (!g_prof) return;"), "{commit}");
+    assert!(commit.contains("(uint32_t *)g_cp - g_x86_a64_family_emit_begin"));
+    assert_eq!(commit.matches("g_x86_a64_family_route_count").count(), 1);
+    assert_eq!(commit.matches("g_x86_a64_family_route_words").count(), 1);
+
+    let report = source
+        .split_once("static int hl_x86_a64_route_report(char *out, size_t size) {")
+        .expect("expansion report")
+        .1;
+    for family in ["alu", "memory", "branch", "sse", "other"] {
+        assert!(report.contains(family), "missing {family}: {report}");
+    }
+    assert!(report.contains("family_sum == total"));
+    assert!(report.contains("family_route_sum[route] == count[route]"));
+}
+
+#[test]
+fn x86_aarch64_family_classifier_covers_developer_hot_families_before_generic_memory() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translate.c");
+    let classifier = source
+        .split_once("static enum hl_x86_a64_family hl_x86_a64_family(const struct insn *instruction) {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void hl_x86_a64_route_begin"))
+        .map(|(body, _)| body)
+        .expect("family classifier");
+    for family in ["FAMILY_INTEGER_ALU", "FAMILY_MEMORY", "FAMILY_BRANCH_CALL", "FAMILY_SSE", "FAMILY_OTHER"] {
+        assert!(classifier.contains(family), "missing {family}: {classifier}");
+    }
+    assert!(classifier.find("FAMILY_SSE").unwrap() < classifier.find("instruction->is_mem").unwrap());
+    assert!(classifier.find("FAMILY_BRANCH_CALL").unwrap() < classifier.find("instruction->is_mem").unwrap());
 }
 
 #[test]
@@ -411,7 +458,7 @@ fn x86_aarch64_route_census_is_diagnostics_gated_and_reconciled() {
         .map(|(body, _)| body)
         .expect("route commit body");
     assert!(commit.trim_start().starts_with("if (!g_prof) return;"), "{commit}");
-    assert_eq!(commit.matches("atomic_fetch_add_explicit").count(), 2, "{commit}");
+    assert_eq!(commit.matches("atomic_fetch_add_explicit").count(), 4, "{commit}");
 
     let report = translator
         .split_once("static int hl_x86_a64_route_report(char *out, size_t size) {")

@@ -41,12 +41,46 @@ enum hl_x86_a64_route {
     HL_X86_A64_ROUTE_COUNT,
 };
 
+enum hl_x86_a64_family {
+    HL_X86_A64_FAMILY_INTEGER_ALU,
+    HL_X86_A64_FAMILY_MEMORY,
+    HL_X86_A64_FAMILY_BRANCH_CALL,
+    HL_X86_A64_FAMILY_SSE,
+    HL_X86_A64_FAMILY_OTHER,
+    HL_X86_A64_FAMILY_COUNT,
+};
+
 static enum hl_x86_a64_route g_x86_a64_route_current;
+static enum hl_x86_a64_family g_x86_a64_family_current;
+static uint32_t *g_x86_a64_family_emit_begin;
 static _Atomic uint64_t g_x86_a64_route_total;
 static _Atomic uint64_t g_x86_a64_route_count[HL_X86_A64_ROUTE_COUNT];
+static _Atomic uint64_t g_x86_a64_family_route_count[HL_X86_A64_FAMILY_COUNT][HL_X86_A64_ROUTE_COUNT];
+static _Atomic uint64_t g_x86_a64_family_route_words[HL_X86_A64_FAMILY_COUNT][HL_X86_A64_ROUTE_COUNT];
 
-static void hl_x86_a64_route_begin(void) {
-    if (g_prof) g_x86_a64_route_current = HL_X86_A64_ROUTE_DIRECT;
+static enum hl_x86_a64_family hl_x86_a64_family(const struct insn *instruction) {
+    const uint8_t op = instruction->op;
+    if ((!instruction->two && ((op >= 0x70 && op <= 0x7f) || op == 0xe8 || op == 0xe9 || op == 0xeb ||
+                               op == 0xc2 || op == 0xc3 || (op == 0xff && instruction->reg >= 2))) ||
+        (instruction->two && op >= 0x80 && op <= 0x8f))
+        return HL_X86_A64_FAMILY_BRANCH_CALL;
+    int legacy_sse = instruction->two &&
+                     ((op >= 0x10 && op <= 0x17) || (op >= 0x28 && op <= 0x2f) ||
+                      (op >= 0x50 && op <= 0x7f) || op >= 0xd0 || op == 0xc2 || op == 0xc4 || op == 0xc5 ||
+                      op == 0xc6);
+    if (instruction->vex || instruction->map3 || legacy_sse) return HL_X86_A64_FAMILY_SSE;
+    if (!instruction->two && ((op < 0x40 && (op & 7) <= 5) || (op >= 0x80 && op <= 0x85) ||
+                              op == 0xa8 || op == 0xa9 || op == 0xf6 || op == 0xf7))
+        return HL_X86_A64_FAMILY_INTEGER_ALU;
+    if (instruction->is_mem) return HL_X86_A64_FAMILY_MEMORY;
+    return HL_X86_A64_FAMILY_OTHER;
+}
+
+static void hl_x86_a64_route_begin(const struct insn *instruction) {
+    if (!g_prof) return;
+    g_x86_a64_route_current = HL_X86_A64_ROUTE_DIRECT;
+    g_x86_a64_family_current = hl_x86_a64_family(instruction);
+    g_x86_a64_family_emit_begin = (uint32_t *)g_cp;
 }
 
 static void hl_x86_a64_route_note_exit(uint64_t reason) {
@@ -84,6 +118,11 @@ static void hl_x86_a64_route_commit(int unimplemented) {
         unimplemented ? HL_X86_A64_ROUTE_UNIMPL : g_x86_a64_route_current;
     atomic_fetch_add_explicit(&g_x86_a64_route_total, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_x86_a64_route_count[route], 1, memory_order_relaxed);
+    uint64_t words = (uint64_t)((uint32_t *)g_cp - g_x86_a64_family_emit_begin);
+    atomic_fetch_add_explicit(&g_x86_a64_family_route_count[g_x86_a64_family_current][route], 1,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_x86_a64_family_route_words[g_x86_a64_family_current][route], words,
+                              memory_order_relaxed);
 }
 
 static void hl_x86_a64_route_note_unimplemented(void) {
@@ -91,13 +130,14 @@ static void hl_x86_a64_route_note_unimplemented(void) {
 }
 
 static int hl_x86_a64_route_report(char *out, size_t size) {
-    uint64_t count[HL_X86_A64_ROUTE_COUNT], sum = 0;
+    uint64_t count[HL_X86_A64_ROUTE_COUNT], family_route_sum[HL_X86_A64_ROUTE_COUNT] = {0};
+    uint64_t sum = 0, family_sum = 0, words_sum = 0;
     for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route) {
         count[route] = atomic_load_explicit(&g_x86_a64_route_count[route], memory_order_relaxed);
         sum += count[route];
     }
     uint64_t total = atomic_load_explicit(&g_x86_a64_route_total, memory_order_relaxed);
-    return snprintf(out, size,
+    int written = snprintf(out, size,
                     "[prof] x86-a64-route: total=%llu direct=%llu avx=%llu sse3b=%llu repstr=%llu div=%llu"
                     " x87=%llu service=%llu trap=%llu unimpl=%llu sum=%llu reconcile=%u\n",
                     (unsigned long long)total, (unsigned long long)count[HL_X86_A64_ROUTE_DIRECT],
@@ -110,6 +150,39 @@ static int hl_x86_a64_route_report(char *out, size_t size) {
                     (unsigned long long)count[HL_X86_A64_ROUTE_TRAP],
                     (unsigned long long)count[HL_X86_A64_ROUTE_UNIMPL], (unsigned long long)sum,
                     total == sum);
+    static const char *const family_name[HL_X86_A64_FAMILY_COUNT] = {"alu", "memory", "branch", "sse", "other"};
+    static const char *const route_name[HL_X86_A64_ROUTE_COUNT] = {
+        "direct", "avx", "sse3b", "repstr", "div", "x87", "service", "trap", "unimpl",
+    };
+    for (unsigned family = 0; family < HL_X86_A64_FAMILY_COUNT; ++family) {
+        uint64_t family_count = 0, family_words = 0;
+        for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route) {
+            uint64_t cell_count =
+                atomic_load_explicit(&g_x86_a64_family_route_count[family][route], memory_order_relaxed);
+            uint64_t cell_words =
+                atomic_load_explicit(&g_x86_a64_family_route_words[family][route], memory_order_relaxed);
+            family_count += cell_count;
+            family_words += cell_words;
+            family_route_sum[route] += cell_count;
+            if (written >= 0 && (size_t)written < size)
+                written += snprintf(out + written, size - (size_t)written,
+                                    "[prof] x86-a64-expand: family=%s route=%s count=%llu words=%llu\n",
+                                    family_name[family], route_name[route], (unsigned long long)cell_count,
+                                    (unsigned long long)cell_words);
+        }
+        family_sum += family_count;
+        words_sum += family_words;
+    }
+    unsigned route_reconcile = 1;
+    for (unsigned route = 0; route < HL_X86_A64_ROUTE_COUNT; ++route)
+        route_reconcile &= family_route_sum[route] == count[route];
+    if (written >= 0 && (size_t)written < size)
+        written += snprintf(out + written, size - (size_t)written,
+                            "[prof] x86-a64-expand-total: count=%llu words=%llu route_total=%llu reconcile=%u"
+                            " route_reconcile=%u\n",
+                            (unsigned long long)family_sum, (unsigned long long)words_sum,
+                            (unsigned long long)total, family_sum == total, route_reconcile);
+    return written;
 }
 
 void hl_x86_legacy_jcc_spill(int kind) {
@@ -1398,7 +1471,7 @@ static void *translate_block(uint64_t gpc) {
             break;
         }
         uint64_t next = gpc + I.len;
-        hl_x86_a64_route_begin();
+        hl_x86_a64_route_begin(&I);
         g_emit_next = next;
         if (prov_mem) jit_instruction_map_put(prov_host, (uint64_t)g_cp, prov_guest); // close previous insn
         prov_host = (uint64_t)g_cp;
