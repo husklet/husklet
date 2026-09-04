@@ -8,7 +8,7 @@ import {
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
-const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks'];
+const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'];
 const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 const PROCESS_SAMPLING_CONCURRENCY = 8;
 
@@ -28,6 +28,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   const images = useResource(api.images.list, initial.images);
   const volumes = useResource(api.volumes.list, initial.volumes);
   const networks = useResource(api.networks.list, initial.networks);
+  const terminals = useResource(api.terminal?.tabs ?? (async () => []), initial.terminals);
   const [executionsTruncated, setExecutionsTruncated] = useState(false);
   const listExecutions = useCallback(async () => {
     const listing = await api.containers.executions();
@@ -58,19 +59,22 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     if (event?.snapshot === 'images') void images.reload();
     if (event?.snapshot === 'volumes') void volumes.reload();
     if (event?.snapshot === 'networks') void networks.reload();
-  }), [selections, containers.reload, images.reload, volumes.reload, networks.reload]);
+    if (event?.snapshot === 'terminal') void terminals.reload();
+  }), [selections, containers.reload, images.reload, volumes.reload, networks.reload, terminals.reload]);
   useEffect(() => {
     if (typeof api.subscribe !== 'function') return undefined;
     void api.subscribe('containers');
     void api.subscribe('images');
     void api.subscribe('volumes');
     void api.subscribe('networks');
+    void api.subscribe('terminal');
     return () => {
       if (typeof api.unsubscribe === 'function') {
         void api.unsubscribe('containers');
         void api.unsubscribe('images');
         void api.unsubscribe('volumes');
         void api.unsubscribe('networks');
+        void api.unsubscribe('terminal');
       }
     };
   }, [api]);
@@ -80,6 +84,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     images={images}
     volumes={volumes}
     networks={networks}
+    terminals={terminals}
     onOpen={setSection} />
     : section === 'containers'
       ? <Containers
@@ -104,7 +109,9 @@ export function Top({ api, selections, containerDetails, executionDetails, image
           ? <Images api={api} resource={images} imageDetails={imageDetails} />
           : section === 'volumes'
             ? <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
-            : <Networks api={api} resource={networks} networkDetails={networkDetails} />;
+            : section === 'networks'
+              ? <Networks api={api} resource={networks} networkDetails={networkDetails} />
+              : <Terminals api={api} resource={terminals} />;
   return (
     <Row grow={true} gap={0}>
       <Navigation section={section} onSelect={setSection} />
@@ -130,11 +137,12 @@ function Navigation({ section, onSelect }) {
   );
 }
 
-export function Overview({ containers, images, volumes, networks, onOpen }) {
+export function Overview({ containers, images, volumes, networks, terminals = { data: [], loading: false, error: null }, onOpen }) {
   const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
   const imagesSummary = resourceSummary(images, () => 'Available locally');
   const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
   const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
+  const terminalsSummary = resourceSummary(terminals, (records) => `${records.filter((tab) => tab.pinned).length} pinned`);
   return (
     <Scroll grow={true} height={'fill'}>
       <Column pad={4} gap={3}>
@@ -150,9 +158,13 @@ export function Overview({ containers, images, volumes, networks, onOpen }) {
           <Summary title={'Images'} {...imagesSummary} onOpen={() => onOpen('images')} />
           <Summary title={'Volumes'} {...volumesSummary} onOpen={() => onOpen('volumes')} />
           <Summary title={'Networks'} {...networksSummary} onOpen={() => onOpen('networks')} />
+          <Summary
+            title={'Terminal tabs'}
+            {...terminalsSummary}
+            onOpen={() => onOpen('terminals')} />
         </Row>
         <ErrorText
-          error={containers.error ?? images.error ?? volumes.error ?? networks.error} />
+          error={containers.error ?? images.error ?? volumes.error ?? networks.error ?? terminals.error} />
       </Column>
     </Scroll>
   );
@@ -1548,6 +1560,72 @@ export function Networks({ api, resource, networkDetails }) {
               detail={'The host returned no inspectable fields.'} />
                   : <StructuredDetail value={inspection.detail} />}
           </CardContent> : null}
+        </Card>)}
+        <Omitted count={view.omitted} />
+      </ResourceState>
+    </Page>
+  );
+}
+
+export function Terminals({ api, resource }) {
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  const view = bounded(resource.data ?? []);
+  const state = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
+  const pin = async (tab) => {
+    setBusy(tab.id); setError(null);
+    try {
+      await api.terminal.pinTab(tab.id, !tab.pinned);
+      await resource.reload();
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setBusy('');
+    }
+  };
+  const focus = async (tab) => {
+    const slot = tab.panes?.[0]?.slot;
+    if (!slot) return;
+    setBusy(tab.id); setError(null);
+    try { await api.terminal.focus(slot); } catch (cause) { setError(cause); } finally { setBusy(''); }
+  };
+  return (
+    <Page
+      title={'Terminal tabs'}
+      subtitle={'Inspect live pane occupancy and protect important tabs from accidental close.'}>
+      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
+      <ErrorText error={error} />
+      <ResourceState
+        state={state}
+        loadingLabel={'Reading terminal tabs…'}
+        emptyLabel={'No terminal tabs'}
+        emptyDetail={'Open a terminal tab to manage it here.'}
+        error={resource.error?.message ?? String(resource.error ?? '')}
+        retryLabel={'Retry terminal tabs'}
+        onRetry={resource.reload}>
+        {view.records.map((tab) => <Card key={tab.id} variant={tab.pinned ? 'filled' : 'outline'}>
+          <CardHeader label={tab.title} detail={tab.id} />
+          <CardContent gap={1}>
+            <Row gap={1} align={'center'}>
+              <Badge label={tab.pinned ? 'Pinned' : 'Unpinned'} tone={tab.pinned ? 'positive' : 'neutral'} />
+              <Text label={`${tab.panes?.length ?? 0} pane${tab.panes?.length === 1 ? '' : 's'}`} color={'text-dim'} />
+            </Row>
+            {(tab.panes ?? []).map((pane) => <Text
+              key={pane.slot}
+              label={`${pane.slot} · ${pane.occupant}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
+              color={'text-dim'} />)}
+          </CardContent>
+          <CardActions gap={1}>
+            {busy === tab.id ? <Spinner /> : null}
+            <Button
+              label={`${tab.pinned ? 'Unpin' : 'Pin'} ${tab.title}`}
+              enabled={busy === ''}
+              onInvoke={() => { void pin(tab); }} />
+            <Button
+              label={`Focus ${tab.title}`}
+              enabled={busy === '' && Boolean(tab.panes?.[0])}
+              onInvoke={() => { void focus(tab); }} />
+          </CardActions>
         </Card>)}
         <Omitted count={view.omitted} />
       </ResourceState>

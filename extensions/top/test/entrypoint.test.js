@@ -31,7 +31,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
       assert.equal(error.code, 'ECONNRESET');
     });
     socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'top', granted: ['containers:read', 'containers:control', 'containers:attach', 'images:read', 'images:write', 'volumes:read', 'volumes:write', 'networks:read', 'networks:write', 'interface:render'],
+      protocol: 1, extension: 'top', granted: ['containers:read', 'containers:control', 'containers:attach', 'images:read', 'images:write', 'volumes:read', 'volumes:write', 'networks:read', 'networks:write', 'terminals:read', 'terminals:control', 'interface:render'],
     } }));
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
@@ -87,6 +87,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
                   ? { reply: 'volume', with: { name: frame.payload.with.name, driver: 'local', generation: 'b'.repeat(32) } }
               : name === 'network_list'
                 ? { reply: 'networks', with: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }] }
+              : name === 'terminal_tabs'
+                ? { reply: 'tabs', with: [{ id: 'p7', title: 'Build', pinned: false, panes: [{ slot: 's4', working_directory: '/work', command: 'make', occupant: 'terminal', provider: null }] }] }
               : name === 'network_inspect'
                 ? { reply: 'network', with: { id: networkId, name: 'private', driver: 'bridge', scope: 'local' } }
             : { reply: 'done' };
@@ -104,7 +106,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     try {
-      await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.filter((name) => name === 'event_subscribe').length === 4);
+      await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.includes('terminal_tabs') && calls.filter((name) => name === 'event_subscribe').length === 5);
     } catch (error) {
       throw new Error(`${error.message}; calls=${JSON.stringify(calls)} stderr=${JSON.stringify(stderr)}`);
     }
@@ -320,6 +322,15 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     const volumeResize = requests.findLast((request) => request.call === 'source_resize_at'
       && request.with.mutation.Length?.source === 205);
     assert.deepEqual(volumeResize.with.mutation.Length, { source: 205, version: 1, rows: 2 });
+    peer.write(encode({ channel: 45, kind: KIND.event, payload: invocation(requests, 'Terminals') }));
+    await until(() => requests.some((request) => request.call === 'interface_render_at'
+      && request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 's4 · terminal')));
+    peer.write(encode({ channel: 46, kind: KIND.event, payload: invocation(requests, 'Pin Build') }));
+    await until(() => calls.includes('terminal_pin_tab'));
+    assert.deepEqual(requests.find((request) => request.call === 'terminal_pin_tab').with, { tab: 'p7', pinned: true });
+    peer.write(encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Focus Build') }));
+    await until(() => calls.includes('terminal_focus_pane'));
+    assert.deepEqual(requests.find((request) => request.call === 'terminal_focus_pane').with, { slot: 's4' });
     assert.equal(stderr, '');
   } finally {
     const closed = child.exitCode === null && child.signalCode === null

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Executions, Images, Networks, Overview, Processes, Volumes, Top } from '../dist/app.js';
+import { Containers, Executions, Images, Networks, Overview, Processes, Terminals, Volumes, Top } from '../dist/app.js';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
@@ -10,12 +10,13 @@ const api = {
   images: { list: async () => [], pull: async () => ({}), inspect: async () => ({}), remove: async () => {}, prune: async () => ({ deleted: 0, space_reclaimed: 0 }) },
   volumes: { list: async () => [], inspect: async () => ({}), create: async () => ({}), remove: async () => {} },
   networks: { list: async () => [], inspect: async () => ({}), create: async () => '', remove: async () => {}, connect: async () => {}, disconnect: async () => {} },
+  terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
 };
 
 test('the test host receives overview and every resource navigation choice', () => {
   const frame = host().render(h(Top, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
-  for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks']) assert.ok(labels.includes(label), label);
+  for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
 });
 
@@ -67,11 +68,35 @@ test('every empty operational page explains what is absent and how to proceed', 
     ['Images', 'No images'],
     ['Volumes', 'No volumes'],
     ['Networks', 'No networks'],
+    ['Terminals', 'No terminal tabs'],
   ]) {
     invoke(stage, section);
     await settled(); await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
   }
+});
+
+test('terminal management exposes exact pin state and acts through immutable tab identity', async () => {
+  const calls = [];
+  const resource = {
+    data: [{ id: 'p7', title: 'Build', pinned: false, panes: [{ slot: 's4', occupant: 'terminal', provider: null }] }],
+    loading: false,
+    error: null,
+    reload: async () => calls.push(['reload']),
+  };
+  const stage = host();
+  stage.render(h(Terminals, { api: { terminal: {
+    pinTab: async (...args) => calls.push(['pin', ...args]),
+    focus: async (...args) => calls.push(['focus', ...args]),
+  } }, resource }));
+  assert.ok(labelled(stage, 'Unpinned'));
+  assert.ok(labelled(stage, 's4 · terminal'));
+  invoke(stage, 'Pin Build');
+  await settled(); await settled();
+  assert.deepEqual(calls, [['pin', 'p7', true], ['reload']]);
+  invoke(stage, 'Focus Build');
+  await settled();
+  assert.deepEqual(calls.at(-1), ['focus', 's4']);
 });
 
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
