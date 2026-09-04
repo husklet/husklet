@@ -6,7 +6,8 @@ import {
   type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
   type TabSummary, type VolumeSummary, type WorkspaceApi,
 } from '@husklet/react';
-import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
+import { ContainerRename } from './container-rename.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
@@ -22,6 +23,7 @@ export { Executions } from './executions.js';
 export { Images } from './images.js';
 export { Volumes } from './volumes.js';
 export { Networks } from './networks.js';
+export { ContainerRename } from './container-rename.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -518,64 +520,6 @@ export function Containers({ api, resource, containerDetails, onOpenExecution })
         <Omitted count={view.omitted} />
       </ResourceState>
     </Page>
-  );
-}
-
-function ContainerRename({ api, container, reload, blocked }) {
-  const current = container.name ?? '';
-  const [draft, setDraft] = useState(current);
-  const [result, setResult] = useState({ state: 'idle', error: null, name: '' });
-  useEffect(() => {
-    setDraft(current);
-    setResult({ state: 'idle', error: null, name: '' });
-  }, [container.id, current]);
-  const validation = containerNameError(draft);
-  const rename = async () => {
-    if (validation || draft === current || result.state === 'loading') return;
-    const requested = draft;
-    const immutableId = container.id;
-    setResult({ state: 'loading', error: null, name: requested });
-    try {
-      await api.containers.rename(immutableId, requested);
-      setResult({ state: 'success', error: null, name: requested });
-      await reload();
-    } catch (error) {
-      setResult({ state: 'error', error, name: requested });
-    }
-  };
-  const changed = draft !== current;
-  return (
-    <Column gap={1}>
-      <Heading label={'Rename container'} scale={'caption'} />
-      <Text
-        label={`Current name: ${current || '(unnamed)'}. Immutable ID: ${container.id}`}
-        color={'text-dim'}
-        wrap={true} />
-      <Row gap={1} wrap={true} align={'center'}>
-        <Entry
-          value={draft}
-          placeholder={`New name for ${shortId(container.id)}`}
-          enabled={!blocked && result.state !== 'loading'}
-          onChange={(event) => {
-            setDraft(String(event.value ?? '').slice(0, 129));
-            setResult({ state: 'idle', error: null, name: '' });
-          }} />
-        {result.state === 'loading' ? <Spinner /> : null}
-        <Button
-          label={result.state === 'loading' ? 'Renaming…' : result.state === 'error' ? 'Retry rename' : 'Rename'}
-          enabled={!blocked && result.state !== 'loading' && changed && !validation}
-          onInvoke={rename} />
-      </Row>
-      {changed && validation ? <Text label={validation} color={'danger'} wrap={true} /> : null}
-      {result.state === 'error' ? <Text
-        label={boundedMessage(result.error)}
-        color={'danger'}
-        wrap={true} /> : null}
-      {result.state === 'success' ? <Text
-        label={`Renamed to ${result.name}. Inventory identity will update after the authoritative refresh.`}
-        color={'positive'}
-        wrap={true} /> : null}
-    </Column>
   );
 }
 
