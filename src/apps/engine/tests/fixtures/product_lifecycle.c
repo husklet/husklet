@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <signal.h>
+#include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -21,6 +22,17 @@ int main(int argc, char **argv) {
             char *const next[] = {"/bin/product-lifecycle", "success", NULL};
             execv(next[0], next);
             _exit(94);
+        }
+    }
+    if (strcmp(mode, "redirect") == 0) {
+        int sink = open("/dev/null", O_WRONLY);
+        if (sink < 0 || dup2(sink, STDERR_FILENO) < 0) return 95;
+        close(sink);
+        pid_t child = fork();
+        if (child < 0) return 96;
+        if (child == 0) {
+            usleep(250000);
+            _exit(0);
         }
     }
     return 0;

@@ -357,8 +357,18 @@ fn assert_product_lifecycle(output: &std::process::Output, expect_success: bool)
 fn translated_process_lifecycle_emits_one_product_record_at_every_teardown() {
     let root = tempfile::tempdir().unwrap();
     build_product_lifecycle_fixture(root.path());
-    for (mode, success) in [("success", true), ("signal", false), ("exec", true), ("nested", true)] {
+    for (mode, success) in [
+        ("success", true),
+        ("signal", false),
+        ("exec", true),
+        ("nested", true),
+        ("redirect", true),
+    ] {
+        let started = std::time::Instant::now();
         let output = run_product_lifecycle(root.path(), mode);
+        if mode == "redirect" {
+            assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+        }
         assert_product_lifecycle(&output, success);
     }
 }

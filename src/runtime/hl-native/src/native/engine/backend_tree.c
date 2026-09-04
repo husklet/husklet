@@ -20,6 +20,19 @@
 #define HL_BACKEND_EXECUTED_FORM_SLOTS 4096u
 #define HL_BACKEND_EXECUTED_FORM_TOP 16u
 #define HL_BACKEND_EXECUTED_STEP_FORM_TOP 64u
+
+/* Reap-time product diagnostics belong to the host worker, after the guest process tree has
+ * finished.  A non-NULL box is retained only for hook fixtures that deliberately capture through
+ * a synthetic guest descriptor table; production passes NULL so a guest projection of fd 2 cannot
+ * redirect or hide the worker's receipt. */
+static int64_t hl_backend_report_write(hl_linux_abi *box, const char *record, size_t size) {
+    if (box != NULL) return hl_linux_write(box, STDERR_FILENO, record, size);
+    ssize_t written;
+    do {
+        written = write(STDERR_FILENO, record, size);
+    } while (written < 0 && errno == EINTR);
+    return (int64_t)written;
+}
 enum hl_backend_x86_jcc_route_counter {
     HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS,
     HL_BACKEND_X86_JCC_ROUTE_HIT,
@@ -1771,7 +1784,7 @@ static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, c
 
 void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box) {
     struct hl_backend_tree_shared *shared = opaque;
-    if (shared == NULL || shared_size != sizeof *shared || box == NULL) return;
+    if (shared == NULL || shared_size != sizeof *shared) return;
     int root_pid = atomic_load_explicit(&shared->root_pid, memory_order_acquire);
     if (root_pid <= 0 || !hl_backend_tree_parent_barrier(shared, root_pid)) return;
     uint32_t expected = 0;
@@ -1792,7 +1805,7 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
     formatted += would_link;
     size_t offset = 0;
     while (offset < (size_t)formatted) {
-        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+        int64_t written = hl_backend_report_write(box, record + offset, (size_t)formatted - offset);
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
@@ -2996,7 +3009,7 @@ static struct hl_backend_mixed_sse_lifecycle_summary hl_backend_mixed_sse_lifecy
 #define HL_BACKEND_PRODUCT_FORMAT_FAIL(box)                                                                           \
     do {                                                                                                               \
         static const char failure[] = "[diag] backend-shape-error version=1 reason=record-overflow\n";                \
-        (void)hl_linux_write((box), STDERR_FILENO, failure, sizeof failure - 1);                                       \
+        (void)hl_backend_report_write((box), failure, sizeof failure - 1);                                             \
         return;                                                                                                        \
     } while (0)
 
@@ -3462,7 +3475,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     record[formatted++] = '\n';
     size_t offset = 0;
     while (offset < (size_t)formatted) {
-        int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+        int64_t written = hl_backend_report_write(box, record + offset, (size_t)formatted - offset);
         if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
         offset += (size_t)written;
     }
@@ -3474,7 +3487,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (formatted <= 0 || (size_t)formatted >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         offset = 0;
         while (offset < (size_t)formatted) {
-            int64_t written = hl_linux_write(box, STDERR_FILENO, record + offset, (size_t)formatted - offset);
+            int64_t written = hl_backend_report_write(box, record + offset, (size_t)formatted - offset);
             if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)formatted - offset) return;
             offset += (size_t)written;
         }
@@ -3519,8 +3532,8 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         detail_len += added;
         size_t detail_offset = 0;
         while (detail_offset < (size_t)detail_len) {
-            int64_t written =
-                hl_linux_write(box, STDERR_FILENO, detail + detail_offset, (size_t)detail_len - detail_offset);
+            int64_t written = hl_backend_report_write(box, detail + detail_offset,
+                                                      (size_t)detail_len - detail_offset);
             if (written <= 0 || (uint64_t)written > (uint64_t)detail_len - detail_offset) return;
             detail_offset += (size_t)written;
         }
@@ -3533,8 +3546,8 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         if (site_len <= 0 || (size_t)site_len >= sizeof site_record) return;
         size_t site_offset = 0;
         while (site_offset < (size_t)site_len) {
-            int64_t written = hl_linux_write(box, STDERR_FILENO, site_record + site_offset,
-                                             (size_t)site_len - site_offset);
+            int64_t written = hl_backend_report_write(box, site_record + site_offset,
+                                                      (size_t)site_len - site_offset);
             if (written <= 0 || (uint64_t)written > (uint64_t)(size_t)site_len - site_offset) return;
             site_offset += (size_t)written;
         }
@@ -3543,7 +3556,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
 
 void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box) {
     struct hl_backend_mixed_sse_shared *census = shared;
-    if (census == NULL || shared_size != sizeof *census || box == NULL) return;
+    if (census == NULL || shared_size != sizeof *census) return;
     int root_pid = atomic_load_explicit(&census->root_pid, memory_order_acquire);
     int settled = root_pid > 0 && hl_backend_mixed_sse_parent_barrier(census, root_pid);
     int complete = settled && atomic_load_explicit(&census->missing_claims, memory_order_relaxed) == 0 &&
