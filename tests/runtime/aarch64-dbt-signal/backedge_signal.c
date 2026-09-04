@@ -7,7 +7,8 @@ static void stop(int signal_number) {
 }
 
 int main(void) {
-    if (signal(SIGTERM, stop) == SIG_ERR) return 1;
+    if (signal(SIGALRM, stop) == SIG_ERR) return 1;
+    alarm(1);
     __asm__ volatile("movz x0,#0\n"
                      "1: add x0,x0,#1\n"
                      "cbnz x0,1b\n"

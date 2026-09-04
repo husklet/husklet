@@ -1,8 +1,8 @@
 # Bounded backedge lifecycle evidence
 
 `backedge-signal-bound` deliberately stays in a generated conditional backedge
-until the container lifecycle sends `SIGTERM`; its handler exits 42 so diagnostics
-settle normally. Completion under the three-second
+until a one-second `SIGALRM`; its handler exits 42 so diagnostics settle normally.
+Completion under the three-second
 case timeout proves that direct in-body chaining reaches the dispatcher signal
 safepoint; changing or removing the generated budget escape makes this fixture
 time out.  QEMU is excluded only because it cannot referee Husklet's container

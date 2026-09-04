@@ -262,6 +262,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
     }
     let signal_fixture = include_str!("../../../../tests/runtime/aarch64-dbt-signal/backedge_signal.c");
     assert!(signal_fixture.contains("cbnz x0,1b"), "signal fixture lost generated backedge");
+    assert!(signal_fixture.contains("alarm(1)"), "signal fixture lost bounded asynchronous delivery");
     assert!(signal_fixture.contains("_exit(42)"), "signal fixture no longer settles through its handler");
     let smc_fixture = include_str!("../../../../tests/runtime/memory/source/aarch64_smctargeted.c");
     for contract in ["0x54ffffc1u", "loop[2] = 0x11000800u", "publish_lines(loop, 1)"] {

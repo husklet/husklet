@@ -9,11 +9,8 @@ build:
 artifact: { destination: /opt/husklet/backedge-signal }
 cases:
   - id: runtime/aarch64-dbt-signal/backedge-signal-bound
-    status: !oracle-excluded
-      reason: "the compatibility contract requires the container lifecycle stop API, which a direct QEMU process cannot referee"
-      evidence: "tests/runtime/aarch64-dbt/EVIDENCE.md"
+    status: active
     compat: { class: compatibility }
     run: []
     timeout: 3
-    orchestration: { stop-after-ms: 100 }
     expect: { exit: 42, stdout_empty: true, stderr: [" r0=*", " fall_total=*"] }
