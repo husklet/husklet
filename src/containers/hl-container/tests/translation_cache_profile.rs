@@ -1517,6 +1517,26 @@ int main(void) {
                 )
             })
             .and_then(|()| {
+                let state = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(21)
+                            .any(|part| part == b".chain-restore-state-")
+                    })
+                    .ok_or("warm HIT emitted no restored-chain authority receipt")?;
+                let bytes = fs::read(state.path())?;
+                require(bytes.len() == 16, "restored-chain authority receipt shape changed")?;
+                let saved = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+                let fixed = u64::from_le_bytes(bytes[8..].try_into().unwrap());
+                require(
+                    fixed > 0 && fixed < saved,
+                    "warm HIT did not preserve fixed chains while deferring DSO-dependent chains",
+                )
+            })
+            .and_then(|()| {
                 let stats = entries
                     .iter()
                     .find(|entry| {

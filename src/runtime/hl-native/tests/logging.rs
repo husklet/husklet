@@ -53,6 +53,7 @@ fn restored_chains_preserve_fixed_edges_and_defer_dso_edges() {
     assert!(classify.contains("fixed_chains[fixed_chain_count++] = chain;"));
     assert!(classify.contains("HL_PCACHE_GLOBAL_CHAIN_FALLBACK_MUTATION"));
     assert!(classify.find("if (fixed)").unwrap() < classify.find("fallback_offset").unwrap());
+    assert!(restore.contains("uint64_t chain_state[2] = {chains, fixed_chain_count};"));
 
     let emitter =
         fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read x86 chain emitter");

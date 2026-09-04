@@ -2852,6 +2852,12 @@ static int pcache_load(uint64_t entry_jump) {
     uint64_t eager_state[5] = {arena, maps, owners, relocs, helper_relocs};
     if (eager_length > 0 && (size_t)eager_length < sizeof eager_receipt)
         (void)x64_pc_artifact_store(eager_receipt, eager_state, sizeof eager_state);
+    char chain_receipt[1024];
+    int chain_length = snprintf(chain_receipt, sizeof chain_receipt, "%s.chain-restore-state-%lld", path,
+                                (long long)getpid());
+    uint64_t chain_state[2] = {chains, fixed_chain_count};
+    if (chain_length > 0 && (size_t)chain_length < sizeof chain_receipt)
+        (void)x64_pc_artifact_store(chain_receipt, chain_state, sizeof chain_state);
 #endif
     return 1;
 #if 0 /* Retired compact/lazy restore experiment; fixed-image restore above is the only product path. */
