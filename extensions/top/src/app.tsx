@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
-  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
+  ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
   type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
   type TabSummary, type VolumeSummary, type WorkspaceApi,
 } from '@husklet/react';
@@ -11,11 +11,13 @@ import { Navigation, Overview, SECTIONS, type Resource, type Section } from './o
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
 import { Executions } from './executions.js';
+import { Images } from './images.js';
 
 export { Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
 export { Processes } from './processes.js';
 export { Executions } from './executions.js';
+export { Images } from './images.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -733,190 +735,6 @@ function ContainerDetail({ api, container, act, inspection, onRetry, onOpenExecu
           onInvoke={() => onOpenExecution(execution.id)} /> : null}
       </Row> : null}
     </CardContent>
-  );
-}
-
-const IMAGE_DETAIL_SCHEMA = Object.freeze([
-  { key: 'property', title: 'Property', width: { chars: 20 } },
-  { key: 'value', title: 'Value', width: 'fill' },
-]);
-
-export function Images({ api, resource, imageDetails }) {
-  const localDetails = useMemo(() => new ImageDetailsSource(), []);
-  const detailsSource = imageDetails ?? localDetails;
-  const [reference, setReference] = useState('');
-  const [detail, setDetail] = useState(null);
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState('');
-  const [error, setError] = useState(null);
-  const [notice, setNotice] = useState('');
-  const inspectionRevision = useRef(0);
-  const inventoryRevision = useRef(resource.data);
-  const currentImages = useRef(new Set());
-  currentImages.current = new Set((resource.data ?? []).map((item) => item.id));
-  const [pull, setPull] = useState(null);
-  const [inspection, setInspection] = useState({ id: '', state: 'idle', count: 0, error: null });
-  const run = async (name, operation) => {
-    setBusy(name); setError(null); setNotice('');
-    try { await operation(); } catch (cause) { setError(cause); } finally { setBusy(''); }
-  };
-  const startPull = () => run('pull', async () => {
-    if (typeof api.images.startPull !== 'function') { await api.images.pull(reference.trim()); await resource.reload(); return; }
-    const started = await api.images.startPull(reference.trim());
-    setPull({ job: started.job, reference: reference.trim(), revision: 0, state: 'starting', status: 'Starting pull…', layer: null, current: null, total: null, error: null });
-  });
-  useEffect(() => {
-    if (!pull?.job || typeof api.watchImagePulls !== 'function' || ['complete', 'failed', 'cancelled'].includes(pull.state)) return undefined;
-    let disposed = false; let stop = null;
-    void api.watchImagePulls(async (change) => {
-      if (disposed || change.job !== pull.job || change.revision <= pull.revision) return;
-      const status = await api.images.pullStatus(pull.job);
-      if (disposed || status.job !== pull.job || status.revision < change.revision) return;
-      setPull(status);
-      if (status.state === 'complete') { setNotice(`Pulled ${status.reference}.`); await resource.reload(); }
-    }).then((dispose) => { if (disposed) void dispose(); else stop = dispose; }).catch((error) => {
-      if (!disposed) setPull((current) => ({ ...current, state: 'failed', error: error.message ?? String(error) }));
-    });
-    return () => { disposed = true; if (stop) void stop(); };
-  }, [api, pull?.job, pull?.revision, pull?.state, resource.reload]);
-  const cancelPull = () => run('pull-cancel', async () => {
-    await api.images.cancelPull(pull.job);
-    setPull((current) => ({ ...current, state: 'cancelled', status: 'Pull cancelled.' }));
-  });
-  const inspect = async (item) => {
-    const revision = ++inspectionRevision.current;
-    setBusy(`inspect:${item.id}`);
-    setDetail(null);
-    setInspection({ id: item.id, state: 'loading', count: 0, error: null });
-    try {
-      const value = await api.images.inspect(item.reference || item.id);
-      if (revision !== inspectionRevision.current) return;
-      const count = await detailsSource.replace(value);
-      if (revision !== inspectionRevision.current) return;
-      setDetail(value);
-      setInspection({ id: item.id, state: 'ready', count, error: null });
-    } catch (cause) {
-      if (revision === inspectionRevision.current) setInspection({ id: item.id, state: 'error', count: 0, error: cause });
-    } finally {
-      setBusy('');
-    }
-  };
-  useEffect(() => {
-    if (inventoryRevision.current === resource.data) return;
-    inventoryRevision.current = resource.data;
-    inspectionRevision.current += 1;
-    setDetail(null);
-    setInspection({ id: '', state: 'idle', count: 0, error: null });
-    setConfirm('');
-  }, [resource.data]);
-  const remove = (item) => run(`remove:${item.id}`, async () => {
-    if (!currentImages.current.has(item.id)) throw new Error(`Image ${item.id} changed or disappeared; inspect and confirm again.`);
-    await api.images.remove(item.id); setConfirm('');
-    if (detail?.id === item.id) setDetail(null);
-    await resource.reload();
-  });
-  const prune = () => run('prune', async () => {
-    const result = await api.images.prune(); setConfirm('');
-    setNotice(`Pruned ${result.deleted} image records and reclaimed ${bytes(result.space_reclaimed)}.`);
-    await resource.reload();
-  });
-  const view = bounded(resource.data);
-  const inventoryState = resource.loading ? 'loading' : resource.error ? 'error' : view.records.length === 0 ? 'empty' : 'ready';
-  return (
-    <Page title={'Images'} subtitle={'Images available to this workspace.'}>
-      <Row gap={1}>
-        <Entry
-          value={reference}
-          placeholder={'registry/image:tag'}
-          onChange={(event) => setReference(String(event.value ?? ''))} />
-        <Button
-          label={pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'}
-          enabled={!busy && reference.trim().length > 0 && (!pull || ['complete', 'failed', 'cancelled'].includes(pull.state))}
-          onInvoke={startPull} />
-        <Button label={'Refresh'} enabled={!busy} onInvoke={resource.reload} />
-      </Row>
-      {pull ? <Card variant={pull.state === 'failed' ? 'outline' : 'filled'}>
-        <CardHeader label={pull.reference} detail={pull.status ?? pull.state} />
-        <CardContent gap={1}>
-          {pull.total > 0 ? <Meter
-            fraction={Math.min(1, pull.current / pull.total)}
-            value={`${pull.current} / ${pull.total} bytes`} /> : pull.state === 'pulling' || pull.state === 'starting' ? <Spinner /> : null}
-          {pull.layer ? <Text label={`Layer ${pull.layer}`} color={'text-dim'} /> : null}
-          {pull.error ? <Text label={pull.error} color={'danger'} wrap={true} /> : null}
-        </CardContent>
-        <CardActions>
-          {!['complete', 'failed', 'cancelled'].includes(pull.state) ? <Button label={'Cancel pull'} onInvoke={cancelPull} /> : null}
-        </CardActions>
-      </Card> : null}
-      <ErrorText error={error} />
-      {notice ? <Text label={notice} color={'positive'} /> : null}
-      <ResourceState
-        state={inventoryState}
-        loadingLabel={'Reading images…'}
-        emptyLabel={'No images'}
-        emptyDetail={'Enter an image reference above to pull one into this workspace.'}
-        error={resource.error?.message ?? String(resource.error ?? '')}
-        retryLabel={'Retry images'}
-        onRetry={resource.reload}>
-        <Row gap={1} align={'center'}>
-          {busy ? <Spinner /> : null}
-          {confirm === 'prune'
-            ? <React.Fragment>
-            <Text label={'Remove every unused image?'} color={'warning'} />
-            <Button
-              label={'Confirm prune'}
-              enabled={!busy}
-              tone={'danger'}
-              destructive={true}
-              onInvoke={prune} />
-            <Button label={'Cancel'} enabled={!busy} onInvoke={() => setConfirm('')} />
-          </React.Fragment>
-            : <Button
-            label={'Prune unused images'}
-            enabled={!busy}
-            tone={'danger'}
-            onInvoke={() => setConfirm('prune')} />}
-        </Row>
-        {view.records.map((item) => <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
-          <CardHeader
-            label={item.reference || item.repo_tags?.[0] || '<untagged>'}
-            detail={shortId(item.id)} />
-          <CardContent>
-            <Text label={bytes(item.size)} color={'text-dim'} />
-            {inspection.id === item.id ? <ResourceState
-              state={inspection.state === 'ready' && inspection.count === 0 ? 'empty' : inspection.state}
-              loadingLabel={'Reading image details…'}
-              emptyLabel={'No image details'}
-              emptyDetail={'The host returned no inspectable fields.'}
-              error={inspection.error?.message ?? String(inspection.error ?? '')}
-              retryLabel={'Retry inspect'}
-              onRetry={() => inspect(item)}>
-              <StructuredDetail value={detail} />
-            </ResourceState> : null}
-          </CardContent>
-          <CardActions gap={1}>
-            <Button label={'Inspect'} enabled={!busy} onInvoke={() => inspect(item)} />
-            {confirm === item.id
-              ? <React.Fragment>
-              <Text label={`Remove immutable image ${item.id}?`} color={'warning'} />
-              <Button
-                label={'Confirm remove'}
-                enabled={!busy}
-                tone={'danger'}
-                destructive={true}
-                onInvoke={() => remove(item)} />
-              <Button label={'Cancel'} enabled={!busy} onInvoke={() => setConfirm('')} />
-            </React.Fragment>
-              : <Button
-              label={'Remove'}
-              enabled={!busy}
-              tone={'danger'}
-              onInvoke={() => setConfirm(item.id)} />}
-          </CardActions>
-        </Card>)}
-        <Omitted count={view.omitted} />
-      </ResourceState>
-    </Page>
   );
 }
 
