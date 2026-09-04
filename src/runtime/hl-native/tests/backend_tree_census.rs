@@ -249,6 +249,20 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
 }
 
 #[test]
+fn aarch64_x86_unsupported_census_is_observation_gated_and_at_the_rejection_seam() {
+    let backend = include_str!("../src/native/engine/backend_tree.c");
+    assert!(backend.contains("unsigned form = instruction >> 21;"));
+    assert!(backend.contains("if (census == NULL || !census->x86_jcc_route_enabled) return;"));
+    assert!(backend.contains("other=%llu"));
+
+    let dbt = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    assert_eq!(dbt.matches("hl_backend_tree_a64_unsupported(instruction);").count(), 1);
+    assert!(dbt.contains(
+        "hl_backend_tree_a64_unsupported(instruction);\n            break;"
+    ));
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

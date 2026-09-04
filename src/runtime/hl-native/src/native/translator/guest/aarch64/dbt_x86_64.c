@@ -252,6 +252,10 @@ static void *translate_block(uint64_t guest_pc) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_BRANCH);
             exit_kind = HL_BACKEND_SHAPE_T_DIRECT_JUMP;
         } else {
+            /* Mechanism observation only: this is the first instruction that
+             * makes the candidate prefix interpreter-owned. Count once per
+             * rejected translation attempt, never once per execution. */
+            hl_backend_tree_a64_unsupported(instruction);
             break;
         }
         hl_a64_x86_emit_return(&assembler);
