@@ -35,6 +35,22 @@ try {
   fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', clientTarball, reactTarball, 'react@18.3.1'], { cwd: consumer });
   execFileSync(process.execPath, ['--input-type=module', '--eval', "import { Session, workspace } from '@husklet/client'; import { Session as ReactSession } from '@husklet/react'; if (Session !== ReactSession || typeof workspace !== 'function') process.exit(1)"], { cwd: consumer });
+  fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
+import { Session, workspace } from '@husklet/client';
+import { Button, type ButtonProps } from '@husklet/react';
+import type { ComponentType } from 'react';
+
+declare const session: Session;
+const host = workspace(session);
+const panes = host.terminal.panes();
+const button: ComponentType<ButtonProps> = Button;
+void panes;
+void button;
+`);
+  fs.writeFileSync(path.join(consumer, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+    strict: true, noEmit: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', skipLibCheck: false,
+  }, include: ['consumer.ts'] }));
+  execFileSync(path.join(root, 'node_modules/.bin/tsc'), ['--project', 'tsconfig.json'], { cwd: consumer });
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
