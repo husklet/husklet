@@ -1,4 +1,4 @@
-import { connect, render, workspace, type InterfaceSourceMutation, type RenderHandle } from '@husklet/react';
+import { connect, render, Text, workspace, type InterfaceSourceMutation, type RenderHandle } from '@husklet/react';
 import { Top } from './app.js';
 import { selections } from './selection.js';
 import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from './model.js';
@@ -20,8 +20,8 @@ const session = await connect({
     if (payload && typeof payload === 'object') providerSelections.publish(payload);
   },
 });
-surface = render(
+surface = render(<Text label={'Loading workspace resources…'} />, session, { title: 'Top' });
+await surface.ready;
+surface.update(
   <Top api={workspace(session)} selections={providerSelections} containerDetails={containerDetails} executionDetails={executionDetails} imageDetails={imageDetails} networkDetails={networkDetails} volumeDetails={volumeDetails} />,
-  session,
-  { title: 'Top' },
 );

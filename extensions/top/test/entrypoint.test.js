@@ -110,6 +110,8 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     } catch (error) {
       throw new Error(`${error.message}; calls=${JSON.stringify(calls)} stderr=${JSON.stringify(stderr)}`);
     }
+    assert.ok(calls.indexOf('interface_render_at') < calls.indexOf('container_list'),
+      'the compact shell renders before resource inventory work begins');
     const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
     await until(() => requests.filter((request) => request.call === 'interface_render_at').length > openingRenders);
