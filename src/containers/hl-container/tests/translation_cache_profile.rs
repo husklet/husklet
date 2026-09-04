@@ -1011,7 +1011,14 @@ int main(void) {
         let repeat_elapsed = repeat_started.elapsed();
         let repeat_logs = containers.logs("pcache-profile-repeat").await?;
         containers.remove("pcache-profile-repeat").await?;
-        require(repeat_status == ExitStatus::Code(0), "repeated compiler process failed")?;
+        if repeat_status != ExitStatus::Code(0) {
+            return Err(format!(
+                "repeated compiler process failed {repeat_status:?}; stdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&repeat_logs.stdout),
+                String::from_utf8_lossy(&repeat_logs.stderr)
+            )
+            .into());
+        }
         require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
         if let Some(cold) = &nested_cold_artifacts {
             let mut warm = cache
