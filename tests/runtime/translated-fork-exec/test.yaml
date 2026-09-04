@@ -15,3 +15,6 @@ cases:
     expect:
       exit: 0
       stdout: vfork_exec.txt
+      stderr: [" r0=*", " fall_total=*"]
+      diagnostics:
+        - { counter: fork_authorized_hits, greater-than: 0 }

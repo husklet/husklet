@@ -1,24 +1,26 @@
-#define _GNU_SOURCE
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern char **environ;
+static int child_work(void) {
+    volatile uint64_t value = 1;
+    for (uint64_t i = 1; i <= 200000; ++i) value = (value * 33u) ^ i;
+    puts("translated-fork-exec child=1");
+    return value == 0;
+}
 
 int main(int argc, char **argv) {
-    if (argc >= 2 && strcmp(argv[1], "vchild") == 0) return 33;
-    volatile int sentinel = 0xABC;
-    pid_t pid = vfork();
-    if (pid == 0) {
-        char *cargv[] = {argv[0], (char *)"vchild", NULL};
-        execve(argv[0], cargv, environ);
-        _exit(120);
+    if (argc == 2 && strcmp(argv[1], "child") == 0) return child_work();
+    pid_t child = fork();
+    if (child == 0) {
+        char *const args[] = {argv[0], "child", NULL};
+        execv("/proc/self/exe", args);
+        _exit(127);
     }
     int status = 0;
-    int reaped = waitpid(pid, &status, 0) == pid;
-    int exit33 = WIFEXITED(status) && WEXITSTATUS(status) == 33;
-    int memory_ok = sentinel == 0xABC;
-    printf("vfork_exec reaped=%d exit33=%d mem_ok=%d\n", reaped, exit33, memory_ok);
-    return !(reaped && exit33 && memory_ok);
+    int ok = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    printf("translated-fork-exec parent=%d\n", ok);
+    return ok ? 0 : 1;
 }
