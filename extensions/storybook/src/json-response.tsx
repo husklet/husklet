@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Badge, Card, CardContent, Column, Heading, JsonView, Row, Text } from '@husklet/react';
 

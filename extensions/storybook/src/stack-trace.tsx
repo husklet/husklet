@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Card, CardContent, Column, Heading, StackFrame, StackTrace, Text } from '@husklet/react';
 export const STACK_STORY = 'Inspect crash stack';

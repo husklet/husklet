@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Column, Heading, HexView, InlineMessage, Text } from '@husklet/react';
 
@@ -7,9 +6,9 @@ export const BINARY_STORY = 'Inspect bounded binary data';
 export const HEX_VIEW_BYTE_LIMIT = 4096;
 
 /** Formats an exact byte value into the same stable projection as hl-gui. */
-export function formatHex(bytes, totalBytes = bytes.length) {
+export function formatHex(bytes: Uint8Array, totalBytes: number = bytes.length): string {
   const shown = bytes.subarray(0, HEX_VIEW_BYTE_LIMIT);
-  const lines = [];
+  const lines: string[] = [];
   for (let offset = 0; offset < shown.length; offset += 16) {
     const row = shown.subarray(offset, offset + 16);
     const octets = Array.from(row, (byte) => byte.toString(16).padStart(2, '0'));
