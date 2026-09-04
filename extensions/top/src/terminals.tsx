@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry, Heading, LogView,
+  Badge, Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction, Entry, Heading, LogView,
   ResourceState, Row, Scroll, Spinner, Text, LOG_VIEW_CHARACTER_LIMIT,
   type PaneText, type ReadablePane, type TabSummary, type WorkspaceApi,
 } from '@husklet/react';
@@ -15,6 +15,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [selected, setSelected] = React.useState('');
   const [readable, setReadable] = React.useState<ReadablePane | null>(null);
   const [input, setInput] = React.useState('');
+  const [title, setTitle] = React.useState('');
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -45,9 +46,9 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
-  const cursor = readable?.kind === 'terminal' ? terminalCursor(readable.snapshot) : null;
+  const cursor = readable ? paneCursor(readable.snapshot) : null;
   const sendLine = async () => {
-    if (!cursor || selected === '' || input === '') return;
+    if (!cursor || readable?.kind !== 'terminal' || selected === '' || input === '') return;
     const requested = ++paneRevision.current;
     setBusy(`write:${selected}`); setError(null);
     try {
@@ -61,12 +62,43 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
+  const mutatePane = async (operation: 'split-beside' | 'split-below' | 'retitle' | 'close') => {
+    if (!cursor || !selected) return;
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    setBusy(`${operation}:${slot}`); setError(null);
+    try {
+      if (operation === 'close') {
+        const result = await api.terminal.closeAndWait(slot, cursor.generation, cursor.revision);
+        if (!result.changed) throw new Error(`Pane ${slot} did not close before the observation window ended; refresh and try again.`);
+        if (requested !== paneRevision.current) return;
+        setSelected(''); setReadable(null); setInput(''); setTitle('');
+      } else if (operation === 'retitle') {
+        const requestedTitle = title.trim();
+        if (!requestedTitle) return;
+        const result = await api.terminal.retitleAndWait(slot, cursor.generation, cursor.revision, requestedTitle);
+        if (!result.changed) throw new Error(`Pane ${slot} did not acquire the requested title before the observation window ended; refresh and try again.`);
+        if (requested !== paneRevision.current) return;
+        setTitle('');
+      } else {
+        const division = operation === 'split-beside' ? 'beside' : 'below';
+        const result = await api.terminal.splitAndWait(slot, cursor.generation, cursor.revision, division);
+        if (!result.changed) throw new Error(`Pane ${slot} did not split before the observation window ended; refresh and try again.`);
+        if (requested !== paneRevision.current) return;
+      }
+      await resource.reload();
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
   React.useEffect(() => {
     if (!selected) return;
     const present = (resource.data ?? []).some((tab) => tab.panes.some((pane) => pane.slot === selected));
     if (present) return;
     paneRevision.current += 1;
-    setSelected(''); setReadable(null); setInput('');
+    setSelected(''); setReadable(null); setInput(''); setTitle('');
   }, [resource.data, selected]);
   return <Page title="Terminal tabs" subtitle="Read terminal output or semantic UI text, send revision-bound input, focus panes, and pin tabs.">
     <Toolbar loading={resource.loading} onRefresh={resource.reload} />
@@ -112,6 +144,23 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
                   onSubmit={() => { void sendLine(); }} />
                 <Button label="Send line" enabled={busy === '' && input.length > 0 && Boolean(cursor)} onInvoke={() => { void sendLine(); }} />
               </Row> : null}
+              <Row gap={1} wrap>
+                <Button label="Split beside" enabled={busy === '' && Boolean(cursor)}
+                  onInvoke={() => { void mutatePane('split-beside'); }} />
+                <Button label="Split below" enabled={busy === '' && Boolean(cursor)}
+                  onInvoke={() => { void mutatePane('split-below'); }} />
+              </Row>
+              <Row gap={1} wrap>
+                <Entry value={title} placeholder="New pane title" grow enabled={busy === '' && Boolean(cursor)}
+                  onChange={(event) => setTitle(String(event.value ?? ''))}
+                  onSubmit={() => { void mutatePane('retitle'); }} />
+                <Button label="Rename pane" enabled={busy === '' && Boolean(cursor) && title.trim().length > 0}
+                  onInvoke={() => { void mutatePane('retitle'); }} />
+              </Row>
+              <ConfirmAction authorityKey={`pane:${selected}:${cursor?.generation ?? 'unknown'}:close`}
+                label="Close pane" confirmLabel="Confirm close pane" pendingLabel="Confirm close pane"
+                question={`Close immutable pane ${selected} at generation ${cursor?.generation ?? 'unknown'}?`}
+                enabled={busy === '' && Boolean(cursor)} onConfirm={() => mutatePane('close')} />
             </CardContent>
           </Card> : null}
         </CardContent>
@@ -126,7 +175,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   </Page>;
 }
 
-function terminalCursor(snapshot: PaneText): TerminalCursor | null {
+function paneCursor(snapshot: Pick<PaneText, 'generation' | 'revision'>): TerminalCursor | null {
   return typeof snapshot.generation === 'number' && Number.isSafeInteger(snapshot.generation)
     && typeof snapshot.revision === 'number' && Number.isSafeInteger(snapshot.revision)
     ? { generation: snapshot.generation, revision: snapshot.revision } : null;

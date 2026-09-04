@@ -179,6 +179,54 @@ test('terminal input stays unavailable without a host-issued revision cursor', a
   assert.deepEqual(calls, [], 'input without an observed generation and revision cannot reach the socket');
 });
 
+test('terminal pane layout mutations use the inspected generation and revision', async () => {
+  const calls = [];
+  const terminal = {
+    toText: async () => ({ kind: 'terminal', text: '$ ready', snapshot: { slot: 'pane-1', generation: 7, revision: 11, lines: ['$ ready'], truncated: false } }),
+    splitAndWait: async (...args) => { calls.push(['split', ...args]); return { changed: true, pane: {} }; },
+    retitleAndWait: async (...args) => { calls.push(['retitle', ...args]); return { changed: true, pane: {} }; },
+    closeAndWait: async (...args) => { calls.push(['close', ...args]); return { changed: true, slot: args[0] }; },
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [{ slot: 'pane-1', occupant: 'terminal', provider: null }] }],
+    loading: false, error: null, reload: async () => calls.push(['reload']),
+  };
+  const stage = host();
+  stage.render(h(Terminals, { api: { terminal }, resource }));
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  invoke(stage, 'Split beside'); await settled(); await settled();
+  invoke(stage, 'Split below'); await settled(); await settled();
+  change(stage, 'New pane title', 'Build logs'); invoke(stage, 'Rename pane'); await settled(); await settled();
+  invoke(stage, 'Close pane'); await settled();
+  assert.equal(calls.some(([kind]) => kind === 'close'), false, 'opening close confirmation has no authority');
+  invoke(stage, 'Confirm close pane'); await settled(); await settled();
+  assert.deepEqual(calls.filter(([kind]) => kind !== 'reload'), [
+    ['split', 'pane-1', 7, 11, 'beside'],
+    ['split', 'pane-1', 7, 11, 'below'],
+    ['retitle', 'pane-1', 7, 11, 'Build logs'],
+    ['close', 'pane-1', 7, 11],
+  ]);
+  assert.equal(fieldValue(stage, 'New pane title'), '', 'a proven close clears stale pane editing state');
+});
+
+test('an unobserved terminal mutation keeps the inspected pane and reports uncertainty', async () => {
+  const terminal = {
+    toText: async () => ({ kind: 'terminal', text: '$ ready', snapshot: { slot: 'pane-1', generation: 7, revision: 11, lines: ['$ ready'], truncated: false } }),
+    closeAndWait: async () => ({ changed: false, slot: 'pane-1', after: { generation: 7, revision: 11 } }),
+    pinTab: async () => {}, focus: async () => {},
+  };
+  const resource = {
+    data: [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [{ slot: 'pane-1', occupant: 'terminal', provider: null }] }],
+    loading: false, error: null, reload: async () => assert.fail('uncertain close cannot refresh as if it succeeded'),
+  };
+  const stage = host(); stage.render(h(Terminals, { api: { terminal }, resource }));
+  invoke(stage, 'Inspect pane-1'); await settled(); await settled();
+  invoke(stage, 'Close pane'); invoke(stage, 'Confirm close pane'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Pane pane-1 did not close before the observation window ended; refresh and try again.'));
+  assert.ok(labelled(stage, 'Terminal pane-1'), 'uncertain close retains the inspected pane');
+});
+
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
   const processApi = { containers: { processes: async () => ({
     titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
