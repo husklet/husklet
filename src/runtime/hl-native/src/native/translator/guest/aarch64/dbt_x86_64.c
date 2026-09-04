@@ -471,7 +471,7 @@ static void *translate_block(uint64_t guest_pc) {
             continue; /* B to the next instruction: retire inside this bounded block. */
         if (hl_a64_x86_conditional_is_next(instruction))
             continue; /* Both conditional outcomes are the next instruction. */
-        unsigned exit_kind;
+        uint64_t exit_kind;
         uint64_t conditional_target = 0;
         int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
                                                                 &conditional_target);
