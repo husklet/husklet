@@ -638,8 +638,8 @@ static void pcache_exec_force_interp(void) {
     if (g_pcache) g_force_base = PC_INTERP_BASE;
 }
 
-static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
-                               uint64_t jump) {
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, int interpreter_present,
+                               int identity_authorized, const char *argv0, uint64_t jump) {
     if (!g_pcache) return;
     // execve is a full identity + arena reset (thread_exit_others ran; the old image was unmapped and the
     // arena/map/ibtc flushed by case 221), so the recording state resets with it and saving becomes safe
@@ -656,7 +656,9 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_pc_ndefer = 0;
     g_pc_nlib = 0;
     __atomic_store_n(&g_pc_lib_next, PC_LIB_BASE, __ATOMIC_RELAXED); // fresh image, fresh hint sequence
-    g_pc_binid = pcache_make_id(program, interpreter, argv0);
+    g_pc_binid = identity_authorized
+                     ? pcache_make_id(program, interpreter_present ? interpreter : (hl_identity_digest){0}, argv0)
+                     : (hl_identity_digest){0};
     g_pc_entry = jump;
     int hit = pcache_load(jump);
     if (g_coldprof) fprintf(stderr, "[pcache] exec %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);

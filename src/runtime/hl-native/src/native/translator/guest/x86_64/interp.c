@@ -3729,8 +3729,8 @@ static void pcache_exec_force_interp(void) {
 
 /* proc.c invokes this only after the exec path has flushed the inherited arena and loaded the new image.
  * That ordering is what makes clearing the fork refusal safe: the new identity cannot describe parent code. */
-static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
-                               uint64_t jump) {
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, int interpreter_present,
+                               int identity_authorized, const char *argv0, uint64_t jump) {
     if (g_x64_pc_launch_only_reset_bus) {
         g_x64_pc_launch_only_reset_bus = 0;
         jit_guest_bus_reset_after_rewind(hl_linux_bus_generation(), hl_linux_bus_active());
@@ -3745,7 +3745,9 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_x64_pc_observe_library_ns = 0;
     g_x64_pc_observe_library_bytes = 0;
     g_x64_pc_observe_library_files = 0;
-    g_pc_binid = pcache_make_id(program, interpreter, argv0);
+    g_pc_binid = identity_authorized
+                     ? pcache_make_id(program, interpreter_present ? interpreter : (hl_identity_digest){0}, argv0)
+                     : (hl_identity_digest){0};
     g_pc_entry = jump;
     g_x64_pc_forked = 0;
     g_x64_pc_exec_publish_generation = g_cache_gen;

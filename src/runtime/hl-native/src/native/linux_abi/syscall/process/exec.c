@@ -84,6 +84,7 @@ typedef struct exec_image {
     hl_dac_snapshot dac;
     hl_exec_file_capabilities file_capabilities;
     hl_linux_image bytes;
+    hl_identity_digest identity;
     int script;
     hl_vfs_cursor_origin origin;
     char path[4200];
@@ -91,6 +92,20 @@ typedef struct exec_image {
 
 static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *image, int lower) {
     return image != NULL && hl_vfs_cursor_origin_is_lower(&image->origin, lower);
+}
+
+static int exec_image_cache_identity_authorized(const exec_image *image) {
+    /* Only a cursor-selected immutable snapshot lower can authorize persistence. A digest authenticates the
+     * exact bytes this exec consumes, but cannot turn an upper, bind, name projection, or descriptor path into
+     * immutable authority. Empty is the fail-closed cache sentinel in every translator. */
+    return image != NULL && image->origin.kind == HL_VFS_CURSOR_ORIGIN_LOWER && image->origin.index >= 0 &&
+           !hl_identity_digest_empty(&image->identity);
+}
+
+static int exec_cache_identity_pair_authorized(const exec_image *main_image, const exec_image *interpreter,
+                                                int interpreter_present) {
+    if (!exec_image_cache_identity_authorized(main_image)) return 0;
+    return !interpreter_present || exec_image_cache_identity_authorized(interpreter);
 }
 
 static int exec_image_open_guest(const char *guest, exec_image *image);
@@ -179,8 +194,12 @@ static int exec_origin_basic_matrix_child(int scenario) {
     int exact = 0;
     if (scenario == 0 || scenario == 1) {
         error = exec_image_open_guest(scenario == 0 ? "/bin/upper" : "/bin/lower", &image);
+        hl_identity_digest consumed = error == 0 ? hl_identity_image_digest(image.bytes.bytes, image.bytes.size)
+                                                 : (hl_identity_digest){0};
         exact = error == 0 && (scenario == 0 ? image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER
-                                             : exec_image_has_lower_origin(&image, 0));
+                                             : exec_image_has_lower_origin(&image, 0)) &&
+                hl_identity_digest_equal(&image.identity, &consumed) &&
+                exec_image_cache_identity_authorized(&image) == (scenario == 1);
     } else if (scenario == 2) {
         error = exec_image_open_guest("/hidden/tool", &image);
         exact = error == -ENOENT;
@@ -204,7 +223,7 @@ static int exec_origin_basic_matrix_child(int scenario) {
         g_nvols = 2;
         error = exec_image_open_guest(scenario == 5 ? "/mnt/tool" : "/mnt/nested/tool", &image);
         exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_VOLUME &&
-                image.origin.index == (scenario == 5 ? 0 : 1);
+                image.origin.index == (scenario == 5 ? 0 : 1) && !exec_image_cache_identity_authorized(&image);
     } else if (scenario == 7) {
         snprintf(g_name_binds[0].names[0], sizeof g_name_binds[0].names[0], "alias");
         g_name_binds[0].names_count = 1;
@@ -212,7 +231,8 @@ static int exec_origin_basic_matrix_child(int scenario) {
         g_name_binds[0].fd = open(name_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         g_name_binds_count = 1;
         error = exec_image_open_guest("/bin/alias", &image);
-        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_NAME_BIND && image.origin.index == 0;
+        exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_NAME_BIND && image.origin.index == 0 &&
+                !exec_image_cache_identity_authorized(&image);
     } else if (scenario == 8) {
         hl_vfs_cursor_entry selected;
         error = hl_vfs_cursor_resolve_at(-100, "/race/tool", 0, &selected);
@@ -222,6 +242,26 @@ static int exec_origin_basic_matrix_child(int scenario) {
             hl_vfs_cursor_entry_release(&selected);
         exact = error == 0 && image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER && image.bytes.size > 768 &&
                 image.bytes.bytes[768] == 7;
+    } else if (scenario == 9) {
+        exec_image interpreter;
+        error = exec_image_open_guest("/bin/lower", &image);
+        if (error == 0) error = exec_image_open_guest("/bin/lower", &interpreter);
+        exact = error == 0 && exec_cache_identity_pair_authorized(&image, &interpreter, 0) &&
+                exec_cache_identity_pair_authorized(&image, &interpreter, 1);
+        if (error == 0) {
+            interpreter.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UPPER, 0};
+            exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 1);
+            interpreter.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_LOWER, 0};
+            interpreter.identity = (hl_identity_digest){0};
+            exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 1);
+            hl_identity_digest main_identity = image.identity;
+            image.identity = (hl_identity_digest){0};
+            exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 0);
+            image.identity = main_identity;
+            image.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UNKNOWN, 0};
+            exact = exact && !exec_cache_identity_pair_authorized(&image, &interpreter, 0);
+            exec_image_release(&interpreter);
+        }
     }
     if (error == 0) exec_image_release(&image);
 
@@ -243,7 +283,7 @@ static int exec_origin_basic_matrix_child(int scenario) {
 
 static int exec_origin_basic_matrix_test(void) {
     int failed = 0;
-    for (int scenario = 0; scenario != 9; scenario++) {
+    for (int scenario = 0; scenario != 10; scenario++) {
         pid_t child = fork();
         if (child < 0) return 4;
         if (child == 0) _exit(exec_origin_basic_matrix_child(scenario));
@@ -367,6 +407,7 @@ static int exec_image_adopt_origin(int descriptor, const char *path, hl_vfs_curs
         exec_image_release(image);
         return capability_error;
     }
+    image->identity = hl_identity_image_digest(image->bytes.bytes, image->bytes.size);
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
@@ -459,6 +500,7 @@ static int exec_image_authorized(const char *path, exec_image *image) {
             return -ENOEXEC;
         }
     }
+    image->identity = hl_identity_image_digest(image->bytes.bytes, image->bytes.size);
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
@@ -636,6 +678,12 @@ typedef struct exec_prepared {
     hl_exec_credential_result credentials;
 } exec_prepared;
 
+static int exec_prepared_cache_identity_authorized(const exec_prepared *prepared) {
+    return prepared != NULL && exec_cache_identity_pair_authorized(
+                                   &prepared->main_image, &prepared->program_interpreter,
+                                   prepared->has_program_interpreter);
+}
+
 static void exec_capture_comm(const char *path, char *comm, size_t capacity) {
     const char *separator = path != NULL ? strrchr(path, '/') : NULL;
     const char *name = separator != NULL ? separator + 1 : (path != NULL ? path : "");
@@ -801,7 +849,6 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     struct loaded main_loaded;
 #ifdef PCACHE_EXEC_HOOKS
-    hl_identity_digest interpreter_identity = {0};
     pcache_exec_force_main();
 #endif
     load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
@@ -813,9 +860,6 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 #endif
         struct loaded interpreter_loaded;
         load_elf(interpreter_host, &interpreter_loaded, NULL, &prepared->program_interpreter.bytes);
-#ifdef PCACHE_EXEC_HOOKS
-        interpreter_identity = interpreter_loaded.identity;
-#endif
         jump = interpreter_loaded.entry;
         at_base = interpreter_loaded.base;
     }
@@ -827,7 +871,9 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     pend_reset();
     memset(g_ibtc, 0, sizeof g_ibtc);
 #ifdef PCACHE_EXEC_HOOKS
-    pcache_exec_reload(main_loaded.identity, interpreter_identity, prepared->arguments[0], jump);
+    pcache_exec_reload(prepared->main_image.identity, prepared->program_interpreter.identity,
+                       prepared->has_program_interpreter, exec_prepared_cache_identity_authorized(prepared),
+                       prepared->arguments[0], jump);
 #endif
     exec_authority_rotate(&prepared->main_image, prepared->guest_executable);
     exec_image_release(&prepared->program_interpreter);
