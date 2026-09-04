@@ -34,6 +34,8 @@ test('event timeline keeps logical history and materialized windows independentl
   assert.equal(window.rows.length, EVENT_WINDOW_LIMIT);
   assert.equal(source.generated, EVENT_WINDOW_LIMIT);
   assert.equal(EVENT_RETENTION_LIMIT, 10_000);
+  assert.equal(source.answer(null), null);
+  assert.equal(source.answer({ source: EVENT_SOURCE, version: 1, id: 8, range: { start: -1, count: 4 } }), null);
 });
 
 test('event timeline is selectable and its acknowledgement rerenders visibly', () => {

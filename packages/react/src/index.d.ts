@@ -3244,7 +3244,7 @@ export interface DataTableProps extends NodeProps {
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
   /** table columns: key, title, width as a Length, align, sortable, editable */
-  schema?: ColumnSpec[];
+  schema?: readonly ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;
@@ -3281,7 +3281,7 @@ export interface KeyValueTableProps extends NodeProps {
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
   /** table columns: key, title, width as a Length, align, sortable, editable */
-  schema?: ColumnSpec[];
+  schema?: readonly ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;
@@ -3316,7 +3316,7 @@ export interface TreeTableProps extends NodeProps {
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
   /** table columns: key, title, width as a Length, align, sortable, editable */
-  schema?: ColumnSpec[];
+  schema?: readonly ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;
@@ -3351,7 +3351,7 @@ export interface EventStreamProps extends NodeProps {
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
   /** table columns: key, title, width as a Length, align, sortable, editable */
-  schema?: ColumnSpec[];
+  schema?: readonly ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;
@@ -3386,7 +3386,7 @@ export interface FileBrowserProps extends NodeProps {
   /** grid rows this child occupies; never below one */
   rowSpan?: number;
   /** table columns: key, title, width as a Length, align, sortable, editable */
-  schema?: ColumnSpec[];
+  schema?: readonly ColumnSpec[];
   /** identity of the windowed row source backing a collection */
   source?: number;
   onSelect?: (report: SelectionReport) => void;

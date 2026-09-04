@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Button, Column, Heading, InlineMessage, LogView, Row, Text } from '@husklet/react';
 
@@ -7,7 +6,7 @@ const { useRef, useState } = React;
 export const STREAMING_LOG_STORY = 'Bounded streaming log';
 export const LOG_CHUNK_LIMIT = 512;
 
-function batch(sequence) {
+function batch(sequence: number): string {
   return Array.from({ length: 16 }, (_, index) =>
     `${String(sequence * 16 + index).padStart(5, '0')} worker-${index % 4} completed operation\n`).join('').slice(0, LOG_CHUNK_LIMIT);
 }

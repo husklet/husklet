@@ -28,7 +28,7 @@ const SHAPES = {
   Edges: 'Edges',
   Bounds: 'Bounds',
   Choices: 'Choice[]',
-  Schema: 'ColumnSpec[]',
+  Schema: 'readonly ColumnSpec[]',
   Source: 'number',
 };
 
