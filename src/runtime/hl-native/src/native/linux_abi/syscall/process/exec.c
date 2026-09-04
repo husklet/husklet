@@ -859,7 +859,8 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     struct loaded main_loaded;
 #ifdef PCACHE_EXEC_HOOKS
-    pcache_exec_force_main();
+    int cache_identity_authorized = exec_prepared_cache_identity_authorized(prepared);
+    pcache_exec_force_main(cache_identity_authorized);
 #endif
     load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
     uint64_t jump = main_loaded.entry, at_base = 0;
@@ -882,7 +883,7 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     memset(g_ibtc, 0, sizeof g_ibtc);
 #ifdef PCACHE_EXEC_HOOKS
     pcache_exec_reload(prepared->main_image.identity, prepared->program_interpreter.identity,
-                       prepared->has_program_interpreter, exec_prepared_cache_identity_authorized(prepared),
+                       prepared->has_program_interpreter, cache_identity_authorized,
                        prepared->arguments[0], jump);
 #endif
     exec_authority_rotate(&prepared->main_image, prepared->guest_executable);

@@ -50,6 +50,8 @@ static void x64_pc_thread_start_abandon(void);
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi);
 static int g_x64_pc_control_loaded_empty;
 static int g_x64_pc_launch_only_reset_bus;
+static int g_x64_pc_exec_identity_authorized = 1;
+static int g_x64_pc_exec_poisoned;
 
 static void s1_calibrate(void) {
     // Nothing to measure; clock syscalls take the R_SYSCALL exit, as after a failure.
@@ -69,6 +71,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     range[0][0] = lo;
     range[0][1] = hi;
     if (map_invalidate_source_ranges((const uint64_t (*)[2])range, 1)) {
+        g_x64_pc_exec_poisoned = 1;
         memset(g_ibtc, 0, sizeof g_ibtc);
         memset(g_xibtc, 0, sizeof g_xibtc);
     }
@@ -3162,8 +3165,10 @@ static void pcache_save(void) {
     if (!X64_PC_FIXED_IMAGE_SUPPORTED) return;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=save\n");
-    if (!g_pcache || g_prof || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
-        g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 || g_x64_pc_interp_lo == 0 ||
+    if (!g_pcache || g_prof || hl_option_get("HL_RESTORE") != NULL || !g_x64_pc_exec_identity_authorized ||
+        g_x64_pc_exec_poisoned ||
+        hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
+        g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 ||
         !jit_guest_bus_active()) {
         if (g_coldprof)
             fprintf(stderr,
@@ -3719,8 +3724,8 @@ static void pcache_launch_only_disable(void) {
     }
 }
 
-static void pcache_exec_force_main(void) {
-    if (g_pcache) pcache_launch_only_disable();
+static void pcache_exec_force_main(int identity_authorized) {
+    if (g_pcache && !identity_authorized) pcache_launch_only_disable();
     if (g_pcache) g_force_base = PC_IMG_BASE;
 }
 
@@ -3755,6 +3760,8 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
     g_x64_pc_observe_library_bytes = 0;
     g_x64_pc_observe_library_files = 0;
     g_pc_binid = pcache_exec_authorized_id(program, interpreter, interpreter_present, identity_authorized, argv0);
+    g_x64_pc_exec_identity_authorized = identity_authorized;
+    g_x64_pc_exec_poisoned = !identity_authorized;
     g_pc_entry = jump;
     g_x64_pc_forked = 0;
     g_x64_pc_exec_publish_generation = g_cache_gen;

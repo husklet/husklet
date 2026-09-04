@@ -628,7 +628,8 @@ static void pcache_after_wholesale_flush(void) {
 // proc.c calls PCACHE_SAVE_HOOK (above) BEFORE the flush -- persisting the outgoing image under the
 // OUTGOING key -- then these force the new image onto the fixed bases and re-key + reload. This is what
 // makes a wrong-key save impossible: g_pc_binid is only ever assigned in lockstep with an arena reset.
-static void pcache_exec_force_main(void) {
+static void pcache_exec_force_main(int identity_authorized) {
+    (void)identity_authorized;
     if (g_pcache) {
         g_force_base = PC_IMG_BASE;
         g_pc_img_lo = g_pc_img_hi = g_pc_interp_lo = g_pc_interp_hi = 0; // re-recorded by load_elf

@@ -44,7 +44,8 @@ static void pcache_after_wholesale_flush(void) {
 // The go-build fork+execve storm re-loads a toolchain binary (compile/asm/link) IN-PROCESS from a COLD,
 // freshly jit_after_fork()'d arena; these let that reload restore the binary's warm arena from the cache.
 // Gated behind PCACHE_EXEC_HOOKS so the SHARED proc.c compiles unchanged for the x86 engine.
-static void pcache_exec_force_main(void) {
+static void pcache_exec_force_main(int identity_authorized) {
+    (void)identity_authorized;
     if (g_pcache) {
         g_force_base = PC_IMG_BASE;
         g_force_base_failed = 0; // fresh image, fresh verdict
