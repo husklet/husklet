@@ -231,7 +231,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "interp_sext(instruction & 0x3FFFFFFu, 26) * 4",
         "cursor + (uint64_t)displacement",
         "guest_pc >= UINT64_MAX - UINT64_C(0xFFF)",
-        "count < 64u",
+        "count < HL_A64_X86_MAX_BLOCK_INSNS",
         "uint64_t exit_kind;",
         "HL_A64_X86_BACKEDGE_BUDGET = 8",
         "HL_A64_X86_MAX_BLOCK_INSNS +",
@@ -369,7 +369,7 @@ fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting()
         "exit_kind = HL_BACKEND_SHAPE_T_COND_TAKEN",
         "HL_BACKEND_SHAPE_T_COND_NOT_TAKEN",
         "interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4",
-        "count < 64u",
+        "count < HL_A64_X86_MAX_BLOCK_INSNS",
     ] {
         assert!(source.contains(contract), "missing stage-three contract {contract}");
     }
