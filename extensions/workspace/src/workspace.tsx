@@ -55,6 +55,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
     <Text label="Settings save without stopping your workspace. Runtime identity changes apply when the workspace or panes reopen." color="text-dim" wrap />
     <SettingsGroup name="runtime" label="Runtime" detail={`linux/${configuration.architecture} · ${configuration.name}`} expanded={expanded} onExpand={setExpanded}>
       {field('Workspace image', configuration.image, 'registry/image:tag', (event) => change('image', String(event.value ?? '').trim()))}
+      {field('Storage directory', configuration.storage ?? '', 'Husklet-managed when empty', (event) => change('storage', nullable(event.value)))}
+      <Text label="Changing storage is refused while this workspace is running; other runtime settings are saved for the next restart." color="text-dim" wrap />
       {field('Default shell', configuration.shell ?? '', 'Automatic when empty', (event) => change('shell', nullable(event.value)))}
       {field('CPU limit', numbers.cpus, 'Unlimited when empty', (event) => numeric('cpus', event.value))}
       {field('Memory (MB)', numbers.memory, 'Unlimited when empty', (event) => numeric('memory', event.value))}
@@ -74,7 +76,13 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       <Column gap={1}><Text label="Cursor shape" /><Select value={configuration.terminal.cursor_shape ?? ''} choices={[
         { value: '', label: 'Host default' }, { value: 'block', label: 'Block' }, { value: 'ibeam', label: 'I-beam' }, { value: 'underline', label: 'Underline' },
       ]} onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))} /></Column>
-      <Row gap={2} align="center"><Switch checked={configuration.terminal.cursor_blink ?? false} onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))} /><Text label="Cursor blink" /></Row>
+      <Row gap={2} align="center">
+        <Switch checked={configuration.terminal.cursor_blink ?? false} onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))} />
+        <Text label="Cursor blink" />
+        <Button label="Use host default for cursor blink" enabled={configuration.terminal.cursor_blink !== null}
+          onInvoke={() => terminal('cursor_blink', null)} />
+      </Row>
+      {configuration.terminal.cursor_blink === null ? <Text label="Cursor blink uses the host default." color="text-dim" /> : null}
     </SettingsGroup>
     <SettingsGroup name="environment" label="Environment variables" detail={`${configuration.environment.length} configured`} expanded={expanded} onExpand={setExpanded}>
       <Environment values={configuration.environment} onChange={(value) => change('environment', value)} />

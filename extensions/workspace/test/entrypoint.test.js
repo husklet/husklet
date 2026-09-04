@@ -44,12 +44,14 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     await until(() => calls.some(({ call }) => call === 'workspace_inspect') && calls.some(({ call }) => call === 'interface_render_at'));
     assert.deepEqual(calls.find(({ call }) => call === 'workspace_inspect').with, { name: 'daily' });
     assert.ok(renderedLabels(calls).includes('Workspace'));
+    assert.ok(renderedLabels(calls).includes('Storage directory'));
     assert.ok(renderedLabels(calls).includes('Environment variables'));
     assert.equal(expandedState(calls, 'Terminal appearance'), false);
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'Automatic when empty', '/bin/bash') }));
     peer.write(encode({ channel: 7, kind: KIND.event, payload: expand(calls, 'Terminal appearance') }));
     await until(() => expandedState(calls, 'Terminal appearance') === true);
     peer.write(encode({ channel: 8, kind: KIND.event, payload: changeTag(calls, 'ColorPicker', 0, '#112233') }));
+    peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Use host default for cursor blink') }));
     await until(() => renderedLabels(calls).includes('Save workspace'));
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invoke(calls, 'Save workspace') }));
     await until(() => calls.some(({ call }) => call === 'workspace_update'));
@@ -58,6 +60,7 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     assert.equal(update.generation, 'a'.repeat(32));
     assert.equal(update.configuration.shell, '/bin/bash');
     assert.equal(update.configuration.terminal.foreground, '#112233');
+    assert.equal(update.configuration.terminal.cursor_blink, null);
     assert.equal(stderr, '');
   } finally {
     const closed = child.exitCode === null ? new Promise((resolve) => child.once('close', resolve)) : Promise.resolve();
