@@ -53,7 +53,12 @@ const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "t_other",
 ];
 
-pub(crate) fn aarch64_opcode_product(stderr: &[u8], required: bool, require_nonzero: bool, reconcile_shape: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+pub(crate) fn aarch64_opcode_product(
+    stderr: &[u8],
+    required: bool,
+    require_nonzero: bool,
+    reconcile_shape: bool,
+) -> Result<Option<BTreeMap<&str, u64>>, Error> {
     let stderr = std::str::from_utf8(stderr).map_err(|_| "aarch64-opcode diagnostic is not UTF-8")?;
     let records: Vec<_> = stderr
         .lines()
@@ -124,8 +129,8 @@ pub(crate) fn aarch64_opcode_product(stderr: &[u8], required: bool, require_nonz
         return Err("aarch64-opcode dedicated fixture retired no instructions".into());
     }
     if reconcile_shape {
-        let shape = backend_shape_product(stderr.as_bytes(), true)?
-            .ok_or("aarch64-opcode product omitted backend-shape")?;
+        let shape =
+            backend_shape_product(stderr.as_bytes(), true)?.ok_or("aarch64-opcode product omitted backend-shape")?;
         if shape["interpreted_steps"] != values["body_retired"] {
             return Err("aarch64-opcode retired total differs from aggregated interpreted steps".into());
         }
@@ -1085,11 +1090,22 @@ pub(crate) fn backend_shape_product(stderr: &[u8], enabled: bool) -> Result<Opti
     if version >= 13 {
         if fields["translation_codegen_available"] == 0 {
             let codegen_activity = [
-                "translated_entries", "translated_steps", "jcc_ibtc_emitted", "jcc_ibtc_hits",
-                "jcc_ibtc_fills", "direct_jmp_ibtc_emitted", "direct_jmp_ibtc_hits",
-                "direct_jmp_ibtc_fills", "direct_call_ibtc_emitted", "direct_call_ibtc_hits",
-                "direct_call_ibtc_fills", "ret_fast_ibtc_hits", "ret_fast_ibtc_fills",
-                "executed_form_total", "executed_form_unique", "executed_form_overflow",
+                "translated_entries",
+                "translated_steps",
+                "jcc_ibtc_emitted",
+                "jcc_ibtc_hits",
+                "jcc_ibtc_fills",
+                "direct_jmp_ibtc_emitted",
+                "direct_jmp_ibtc_hits",
+                "direct_jmp_ibtc_fills",
+                "direct_call_ibtc_emitted",
+                "direct_call_ibtc_hits",
+                "direct_call_ibtc_fills",
+                "ret_fast_ibtc_hits",
+                "ret_fast_ibtc_fills",
+                "executed_form_total",
+                "executed_form_unique",
+                "executed_form_overflow",
             ];
             if codegen_activity.iter().any(|name| fields[name] != 0)
                 || (0..16).any(|rank| fields[format!("executed_form{rank}_count").as_str()] != 0)
@@ -1356,7 +1372,10 @@ pub(crate) fn executed_form_digest(stderr: &[u8]) -> String {
 
 pub(super) fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
     for line in stderr.lines().filter(|line| {
-        valid_profile_line(line) || line.starts_with(BACKEND_TREE_PREFIX) || line.starts_with(BACKEND_SHAPE_PREFIX)
+        valid_profile_line(line)
+            || line.starts_with(BACKEND_TREE_PREFIX)
+            || line.starts_with(BACKEND_SHAPE_PREFIX)
+            || line.starts_with(AARCH64_OPCODE_PREFIX)
     }) {
         writeln!(output, "{line}")?;
     }
@@ -1449,13 +1468,17 @@ mod tests {
 
     #[test]
     fn aarch64_opcode_census_is_strict_and_reconciled() {
-        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true, true, false).unwrap().unwrap();
+        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true, true, false)
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed["body_retired"], 12);
         assert!(parsed["load_store"] > 0);
         assert!(
             aarch64_opcode_product(
                 A64_OPCODE.replace("body_retired=12", "body_retired=11").as_bytes(),
-                true, true, false
+                true,
+                true,
+                false
             )
             .is_err()
         );
@@ -1464,14 +1487,18 @@ mod tests {
                 A64_OPCODE
                     .replace("major15=1", "major15=18446744073709551615")
                     .as_bytes(),
-                true, true, false
+                true,
+                true,
+                false
             )
             .is_err()
         );
         assert!(
             aarch64_opcode_product(
                 A64_OPCODE.replace(" major15=1", " unknown=1 major15=1").as_bytes(),
-                true, true, false
+                true,
+                true,
+                false
             )
             .is_err()
         );
@@ -1480,7 +1507,9 @@ mod tests {
                 A64_OPCODE
                     .replace(" major8=2 major9=1", " major9=1 major8=2")
                     .as_bytes(),
-                true, true, false
+                true,
+                true,
+                false
             )
             .is_err()
         );
@@ -1488,13 +1517,39 @@ mod tests {
         assert!(aarch64_opcode_product(b"ordinary stderr\n", true, false, false).is_err());
         let zero = A64_OPCODE
             .split_ascii_whitespace()
-            .map(|field| field.split_once('=').map_or_else(|| field.to_owned(), |(name, _)| {
-                if matches!(name, "version" | "available") { field.to_owned() } else { format!("{name}=0") }
-            }))
+            .map(|field| {
+                field.split_once('=').map_or_else(
+                    || field.to_owned(),
+                    |(name, _)| {
+                        if matches!(name, "version" | "available") {
+                            field.to_owned()
+                        } else {
+                            format!("{name}=0")
+                        }
+                    },
+                )
+            })
             .collect::<Vec<_>>()
-            .join(" ") + "\n";
+            .join(" ")
+            + "\n";
         aarch64_opcode_product(zero.as_bytes(), true, false, false).unwrap();
         assert!(aarch64_opcode_product(zero.as_bytes(), true, true, false).is_err());
+    }
+
+    #[test]
+    fn aarch64_opcode_census_reaches_worker_counter_assertions() {
+        let captured = format!("[diag] backend-shape crossings=8\n{A64_OPCODE}");
+        let mut forwarded = Vec::new();
+        forward_profile(&captured, &mut forwarded).unwrap();
+        assert_eq!(forwarded, captured.as_bytes());
+
+        let assertions = serde_yaml::from_str(
+            "- { counter: body_retired, equals: 12 }\n\
+             - { counter: major10, equals: 1 }\n\
+             - { counter: branch_system, equals: 1 }\n",
+        )
+        .unwrap();
+        assert!(crate::runtime::definition::diagnostics::violation(&assertions, &forwarded).is_none());
     }
 
     #[test]
@@ -1591,7 +1646,9 @@ mod tests {
         }
         for rank in 0..16 {
             let (key, count) = if rank == 0 { (17, 3) } else { (0, 0) };
-            product.push_str(&format!(" executed_form{rank}_key={key} executed_form{rank}_count={count}"));
+            product.push_str(&format!(
+                " executed_form{rank}_key={key} executed_form{rank}_count={count}"
+            ));
         }
         product.push_str(
             "\n[diag] x86-exit-family version=1 translated_entries=2 total=2 \
@@ -1602,7 +1659,9 @@ mod tests {
     }
 
     fn set_product_field(record: &str, name: &str, value: u64) -> String {
-        let start = record.find(&format!("{name}=")).unwrap_or_else(|| panic!("missing fixture field {name}"));
+        let start = record
+            .find(&format!("{name}="))
+            .unwrap_or_else(|| panic!("missing fixture field {name}"));
         let value_start = start + name.len() + 1;
         let value_end = record[value_start..]
             .find(char::is_whitespace)
@@ -1805,9 +1864,7 @@ mod tests {
             BACKEND_SHAPE_PRODUCT_V13_ORDER[..BACKEND_SHAPE_PRODUCT_V13_ORDER.len() - 3],
             "native producer and product parser field order diverged"
         );
-        assert!(report.contains(
-            " executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu"
-        ));
+        assert!(report.contains(" executed_form_total=%llu executed_form_unique=%llu executed_form_overflow=%llu"));
         assert!(report.contains(" executed_form%u_key=%llu executed_form%u_count=%llu"));
 
         let arguments = report
