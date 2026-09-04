@@ -122,6 +122,7 @@ fn containers() -> Vec<ContainerSummary> {
             image: "alpine:3.20".into(),
             state: state.into(),
             created: 1_700_000_000,
+            generation: index as u64 + 1,
         })
         .collect()
 }
