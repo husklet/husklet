@@ -7,8 +7,8 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 import { connect, workspace } from '../../../packages/react/src/index.js';
 import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
-import { WorkspaceManager } from '../src/app.js';
-import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource } from '../src/model.js';
+import { WorkspaceManager } from '../dist/app.js';
+import { CONTAINER_DETAIL_SOURCE, ContainerDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
 test('authoritative container inventory replacement invalidates prior detail lifecycle', { timeout: 5_000 }, async () => {

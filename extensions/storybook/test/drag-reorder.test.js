@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { DragReorderStory, EVENT_LIMIT, initialItems, reorder } from '../src/drag-reorder.js';
+import { DragReorderStory, EVENT_LIMIT, initialItems, reorder } from '../dist/drag-reorder.js';
 import { host } from './host.js';
 
 test('reorder is bounded to known immutable item identities', () => {

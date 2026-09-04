@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Executions, Images, Networks, Overview, Processes, Volumes, WorkspaceManager } from '../src/app.js';
-import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../src/model.js';
+import { Containers, Executions, Images, Networks, Overview, Processes, Volumes, WorkspaceManager } from '../dist/app.js';
+import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
 const api = {

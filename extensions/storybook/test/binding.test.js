@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { props } from '../src/catalogue.js';
-import { BINDING, control, editorOf } from '../src/editors.js';
+import { props } from '../dist/catalogue.js';
+import { BINDING, control, editorOf } from '../dist/editors.js';
 import { value } from './host.js';
 
 /** What a control of each kind hands its property. */

@@ -7,8 +7,8 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 import { connect, workspace } from '../../../packages/react/src/index.js';
 import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
-import { Executions } from '../src/app.js';
-import { EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource } from '../src/model.js';
+import { Executions } from '../dist/app.js';
+import { EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
 test('execution detail traverses every ResourceState over real framing and drops stale detail', { timeout: 5_000 }, async () => {

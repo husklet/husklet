@@ -20,6 +20,26 @@ node -e '
   if (manifest.name !== "@husklet/storybook") {
     throw new Error("extensions/storybook must remain the @husklet/storybook package");
   }
+  for (const forbidden of ["client", "react", "tools"]) {
+    if (fs.existsSync(path.join(root, "extensions", forbidden))) {
+      throw new Error(`extensions/${forbidden} is not a runnable extension`);
+    }
+  }
+  const walk = (directory) => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const location = path.join(directory, entry.name);
+    return entry.isDirectory() ? walk(location) : [location];
+  });
+  for (const directory of fs.readdirSync(path.join(root, "extensions"), { withFileTypes: true })) {
+    if (!directory.isDirectory() || directory.name === "base" || directory.name === "node_modules") continue;
+    const extension = path.join(root, "extensions", directory.name);
+    if (!fs.existsSync(path.join(extension, "extension.toml"))) {
+      throw new Error(`extensions/${directory.name} has no runnable extension manifest`);
+    }
+    const javascript = walk(path.join(extension, "src")).filter((file) => /\.[cm]?jsx?$/.test(file));
+    if (javascript.length !== 0) {
+      throw new Error(`extension source must be TypeScript: ${javascript.join(", ")}`);
+    }
+  }
 ' "$root"
 
 # `cargo check` runs hl-extension's no-write source/artifact fingerprint gate.

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SAMPLE_LIMIT, boundedSamples } from '../src/resource-metrics.js';
+import { SAMPLE_LIMIT, boundedSamples } from '../dist/resource-metrics.js';
 
 test('resource trends keep only the newest finite bounded samples', () => {
   const values = [...Array.from({ length: 80 }, (_, index) => index), Number.NaN];

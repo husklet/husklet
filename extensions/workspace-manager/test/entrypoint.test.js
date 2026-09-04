@@ -97,7 +97,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  const child = spawn(process.execPath, ['src/main.js'], {
+  const child = spawn(process.execPath, ['dist/main.js'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socketPath }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';

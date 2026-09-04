@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 import { connect, workspace } from '../../../packages/react/src/index.js';
 import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
-import { WorkspaceManager } from '../src/app.js';
+import { WorkspaceManager } from '../dist/app.js';
 import { host } from './host.js';
 
 test('volume inventory removes stale generation authority across real framed refresh states', { timeout: 5_000 }, async () => {

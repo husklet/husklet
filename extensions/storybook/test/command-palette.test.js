@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground } from '../src/app.js';
-import { COMMAND_PALETTE_STORY, CommandPaletteStory } from '../src/command-palette.js';
+import { Playground } from '../dist/app.js';
+import { COMMAND_PALETTE_STORY, CommandPaletteStory } from '../dist/command-palette.js';
 import { host } from './host.js';
 
 function labels(patches) {

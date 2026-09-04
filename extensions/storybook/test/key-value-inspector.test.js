@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground } from '../src/app.js';
+import { Playground } from '../dist/app.js';
 import {
   KEY_VALUE_RECORDS,
   KEY_VALUE_SOURCE,
@@ -10,7 +10,7 @@ import {
   KEY_VALUE_WINDOW_LIMIT,
   KeyValueInspectorStory,
   KeyValueSource,
-} from '../src/key-value-inspector.js';
+} from '../dist/key-value-inspector.js';
 import { host } from './host.js';
 
 function labelled(patches, tag, label) {

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { component, editable, props, tags } from '../src/catalogue.js';
-import { amountOf, control, lengthValue, memberOf, modeOf, rows } from '../src/editors.js';
+import { component, editable, props, tags } from '../dist/catalogue.js';
+import { amountOf, control, lengthValue, memberOf, modeOf, rows } from '../dist/editors.js';
 import { value } from './host.js';
 
 const byName = new Map(props.map((prop) => [prop.name, prop]));

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground } from '../src/app.js';
-import { LargeDataTableStory, LargeRecordSource, LOGICAL_ROWS, OPERATION_HISTORY_LIMIT, WINDOW_LIMIT, SOURCE } from '../src/large-table.js';
+import { Playground } from '../dist/app.js';
+import { LargeDataTableStory, LargeRecordSource, LOGICAL_ROWS, OPERATION_HISTORY_LIMIT, WINDOW_LIMIT, SOURCE } from '../dist/large-table.js';
 import { host } from './host.js';
 
 function node(patches, tag, label) {

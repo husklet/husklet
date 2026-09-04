@@ -4,7 +4,7 @@ import reactCatalogue from '../../../packages/react/catalogue.json' with { type:
 
 import { components } from '@husklet/react';
 
-import catalogue, { enums, families, grouped, props, tags } from '../src/catalogue.js';
+import catalogue, { enums, families, grouped, props, tags } from '../dist/catalogue.js';
 
 test('the catalogue describes the whole library', () => {
   assert.equal(catalogue.version, 1);

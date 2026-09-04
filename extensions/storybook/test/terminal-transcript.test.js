@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Playground } from '../src/app.js';
-import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from '../src/terminal-transcript.js';
+import { Playground } from '../dist/app.js';
+import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from '../dist/terminal-transcript.js';
 import { host } from './host.js';
 
 function labels(patches) {

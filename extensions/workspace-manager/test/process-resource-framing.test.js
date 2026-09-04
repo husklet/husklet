@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 import { connect, workspace } from '../../../packages/react/src/index.js';
 import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
-import { Processes } from '../src/app.js';
+import { Processes } from '../dist/app.js';
 import { host } from './host.js';
 
 test('process snapshots remove stale PID and scope claims across framed refresh states', { timeout: 5_000 }, async () => {

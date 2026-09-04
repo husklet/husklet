@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { component, tags } from '../src/catalogue.js';
-import { all, defaults } from '../src/defaults.js';
+import { component, tags } from '../dist/catalogue.js';
+import { all, defaults } from '../dist/defaults.js';
 
 test('selecting a component produces a default set of the right shape', () => {
   for (const [name, opened] of all()) {

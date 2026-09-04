@@ -13,14 +13,14 @@ import {
   interactionDetail,
   interactionProps,
   searchResults,
-} from '../src/app.js';
-import { grouped, tags } from '../src/catalogue.js';
-import { defaults } from '../src/defaults.js';
+} from '../dist/app.js';
+import { grouped, tags } from '../dist/catalogue.js';
+import { defaults } from '../dist/defaults.js';
 import { components } from '@husklet/react';
-import { ACQUISITION_STORY, acquisitionStates } from '../src/acquisition.js';
-import { FORM_STORY, ValidatedSettingsFormStory } from '../src/form.js';
-import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../src/keyboard-accessibility.js';
-import { QUERY_PLAN_MODES, QueryPlanStory, filterQueryPlan, queryPlan } from '../src/query-plan.js';
+import { ACQUISITION_STORY, acquisitionStates } from '../dist/acquisition.js';
+import { FORM_STORY, ValidatedSettingsFormStory } from '../dist/form.js';
+import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../dist/keyboard-accessibility.js';
+import { QUERY_PLAN_MODES, QueryPlanStory, filterQueryPlan, queryPlan } from '../dist/query-plan.js';
 
 import { host } from './host.js';
 

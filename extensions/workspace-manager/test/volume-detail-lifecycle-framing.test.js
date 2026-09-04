@@ -7,8 +7,8 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 import { connect, workspace } from '../../../packages/react/src/index.js';
 import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
-import { WorkspaceManager } from '../src/app.js';
-import { VOLUME_DETAIL_SOURCE, VolumeDetailsSource } from '../src/model.js';
+import { WorkspaceManager } from '../dist/app.js';
+import { VOLUME_DETAIL_SOURCE, VolumeDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
 test('same-name volume generation replacement invalidates detail authority', { timeout: 5_000 }, async () => {
