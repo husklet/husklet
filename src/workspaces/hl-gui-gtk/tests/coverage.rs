@@ -118,20 +118,31 @@ fn every_composite_field_caption_names_its_editable_widget() {
         let mut session = Session::new();
         let node = session.producer.create(*tag);
         session.producer.append(NodeId::ROOT, node);
-        session.producer.set(node, Prop::Label, PropValue::text("Accessible name"));
+        session
+            .producer
+            .set(node, Prop::Label, PropValue::text("Accessible name"));
         session.flush().unwrap();
         let widgets = session.widgets();
         let caption = widgets
             .iter()
             .find(|candidate| candidate.has_css_class("hl-caption"))
             .and_then(|candidate| candidate.clone().downcast::<gtk::Label>().ok());
-        let focusable = widgets.iter().find(|candidate| candidate.has_css_class("hl-field")).cloned();
-        let (Some(caption), Some(focusable)) = (caption, focusable) else { continue };
+        let focusable = widgets
+            .iter()
+            .find(|candidate| candidate.has_css_class("hl-field"))
+            .cloned();
+        let (Some(caption), Some(focusable)) = (caption, focusable) else {
+            continue;
+        };
         if !focusable.is_focusable() {
             continue;
         }
         let labelled = caption.mnemonic_widget().as_ref() == Some(&focusable);
-        assert!(labelled, "{} draws a caption that does not name its editable GTK widget", tag.as_str());
+        assert!(
+            labelled,
+            "{} draws a caption that does not name its editable GTK widget",
+            tag.as_str()
+        );
         covered.push(*tag);
     }
     assert!(!covered.is_empty(), "catalogue contains composite labelled controls");
@@ -150,18 +161,19 @@ fn query_plan_is_nested_selectable_and_hot() {
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-hot"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::QueryPlanMetric).is_some());
     s.producer.set(n, Prop::Value, PropValue::text("id=j state=normal"));
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-normal"));
-    assert!(!node.has_css_class("query-plan-hot"), "a changed query state retained stale hotspot styling");
+    assert!(
+        !node.has_css_class("query-plan-hot"),
+        "a changed query state retained stale hotspot styling"
+    );
 }
 fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     let mut s = Session::new();
@@ -182,12 +194,10 @@ fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     s.flush().unwrap();
     let node = s.tagged(Tag::DependencyNode).unwrap();
     assert!(node.has_css_class("dependency-conflict"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::DependencyEdge).is_some())
 }
 
@@ -218,12 +228,10 @@ fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
     let phase = session.tagged(Tag::NetworkPhase).unwrap();
     assert!(request.has_css_class("network-failure"));
     assert!(phase.has_css_class("network-phase"));
-    assert!(
-        subtree(&request)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&request)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     let bar = subtree(&phase)
         .into_iter()
         .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
@@ -528,6 +536,13 @@ fn portrait(tag: Tag, prop: Prop, value: Option<&PropValue>) -> String {
     let node = session.producer.create(tag);
     session.producer.append(host, node);
     fill(&mut session, node, tag);
+    if tag == Tag::Select && prop == Prop::Value {
+        session.producer.set(
+            node,
+            Prop::Choices,
+            PropValue::Choices(vec![Choice::new("other", "Other"), Choice::new(CONTENT, "Nginx")]),
+        );
+    }
     if let Some(value) = value {
         session.producer.set(node, prop, value.clone());
     }
@@ -1278,16 +1293,12 @@ fn stack_frames_keep_selectable_function_and_location() {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Label>().ok())
         .collect::<Vec<_>>();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
-    );
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "host::dispatch" && label.is_selectable()));
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {
