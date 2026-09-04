@@ -37,6 +37,7 @@ try {
   execFileSync(process.execPath, ['--input-type=module', '--eval', "import { Session, workspace } from '@husklet/client'; import { Session as ReactSession } from '@husklet/react'; if (Session !== ReactSession || typeof workspace !== 'function') process.exit(1)"], { cwd: consumer });
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
 import { Session, workspace } from '@husklet/client';
+import type { ExtensionCapability, PaneText as WirePaneText } from '@husklet/client/protocol';
 import { Button, type ButtonProps } from '@husklet/react';
 import type { ComponentType } from 'react';
 
@@ -44,8 +45,15 @@ declare const session: Session;
 const host = workspace(session);
 const panes = host.terminal.panes();
 const button: ComponentType<ButtonProps> = Button;
+const capability: ExtensionCapability = 'panes:observe';
+// @ts-expect-error generated capabilities are closed and namespaced.
+const invalidCapability: ExtensionCapability = 'container-read';
+const projection: WirePaneText = { slot: 'pane-1', lines: ['ready'], truncated: false };
 void panes;
 void button;
+void capability;
+void invalidCapability;
+void projection;
 `);
   fs.writeFileSync(path.join(consumer, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
     strict: true, noEmit: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', skipLibCheck: false,
