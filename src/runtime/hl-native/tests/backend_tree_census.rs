@@ -66,7 +66,7 @@ fn x86_step_form_record_preserves_the_compatible_mixed_table() {
         "executed_form_total=%llu",
         "executed_form_unique=%llu",
         "executed_form_overflow=%llu",
-        "executed_form_top0_key=%llu",
+        "executed_form%u_key=%llu executed_form%u_count=%llu",
     ] {
         assert!(source.contains(field), "mixed executed-form field disappeared: {field}");
     }
