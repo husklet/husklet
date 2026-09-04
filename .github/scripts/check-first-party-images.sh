@@ -34,6 +34,8 @@ expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.npm.version="
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
 expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
+expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Cmd}}'"'"')" == '"'"'["node","/app/dist/main.js"]'"'"' ]] \'
+expect_literal .github/scripts/smoke-extension-image.sh '      if (!fs.statSync("/app/dist/main.js").isFile()) throw new Error("entrypoint missing");'
 
 node -e '
   const fs = require("node:fs");
@@ -80,6 +82,7 @@ for extension in extensions storybook top workspace; do
   expect_literal "$dockerfile" 'FROM ${HUSKLET_BASE_IMAGE}'
   expect_literal "$dockerfile" 'ARG HUSKLET_EXTENSION_VERSION'
   expect_literal "$dockerfile" 'ARG HUSKLET_REACT_VERSION'
+  expect_literal "$dockerfile" 'CMD ["node", "/app/dist/main.js"]'
   expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/client/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/react/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" 'LABEL husklet.extension.manifest="/etc/husklet/extension.toml"'
