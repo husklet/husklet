@@ -186,6 +186,11 @@ let
     else
       let
         apkArchitecture = if architecture == "amd64" then "x86_64" else "aarch64";
+        hostArchitecture =
+          if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then "amd64"
+          else if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then "arm64"
+          else throw "developer rootfs construction requires an AArch64 or x86-64 Linux host";
+        hostLoader = if hostArchitecture == "amd64" then "ld-musl-x86_64.so.1" else "ld-musl-aarch64.so.1";
         indexes = lib.mapAttrs
           (repository: index: pkgs.fetchurl {
             name = "APKINDEX-${repository}-${apkArchitecture}.tar.gz";
@@ -202,12 +207,13 @@ let
           })
           manifest.packages;
       in
-      pkgs.runCommand "husklet-developer-rootfs-${architecture}" {
-        nativeBuildInputs = [ pkgs.apk-tools pkgs.binutils pkgs.coreutils pkgs.libarchive ];
-      } ''
+      pkgs.runCommand "husklet-developer-rootfs-${architecture}" { } ''
         set -eu
         mkdir -p "$out"
-        bsdtar -xf ${alpineArchives.${architecture}} -C "$out"
+        tar -xzf ${alpineArchives.${architecture}} -C "$out"
+        mkdir apk-host
+        tar -xzf ${alpineArchives.${hostArchitecture}} -C apk-host
+        apk="$PWD/apk-host/lib/${hostLoader} --library-path $PWD/apk-host/lib:$PWD/apk-host/usr/lib $PWD/apk-host/sbin/apk"
         mkdir -p repository/main/${apkArchitecture} repository/community/${apkArchitecture}
         ln -s ${indexes.main} repository/main/${apkArchitecture}/APKINDEX.tar.gz
         ln -s ${indexes.community} repository/community/${apkArchitecture}/APKINDEX.tar.gz
@@ -222,12 +228,12 @@ let
         # Payload audit must establish that package scripts and path triggers are
         # unnecessary before scriptsAudited may become true. Disabling them makes
         # this transaction host-independent for the foreign-ISA root.
-        apk --root "$out" --arch ${apkArchitecture} --usermode --no-network --no-cache \
+        $apk --root "$out" --arch ${apkArchitecture} --usermode --no-network --no-cache \
           --scripts=false --commit-hooks=false \
           --repositories-file "$PWD/repositories" add \
           build-base=0.5-r4 git=2.54.0-r0 ripgrep=15.1.0-r0
         ${lib.concatMapStringsSep "\n" (apk: ''
-          apk --root "$out" --arch ${apkArchitecture} info --exists '${apk.name}=${apk.version}'
+          $apk --root "$out" --arch ${apkArchitecture} info --exists '${apk.name}=${apk.version}'
         '') apks}
         expected_machine=${toString manifest.machine}
         for tool in ${lib.escapeShellArgs requiredTools}; do
