@@ -38,6 +38,8 @@ test('sort, filter, resize and all states remain bounded source operations', asy
   assert.equal(first.rows.length, WINDOW_LIMIT, 'a resized viewport cannot exceed one protocol window');
   assert(first.rows.length <= 128, 'the wire window has a fixed production bound');
   assert.equal(source.generated, WINDOW_LIMIT);
+  assert.equal(source.answer(null), null);
+  assert.equal(source.answer({ ...request, range: { start: -1, count: 1 } }), null);
 
   assert.deepEqual(await source.sort({ source: SOURCE, version: 1, column: 'id', descending: true }), { accepted: true });
   const sorted = source.answer({ ...request, id: 5, version: 2, range: { start: 0, count: 8 } });
