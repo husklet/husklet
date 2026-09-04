@@ -78,6 +78,57 @@ fn production_worker_captures_kills_restores_and_continues() {
     assert!(receipt["member_count"].as_u64().is_some_and(|count| count > 0));
 }
 
+#[test]
+fn production_translated_worker_captures_kills_restores_and_continues() {
+    let fixture = tempfile::tempdir().unwrap();
+    let rootfs = fixture.path().join("rootfs");
+    let control = rootfs.join("run/checkpoint");
+    std::fs::create_dir_all(rootfs.join("bin")).unwrap();
+    std::fs::create_dir_all(&control).unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/checkpoint-translated/daily_dev.c");
+    let probe = rootfs.join("bin/checkpoint-cycle-probe");
+    assert!(
+        Command::new("cc")
+            .args(["-static", "-O2", "-o"])
+            .arg(&probe)
+            .arg(source)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = Command::new(worker())
+        .args([
+            "--guest-isa",
+            guest_isa(),
+            "--translit",
+            "--diagnostics",
+            "--loader-receipt",
+            "--rootfs",
+            rootfs.to_str().unwrap(),
+            "--checkpoint-cycle",
+            "/run/checkpoint",
+            "bin/checkpoint-cycle-probe",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "translated worker failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let receipt = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("[hl-checkpoint-cycle]\t"))
+        .collect::<Vec<_>>();
+    assert_eq!(receipt.len(), 1, "{stderr}");
+    let receipt: Value = serde_json::from_str(receipt[0]).unwrap();
+    assert_eq!(receipt["backend"], "translated");
+    assert_eq!(receipt["kill_exit_kind"], "Signal");
+    assert_eq!(receipt["kill_guest_status"], 9);
+    assert!(stderr.contains("[diag] backend-shape "), "{stderr}");
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[test]
 fn failure_after_start_stops_and_reaps_the_probe() {
