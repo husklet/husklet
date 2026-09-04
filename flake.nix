@@ -308,6 +308,7 @@
         assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.arm64.packages == 92831642;
         assert builtins.foldl' (sum: package: sum + package.expectedSize) 0 framework.manifests.amd64.packages == 103044688;
         assert !framework.manifests.arm64.closureComplete && !framework.manifests.amd64.closureComplete;
+        assert !framework.manifests.arm64.scriptsAudited && !framework.manifests.amd64.scriptsAudited;
         assert !armRefusal.success && !x86Refusal.success;
         pkgs.runCommand "developer-rootfs-manifest-framework" { } ''
           touch "$out"

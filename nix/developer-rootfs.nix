@@ -72,6 +72,8 @@ let
         main = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/APKINDEX.tar.gz"; sha256 = "6ad66a68b4c9d08a5b64f19f6b0de56831e1e8505d15d6dbb6f7c92abc4b442f"; };
         community = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/aarch64/APKINDEX.tar.gz"; sha256 = "cc6373bb1887941bdd1b7cade9f53455e3f2b4762ee072b020a36e691f6cd451"; };
       };
+      # Set only after inspecting every fixed APK control stream for scripts/triggers.
+      scriptsAudited = false;
       closureComplete = false;
       packages = map (package "arm64") closure;
     };
@@ -83,6 +85,8 @@ let
         main = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz"; sha256 = "d06e04b2a46b8f669cd1fa5244ed3786a63efd41d9a2403433a9e6a21d9d7ce1"; };
         community = { url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/community/x86_64/APKINDEX.tar.gz"; sha256 = "d5fda4c2f0c2ed5c537a1a3aeeb7e642e5aabf7e22b2ae2be9d99d341f1fcef7"; };
       };
+      # Set only after inspecting every fixed APK control stream for scripts/triggers.
+      scriptsAudited = false;
       closureComplete = false;
       packages = map (package "amd64") closure;
     };
@@ -95,20 +99,27 @@ let
           (lib.filter (field: package.${field} == null) [ "version" "url" "sha256" ]))
       manifest.packages;
 
-  complete = manifest: manifest.closureComplete && missingFields manifest == [ ];
+  complete = manifest: manifest.closureComplete && manifest.scriptsAudited && missingFields manifest == [ ];
 
   forArchitecture = architecture:
     let
       manifest = manifests.${architecture} or (throw "unsupported developer rootfs architecture: ${architecture}");
       missing = missingFields manifest;
     in
-    if !manifest.closureComplete || missing != [ ] then
-      throw "developer rootfs ${architecture} APK closure is incomplete (closureComplete=${toString manifest.closureComplete}): ${lib.concatStringsSep ", " missing}"
+    if !manifest.closureComplete || !manifest.scriptsAudited || missing != [ ] then
+      throw "developer rootfs ${architecture} APK closure is incomplete or unaudited: ${lib.concatStringsSep ", " missing}"
     else
       let
+        apkArchitecture = if architecture == "amd64" then "x86_64" else "aarch64";
+        indexes = lib.mapAttrs
+          (repository: index: pkgs.fetchurl {
+            name = "APKINDEX-${repository}-${apkArchitecture}.tar.gz";
+            inherit (index) url sha256;
+          })
+          manifest.indexes;
         apks = map
           (package: {
-            inherit (package) expectedSize name;
+            inherit (package) expectedSize name repository version;
             source = pkgs.fetchurl {
               name = "${package.name}-${package.version}.apk";
               inherit (package) url sha256;
@@ -117,17 +128,31 @@ let
           manifest.packages;
       in
       pkgs.runCommand "husklet-developer-rootfs-${architecture}" {
-        nativeBuildInputs = [ pkgs.binutils pkgs.coreutils pkgs.libarchive ];
+        nativeBuildInputs = [ pkgs.apk-tools pkgs.binutils pkgs.coreutils pkgs.libarchive ];
       } ''
         set -eu
         mkdir -p "$out"
         bsdtar -xf ${alpineArchives.${architecture}} -C "$out"
+        mkdir -p repository/main/${apkArchitecture} repository/community/${apkArchitecture}
+        ln -s ${indexes.main} repository/main/${apkArchitecture}/APKINDEX.tar.gz
+        ln -s ${indexes.community} repository/community/${apkArchitecture}/APKINDEX.tar.gz
         ${lib.concatMapStringsSep "\n" (apk: ''
           test "$(stat -c %s ${apk.source})" = ${toString apk.expectedSize} || {
             echo "APK ${apk.name} size differs from its signed APKINDEX" >&2
             exit 1
           }
-          bsdtar -xf ${apk.source} -C "$out" --exclude .PKGINFO --exclude .SIGN.RSA.*
+          ln -s ${apk.source} repository/${apk.repository}/${apkArchitecture}/${apk.name}-${apk.version}.apk
+        '') apks}
+        printf '%s\n' "$PWD/repository/main" "$PWD/repository/community" > repositories
+        # Payload audit must establish that package scripts and path triggers are
+        # unnecessary before scriptsAudited may become true. Disabling them makes
+        # this transaction host-independent for the foreign-ISA root.
+        apk --root "$out" --arch ${apkArchitecture} --usermode --no-network --no-cache \
+          --scripts=false --commit-hooks=false \
+          --repositories-file "$PWD/repositories" add \
+          build-base=0.5-r4 git=2.54.0-r0 ripgrep=15.1.0-r0
+        ${lib.concatMapStringsSep "\n" (apk: ''
+          apk --root "$out" --arch ${apkArchitecture} info --exists '${apk.name}=${apk.version}'
         '') apks}
         expected_machine=${toString manifest.machine}
         for tool in ${lib.escapeShellArgs requiredTools}; do
