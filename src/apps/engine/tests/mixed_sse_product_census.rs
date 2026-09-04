@@ -369,6 +369,29 @@ fn translated_process_lifecycle_emits_one_product_record_at_every_teardown() {
     }
 }
 
+#[test]
+fn reap_product_transport_is_host_owned_not_guest_projected() {
+    let lifecycle = include_str!("../../../runtime/hl-native/src/native/engine/lifecycle.c");
+    let finish = lifecycle
+        .split_once("static hl_status hl_production_finish_process(")
+        .and_then(|(_, tail)| tail.split_once("static hl_status hl_production_finish("))
+        .map(|(body, _)| body)
+        .expect("production reap boundary");
+    assert!(finish.contains(
+        "hl_target_backend_tree_reap_report(state->backend_tree, state->backend_tree_size, NULL);"
+    ));
+    assert!(!lifecycle.contains("backend_tree_box"));
+
+    let backend = include_str!("../../../runtime/hl-native/src/native/engine/backend_tree.c");
+    let writer = backend
+        .split_once("static int64_t hl_backend_report_write(")
+        .and_then(|(_, tail)| tail.split_once("\n}"))
+        .map(|(body, _)| body)
+        .expect("backend report transport");
+    assert!(writer.contains("if (box != NULL) return hl_linux_write(box, STDERR_FILENO"));
+    assert!(writer.contains("write(STDERR_FILENO, record, size)"));
+}
+
 fn build_map_failure_injection(root: &Path) -> std::path::PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fail_shared_mmap.c");
     let output = root.join("fail-shared-mmap.so");
