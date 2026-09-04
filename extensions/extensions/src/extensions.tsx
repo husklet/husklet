@@ -1,8 +1,8 @@
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, ConfirmAction,
-  EmptyState, Entry, Heading, InlineMessage, Row, Scroll, Spinner, Text,
-  type ExtensionAcquisitionStatus, type ExtensionSummary, type WorkspaceApi,
+  EmptyState, Entry, Heading, InlineMessage, Row, Scroll, Spinner, Switch, Text,
+  type ExtensionAcquisitionStatus, type ExtensionCapability, type ExtensionSummary, type WorkspaceApi,
 } from '@husklet/react';
 
 type Change = { value?: unknown };
@@ -11,6 +11,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [reference, setReference] = React.useState('');
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
+  const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
 
@@ -34,20 +35,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       for (let attempt = 0; attempt < 120; attempt += 1) {
         const status = await api.extensions.acquisition(started.job);
         setAcquisition(status);
+        if (status.candidate) setGranted(status.candidate.requested);
         if (status.state === 'ready' || status.state === 'failed' || status.state === 'cancelled') break;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(''); }
   };
-  const install = async () => {
+  const publish = async () => {
     if (!acquisition?.candidate || busy) return;
-    setBusy('install');
+    const updating = Boolean(acquisition.candidate.installed_image_digest);
+    setBusy(updating ? 'update' : 'install');
     try {
-      await api.extensions.install(acquisition.job, acquisition.revision, acquisition.candidate.requested);
+      await api.extensions[updating ? 'update' : 'install'](acquisition.job, acquisition.revision, granted);
       setAcquisition(null); setReference(''); await reload();
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(''); }
+  };
+  const cancel = async () => {
+    if (!acquisition || busy !== 'inspect') return;
+    try { await api.extensions.cancelAcquisition(acquisition.job, acquisition.revision); }
+    catch (cause) { setError(message(cause)); }
   };
   const lifecycle = async (extension: ExtensionSummary, action: 'enable' | 'disable' | 'retry' | 'remove') => {
     setBusy(`${action}:${extension.name}`);
@@ -73,12 +81,26 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             <CardContent gap={1}>
               <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
               <Text label={acquisition.candidate.image_digest} wrap />
-              <Text label={`Requested: ${acquisition.candidate.requested.join(', ') || 'nothing'}`} wrap />
-              <Button label={busy === 'install' ? 'Installing…' : 'Install with requested capabilities'} enabled={!busy} onInvoke={install} />
+              <Text label="Capability access" color="text-dim" />
+              {acquisition.candidate.requested.map((capability) => <Row key={capability} gap={2} align="center">
+                <Switch checked={granted.includes(capability)} onToggle={(event: Change) => setGranted((current) => Boolean(event.value) ? [...new Set([...current, capability])] : current.filter((item) => item !== capability))} />
+                <Text label={capability} />
+              </Row>)}
+              {acquisition.candidate.requested.length === 0 && <Text label="This extension requests no capabilities." />}
+              <Button label={busy === 'update' ? 'Updating…' : busy === 'install' ? 'Installing…' : acquisition.candidate.installed_image_digest ? 'Update extension' : 'Install extension'} enabled={!busy} onInvoke={publish} />
             </CardContent>
           )}
           {acquisition && !acquisition.candidate && (
-            <CardContent><Row gap={2}><Spinner /><Text label={acquisition.state} /></Row></CardContent>
+            <CardContent gap={1}>
+              <Row gap={2}>
+                {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
+                <Text label={acquisition.state} />
+                {!['failed', 'cancelled'].includes(acquisition.state)
+                  ? <Button label="Cancel" enabled={busy === 'inspect'} onInvoke={cancel} />
+                  : <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />}
+              </Row>
+              {acquisition.error && <InlineMessage label={acquisition.error} tone="danger" />}
+            </CardContent>
           )}
         </Card>
         {error && <InlineMessage label={error} tone="danger" />}
