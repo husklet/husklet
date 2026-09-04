@@ -2,7 +2,8 @@ import React from 'react';
 import {
   Button, Card, CardActions, CardContent, CardHeader, Column, Heading, List, ListItemButton,
   Row, Scroll, Text,
-  type ContainerSummary, type ImageSummary, type NetworkSummary, type TabSummary, type VolumeSummary,
+  type ContainerSummary, type ExecutionSummary, type ImageSummary, type NetworkSummary, type TabSummary,
+  type VolumeSummary,
 } from '@husklet/react';
 import { boundedMessage } from './model.js';
 
@@ -31,12 +32,13 @@ export function Navigation({ section, onSelect }: { section: Section; onSelect: 
   </Column>;
 }
 
-export function Overview({ containers, images, volumes, networks, terminals = { data: [], loading: false, error: null }, onOpen }: {
-  containers: Resource<ContainerSummary>; images: Resource<ImageSummary>; volumes: Resource<VolumeSummary>;
+export function Overview({ containers, executions, images, volumes, networks, terminals = { data: [], loading: false, error: null }, onOpen }: {
+  containers: Resource<ContainerSummary>; executions: Resource<ExecutionSummary>; images: Resource<ImageSummary>; volumes: Resource<VolumeSummary>;
   networks: Resource<NetworkSummary>; terminals?: Pick<Resource<TabSummary>, 'data' | 'loading' | 'error'>;
   onOpen: (section: Section) => void;
 }) {
   const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
+  const executionsSummary = resourceSummary(executions, (records) => `${records.filter((item) => item.running).length} running`);
   const imagesSummary = resourceSummary(images, () => 'Available locally');
   const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
   const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
@@ -46,12 +48,14 @@ export function Overview({ containers, images, volumes, networks, terminals = { 
     <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
     <Row gap={2} wrap>
       <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
+      <Summary title="Processes" value="On demand" detail="Across running containers" onOpen={() => onOpen('processes')} />
+      <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
       <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
       <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
       <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
       <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
     </Row>
-    <ErrorText error={containers.error ?? images.error ?? volumes.error ?? networks.error ?? terminals.error} />
+    <ErrorText error={containers.error ?? executions.error ?? images.error ?? volumes.error ?? networks.error ?? terminals.error} />
   </Column></Scroll>;
 }
 
@@ -66,7 +70,7 @@ function Summary({ title: label, value, detail, onOpen }: { title: string; value
   return <Card width={{ minimum: { chars: 18 } }} variant="outline">
     <CardHeader label={label} />
     <CardContent gap={1}><Heading label={value} scale="title" /><Text label={detail} color="text-dim" /></CardContent>
-    <CardActions><Button label="Open" variant="ghost" onInvoke={onOpen} /></CardActions>
+    <CardActions><Button label={`Open ${label}`} variant="ghost" onInvoke={onOpen} /></CardActions>
   </Card>;
 }
 

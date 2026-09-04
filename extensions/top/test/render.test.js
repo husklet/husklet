@@ -27,6 +27,7 @@ test('overview never presents stale inventory counts as current during loading o
   const stage = host();
   stage.render(h(Overview, {
     containers: { data: stale, loading: true, error: null },
+    executions: { data: [], loading: false, error: null },
     images: { data: stale, loading: false, error: new Error('image refresh failed') },
     volumes: { data: [], loading: false, error: null },
     networks: { data: [], loading: false, error: null },
@@ -36,6 +37,12 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Reading inventory…'));
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'Refresh failed'));
+  assert.ok(labelled(stage, 'On demand'));
+  assert.ok(labelled(stage, 'Across running containers'));
+  assert.ok(labelled(stage, '0 running'));
+  for (const resource of ['Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminal tabs']) {
+    assert.ok(labelled(stage, `Open ${resource}`), `${resource} has an unambiguous dashboard action`);
+  }
   assert.equal(labelled(stage, '1 running'), undefined, 'loading cannot retain stale running claims');
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
 });

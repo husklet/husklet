@@ -101,6 +101,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
   const body = section === 'overview'
     ? <Overview
     containers={containers}
+    executions={executions}
     images={images}
     volumes={volumes}
     networks={networks}
