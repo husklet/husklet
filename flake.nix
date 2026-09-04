@@ -294,8 +294,8 @@
       developerRootfsManifestCheckFor = pkgs:
         let
           framework = developerRootfsFor pkgs;
-          armEvaluation = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "arm64") true);
-          x86Evaluation = builtins.tryEval (builtins.deepSeq (framework.forArchitecture "amd64") true);
+          armEvaluation = builtins.tryEval (framework.forArchitecture "arm64").drvPath;
+          x86Evaluation = builtins.tryEval (framework.forArchitecture "amd64").drvPath;
         in
         assert framework.requiredTools == [
           "bin/sh" "usr/bin/git" "usr/bin/gcc" "usr/bin/rg" "usr/bin/make"
@@ -311,7 +311,10 @@
         assert framework.manifests.arm64.scriptsAudited && framework.manifests.amd64.scriptsAudited;
         assert armEvaluation.success && x86Evaluation.success;
         pkgs.runCommand "developer-rootfs-manifest-framework" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-          ${./nix/update-developer-rootfs-apks.py} --self-test
+          mkdir -p source/nix
+          cp ${./nix/update-developer-rootfs-apks.py} source/nix/update-developer-rootfs-apks.py
+          cp ${./nix/developer-rootfs.nix} source/nix/developer-rootfs.nix
+          ${pkgs.python3}/bin/python3 source/nix/update-developer-rootfs-apks.py --self-test
           touch "$out"
         '';
 
