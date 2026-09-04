@@ -11,7 +11,6 @@ members = [
 # Test runs drop scratch directories beside the crates; the member globs would
 # otherwise pick them up and fail every cargo command with a missing manifest.
 exclude = [
-    "src/apps/storybook",
     "src/containers/.cache",
 ]
 # `hl-gui-gtk` is the only member of the default set that needs a system library:

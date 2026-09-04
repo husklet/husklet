@@ -1,11 +1,11 @@
 import React from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Column, Entry, Heading,
+  Accordion, AccordionDetails, AccordionSummary, Button, CardActions, Column, Entry, Heading,
   InlineMessage, Row, Scroll, Select, Spinner, Switch, Text,
   type WorkspaceApi, type WorkspaceConfiguration, type WorkspaceMount,
 } from '@husklet/react';
 
-type Change = { value?: unknown };
+type Change = { value?: unknown; expanded?: boolean };
 type Numbers = { cpus: string; memory: string; scrollback: string; fontSize: string };
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
@@ -15,6 +15,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const [saved, setSaved] = React.useState('');
   const [saving, setSaving] = React.useState(false);
   const [dirty, setDirty] = React.useState(false);
+  const [expanded, setExpanded] = React.useState('runtime');
   const load = React.useCallback(async () => {
     try {
       const current = await api.info();
@@ -52,7 +53,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   return <Scroll grow height="fill"><Column pad={4} gap={3}>
     <Heading label="Workspace" scale="title" />
     <Text label="Settings save without stopping your workspace. Runtime identity changes apply when the workspace or panes reopen." color="text-dim" wrap />
-    <Card variant="outline"><CardHeader label="Runtime" detail={`linux/${configuration.architecture} · ${configuration.name}`} /><CardContent gap={2}>
+    <SettingsGroup name="runtime" label="Runtime" detail={`linux/${configuration.architecture} · ${configuration.name}`} expanded={expanded} onExpand={setExpanded}>
       {field('Workspace image', configuration.image, 'registry/image:tag', (event) => change('image', String(event.value ?? '').trim()))}
       {field('Default shell', configuration.shell ?? '', 'Automatic when empty', (event) => change('shell', nullable(event.value)))}
       {field('CPU limit', numbers.cpus, 'Unlimited when empty', (event) => numeric('cpus', event.value))}
@@ -64,8 +65,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       ]} onChange={(event: Change) => change('execution_lifetime', String(event.value ?? 'persisted') as WorkspaceConfiguration['execution_lifetime'])} /></Column>
       {field('VPN proxy', configuration.vpn ?? '', 'socks5://host:port (optional)', (event) => change('vpn', nullable(event.value)))}
       <Row gap={2} align="center"><Switch checked={configuration.docker_socket} onToggle={(event: Change) => change('docker_socket', Boolean(event.value))} /><Text label="Expose Docker-compatible workspace socket" /></Row>
-    </CardContent></Card>
-    <Card variant="outline"><CardHeader label="Terminal appearance" detail="Applied when panes reconcile with this workspace." /><CardContent gap={2}>
+    </SettingsGroup>
+    <SettingsGroup name="terminal" label="Terminal appearance" detail={terminalSummary(configuration)} expanded={expanded} onExpand={setExpanded}>
       {field('Font family', configuration.terminal.font_family ?? '', 'Host default', (event) => terminal('font_family', nullable(event.value)))}
       {field('Font size', numbers.fontSize, 'Host default', (event) => numeric('fontSize', event.value))}
       {field('Foreground', configuration.terminal.foreground ?? '', '#RRGGBB or host default', (event) => terminal('foreground', nullable(event.value)))}
@@ -74,26 +75,39 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
         { value: '', label: 'Host default' }, { value: 'block', label: 'Block' }, { value: 'ibeam', label: 'I-beam' }, { value: 'underline', label: 'Underline' },
       ]} onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))} /></Column>
       <Row gap={2} align="center"><Switch checked={configuration.terminal.cursor_blink ?? false} onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))} /><Text label="Cursor blink" /></Row>
-    </CardContent></Card>
-    <Environment values={configuration.environment} onChange={(value) => change('environment', value)} />
-    <Mounts values={configuration.mounts} onChange={(value) => change('mounts', value)} />
+    </SettingsGroup>
+    <SettingsGroup name="environment" label="Environment variables" detail={`${configuration.environment.length} configured`} expanded={expanded} onExpand={setExpanded}>
+      <Environment values={configuration.environment} onChange={(value) => change('environment', value)} />
+    </SettingsGroup>
+    <SettingsGroup name="mounts" label="Filesystem mounts" detail={`${configuration.mounts.length} configured`} expanded={expanded} onExpand={setExpanded}>
+      <Mounts values={configuration.mounts} onChange={(value) => change('mounts', value)} />
+    </SettingsGroup>
     {invalid && <InlineMessage label={invalid} tone="danger" />}{error && <InlineMessage label={error} tone="danger" />}{saved && <InlineMessage label={saved} tone="positive" />}
     <CardActions><Button label={saving ? 'Saving…' : 'Save workspace'} enabled={!saving && dirty && !invalid} onInvoke={save} /><Button label="Discard changes" enabled={!saving && dirty} onInvoke={load} /></CardActions>
   </Column></Scroll>;
 }
 
+function SettingsGroup({ name, label, detail, expanded, onExpand, children }: { name: string; label: string; detail: string; expanded: string; onExpand: (value: string) => void; children: React.ReactNode }) {
+  const open = expanded === name;
+  return <Accordion label={label} expanded={open} onExpand={(event: Change) => onExpand(Boolean(event.expanded ?? event.value) ? name : '')}>
+    <AccordionSummary label={label}><Text label={detail} color="text-dim" wrap /></AccordionSummary>
+    <AccordionDetails gap={2}>{children}</AccordionDetails>
+  </Accordion>;
+}
+
 function Environment({ values, onChange }: { values: [string, string][]; onChange: (value: [string, string][]) => void }) {
   const replace = (index: number, part: 0 | 1, value: unknown) => onChange(values.map((row, at) => at === index ? [part === 0 ? String(value ?? '') : row[0], part === 1 ? String(value ?? '') : row[1]] : row));
-  return <Card variant="outline"><CardHeader label="Environment variables" detail={`${values.length} configured`} /><CardContent gap={2}>{values.map((row, index) => <Row key={`${index}:${row[0]}`} gap={1}><Entry value={row[0]} placeholder="NAME" onChange={(event: Change) => replace(index, 0, event.value)} /><Entry value={row[1]} placeholder="value" grow onChange={(event: Change) => replace(index, 1, event.value)} /><Button label={`Remove ${row[0] || `variable ${index + 1}`}`} onInvoke={() => onChange(values.filter((_, at) => at !== index))} /></Row>)}</CardContent><CardActions><Button label="Add variable" onInvoke={() => onChange([...values, ['', '']])} /></CardActions></Card>;
+  return <Column gap={2}>{values.map((row, index) => <Row key={`${index}:${row[0]}`} gap={1}><Entry value={row[0]} placeholder="NAME" onChange={(event: Change) => replace(index, 0, event.value)} /><Entry value={row[1]} placeholder="value" grow onChange={(event: Change) => replace(index, 1, event.value)} /><Button label={`Remove ${row[0] || `variable ${index + 1}`}`} onInvoke={() => onChange(values.filter((_, at) => at !== index))} /></Row>)}<CardActions><Button label="Add variable" onInvoke={() => onChange([...values, ['', '']])} /></CardActions></Column>;
 }
 function Mounts({ values, onChange }: { values: WorkspaceMount[]; onChange: (value: WorkspaceMount[]) => void }) {
   const replace = (index: number, patch: Partial<WorkspaceMount>) => onChange(values.map((row, at) => at === index ? { ...row, ...patch } : row));
-  return <Card variant="outline"><CardHeader label="Filesystem mounts" detail={`${values.length} configured`} /><CardContent gap={2}>{values.map((mount, index) => <Column key={`${index}:${mount.container}`} gap={1}><Row gap={1}><Entry value={mount.host} placeholder="Host path" grow onChange={(event: Change) => replace(index, { host: String(event.value ?? '') })} /><Entry value={mount.container} placeholder="Absolute container path" grow onChange={(event: Change) => replace(index, { container: String(event.value ?? '') })} /></Row><Row gap={2} align="center"><Switch checked={mount.read_only} onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })} /><Text label="Read only" /><Button label={`Remove mount ${index + 1}`} onInvoke={() => onChange(values.filter((_, at) => at !== index))} /></Row></Column>)}</CardContent><CardActions><Button label="Add mount" onInvoke={() => onChange([...values, { host: '', container: '', read_only: true }])} /></CardActions></Card>;
+  return <Column gap={2}>{values.map((mount, index) => <Column key={`${index}:${mount.container}`} gap={1}><Row gap={1}><Entry value={mount.host} placeholder="Host path" grow onChange={(event: Change) => replace(index, { host: String(event.value ?? '') })} /><Entry value={mount.container} placeholder="Absolute container path" grow onChange={(event: Change) => replace(index, { container: String(event.value ?? '') })} /></Row><Row gap={2} align="center"><Switch checked={mount.read_only} onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })} /><Text label="Read only" /><Button label={`Remove mount ${index + 1}`} onInvoke={() => onChange(values.filter((_, at) => at !== index))} /></Row></Column>)}<CardActions><Button label="Add mount" onInvoke={() => onChange([...values, { host: '', container: '', read_only: true }])} /></CardActions></Column>;
 }
 function field(label: string, value: string, placeholder: string, onChange: (event: Change) => void) { return <Column gap={1}><Text label={label} /><Entry value={value} placeholder={placeholder} onChange={onChange} /></Column>; }
 function nullable(value: unknown): string | null { const result = String(value ?? '').trim(); return result || null; }
 function numberDraft(value: WorkspaceConfiguration): Numbers { return { cpus: text(value.cpus), memory: text(value.memory_mb), scrollback: text(value.scrollback), fontSize: text(value.terminal.font_size) }; }
 function text(value: number | null): string { return value === null ? '' : String(value); }
+function terminalSummary(value: WorkspaceConfiguration): string { return `${value.terminal.font_family ?? 'Host font'} · ${value.terminal.font_size ?? 'default size'} · ${value.terminal.cursor_shape ?? 'default cursor'}`; }
 function optionalInteger(value: string, label: string): number | null { if (!value.trim()) return null; const parsed = Number(value); if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive whole number or empty.`); return parsed; }
 function withNumbers(value: WorkspaceConfiguration, numbers: Numbers): WorkspaceConfiguration { return { ...value, cpus: optionalInteger(numbers.cpus, 'CPU limit'), memory_mb: optionalInteger(numbers.memory, 'Memory'), scrollback: optionalInteger(numbers.scrollback, 'Scrollback'), terminal: { ...value.terminal, font_size: optionalInteger(numbers.fontSize, 'Font size') } }; }
 function validate(value: WorkspaceConfiguration) {

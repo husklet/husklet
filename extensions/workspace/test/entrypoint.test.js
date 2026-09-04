@@ -45,7 +45,10 @@ test('the Vite production entrypoint reads and renders Workspace over a Unix soc
     assert.deepEqual(calls.find(({ call }) => call === 'workspace_inspect').with, { name: 'daily' });
     assert.ok(renderedLabels(calls).includes('Workspace'));
     assert.ok(renderedLabels(calls).includes('Environment variables'));
-    peer.write(encode({ channel: 8, kind: KIND.event, payload: change(calls, 'Automatic when empty', '/bin/bash') }));
+    assert.equal(expandedState(calls, 'Terminal appearance'), false);
+    peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'Automatic when empty', '/bin/bash') }));
+    peer.write(encode({ channel: 7, kind: KIND.event, payload: expand(calls, 'Terminal appearance') }));
+    await until(() => expandedState(calls, 'Terminal appearance') === true);
     await until(() => renderedLabels(calls).includes('Save workspace'));
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invoke(calls, 'Save workspace') }));
     await until(() => calls.some(({ call }) => call === 'workspace_update'));
@@ -92,6 +95,25 @@ function invoke(calls, label) {
   const handler = patches.findLast((patch) => patch.SetHandler?.id === node
     && patch.SetHandler.handler?.trigger === 'Invoke').SetHandler;
   return { slot: 'workspace-settings', event: 'Invoke', node, id: handler.handler.id };
+}
+
+function expand(calls, label) {
+  const patches = renderedPatches(calls);
+  const labelled = new Set(patches.filter((patch) => patch.SetProp?.prop === 'Label'
+    && patch.SetProp.value?.Text === label).map((patch) => patch.SetProp.id));
+  const handler = patches.findLast((patch) => labelled.has(patch.SetHandler?.id)
+    && patch.SetHandler.handler?.trigger === 'Expand').SetHandler;
+  return { slot: 'workspace-settings', event: 'Expand', node: handler.id, id: handler.handler.id, expanded: true };
+}
+
+function expandedState(calls, label) {
+  const patches = renderedPatches(calls);
+  const labelled = new Set(patches.filter((patch) => patch.SetProp?.prop === 'Label'
+    && patch.SetProp.value?.Text === label).map((patch) => patch.SetProp.id));
+  const handler = patches.findLast((patch) => labelled.has(patch.SetHandler?.id)
+    && patch.SetHandler.handler?.trigger === 'Expand').SetHandler;
+  return patches.findLast((patch) => patch.SetProp?.id === handler.id
+    && patch.SetProp.prop === 'Expanded').SetProp.value.Flag;
 }
 
 function renderedPatches(calls) {
