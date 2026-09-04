@@ -307,6 +307,22 @@ fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
 }
 
 #[test]
+fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/alu_bench.c");
+    assert!(fixture.contains(".rept 12"), "{fixture}");
+    for instruction in [
+        "add x1,x1,x2,lsl #1",
+        "eor x3,x3,x1,ror #7",
+        "and x3,x3,#0x00ffffffffffffff",
+        "orr x4,x4,x3",
+        "subs x10,x10,#1",
+        "cbnz x10,1b",
+    ] {
+        assert!(fixture.contains(instruction), "benchmark omitted {instruction}");
+    }
+}
+
+#[test]
 fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

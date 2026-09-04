@@ -16,3 +16,13 @@ cases:
       exit: 42
       stdout_empty: true
       stderr: [" r0=*", " fall_total=*"]
+  - id: runtime/aarch64-dbt/alu-bench
+    status: active
+    compat: { class: smoke }
+    build: { source: source/alu_bench.c, output: alu-bench }
+    artifact: { destination: /opt/husklet/alu-bench }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      stderr: [" r0=*", " fall_total=*"]
