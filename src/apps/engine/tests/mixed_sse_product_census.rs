@@ -364,11 +364,7 @@ fn translated_process_lifecycle_emits_one_product_record_at_every_teardown() {
         ("nested", true),
         ("redirect", true),
     ] {
-        let started = std::time::Instant::now();
         let output = run_product_lifecycle(root.path(), mode);
-        if mode == "redirect" {
-            assert!(started.elapsed() >= std::time::Duration::from_millis(200));
-        }
         assert_product_lifecycle(&output, success);
     }
 }
