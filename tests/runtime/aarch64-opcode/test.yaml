@@ -17,6 +17,7 @@ cases:
     expect:
       exit: 0
       stdout_empty: true
+      stderr: [" r0=*", " fall_total=*"]
       diagnostics:
         - { counter: body_retired, equals: 12 }
         - { counter: major0, equals: 0 }
