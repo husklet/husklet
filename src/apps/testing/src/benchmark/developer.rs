@@ -4,7 +4,11 @@
 //! belong in this runner until it owns a production checkpoint controller: phase markers alone would be
 //! a fake boundary that proves no process state was captured.
 
-use super::{evidence::Measurement, identity, perf::{Counters, parse as parse_perf}};
+use super::{
+    evidence::Measurement,
+    identity,
+    perf::{Counters, parse as parse_perf},
+};
 use crate::suite::Error;
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -244,6 +248,13 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Error> {
+    if !cfg!(target_os = "linux") || !cfg!(any(target_arch = "aarch64", target_arch = "x86_64")) {
+        return Err("developer benchmark requires an AArch64 or x86-64 Linux host".into());
+    }
+    let perf = Command::new("perf").arg("--version").output();
+    if !perf.is_ok_and(|output| output.status.success()) {
+        return Err("developer benchmark requires a working perf executable".into());
+    }
     let translated = arm_artifacts(options, Mode::Translated);
     if !options.host_manifest.is_file()
         || !options.rootfs.is_dir()
@@ -252,7 +263,10 @@ fn validate_options(options: &Options) -> Result<(), Error> {
         || !translated.engine.is_file()
         || !options.native_library.is_file()
     {
-        return Err("host manifest, baseline/translated rootfs, worker, or native library has the wrong type".into());
+        return Err(
+            "host manifest, baseline/translated rootfs, worker, or native library has the wrong type"
+                .into(),
+        );
     }
     if options.guest_isa != host_isa().guest() {
         return Err("native and supervised controls require a baseline rootfs matching the host ISA".into());
@@ -333,7 +347,14 @@ const STAGE_COMMAND: &str = "cd /work && git init -q && git config user.email be
 fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
     let artifacts = arm_artifacts(options, mode);
     if artifacts.guest_isa == host_isa().guest() {
-        return ["chroot".into(), root.as_os_str().to_owned(), "/bin/sh".into(), "-c".into(), STAGE_COMMAND.into()].into();
+        return [
+            "chroot".into(),
+            root.as_os_str().to_owned(),
+            "/bin/sh".into(),
+            "-c".into(),
+            STAGE_COMMAND.into(),
+        ]
+        .into();
     }
     vec![
         artifacts.engine.as_os_str().to_owned(),
