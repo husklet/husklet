@@ -229,7 +229,7 @@ let
         # unnecessary before scriptsAudited may become true. Disabling them makes
         # this transaction host-independent for the foreign-ISA root.
         $apk --root "$out" --arch ${apkArchitecture} --usermode --no-network --no-cache \
-          --scripts=false --commit-hooks=false \
+          --no-scripts --no-commit-hooks \
           --repositories-file "$PWD/repositories" add \
           build-base=0.5-r4 git=2.54.0-r0 ripgrep=15.1.0-r0
         ${lib.concatMapStringsSep "\n" (apk: ''
