@@ -23,7 +23,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v7";
+const SCHEMA: &str = "husklet-developer-benchmark-v9";
 const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
@@ -89,6 +89,9 @@ pub(crate) struct Options {
     /// Separate cache-safe campaign; the default cold schedule is unchanged.
     #[arg(long)]
     warm_translation_cache: bool,
+    /// Collect translated JCC mechanism counts. Perturbs timing and is not acceptance-comparable.
+    #[arg(long)]
+    translated_route_observe: bool,
 }
 
 fn parse_samples(value: &str) -> Result<u32, String> {
@@ -178,6 +181,7 @@ struct Identity {
     samples: u32,
     #[serde(default)]
     warm_translation_cache: bool,
+    translated_route_observe: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -197,6 +201,7 @@ struct Row {
     semantic_sha256: String,
     portable_semantic_sha256: String,
     backend_receipt: String,
+    translated_route_observe: bool,
 }
 
 
@@ -219,6 +224,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         workload_recipe: workload_recipe_identity(),
         samples: options.samples,
         warm_translation_cache: options.warm_translation_cache,
+        translated_route_observe: options.translated_route_observe,
     };
     let ledger_path = options.results.join("ledger.jsonl");
     if options.resume {
@@ -683,7 +689,8 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         .into_inner()?;
     let phase_ns = validate_phases(&marks, elapsed)?;
     let stderr = String::from_utf8(stderr)?;
-    let receipt = backend_receipt(backend, guest_isa, &stderr, &measured, root)?;
+    let receipt = backend_receipt(backend, guest_isa, &stderr, &measured, root,
+                                  options.translated_route_observe && mode == Mode::Translated)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
     let stderr_sha256 = hex(Sha256::digest(stderr.as_bytes()));
     atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
@@ -704,6 +711,7 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         semantic_sha256: semantic_sha256(&output),
         portable_semantic_sha256: portable_semantic_sha256(&output),
         backend_receipt: receipt,
+        translated_route_observe: options.translated_route_observe,
     })
 }
 
@@ -738,6 +746,9 @@ fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, argu
                 }
                 Mode::Translated => {
                     measured.extend(["--native-supervised=off".into(), "--translit".into()]);
+                    if options.translated_route_observe && !options.warm_translation_cache {
+                        measured.push("--translation-cache-observe".into());
+                    }
                 }
                 Mode::Native => unreachable!(),
             }
@@ -774,6 +785,7 @@ fn measure_null(options: &Options, root: &Path, mode: Mode, sample: u32, positio
         &String::from_utf8(output.stderr)?,
         &measured,
         root,
+        options.translated_route_observe && mode == Mode::Translated,
     )?;
     let counters = parse_perf(&fs::read_to_string(&path)?)?;
     fs::remove_file(path)?;
@@ -806,6 +818,7 @@ fn backend_receipt(
     stderr: &str,
     measured: &[OsString],
     root: &Path,
+    require_jcc_route: bool,
 ) -> Result<String, Error> {
     let evidence: String = match backend {
         ExecutionBackend::HostNative => {
@@ -854,10 +867,47 @@ fn backend_receipt(
             backend_shape_receipt(stderr).expect("typed parser established one backend-shape record")
         }
     };
+    let route = if require_jcc_route {
+        format!(" {}", x86_jcc_route_receipt(stderr)?)
+    } else { String::new() };
     Ok(format!(
-        "guest_isa={} backend={backend:?} {evidence}",
+        "guest_isa={} backend={backend:?} {evidence}{route}",
         guest_isa.as_str()
     ))
+}
+
+fn x86_jcc_route_receipt(stderr: &str) -> Result<String, Error> {
+    let records = stderr.lines()
+        .filter(|line| line.starts_with("[diag] x86-jcc-route version=1 "))
+        .collect::<Vec<_>>();
+    if records.len() != 1 {
+        return Err(format!("translated route observation requires exactly one x86-jcc-route v1 record; observed {}", records.len()).into());
+    }
+    let mut fields = std::collections::BTreeMap::new();
+    for field in records[0].split_ascii_whitespace().skip(3) {
+        let (name, value) = field.split_once('=').ok_or("malformed x86-jcc-route field")?;
+        let value = value.parse::<u64>()
+            .map_err(|_| format!("x86-jcc-route field {name} is not an unsigned integer"))?;
+        if fields.insert(name, value).is_some() {
+            return Err("x86-jcc-route record contains a duplicate field".into());
+        }
+    }
+    for name in ["attempts", "hit", "empty", "collision", "state_refusal", "irq",
+                 "known_taken", "known_fallthrough"] {
+        if !fields.contains_key(name) {
+            return Err(format!("x86-jcc-route record omits {name}").into());
+        }
+    }
+    if fields.len() != 8 {
+        return Err("x86-jcc-route record contains an unknown field".into());
+    }
+    let classified = ["hit", "empty", "collision", "state_refusal", "irq"]
+        .into_iter().try_fold(0_u64, |sum, name| sum.checked_add(fields[name]))
+        .ok_or("x86-jcc-route classified-count sum overflowed")?;
+    if fields["attempts"] != classified {
+        return Err(format!("x86-jcc-route does not conserve attempts: {} != {classified}", fields["attempts"]).into());
+    }
+    Ok(records[0].to_owned())
 }
 
 fn validate_backend_shape(
@@ -963,7 +1013,10 @@ fn validate_outputs(rows: &[Row]) -> Result<(), Error> {
 }
 
 fn publish_report(directory: &Path, rows: &[Row]) -> Result<(), Error> {
-    let mut text = String::from(
+    let mut text = if rows.iter().any(|row| row.translated_route_observe) {
+        String::from("# timing=perturbed mechanism-count-mode; not acceptance-comparable\n")
+    } else { String::new() };
+    text.push_str(
         "sample\tposition\tmode\thost_isa\tguest_isa\tbackend\twall_ns\tduration_ns\ttask_clock_ms\tinstructions\tcycles\tpage_faults\tnull_duration_ns\tnull_task_clock_ms\tnull_instructions\tnull_cycles\tnull_page_faults\tphase\tphase_ns\n",
     );
     for row in rows {
@@ -1107,6 +1160,7 @@ mod tests {
             lock_timeout: 900,
             max_load: 1.0,
             warm_translation_cache: false,
+            translated_route_observe: false,
         }
     }
 
@@ -1127,13 +1181,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_identity_cannot_resume_as_v7() {
+    fn legacy_identity_cannot_resume_as_v9() {
         let error = serde_json::from_str::<Identity>(r#"{"schema":"husklet-developer-benchmark-v3"}"#)
             .err()
             .unwrap()
             .to_string();
         assert!(error.contains("host_manifest"), "{error}");
-        assert_eq!(SCHEMA, "husklet-developer-benchmark-v7");
+        assert_eq!(SCHEMA, "husklet-developer-benchmark-v9");
     }
 
     #[test]
@@ -1155,7 +1209,7 @@ mod tests {
 
     #[test]
     fn backend_receipts_cannot_be_vacuous() {
-        let receipt = |backend, guest, stderr| backend_receipt(backend, guest, stderr, &[], Path::new("/root"));
+        let receipt = |backend, guest, stderr| backend_receipt(backend, guest, stderr, &[], Path::new("/root"), false);
         assert_eq!(
             receipt(
                 ExecutionBackend::NativeSupervised,
@@ -1201,13 +1255,13 @@ mod tests {
     fn host_native_receipt_binds_the_exact_chroot_argv_and_root() {
         let root = Path::new("/results/root-2-5");
         let argv = ["chroot".into(), root.as_os_str().to_owned(), "/bin/sh".into()];
-        let receipt = backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &argv, root).unwrap();
+        let receipt = backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &argv, root, false).unwrap();
         assert!(receipt.contains("backend=HostNative host-native argv_sha256="), "{receipt}");
         assert!(receipt.contains(" root_path_sha256="), "{receipt}");
         let wrong = ["env".into(), root.as_os_str().to_owned(), "/bin/sh".into()];
-        assert!(backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &wrong, root).is_err());
+        assert!(backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &wrong, root, false).is_err());
         assert!(backend_receipt(ExecutionBackend::HostNative, GuestIsa::X86_64, "", &argv,
-                                Path::new("/results/other-root")).is_err());
+                                Path::new("/results/other-root"), false).is_err());
     }
 
     #[test]
@@ -1306,11 +1360,42 @@ mod tests {
         assert_eq!(argv[0], "/workers/hl-aarch64");
         assert!(argv.windows(2).any(|pair| pair == ["--guest-isa", "aarch64"]));
         assert!(argv.windows(2).any(|pair| pair == ["--rootfs", "/cloned-arm-root"]));
+        assert!(!argv.contains(&"--translation-cache-observe"));
 
         let supervised = arm_artifacts(&options, Mode::Supervised);
         assert_eq!(supervised.rootfs, Path::new("/roots/x86"));
         assert_eq!(supervised.engine, Path::new("/workers/hl-x86_64"));
         assert_eq!(supervised.guest_isa, GuestIsa::X86_64);
+    }
+
+    #[test]
+    fn translated_route_observation_changes_only_the_translated_argv() {
+        let mut options = cross_isa_options();
+        options.translated_route_observe = true;
+        for mode in [Mode::Native, Mode::Supervised, Mode::Translated] {
+            let argv = measured_argv(&options, Path::new("/root"), mode, "bin/true", &[]);
+            let count = argv.iter().filter(|value| *value == "--translation-cache-observe").count();
+            assert_eq!(count, usize::from(mode == Mode::Translated), "{mode:?}");
+        }
+        assert!(!stage_argv(&options, Path::new("/root"), Mode::Translated)
+            .contains(&OsString::from("--translation-cache-observe")));
+        options.warm_translation_cache = true;
+        let argv = measured_argv(&options, Path::new("/root"), Mode::Translated, "bin/true", &[]);
+        assert_eq!(
+            argv.iter().filter(|value| *value == "--translation-cache-observe").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn translated_route_receipt_is_unique_complete_and_conserved() {
+        let valid = "[diag] x86-jcc-route version=1 attempts=6 hit=1 empty=2 collision=1 state_refusal=1 irq=1 known_taken=7 known_fallthrough=9";
+        assert_eq!(x86_jcc_route_receipt(valid).unwrap(), valid);
+        assert!(x86_jcc_route_receipt("").is_err());
+        assert!(x86_jcc_route_receipt(&format!("{valid}\n{valid}")).is_err());
+        assert!(x86_jcc_route_receipt("[diag] x86-jcc-route version=1 attempts=5 hit=1 empty=2 collision=1 state_refusal=1 irq=1 known_taken=7 known_fallthrough=9").is_err());
+        assert!(x86_jcc_route_receipt("[diag] x86-jcc-route version=1 attempts=6 hit=1 empty=2 collision=1 state_refusal=1 irq=1 known_taken=7").is_err());
+        assert!(x86_jcc_route_receipt("[diag] x86-jcc-route version=1 attempts=6 hit=1 empty=2 collision=1 state_refusal=1 irq=1 known_taken=7 known_fallthrough=9 extra=0").is_err());
     }
 
     #[test]
@@ -1521,6 +1606,7 @@ mod tests {
             semantic_sha256: output.into(),
             portable_semantic_sha256: portable.into(),
             backend_receipt: String::new(),
+            translated_route_observe: false,
         };
         assert!(validate_outputs(&[
             row(Mode::Native, GuestIsa::X86_64, "same", "portable"),
@@ -1593,6 +1679,7 @@ mod tests {
             semantic_sha256: semantic_sha256(output),
             portable_semantic_sha256: portable_semantic_sha256(output),
             backend_receipt: "host-native".into(),
+            translated_route_observe: false,
         };
         let ledger = directory.path().join("ledger.jsonl");
         append(&ledger, &row).unwrap();
