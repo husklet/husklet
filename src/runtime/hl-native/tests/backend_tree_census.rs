@@ -209,7 +209,7 @@ fn aarch64_x86_dbt_records_one_typed_exit_per_generated_return() {
         .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void block_return"))
         .map(|(body, _)| body)
         .expect("AArch64 x86 DBT run_block body");
-    let publication = "hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);";
+    let publication = "hl_a64_x86_record_translated_exit(exit_kind);";
     assert_eq!(body.matches(publication).count(), 1, "{body}");
     let generated = body
         .split_once("} else {")
