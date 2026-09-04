@@ -310,7 +310,8 @@
         assert !framework.manifests.arm64.closureComplete && !framework.manifests.amd64.closureComplete;
         assert !framework.manifests.arm64.scriptsAudited && !framework.manifests.amd64.scriptsAudited;
         assert !armRefusal.success && !x86Refusal.success;
-        pkgs.runCommand "developer-rootfs-manifest-framework" { } ''
+        pkgs.runCommand "developer-rootfs-manifest-framework" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+          ${./nix/update-developer-rootfs-apks.py} --self-test
           touch "$out"
         '';
 

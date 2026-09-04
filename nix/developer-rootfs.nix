@@ -2,6 +2,12 @@
 
 let
   lib = pkgs.lib;
+  # APK_HASHES_START -- updated only by nix/update-developer-rootfs-apks.py output.
+  payloadHashes = {
+    arm64 = { };
+    amd64 = { };
+  };
+  # APK_HASHES_END
   requiredTools = [
     "bin/sh"
     "usr/bin/git"
@@ -60,8 +66,7 @@ let
     repository = builtins.elemAt entry 2;
     expectedSize = builtins.elemAt entry (if architecture == "amd64" then 3 else 4);
     url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/${builtins.elemAt entry 2}/${if architecture == "amd64" then "x86_64" else "aarch64"}/${builtins.elemAt entry 0}-${builtins.elemAt entry 1}.apk";
-    # Pending until the corresponding APK payload is fetched and hashed.
-    sha256 = null;
+    sha256 = payloadHashes.${architecture}.${builtins.elemAt entry 0} or null;
   };
   manifests = {
     arm64 = {
