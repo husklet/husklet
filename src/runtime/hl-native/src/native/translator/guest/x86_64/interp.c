@@ -2030,6 +2030,28 @@ static int x64_pc_exec_publication_authorized(int checkpoint_restore) {
     return !g_x64_pc_forked && g_x64_pc_exec_identity_authorized && !g_x64_pc_exec_poisoned && !checkpoint_restore;
 }
 
+enum x64_pc_save_refusal {
+    X64_PC_SAVE_DISABLED = 1u << 0, X64_PC_SAVE_PROFILE = 1u << 1,
+    X64_PC_SAVE_FORKED = 1u << 2, X64_PC_SAVE_IDENTITY_UNAUTHORIZED = 1u << 3,
+    X64_PC_SAVE_POISONED = 1u << 4, X64_PC_SAVE_RESTORE = 1u << 5,
+    X64_PC_SAVE_EMPTY_IDENTITY = 1u << 6, X64_PC_SAVE_EMPTY_ARENA = 1u << 7,
+    X64_PC_SAVE_FORCE_BASE = 1u << 8, X64_PC_SAVE_LIBRARY = 1u << 9,
+    X64_PC_SAVE_NO_IMAGE = 1u << 10, X64_PC_SAVE_NO_BUS = 1u << 11,
+};
+
+static uint32_t x64_pc_save_refusal_reasons(int enabled, int profile, int forked, int identity_authorized,
+                                             int poisoned, int checkpoint_restore, int empty_identity,
+                                             int empty_arena, int force_base_failed, int library_unsupported,
+                                             int no_image, int no_bus) {
+    return (!enabled ? X64_PC_SAVE_DISABLED : 0) | (profile ? X64_PC_SAVE_PROFILE : 0) |
+           (forked ? X64_PC_SAVE_FORKED : 0) |
+           (!identity_authorized ? X64_PC_SAVE_IDENTITY_UNAUTHORIZED : 0) |
+           (poisoned ? X64_PC_SAVE_POISONED : 0) | (checkpoint_restore ? X64_PC_SAVE_RESTORE : 0) |
+           (empty_identity ? X64_PC_SAVE_EMPTY_IDENTITY : 0) | (empty_arena ? X64_PC_SAVE_EMPTY_ARENA : 0) |
+           (force_base_failed ? X64_PC_SAVE_FORCE_BASE : 0) | (library_unsupported ? X64_PC_SAVE_LIBRARY : 0) |
+           (no_image ? X64_PC_SAVE_NO_IMAGE : 0) | (no_bus ? X64_PC_SAVE_NO_BUS : 0);
+}
+
 static void x64_pc_exec_epoch_authorize(int identity_authorized) {
     g_x64_pc_forked = 0;
     g_x64_pc_exec_identity_authorized = identity_authorized;
@@ -3179,15 +3201,17 @@ static void pcache_save(void) {
     if (!X64_PC_FIXED_IMAGE_SUPPORTED) return;
     if (g_x64_pc_control_loaded_empty)
         fprintf(stderr, "[pcache-control] loaded-policy=save\n");
-    if (!g_pcache || g_prof || !x64_pc_exec_publication_authorized(hl_option_get("HL_RESTORE") != NULL) ||
-        hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache || g_force_base_failed ||
-        g_x64_pc_library_unsupported || g_x64_pc_image_lo == 0 ||
-        !jit_guest_bus_active()) {
+    int checkpoint_restore = hl_option_get("HL_RESTORE") != NULL;
+    uint32_t refusal = x64_pc_save_refusal_reasons(
+        g_pcache, g_prof, g_x64_pc_forked, g_x64_pc_exec_identity_authorized, g_x64_pc_exec_poisoned,
+        checkpoint_restore, hl_identity_digest_empty(&g_pc_binid), g_cp == g_cache, g_force_base_failed,
+        g_x64_pc_library_unsupported, g_x64_pc_image_lo == 0, !jit_guest_bus_active());
+    if (refusal != 0) {
         if (g_coldprof)
             fprintf(stderr,
-                    "[pcache] save refused unsupported=%d image=%llx interp=%llx "
+                    "[pcache] save refused reasons=0x%x unsupported=%d image=%llx interp=%llx "
                     "post_disable_census_sites=%llu\n",
-                    g_x64_pc_library_unsupported, (unsigned long long)g_x64_pc_image_lo,
+                    refusal, g_x64_pc_library_unsupported, (unsigned long long)g_x64_pc_image_lo,
                     (unsigned long long)g_x64_pc_interp_lo,
                     (unsigned long long)translit_pcache_census_emitted_while_disabled);
         return;
@@ -3809,6 +3833,9 @@ static int x64_pc_nested_exec_policy_test(void) {
     hl_identity_digest repeated = pcache_exec_authorized_id(repeated_content, (hl_identity_digest){0}, 0, 1, "tool");
     if (!hl_identity_digest_equal(&keys[1], &repeated)) return 3;
     if (x64_pc_launch_only_disables_nested(1, 1) || !x64_pc_launch_only_disables_nested(1, 0)) return 4;
+    uint32_t every_refusal = x64_pc_save_refusal_reasons(0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1);
+    if (every_refusal != (1u << 12) - 1 || x64_pc_save_refusal_reasons(1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0))
+        return 5;
 
     int saved_forked = g_x64_pc_forked;
     int saved_authorized = g_x64_pc_exec_identity_authorized;
@@ -3826,7 +3853,7 @@ static int x64_pc_nested_exec_policy_test(void) {
     g_x64_pc_forked = saved_forked;
     g_x64_pc_exec_identity_authorized = saved_authorized;
     g_x64_pc_exec_poisoned = saved_poisoned;
-    return exact ? 0 : 5;
+    return exact ? 0 : 6;
 }
 #endif
 
