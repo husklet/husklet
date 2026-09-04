@@ -10,7 +10,7 @@ import { component, tags } from './catalogue.js';
 
 type StoryValue = string | number | boolean | { value: string; label: string }[];
 export type StoryChild = { tag: string; props: Record<string, StoryValue> };
-export type StoryDefaults = { props: Record<string, StoryValue>; children: StoryChild[] };
+export type StoryDefaults = { props: Record<string, unknown>; children: StoryChild[] };
 
 /** Children a container opens with, so an empty box is never shown as one. */
 const SAMPLE: StoryChild[] = [

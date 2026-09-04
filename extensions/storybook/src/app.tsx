@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 // The playground: pick a component on the left, see it in the middle, change
 // its properties on the right.
 //
@@ -6,6 +5,7 @@
 // spelled out in this file.
 
 import React from 'react';
+import type { Key, ReactNode } from 'react';
 import {
   Button,
   Column,
@@ -23,18 +23,19 @@ import {
   Switch,
   Text,
   components,
+  type Report,
 } from '@husklet/react';
 
-import { component, grouped, notes } from './catalogue.js';
-import { OPENING, defaults, spaced } from './defaults.js';
-import { amountOf, lengthValue, modeOf, rows } from './editors.js';
-import { LargeDataTableStory } from './large-table.js';
+import { component, grouped, notes, type Family, type Tag } from './catalogue.js';
+import { OPENING, defaults, spaced, type StoryChild, type StoryDefaults } from './defaults.js';
+import { amountOf, lengthValue, modeOf, rows, type ControlRow } from './editors.js';
+import { LargeDataTableStory, LargeRecordSource } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
 import { KEYBOARD_STORY, KeyboardAccessibilityStory } from './keyboard-accessibility.js';
 import { STREAMING_LOG_STORY, StreamingLogStory } from './streaming-log.js';
-import { EVENT_STREAM_STORY, EventStreamStory } from './event-stream.js';
-import { KEY_VALUE_STORY, KeyValueInspectorStory } from './key-value-inspector.js';
+import { EVENT_STREAM_STORY, EventStreamStory, TimelineSource } from './event-stream.js';
+import { KEY_VALUE_STORY, KeyValueInspectorStory, KeyValueSource } from './key-value-inspector.js';
 import { MARKDOWN_STORY, MarkdownReviewStory } from './markdown-review.js';
 import { NAVIGATION_STORY, NavigationDialogsStory } from './navigation-dialogs.js';
 import { DIFF_STORY, DiffReviewStory } from './diff-review.js';
@@ -78,21 +79,34 @@ export const FLOW_STORIES = Object.freeze([
   MARKDOWN_STORY, FORM_STORY, DIFF_STORY, NAVIGATION_STORY,
 ]);
 
+type StoryFamily = Family & { tags: Tag[] };
+type Change = (name: string, value: unknown) => void;
+type PlaygroundProps = {
+  largeSource?: LargeRecordSource;
+  timelineSource?: TimelineSource;
+  keyValueSource?: KeyValueSource;
+  fileSource?: unknown;
+  initialStory?: string;
+};
+type SearchResult = { kind: 'flow' | 'component'; name: string; detail: string; family: string | null };
+type Interaction = { sequence: number; trigger: string; detail: string };
+
 /** The whole playground. */
-export function Playground({ largeSource, timelineSource, keyValueSource, fileSource, initialStory = OPENING } = {}) {
+export function Playground({ largeSource, timelineSource, keyValueSource, fileSource, initialStory = OPENING }: PlaygroundProps = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
   const [activeFamily, setActiveFamily] = useState(() =>
     families.find((family) => family.tags.some((tag) => tag.name === initialStory))?.name
       ?? families.find((family) => family.tags.some((tag) => tag.name === OPENING))?.name
       ?? families[0]?.name);
-  const [edited, setEdited] = useState(() => new Map());
+  const [edited, setEdited] = useState(() => new Map<string, StoryDefaults>());
 
   const flow = FLOW_STORIES.includes(selected);
   const opened = flow ? null : edited.get(selected) ?? defaults(selected);
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
-  const change = (name, value) => {
+  const change: Change = (name, value) => {
+    if (opened === null) return;
     const next = new Map(edited);
     next.set(selected, { ...opened, props: { ...opened.props, [name]: value } });
     setEdited(next);
@@ -130,7 +144,10 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
 }
 
 /** Every component, under the family it belongs to. */
-export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }) {
+export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }: {
+  families: StoryFamily[]; selected: string; activeFamily?: string;
+  onFamily: (family: string) => void; onSelect: (story: string) => void;
+}) {
   const [search, setSearch] = useState('');
   const family = families.find((candidate) => candidate.name === activeFamily) ?? families[0];
   const query = search.trim().toLocaleLowerCase();
@@ -154,7 +171,7 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
                 key={`${result.kind}:${result.name}`}
                 label={result.name}
                 tooltip={result.detail}
-                selected={selected === result.name}
+                variant={selected === result.name ? 'filled' : 'ghost'}
                 onInvoke={() => {
                   if (result.family) onFamily(result.family);
                   onSelect(result.name);
@@ -175,7 +192,7 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
         ...FLOW_STORIES.map((story) => <ListItemButton
           key={story}
           label={story}
-          selected={selected === story}
+          variant={selected === story ? 'filled' : 'ghost'}
           onInvoke={() => onSelect(story)} />),
         <ListSubheader
           key={'components'}
@@ -190,7 +207,7 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
         ...family.tags.map((tag) => <ListItemButton
           key={tag.name}
           label={tag.name}
-          selected={tag.name === selected}
+          variant={tag.name === selected ? 'filled' : 'ghost'}
           onInvoke={() => onSelect(tag.name)} />),
           ]}
       </Column>
@@ -199,26 +216,31 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
 }
 
 /** A bounded global navigation projection; no query materializes the catalogue. */
-export function searchResults(families, query) {
+export function searchResults(families: StoryFamily[], query: unknown): SearchResult[] {
   const normalized = String(query ?? '').trim().toLocaleLowerCase();
   if (normalized.length === 0) return [];
   const flows = FLOW_STORIES
     .filter((name) => name.toLocaleLowerCase().includes(normalized))
-    .map((name) => ({ kind: 'flow', name, detail: 'End-user flow', family: null }));
+    .map((name): SearchResult => ({ kind: 'flow', name, detail: 'End-user flow', family: null }));
   const components = families.flatMap((family) => family.tags
     .filter((tag) => tag.name.toLocaleLowerCase().includes(normalized))
-    .map((tag) => ({ kind: 'component', name: tag.name, detail: family.label, family: family.name })));
+    .map((tag): SearchResult => ({ kind: 'component', name: tag.name, detail: family.label, family: family.name })));
   return [...flows, ...components].slice(0, SEARCH_RESULT_LIMIT);
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers = [] }) {
-  const [interactions, setInteractions] = useState([]);
+export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers = [] }: PlaygroundProps & {
+  name: string; opened: StoryDefaults | null; triggers?: string[];
+}) {
+  const [interactions, setInteractions] = useState<Interaction[]>([]);
   const sequence = useRef(0);
   const handlers = interactionProps(triggers, (trigger, event) => {
     const interaction = { sequence: ++sequence.current, trigger, detail: interactionDetail(event) };
     setInteractions((current) => [...current, interaction].slice(-INTERACTION_HISTORY));
   });
+  // The final branch below is reachable only for catalogue components; flow
+  // stories are exhausted by the branches above and intentionally have no defaults.
+  const instance = opened as StoryDefaults;
   return (
     <Column grow={true} gap={2} pad={4}>
       <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />
@@ -293,7 +315,7 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
           ? <NavigationDialogsStory />
           : name === 'DataTable' && largeSource
           ? <LargeDataTableStory source={largeSource} />
-          : nativeComponent(name, { ...present(opened.props), ...handlers }, opened.children.map(child))}
+          : nativeComponent(name, { ...present(instance.props), ...handlers }, instance.children.map(child))}
       </Section>
       {triggers.length === 0
         ? []
@@ -333,23 +355,24 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
 }
 
 /** Real handlers for every interaction the selected component declares. */
-export function interactionProps(triggers, receive) {
-  return Object.fromEntries(triggers.map((trigger) => [`on${trigger}`, (event) => receive(trigger, event)]));
+export function interactionProps(triggers: string[], receive: (trigger: string, event: Report) => void): Record<string, (event: Report) => void> {
+  return Object.fromEntries(triggers.map((trigger) => [`on${trigger}`, (event: Report) => receive(trigger, event)]));
 }
 
 /** A short, finite payload description suitable for the visible event console. */
-export function interactionDetail(event) {
+export function interactionDetail(event: unknown): string {
   if (event === null || typeof event !== 'object') return '';
+  const report = event as Record<string, unknown>;
   const fields = ['value', 'rows', 'key', 'pressed', 'focused', 'phase', 'x', 'y', 'button'];
   const detail = fields
-    .filter((field) => event[field] !== undefined)
-    .map((field) => `${field}=${JSON.stringify(boundedValue(event[field]))}`)
+    .filter((field) => report[field] !== undefined)
+    .map((field) => `${field}=${JSON.stringify(boundedValue(report[field]))}`)
     .join(' ');
   return detail.slice(0, 240);
 }
 
 /** Bound payload work as well as its visible result: events are extension-controlled input. */
-function boundedValue(value, depth = 0) {
+function boundedValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 79)}…` : value;
   if (value === null || typeof value !== 'object') return value;
   if (depth >= 2) return '…';
@@ -357,12 +380,13 @@ function boundedValue(value, depth = 0) {
     const shown = value.slice(0, 3).map((entry) => boundedValue(entry, depth + 1));
     return value.length > shown.length ? [...shown, `… ${value.length - shown.length} more`] : shown;
   }
-  const shown = {};
+  const shown: Record<string, unknown> = {};
+  const record = value as Record<string, unknown>;
   let count = 0;
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) continue;
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
     count += 1;
-    if (count <= 4) shown[key] = boundedValue(value[key], depth + 1);
+    if (count <= 4) shown[key] = boundedValue(record[key], depth + 1);
     if (count === 5) {
       shown['…'] = 'more';
       break;
@@ -372,24 +396,28 @@ function boundedValue(value, depth = 0) {
 }
 
 /** One default child, as an element. */
-function child(descriptor, index) {
+function child(descriptor: StoryChild, index: number): ReactNode {
   return nativeComponent(descriptor.tag, { key: `child-${index}`, ...descriptor.props });
 }
 
-function nativeComponent(name, { key, ...props }, children = []) {
+function nativeComponent(name: string, supplied: Record<string, unknown>, children: ReactNode[] = []): ReactNode {
+  const { key, ...props } = supplied;
   const Component = components[name];
-  return <Component key={key} {...props}>{children}</Component>;
+  return React.createElement(Component, { key: key as Key | null | undefined, ...props }, children);
 }
 
 /** The props as the component takes them; an unset property is simply absent. */
-export function present(props) {
+export function present(props: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(props).filter(([, value]) => value !== undefined));
 }
 
 /** One row per property, grouped, with the control its editor hint asks for. */
-export function Inspector({ name, properties, triggers, props, onChange }) {
-  const groups = [];
-  let current = null;
+export function Inspector({ name, properties, triggers, props, onChange }: {
+  name: string; properties: ControlRow[]; triggers: string[]; props: Record<string, unknown>; onChange: Change;
+}) {
+  type Group = { key: string; group: string; editable: boolean; rows: ControlRow[] };
+  const groups: Group[] = [];
+  let current: Group | null = null;
   for (const row of properties) {
     const key = `${row.editable ? 'set' : 'read'}:${row.group}`;
     if (current === null || current.key !== key) {
@@ -423,7 +451,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
 }
 
 /** One property, with the control that edits it. */
-export function Field({ row, value, onChange }) {
+export function Field({ row, value, onChange }: { row: ControlRow; value: unknown; onChange: Change }) {
   return (
     <Row gap={2} align={'center'}>
       <Text key={'name'} label={row.name} tooltip={row.note} width={{ chars: 12 }} />
@@ -435,7 +463,7 @@ export function Field({ row, value, onChange }) {
 }
 
 /** The controls a property's editor hint asks for, already wired to `onChange`. */
-function controls(row, value, onChange) {
+function controls(row: ControlRow, value: unknown, onChange: Change): ReactNode[] {
   switch (row.editor) {
     case 'text':
       return [
@@ -456,7 +484,7 @@ function controls(row, value, onChange) {
       return [
         <Select
           key={'value'}
-          choices={row.members}
+          choices={row.members ?? []}
           value={value === undefined ? '' : String(value)}
           onChange={(event) => onChange(row.name, event.value)} />,
       ];
@@ -474,7 +502,7 @@ function controls(row, value, onChange) {
       return [
         <Select
           key={'mode'}
-          choices={row.modes}
+          choices={row.modes ?? []}
           value={mode}
           onChange={(event) => onChange(row.name, lengthValue(event.value, amount))} />,
         ...(mode === 'step' || mode === 'chars'
