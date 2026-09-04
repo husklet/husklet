@@ -28,7 +28,11 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       if (call === 'extension_acquisition_start') acquisitions += 1;
       if (call === 'extension_acquisition_cancel') cancelled = true;
       const payload = call === 'extension_list'
-        ? { reply: 'extensions', with: [{ name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'running', version: '0.1.0', enabled: true, pane_providers: [] }] }
+        ? { reply: 'extensions', with: [
+          { name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'duty', version: '0.1.0', enabled: true, pane_providers: [] },
+          { name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`, status: 'fault:3', version: '0.1.0', enabled: true, pane_providers: [] },
+          { name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby', version: '0.1.0', enabled: false, pane_providers: [] },
+        ] }
         : call === 'extension_acquisition_start'
           ? { reply: 'extension_acquisition_job', with: { job: `job-${acquisitions}` } }
           : call === 'extension_acquisition_status'
@@ -58,7 +62,25 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     }
     assert.ok(renderedLabels(calls).includes('Extensions'));
     assert.ok(renderedLabels(calls).includes('resources'));
+    assert.ok(renderedLabels(calls).includes('Disable'), 'a duty extension can be disabled');
+    assert.ok(renderedLabels(calls).includes('Retry'), 'a faulted extension can be retried');
+    assert.ok(renderedLabels(calls).includes('Enable'), 'a standby extension can be enabled');
     assert.deepEqual(calls.find(({ call }) => call === 'event_subscribe').with, { topic: 'extensions' });
+    peer.write(encode({ channel: 20, kind: KIND.event, payload: invoke(calls, 'Disable') }));
+    await until(() => calls.some(({ call }) => call === 'extension_disable'));
+    assert.deepEqual(calls.find(({ call }) => call === 'extension_disable').with, {
+      name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`,
+    });
+    peer.write(encode({ channel: 21, kind: KIND.event, payload: invoke(calls, 'Retry') }));
+    await until(() => calls.some(({ call }) => call === 'extension_retry'));
+    assert.deepEqual(calls.find(({ call }) => call === 'extension_retry').with, {
+      name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`,
+    });
+    peer.write(encode({ channel: 22, kind: KIND.event, payload: invoke(calls, 'Enable') }));
+    await until(() => calls.some(({ call }) => call === 'extension_enable'));
+    assert.deepEqual(calls.find(({ call }) => call === 'extension_enable').with, {
+      name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`,
+    });
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'registry.example/extension:version', 'registry.example/extension:2') }));
     await until(() => renderedLabels(calls).includes('Inspect'));
     peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Inspect') }));

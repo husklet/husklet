@@ -126,9 +126,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             <CardHeader label={extension.name} detail={extension.version ?? extension.image_digest} />
             <CardContent><Row gap={2}><Badge label={extension.status} /><Text label={extension.image_digest} wrap /></Row></CardContent>
             <CardActions gap={1}>
-              {extension.status === 'running'
-                ? <Button label="Disable" enabled={!busy} onInvoke={() => lifecycle(extension, 'disable')} />
-                : <Button label={extension.status === 'fault' ? 'Retry' : 'Enable'} enabled={!busy} onInvoke={() => lifecycle(extension, extension.status === 'fault' ? 'retry' : 'enable')} />}
+              {extension.status.startsWith('fault:')
+                ? <Button label="Retry" enabled={!busy} onInvoke={() => lifecycle(extension, 'retry')} />
+                : extension.enabled
+                  ? <Button label="Disable" enabled={!busy} onInvoke={() => lifecycle(extension, 'disable')} />
+                  : <Button label="Enable" enabled={!busy} onInvoke={() => lifecycle(extension, 'enable')} />}
               <ConfirmAction
                 label="Remove"
                 confirmLabel={`Remove ${extension.name}`}
