@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use std::io::Read as _;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+mod checkpoint_cycle;
+
 /// The fixed guest architecture selected by a worker executable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Guest {
@@ -155,6 +158,10 @@ struct LaunchArguments {
     /// Keep caching active across guest execs (benchmark/product-process-tree mode).
     #[arg(long, requires = "translation_cache")]
     translation_cache_process_tree: bool,
+    /// Exercise capture, forced-stop restore, and successful restore/continue using this guest path.
+    #[cfg(unix)]
+    #[arg(long, value_name = "GUEST_DIRECTORY", requires = "rootfs")]
+    checkpoint_cycle: Option<PathBuf>,
     /// Guest entry: a path inside `--rootfs`, or a host path when no rootfs is given.
     executable: PathBuf,
     /// Arguments handed to the guest unchanged.
@@ -439,8 +446,21 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
         hl_native::select_artifact(path)
             .map_err(|reason| Failure::Request(format!("cannot select native library: {reason}")))?;
     }
-    let engine = if let Some(rootfs) = &launch.rootfs {
+    let plan = if let Some(rootfs) = &launch.rootfs {
         let plan = rootfs_plan(rootfs, launch)?;
+        Some(plan)
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    if let Some(directory) = &launch.checkpoint_cycle {
+        let rootfs = launch.rootfs.as_deref().expect("clap requires rootfs");
+        let plan = plan.expect("a rootfs launch has a plan");
+        let (exit, receipt) = checkpoint_cycle::run(guest.isa(), plan, rootfs, directory)?;
+        eprintln!("[hl-checkpoint-cycle]\t{receipt}");
+        return Ok(exit);
+    }
+    let engine = if let Some(plan) = plan {
         hl_engine::runtime::Engine::from_plan(guest.isa(), plan)?
     } else {
         let mut builder = hl_engine::runtime::Builder::new(guest.isa(), &launch.executable);
@@ -491,6 +511,12 @@ fn rootfs_plan(
     rootfs: &std::path::Path,
     launch: &LaunchArguments,
 ) -> Result<hl_engine::launcher::plan::RuntimePlan, Failure> {
+    #[cfg(unix)]
+    if launch.checkpoint_cycle.is_some() && !launch.arguments.is_empty() {
+        return Err(Failure::Request(
+            "--checkpoint-cycle owns the probe's sole control-directory argument".to_owned(),
+        ));
+    }
     if launch.diagnostics && launch.translation_cache.is_some() {
         return Err(Failure::Request(
             "--diagnostics cannot be combined with --translation-cache: general diagnostics embeds launch-private counter addresses and disables persistent caching; use --translation-cache-observe"
@@ -631,11 +657,23 @@ fn rootfs_plan(
                 .map_err(|error| Failure::Request(format!("cannot confine translation caching to the launch image: {error:?}")))?;
         }
     }
+    let checkpoint_argument = {
+        #[cfg(unix)]
+        {
+            launch
+                .checkpoint_cycle
+                .iter()
+                .map(|path| path.as_os_str().as_encoded_bytes().to_vec())
+        }
+        #[cfg(not(unix))]
+        std::iter::empty()
+    };
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
         arguments: std::iter::once(guest_entry.as_os_str().as_encoded_bytes().to_vec())
             .chain(launch.arguments.iter().map(|argument| argument.as_bytes().to_vec()))
+            .chain(checkpoint_argument)
             .collect(),
         // The worker is a developer-facing raw-rootfs entry point, not an OCI launch with an image
         // configuration supplying Env.  ProductionMachine deliberately treats this vector as exact;
@@ -932,6 +970,43 @@ mod tests {
             let bare = launch(&["--translit", option, "program"]);
             assert_eq!(bare.executable.as_os_str(), "program");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_cycle_is_rootfs_bound_and_owns_the_probe_argument() {
+        assert!(LaunchArguments::try_parse_from([
+            "hl-x86_64",
+            "--checkpoint-cycle",
+            "/run/checkpoint",
+            "bin/probe",
+        ])
+        .is_err());
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("bin")).unwrap();
+        std::fs::write(root.path().join("bin/probe"), b"probe").unwrap();
+        std::fs::create_dir_all(root.path().join("run/checkpoint")).unwrap();
+        let parsed = LaunchArguments::try_parse_from([
+            "hl-x86_64",
+            "--rootfs",
+            root.path().to_str().unwrap(),
+            "--checkpoint-cycle",
+            "/run/checkpoint",
+            "bin/probe",
+        ])
+        .unwrap();
+        assert_eq!(parsed.checkpoint_cycle.as_deref(), Some(std::path::Path::new("/run/checkpoint")));
+
+        let with_extra = launch(&[
+            "--rootfs",
+            root.path().to_str().unwrap(),
+            "--checkpoint-cycle",
+            "/run/checkpoint",
+            "bin/probe",
+            "extra",
+        ]);
+        assert!(rootfs_plan(root.path(), &with_extra).is_err());
     }
 
     #[test]
