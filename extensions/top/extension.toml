@@ -1,0 +1,19 @@
+name = "top"
+display_name = "Top"
+version = "0.1.0"
+protocol = 1
+activation = "tab"
+
+# Process inspection and execution are container authorities in the host. Image
+# pulls are separate from image reads. Resource mutation is likewise distinct
+# from inventory so the consent prompt describes every control authority.
+capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "interface:render"]
+
+[interface]
+tab_title = "Top"
+icon = "utilities-system-monitor-symbolic"
+
+[[pane_providers]]
+id = "main"
+title = "Top"
+icon = "utilities-system-monitor-symbolic"

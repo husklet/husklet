@@ -7,10 +7,10 @@ ARG HUSKLET_REACT_IMAGE
 FROM ${HUSKLET_REACT_IMAGE} AS build
 USER root
 RUN npm install --no-save --ignore-scripts --no-audit --no-fund \
-    typescript@5.9.2 @types/node@22.20.1 @types/react@18.3.3
+    typescript@5.9.2 vite@7.1.4 @types/node@22.20.1 @types/react@18.3.3
 COPY src ./src
-COPY tsconfig.json ./
-RUN tsc --project tsconfig.json
+COPY tsconfig.json vite.config.ts ./
+RUN tsc --noEmit && vite build
 
 FROM ${HUSKLET_REACT_IMAGE}
 ARG HUSKLET_EXTENSION_VERSION
@@ -18,8 +18,6 @@ ARG HUSKLET_REACT_VERSION
 
 WORKDIR /app
 COPY --from=build /app/dist ./dist
-COPY README.md ./
-
 USER root
 COPY --chown=node:node extension.toml /etc/husklet/extension.toml
 RUN test -n "${HUSKLET_EXTENSION_VERSION}" \

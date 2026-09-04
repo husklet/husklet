@@ -645,21 +645,21 @@ test('extension facade preserves exact read and control request shapes', async (
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
-  const operations = [api.extensions.list(), api.extensions.inspect('workspace-manager'),
-    api.extensions.enable('workspace-manager', `sha256:${'a'.repeat(64)}`), api.extensions.disable('workspace-manager', `sha256:${'a'.repeat(64)}`),
-    api.extensions.retry('workspace-manager', `sha256:${'a'.repeat(64)}`),
-    api.extensions.remove('workspace-manager', `sha256:${'a'.repeat(64)}`)];
+  const operations = [api.extensions.list(), api.extensions.inspect('top'),
+    api.extensions.enable('top', `sha256:${'a'.repeat(64)}`), api.extensions.disable('top', `sha256:${'a'.repeat(64)}`),
+    api.extensions.retry('top', `sha256:${'a'.repeat(64)}`),
+    api.extensions.remove('top', `sha256:${'a'.repeat(64)}`)];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_list' },
-    { call: 'extension_inspect', with: { name: 'workspace-manager' } },
-    { call: 'extension_enable', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
-    { call: 'extension_disable', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
-    { call: 'extension_retry', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
-    { call: 'extension_remove', with: { name: 'workspace-manager', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_inspect', with: { name: 'top' } },
+    { call: 'extension_enable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_disable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_retry', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
+    { call: 'extension_remove', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
   ]);
-  const summary = { name: 'workspace-manager', image_digest: 'sha256:abc', status: 'standby' };
+  const summary = { name: 'top', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
   for (let index = 0; index < 4; index += 1) stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));

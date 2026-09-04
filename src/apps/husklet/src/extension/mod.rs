@@ -17,6 +17,7 @@
 pub(crate) mod acquisition;
 mod control;
 mod conversation;
+mod defaults;
 mod files;
 mod host;
 mod image;
@@ -42,6 +43,7 @@ use hl_extension::port::{
 
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
+pub use defaults::{install_defaults, DEFAULT_EXTENSIONS};
 pub use files::WorkspaceDirectory;
 pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, Supply, WeakEvents, Workspace};
 pub use image::ImageLibrary;

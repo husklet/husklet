@@ -71,7 +71,7 @@ node -e '
 [[ "$(grep -Fc '.github/scripts/verify-published-extension-image.sh' "$workflow")" == 2 ]] \
   || fail "release must verify both published multi-architecture registry manifests"
 
-for extension in storybook workspace-manager; do
+for extension in extensions storybook top workspace; do
   dockerfile="extensions/$extension/Dockerfile"
   manifest="extensions/$extension/extension.toml"
 

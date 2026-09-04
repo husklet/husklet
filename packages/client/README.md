@@ -129,7 +129,7 @@ subscription against the mutation:
 ```js
 const switched = await host.terminal.switchOccupantAndWait(
   pane.slot, pane.generation, pane.revision,
-  { kind: 'surface', extension: 'workspace-manager', provider: 'main' },
+  { kind: 'surface', extension: 'top', provider: 'main' },
 );
 if (switched.changed) console.log(switched.pane.provider);
 ```

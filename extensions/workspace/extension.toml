@@ -1,0 +1,15 @@
+name = "workspace"
+display_name = "Workspace"
+version = "0.1.0"
+protocol = 1
+activation = "workspace"
+capabilities = ["workspaces:read", "workspaces:control", "interface:render"]
+
+[interface]
+tab_title = "Workspace"
+icon = "preferences-system-symbolic"
+
+[[pane_providers]]
+id = "main"
+title = "Workspace"
+icon = "preferences-system-symbolic"

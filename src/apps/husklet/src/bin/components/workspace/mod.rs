@@ -68,6 +68,7 @@ impl Form {
             let on_created = on_created.clone();
             let pages = view.pages.clone();
             let status = view.status.clone();
+            let create = view.create.clone();
             view.create.connect_clicked(move |_| {
                 // Validate: name + image are required. Mark empties red and jump to General.
                 let name_ok = !form.name.text().trim().is_empty();
@@ -80,20 +81,43 @@ impl Form {
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
-                let result = form.configuration().and_then(|workspace| {
-                    let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
-                    create_workspace(&mut store, workspace)
+                let Ok(workspace) = form.configuration() else {
+                    status.add_css_class("err");
+                    status.set_text("Workspace configuration is invalid.");
+                    return;
+                };
+                create.set_sensitive(false);
+                status.remove_css_class("err");
+                status.set_text("Installing Workspace and Extensions…");
+                let (sent, received) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = provision_workspace(workspace).map_err(|error| error.to_string());
+                    let _ = sent.send(result);
                 });
-                match result {
-                    Ok(()) => {
+                let create = create.clone();
+                let status = status.clone();
+                let on_created = on_created.clone();
+                let w = w.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(50), move || match received.try_recv() {
+                    Ok(Ok(())) => {
                         on_created();
                         w.close();
+                        glib::ControlFlow::Break
                     }
-                    Err(error) => {
+                    Ok(Err(error)) => {
                         status.add_css_class("err");
-                        status.set_text(&error.to_string());
+                        status.set_text(&format!("Could not finish workspace setup: {error}"));
+                        create.set_sensitive(true);
+                        glib::ControlFlow::Break
                     }
-                }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        status.add_css_class("err");
+                        status.set_text("Workspace setup stopped unexpectedly.");
+                        create.set_sensitive(true);
+                        glib::ControlFlow::Break
+                    }
+                });
             });
         }
 
@@ -147,6 +171,20 @@ fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> s
         ));
     }
     store.upsert(workspace)
+}
+
+fn provision_workspace(workspace: WorkspaceConfig) -> std::io::Result<()> {
+    let path = Home::current().workspaces_config();
+    let store = WorkspaceStore::load(&path)?;
+    if store.get(&workspace.name).is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("A workspace named {:?} already exists.", workspace.name),
+        ));
+    }
+    hl::extension::install_defaults(&workspace).map_err(std::io::Error::other)?;
+    let mut store = WorkspaceStore::load(path)?;
+    create_workspace(&mut store, workspace)
 }
 
 const fn native_workspace_architecture() -> Arch {

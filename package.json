@@ -3,7 +3,14 @@
   "private": true,
   "type": "module",
   "description": "Husklet JavaScript packages and first-party extensions.",
-  "workspaces": ["packages/client", "packages/react", "extensions/storybook", "extensions/workspace-manager"],
+  "workspaces": [
+    "packages/client",
+    "packages/react",
+    "extensions/extensions",
+    "extensions/storybook",
+    "extensions/workspace",
+    "extensions/top"
+  ],
   "scripts": {
     "prepublish:check": "node tools/npm/prepublish-check.js",
     "postpublish:check": "node tools/npm/postpublish-check.js"

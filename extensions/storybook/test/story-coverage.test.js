@@ -166,11 +166,11 @@ test('workspace layout bounds slots and interactively splits by stable identity'
   assert(split);
   assert(chooser && focus, 'chooser and keyboard focus controls are visible');
   assert(first.patches.some((patch) => patch.SetProp?.value?.Text === 'nested horizontal split'));
-  assert(first.patches.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  assert(first.patches.some((patch) => patch.SetProp?.value?.Text?.includes('top/containers')));
   let before = stage.frames.length;
   assert(stage.surface.dispatch({ trigger: 'Invoke', node: chooser, id: `${chooser}:Invoke` }));
   let changed = stage.since(before);
-  assert(changed.some((patch) => patch.SetProp?.value?.Text?.includes('workspace-manager/containers')));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text?.includes('top/containers')));
   before = stage.frames.length;
   assert(stage.surface.dispatch({ trigger: 'Invoke', node: split, id: `${split}:Invoke` }));
   changed = stage.since(before);
@@ -198,7 +198,7 @@ test('extension lifecycle bounds authority and controls the selected immutable g
   assert(stage.surface.dispatch({ trigger: 'Invoke', node: stop, id: `${stop}:Invoke` }));
   const changed = stage.since(before);
   assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Start extension'));
-  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped workspace-manager at sha256:manager-generation-14.'));
+  assert(changed.some((patch) => patch.SetProp?.value?.Text === 'Stopped top at sha256:manager-generation-14.'));
 });
 
 test('workspace file review independently bounds paths, content, and interactive writes', () => {
