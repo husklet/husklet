@@ -1636,6 +1636,16 @@ static uint64_t translit_unsupported_key(const struct insn *insn) {
            (uint64_t)(insn->evex_z != 0) << 58 | (uint64_t)(insn->evex_b != 0) << 59;
 }
 
+/* Version 2 extends, rather than changes, the compatible unsupported-form key.
+   The narrow FS bridge is the only lowering decision for which version 1 omits
+   required decoder state.  Keep the remaining high bits reserved. */
+#if !defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t translit_step_form_key_v2(const struct insn *insn) {
+    return translit_unsupported_key(insn) | (uint64_t)(insn->m_hasbase != 0) << 60 |
+           (uint64_t)(insn->m_hasindex != 0) << 61;
+}
+#endif
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t translit_unsupported_mix(uint64_t value) {
     value ^= value >> 33;

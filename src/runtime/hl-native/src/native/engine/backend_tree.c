@@ -3440,7 +3440,7 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
         uint64_t interpreted = atomic_load_explicit(&census->interpreted_steps, memory_order_relaxed);
         int detail_len = snprintf(
             detail, sizeof detail,
-            "[diag] x86-executed-step-form version=1 tree_complete=%d total=%llu keyed=%llu overflow=%llu"
+            "[diag] x86-executed-step-form version=2 tree_complete=%d total=%llu keyed=%llu overflow=%llu"
             " unique=%llu interpreted_steps=%llu reconcile=%u interpreted_reconcile=%u top_n=%u",
             available, (unsigned long long)total, (unsigned long long)keyed, (unsigned long long)overflow,
             (unsigned long long)unique, (unsigned long long)interpreted, keyed + overflow == total,

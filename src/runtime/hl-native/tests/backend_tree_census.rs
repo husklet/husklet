@@ -27,7 +27,7 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn x86_interpreter_step_forms_have_one_diagnostics_only_writer() {
     let source = include_str!("../src/native/translator/guest/x86_64/interp.c");
-    let writer = "hl_backend_tree_executed_step_form(translit_unsupported_key(&insn));";
+    let writer = "hl_backend_tree_executed_step_form(translit_step_form_key_v2(&insn));";
     assert_eq!(source.matches(writer).count(), 1, "step-form writer must have one authoritative site");
     let guarded = source
         .split_once("if (census_steps && step != STEP_END) {")
@@ -45,7 +45,7 @@ fn x86_step_form_record_is_versioned_bounded_and_reconciled() {
     let source = include_str!("../src/native/engine/backend_tree.c");
     for contract in [
         "#define HL_BACKEND_EXECUTED_STEP_FORM_TOP 64u",
-        "[diag] x86-executed-step-form version=1",
+        "[diag] x86-executed-step-form version=2",
         "keyed + overflow == total",
         "total == interpreted",
         "top_cumulative <= keyed",
@@ -56,7 +56,32 @@ fn x86_step_form_record_is_versioned_bounded_and_reconciled() {
     ] {
         assert!(source.contains(contract), "missing step-form census contract: {contract}");
     }
-    assert_eq!(source.matches("[diag] x86-executed-step-form version=1").count(), 1);
+    assert_eq!(source.matches("[diag] x86-executed-step-form version=2").count(), 1);
+}
+
+#[test]
+fn x86_step_form_v2_adds_only_the_missing_sib_facts() {
+    let source = include_str!("../src/native/translator/guest/x86_64/translit.inc");
+    let encoder = source
+        .split_once("static uint64_t translit_step_form_key_v2(const struct insn *insn) {")
+        .and_then(|(_, tail)| tail.split_once("\n}"))
+        .map(|(body, _)| body)
+        .expect("v2 step-form encoder");
+    assert!(encoder.contains("translit_unsupported_key(insn)"), "{encoder}");
+    assert_eq!(encoder.matches("insn->m_hasbase != 0").count(), 1, "{encoder}");
+    assert_eq!(encoder.matches("insn->m_hasindex != 0").count(), 1, "{encoder}");
+    assert!(encoder.contains("<< 60"), "{encoder}");
+    assert!(encoder.contains("<< 61"), "{encoder}");
+    assert!(!encoder.contains("<< 62") && !encoder.contains("<< 63"), "{encoder}");
+
+    let v1 = 0x0000_0002_0919_008b_u64;
+    let absent = v1;
+    let base = v1 | (1_u64 << 60);
+    let index = v1 | (1_u64 << 61);
+    assert_eq!(absent & (3_u64 << 60), 0);
+    assert_eq!(base & (3_u64 << 60), 1_u64 << 60);
+    assert_eq!(index & (3_u64 << 60), 1_u64 << 61);
+    assert_eq!((base | index) >> 62, 0, "v2 must leave bits 62..63 reserved");
 }
 
 #[test]
@@ -73,6 +98,8 @@ fn x86_step_form_record_preserves_the_compatible_mixed_table() {
     assert!(source.contains(
         "hl_backend_executed_form_top(census->executed_forms, form_keys, form_counts, HL_BACKEND_EXECUTED_FORM_TOP);"
     ));
+    let interpreter = include_str!("../src/native/translator/guest/x86_64/interp.c");
+    assert!(interpreter.contains("hl_backend_tree_executed_form(translit_unsupported_key(&insn));"));
 }
 
 #[test]
