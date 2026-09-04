@@ -88,7 +88,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     server.listen(socket, resolve);
   });
 
-  const child = spawn(process.execPath, ['src/main.js'], {
+  const child = spawn(process.execPath, ['dist/main.js'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
     stdio: ['ignore', 'pipe', 'pipe'],

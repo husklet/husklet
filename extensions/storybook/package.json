@@ -5,14 +5,22 @@
   "description": "A component playground: browse the library, render it, edit its properties.",
   "license": "MIT",
   "type": "module",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "test": "node --test 'test/*.test.js'",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.json",
+    "test": "npm run build && node --test 'test/*.test.js'",
     "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > src/catalogue.json"
   },
   "dependencies": {
     "@husklet/react": "file:../../packages/react",
     "react": "^18.3.1"
   },
-  "engines": { "node": ">=20" }
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/react": "18.3.3",
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
