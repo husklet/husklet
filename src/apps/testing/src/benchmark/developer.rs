@@ -23,7 +23,7 @@ use std::{
     time::Instant,
 };
 
-const SCHEMA: &str = "husklet-developer-benchmark-v5";
+const SCHEMA: &str = "husklet-developer-benchmark-v6";
 const UNIT_COUNT: u32 = 128;
 const PHASES: [&str; 11] = [
     "prompt",
@@ -242,6 +242,9 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
             }
             clone_root(arm_artifacts(&options, mode).rootfs, &root)?;
             let result = (|| {
+                if mode == Mode::Native {
+                    project_native_hostname(&root)?;
+                }
                 stage_fixture(&options, &root, mode, fixture)?;
                 execute(&options, &root, mode, sample, position)
             })();
@@ -408,6 +411,54 @@ fn clone_root(source: &Path, destination: &Path) -> Result<(), Error> {
     } else {
         Err("rootfs clone failed".into())
     }
+}
+
+fn project_native_hostname(root: &Path) -> Result<(), Error> {
+    let raw = fs::read_to_string("/proc/sys/kernel/hostname")?;
+    project_native_hostname_value(root, raw.strip_suffix('\n').unwrap_or(&raw))
+}
+
+fn project_native_hostname_value(root: &Path, hostname: &str) -> Result<(), Error> {
+    let valid_label = |label: &str| {
+        !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-') &&
+            label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    };
+    if hostname.is_empty() || hostname.len() > 253 || !hostname.split('.').all(valid_label) {
+        return Err("host hostname is not a valid DNS name".into());
+    }
+    let root_meta = fs::symlink_metadata(root)?;
+    let etc = root.join("etc");
+    let etc_meta = fs::symlink_metadata(&etc)?;
+    let hosts = etc.join("hosts");
+    let hosts_meta = fs::symlink_metadata(&hosts)?;
+    if !root_meta.is_dir() || root_meta.file_type().is_symlink() || !etc_meta.is_dir() ||
+        etc_meta.file_type().is_symlink() || !hosts_meta.is_file() || hosts_meta.file_type().is_symlink()
+    {
+        return Err("native root /etc/hosts is not a proven regular file beneath the clone".into());
+    }
+    let canonical_root = fs::canonicalize(root)?;
+    let canonical_etc = fs::canonicalize(&etc)?;
+    if canonical_etc.parent() != Some(canonical_root.as_path()) {
+        return Err("native root /etc escapes the cloned root".into());
+    }
+    let mut contents = fs::read(&hosts)?;
+    if !contents.is_empty() && !contents.ends_with(b"\n") {
+        contents.push(b'\n');
+    }
+    contents.extend_from_slice(format!("127.0.1.1\t{hostname}\n").as_bytes());
+    let temporary = etc.join(format!(".hosts.husklet-native-{}", std::process::id()));
+    let write_result = (|| {
+        let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        output.set_permissions(hosts_meta.permissions())?;
+        output.write_all(&contents)?;
+        output.sync_all()?;
+        fs::rename(&temporary, &hosts)?;
+        Ok::<_, Error>(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
 }
 
 const STAGE_COMMAND: &str = "cd /work && git init -q && git config user.email bench@example.invalid && git config user.name Bench && git add . && git commit -qm seed && git clone -q --bare . /fixture.git";
@@ -1027,12 +1078,13 @@ mod tests {
     }
 
     #[test]
-    fn v3_identity_cannot_resume_as_v4() {
+    fn legacy_identity_cannot_resume_as_v6() {
         let error = serde_json::from_str::<Identity>(r#"{"schema":"husklet-developer-benchmark-v3"}"#)
             .err()
             .unwrap()
             .to_string();
         assert!(error.contains("host_manifest"), "{error}");
+        assert_eq!(SCHEMA, "husklet-developer-benchmark-v6");
     }
 
     #[test]
@@ -1180,6 +1232,49 @@ mod tests {
         options.guest_isa = host_isa().guest();
         let argv = stage_argv(&options, Path::new("/cloned-x86-root"), Mode::Native);
         assert_eq!(argv[0], "chroot");
+    }
+
+    #[test]
+    fn native_hostname_is_projected_only_into_the_cloned_root() {
+        let source = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("etc")).unwrap();
+        fs::write(source.path().join("etc/hosts"), b"127.0.0.1\tlocalhost\n").unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        clone_root(source.path(), clone.path()).unwrap();
+        project_native_hostname_value(clone.path(), "naa0245").unwrap();
+        assert_eq!(fs::read(source.path().join("etc/hosts")).unwrap(), b"127.0.0.1\tlocalhost\n");
+        assert_eq!(fs::read(clone.path().join("etc/hosts")).unwrap(),
+                   b"127.0.0.1\tlocalhost\n127.0.1.1\tnaa0245\n");
+        let production = include_str!("developer.rs").split_once("#[cfg(test)]\nmod tests").unwrap().0;
+        assert!(production.find("if mode == Mode::Native {").unwrap() <
+                production.find("stage_fixture(&options, &root, mode, fixture)?;").unwrap());
+        assert_eq!(production.matches("project_native_hostname(&root)?;").count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_hostname_projection_refuses_symlinked_etc_or_hosts() {
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("hosts"), b"outside\n").unwrap();
+        let linked_etc = tempfile::tempdir().unwrap();
+        symlink(outside.path(), linked_etc.path().join("etc")).unwrap();
+        assert!(project_native_hostname_value(linked_etc.path(), "host-a").is_err());
+        let linked_hosts = tempfile::tempdir().unwrap();
+        fs::create_dir(linked_hosts.path().join("etc")).unwrap();
+        symlink(outside.path().join("hosts"), linked_hosts.path().join("etc/hosts")).unwrap();
+        assert!(project_native_hostname_value(linked_hosts.path(), "host-a").is_err());
+        assert_eq!(fs::read(outside.path().join("hosts")).unwrap(), b"outside\n");
+    }
+
+    #[test]
+    fn native_hostname_projection_rejects_unvalidated_names() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("etc")).unwrap();
+        fs::write(root.path().join("etc/hosts"), b"localhost\n").unwrap();
+        for hostname in ["", "bad host", "-edge", "edge-", "host\nspoof"] {
+            assert!(project_native_hostname_value(root.path(), hostname).is_err(), "{hostname:?}");
+        }
+        assert_eq!(fs::read(root.path().join("etc/hosts")).unwrap(), b"localhost\n");
     }
 
     #[test]
