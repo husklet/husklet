@@ -93,6 +93,19 @@ test('typed image details become revisioned bounded source windows', async () =>
   assert.equal(source.answer({ source: IMAGE_DETAIL_SOURCE, version: 0, id: 4, range: { start: 0, count: 1 } }), null);
 });
 
+test('detail sources reject malformed host row requests before slicing', async () => {
+  const source = new ImageDetailsSource();
+  await source.replace({
+    id: 'sha256:one', references: [], created: 'now', size: 1, os: 'linux', architecture: 'amd64',
+    entrypoint: [], command: [], working_directory: '/', user: '',
+  });
+  for (const request of [null, {}, { source: IMAGE_DETAIL_SOURCE, version: 1, id: 1 },
+    { source: IMAGE_DETAIL_SOURCE, version: 1, id: 1, range: { start: -1, count: 1 } },
+    { source: IMAGE_DETAIL_SOURCE, version: 1, id: 1, range: { start: 0, count: Number.NaN } }]) {
+    assert.equal(source.answer(request), null);
+  }
+});
+
 test('wire-shaped process matrices retain their host titles', () => {
   assert.deepEqual(processRows({ titles: ['PID', 'USER', 'CMD'], processes: [['7', 'root', 'sleep 5']] }, 'api'), [
     { container: 'api', cells: { PID: '7', USER: 'root', CMD: 'sleep 5' }, values: ['7', 'root', 'sleep 5'] },
