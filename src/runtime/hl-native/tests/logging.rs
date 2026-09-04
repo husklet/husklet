@@ -1,5 +1,29 @@
 use std::{fs, path::PathBuf, process::Command};
 
+#[test]
+fn restored_library_activation_publishes_metadata_without_reopening_code() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let source = fs::read_to_string(native.join("translator/guest/x86_64/interp.c"))
+        .expect("read x86 persistent-cache implementation");
+    let start = source.find("static void x64_pc_activate_ready(uint64_t pc)").expect("activation function");
+    let end = source[start..]
+        .find("\nstatic void pcache_note_libmap")
+        .map(|offset| start + offset)
+        .expect("activation function end");
+    let activation = &source[start..end];
+    for forbidden in ["jit_wprot(", "jit_publish_code(", "memcpy(g_cache"] {
+        assert!(
+            !activation.contains(forbidden),
+            "restored library activation must be metadata-only; found {forbidden}"
+        );
+    }
+    let load = &source[..start];
+    assert!(
+        load.contains("memcpy(g_cache, arena_bytes, (size_t)arena)"),
+        "initial restore must copy the complete authenticated arena"
+    );
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[test]
 fn jitdump_is_one_process_lifetime_stream_across_cache_generations() {

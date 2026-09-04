@@ -432,7 +432,6 @@ int main(void) {
                 "source-build",
                 "chain-fallback",
                 "manifest-activation",
-                "activation-close",
             ]
             .contains(&stage.as_str()),
             "unknown warm failure stage",
@@ -854,8 +853,6 @@ int main(void) {
     }
     let started = Instant::now();
     containers.start("pcache-profile").await?;
-    let activation_close_failure = mode == Mode::CacheStageFailure
-        && std::env::var("HL_TRANSLIT_PCACHE_WARM_FAIL_STAGE").as_deref() == Ok("activation-close");
     let (waited, logs) = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
         let executions = containers.executions();
         let exec = executions
@@ -927,24 +924,6 @@ int main(void) {
         eprintln!("pcache-profile backend_receipt={receipt}");
     }
     containers.remove("pcache-profile").await?;
-    if activation_close_failure {
-        let failure = waited.expect_err("activation close failure returned ordinary guest status");
-        let entries = cache.read_dir()?.collect::<Result<Vec<_>, _>>()?;
-        require(
-            format!("{failure:?}").contains("NativeRunFailed(12)"),
-            "activation close failure resumed guest execution",
-        )?;
-        require(logs.stdout.is_empty(), "activation close failure produced guest output")?;
-        require(
-            entries.iter().any(|entry| {
-                String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(".activation-close-attempt-")
-            }) && !entries.iter().any(|entry| {
-                String::from_utf8_lossy(entry.file_name().as_encoded_bytes()).contains(".library-activated-")
-            }),
-            "activation close failure was not attempted before publication",
-        )?;
-        return Ok(());
-    }
     let status = waited?;
     if status != ExitStatus::Code(0) {
         return Err(format!(
@@ -1106,6 +1085,18 @@ int main(void) {
                 .windows(17)
                 .any(|part| part == b".hit-fixed-image-")
         });
+        if cfg!(feature = "native-test-hooks") && cache_loaded {
+            require(
+                entries.iter().any(|entry| {
+                    entry
+                        .file_name()
+                        .as_encoded_bytes()
+                        .windows(20)
+                        .any(|part| part == b".hit-eager-snapshot-")
+                }),
+                "warm cache hit did not copy the complete authenticated snapshot before publication",
+            )?;
+        }
         require(
             !entries.is_empty() || mode == Mode::CacheNestedToolchainSmc,
             "cache arm published no entries",
