@@ -759,16 +759,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extension"
-version = "0.1.0"
-dependencies = [
- "hl-extension",
- "hl-gui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1586,7 +1576,6 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 name = "husklet"
 version = "0.4.0"
 dependencies = [
- "extension",
  "flate2",
  "fs2",
  "gtk4",

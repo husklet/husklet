@@ -896,6 +896,16 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const REFERENCE_SOCKET: &str = "HUSKLET_TEST_REFERENCE_SOCKET";
+    const REFERENCE_MANIFEST: &str = r#"
+name = "sample"
+display_name = "Protocol fixture"
+version = "0.1.0"
+protocol = 1
+capabilities = ["interface:render"]
+
+[interface]
+tab_title = "Sample"
+"#;
 
     /// The source the fake extension's table draws from.
     const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
@@ -1342,7 +1352,7 @@ mod tests {
             let child = Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
                 .args([
                     "--exact",
-                    "extension::host::tests::reference_extension_sidecar_process",
+                    "extension::host::tests::protocol_sidecar_process",
                     "--ignored",
                     "--nocapture",
                 ])
@@ -1392,20 +1402,24 @@ mod tests {
 
     #[test]
     #[ignore = "subprocess entrypoint for the reference-sidecar lifecycle test"]
-    fn reference_extension_sidecar_process() {
+    fn protocol_sidecar_process() {
         let socket = PathBuf::from(std::env::var(REFERENCE_SOCKET).expect("reference socket"));
         let stream = connect(&socket).expect("host listener");
-        extension::serve(stream, extension::Extension::new()).expect("reference extension session");
+        let mut wire = Wire::new(stream);
+        shake(&mut wire).expect("protocol handshake");
+        describe(&mut wire, 1).expect("interface description");
+        answer(&mut wire);
     }
 
     #[test]
     fn a_roster_enabled_reference_extension_runs_as_a_real_host_sidecar_process() {
         let storage = tempfile::TempDir::new().expect("storage");
         let directory = hl_ws::storage::Directory::open(storage.path()).expect("directory");
-        let manifest = extension::manifest().expect("reference manifest");
+        let manifest = Manifest::parse(REFERENCE_MANIFEST, PROTOCOL).expect("reference manifest");
+        let requested = Grant::new([Capability::Interface]);
         let mut roster = Roster::open(directory).expect("roster");
         roster
-            .register(&manifest, "sha256:reference", &extension::requested(), 1)
+            .register(&manifest, "sha256:reference", &requested, 1)
             .expect("installed with consent");
         roster.enable(&manifest.name).expect("enabled");
         let record = roster

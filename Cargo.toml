@@ -21,7 +21,6 @@ exclude = [
 # host without the GTK4 development files. `hl-gui` itself is toolkit-neutral and
 # depends on nothing; libadwaita is not used anywhere in the workspace.
 default-members = [
-    "src/apps/extension",
     "src/workspaces/hl-gui",
     "src/workspaces/hl-gui-gtk",
     "src/workspaces/hl-extension",

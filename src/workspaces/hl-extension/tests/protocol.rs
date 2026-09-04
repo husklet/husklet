@@ -356,8 +356,10 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
         .join("..")
         .join("..");
     let shipped = [
+        root.join("extensions/workspace/extension.toml"),
+        root.join("extensions/extensions/extension.toml"),
+        root.join("extensions/top/extension.toml"),
         root.join("extensions/storybook/extension.toml"),
-        root.join("src/apps/extension/extension.toml"),
     ];
 
     for path in shipped {

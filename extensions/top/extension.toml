@@ -15,6 +15,41 @@ tab_title = "Top"
 icon = "utilities-system-monitor-symbolic"
 
 [[pane_providers]]
-id = "main"
-title = "Top"
+id = "overview"
+title = "Resource overview"
 icon = "utilities-system-monitor-symbolic"
+
+[[pane_providers]]
+id = "containers"
+title = "Containers"
+icon = "package-x-generic-symbolic"
+
+[[pane_providers]]
+id = "processes"
+title = "Container processes"
+icon = "system-run-symbolic"
+
+[[pane_providers]]
+id = "executions"
+title = "Container executions"
+icon = "utilities-terminal-symbolic"
+
+[[pane_providers]]
+id = "images"
+title = "Images"
+icon = "drive-harddisk-symbolic"
+
+[[pane_providers]]
+id = "volumes"
+title = "Volumes"
+icon = "folder-symbolic"
+
+[[pane_providers]]
+id = "networks"
+title = "Networks"
+icon = "network-workgroup-symbolic"
+
+[[pane_providers]]
+id = "terminals"
+title = "Terminal panes"
+icon = "utilities-terminal-symbolic"

@@ -8,7 +8,7 @@ import {
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
-const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'];
+export const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'];
 const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 const PROCESS_SAMPLING_CONCURRENCY = 8;
 
