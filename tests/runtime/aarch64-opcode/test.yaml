@@ -2,7 +2,7 @@ targets: [arm64]
 image: alpine:3.20
 execution: { translated: true, translated_diagnostics: true }
 build:
-  compiler: { arm64: aarch64-linux-gnu-gcc }
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
 cases:
   - id: runtime/aarch64-opcode/terminal-families
