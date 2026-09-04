@@ -1,6 +1,6 @@
 #include "../../../cache_abi.h"
 
-static int interp_step(struct cpu *cpu) {
+static int interp_step(struct cpu *cpu, unsigned *major_out) {
     uint32_t insn = 0;
     if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
         // Unreadable instruction: the JIT's R_FETCHFAULT; a guest SIGSEGV at this PC.
@@ -8,7 +8,9 @@ static int interp_step(struct cpu *cpu) {
         cpu->reason = R_FETCHFAULT;
         return INTERP_END;
     }
-    switch ((insn >> 25) & 0xF) {
+    unsigned major = (insn >> 25) & 0xF;
+    *major_out = major;
+    switch (major) {
     case 0x0:
         // op0 == 0000 is RESERVED and its only member, UDF, is PERMANENTLY undefined -- not a gap here, so
         // deliver a guest SIGILL instead of stopping the engine (SME and SVE below ARE allocated, stay fatal).
@@ -172,7 +174,9 @@ static void run_block(struct cpu *cpu, void *code) {
             cpu->reason = R_BRANCH;
             break;
         }
-        if (interp_step(cpu) == INTERP_END) break;
+        unsigned major = 0;
+        if (interp_step(cpu, &major) == INTERP_END) break;
+        hl_backend_tree_a64_body_retired(major);
         executed++;
     }
 

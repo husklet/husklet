@@ -4,6 +4,34 @@ use std::io::Write;
 
 const BACKEND_TREE_PREFIX: &str = "[diag] backend-tree ";
 const BACKEND_SHAPE_PREFIX: &str = "[diag] backend-shape ";
+const AARCH64_OPCODE_PREFIX: &str = "[diag] aarch64-opcode ";
+const AARCH64_OPCODE_FIELDS: &[&str] = &[
+    "version",
+    "available",
+    "body_retired",
+    "major0",
+    "major1",
+    "major2",
+    "major3",
+    "major4",
+    "major5",
+    "major6",
+    "major7",
+    "major8",
+    "major9",
+    "major10",
+    "major11",
+    "major12",
+    "major13",
+    "major14",
+    "major15",
+    "reserved",
+    "load_store",
+    "dp_register",
+    "dp_immediate",
+    "branch_system",
+    "simd_fp",
+];
 const X86_EXIT_FAMILY_PREFIX: &str = "[diag] x86-exit-family ";
 const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "version",
@@ -24,6 +52,79 @@ const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "t_fault",
     "t_other",
 ];
+
+pub(crate) fn aarch64_opcode_product(stderr: &[u8], enabled: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+    let stderr = std::str::from_utf8(stderr).map_err(|_| "aarch64-opcode diagnostic is not UTF-8")?;
+    let records: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(AARCH64_OPCODE_PREFIX))
+        .collect();
+    if !enabled {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        return Err("aarch64-opcode diagnostic appeared while disabled".into());
+    }
+    if records.len() != 1 {
+        return Err(format!(
+            "aarch64-opcode diagnostic appeared {} times, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let mut values = BTreeMap::new();
+    let mut order = Vec::new();
+    for field in records[0].split_ascii_whitespace() {
+        let (name, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("aarch64-opcode malformed field {field:?}"))?;
+        if !AARCH64_OPCODE_FIELDS.contains(&name) {
+            return Err(format!("aarch64-opcode unknown field {name:?}").into());
+        }
+        if values
+            .insert(
+                name,
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("aarch64-opcode field {name:?} is not an integer"))?,
+            )
+            .is_some()
+        {
+            return Err(format!("aarch64-opcode duplicate field {name:?}").into());
+        }
+        order.push(name);
+    }
+    if order != AARCH64_OPCODE_FIELDS {
+        return Err("aarch64-opcode fields are omitted or out of order".into());
+    }
+    if values["version"] != 1 || values["available"] != 1 {
+        return Err("aarch64-opcode version/availability is invalid".into());
+    }
+    let majors = (0..16).try_fold(0u64, |sum, i| {
+        sum.checked_add(values[format!("major{i}").as_str()])
+            .ok_or("aarch64-opcode major sum overflow")
+    })?;
+    let families = [
+        "reserved",
+        "load_store",
+        "dp_register",
+        "dp_immediate",
+        "branch_system",
+        "simd_fp",
+    ]
+    .into_iter()
+    .try_fold(0u64, |sum, name| {
+        sum.checked_add(values[name])
+            .ok_or("aarch64-opcode family sum overflow")
+    })?;
+    if majors != values["body_retired"] || families != values["body_retired"] {
+        return Err("aarch64-opcode counters do not reconcile".into());
+    }
+    if values["body_retired"] != 0 && families == 0 {
+        return Err("aarch64-opcode positive census has no family".into());
+    }
+    Ok(Some(values))
+}
 const BACKEND_SHAPE_PRODUCT_FIELDS: &[&str] = &[
     "version",
     "available",
@@ -1336,6 +1437,48 @@ fn glob(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const A64_OPCODE: &str = "[diag] aarch64-opcode version=1 available=1 body_retired=12 major0=0 major1=0 major2=0 major3=0 major4=2 major5=1 major6=1 major7=1 major8=2 major9=1 major10=1 major11=0 major12=1 major13=0 major14=1 major15=1 reserved=0 load_store=5 dp_register=1 dp_immediate=3 branch_system=1 simd_fp=2\n";
+
+    #[test]
+    fn aarch64_opcode_census_is_strict_and_reconciled() {
+        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true).unwrap().unwrap();
+        assert_eq!(parsed["body_retired"], 12);
+        assert!(parsed["load_store"] > 0);
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE.replace("body_retired=12", "body_retired=11").as_bytes(),
+                true
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE
+                    .replace("major15=1", "major15=18446744073709551615")
+                    .as_bytes(),
+                true
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE.replace(" major15=1", " unknown=1 major15=1").as_bytes(),
+                true
+            )
+            .is_err()
+        );
+        assert!(
+            aarch64_opcode_product(
+                A64_OPCODE
+                    .replace(" major8=2 major9=1", " major9=1 major8=2")
+                    .as_bytes(),
+                true
+            )
+            .is_err()
+        );
+        assert!(aarch64_opcode_product(A64_OPCODE.as_bytes(), false).is_err());
+    }
 
     #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
