@@ -473,6 +473,7 @@ test('image removal and prune require an explicit confirmation step', async () =
   assert.ok(labelled(stage, `Remove immutable image ${refreshedDigest}?`));
   invoke(stage, 'Confirm remove'); await settled();
   assert.deepEqual(calls, [['remove', refreshedDigest]]);
+  assert.ok(labelled(stage, `Image removal completed for ${refreshedDigest}; refreshed bounded inventory.`));
 
   const pruneStage = host();
   const pruneFrame = pruneStage.render(h(Images, { api: controlled, resource }));
@@ -1445,6 +1446,7 @@ test('volume and network mutations expose danger only on final confirm and cance
   invoke(volumes, 'Confirm remove');
   await settled();
   assert.deepEqual(calls, [['volume.remove', 'cache', refreshedVolumeGeneration]]);
+  assert.ok(labelled(volumes, `Volume cache generation ${refreshedVolumeGeneration} was removed; refreshed bounded inventory.`));
 
   const networks = host();
   const initialNetworks = resource([{ id: networkId, name: 'private', driver: 'bridge', scope: 'local' }]);
@@ -1467,6 +1469,11 @@ test('volume and network mutations expose danger only on final confirm and cance
   await settled();
   assert.equal(calls.some(([name]) => name === 'network.remove'), false);
   assert.ok(labelled(networks, `Network ${networkId} changed or disappeared; inspect and confirm again.`));
+  invoke(networks, 'Remove');
+  invoke(networks, 'Confirm remove');
+  await settled(); await settled();
+  assert.deepEqual(calls.at(-1), ['network.remove', refreshedNetworkId]);
+  assert.ok(labelled(networks, `Network ${refreshedNetworkId} was removed; refreshed bounded inventory.`));
 });
 
 test('shared volume confirmation disables both final actions while removal is pending', async () => {

@@ -32,6 +32,7 @@ export function Volumes({ api, resource, volumeDetails }: {
   const [name, setName] = React.useState('');
   const [inspection, setInspection] = React.useState<Inspection>(EMPTY_INSPECTION);
   const [creation, setCreation] = React.useState<Creation>({ state: 'idle', name: '', error: null });
+  const [removalNotice, setRemovalNotice] = React.useState('');
   const inspectionRevision = React.useRef(0);
   const inventoryRevision = React.useRef(resource.data);
   const currentVolumes = React.useRef(new Map<string, string>());
@@ -51,12 +52,14 @@ export function Volumes({ api, resource, volumeDetails }: {
     }
   };
   const remove = async (volume: VolumeSummary) => {
+    setRemovalNotice('');
     if (currentVolumes.current.get(volume.name) !== volume.generation) {
       throw new Error(`Volume ${volume.name} changed generation; inspect and confirm again.`);
     }
     await api.volumes.remove(volume.name, volume.generation);
     if (inspection.name === volume.name) setInspection(EMPTY_INSPECTION);
     await resource.reload();
+    setRemovalNotice(`Volume ${volume.name} generation ${volume.generation} was removed; refreshed bounded inventory.`);
   };
   const inspect = async (volume: VolumeSummary) => {
     const revision = ++inspectionRevision.current;
@@ -99,6 +102,7 @@ export function Volumes({ api, resource, volumeDetails }: {
     </Row> : null}
     {creation.state === 'error' ? <Text label={boundedMessage(creation.error)} color="danger" wrap /> : null}
     {creation.state === 'success' ? <Text label={`Created volume ${creation.name}.`} color="positive" wrap /> : null}
+    {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
     <ResourceState state={inventoryState} loadingLabel="Reading volumes…" emptyLabel="No volumes"
       emptyDetail="Create a named volume above when a workload needs durable storage."
       error={boundedMessage(resource.error)} retryLabel="Retry volumes" onRetry={resource.reload}>

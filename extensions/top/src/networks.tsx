@@ -37,6 +37,7 @@ export function Networks({ api, resource, networkDetails }: {
   const [error, setError] = React.useState<unknown>(null);
   const [creation, setCreation] = React.useState<Creation>({ state: 'idle', name: '', error: null });
   const [operation, setOperation] = React.useState<Operation>({ state: 'idle', request: null, error: null });
+  const [removalNotice, setRemovalNotice] = React.useState('');
   const [disconnectRequest, setDisconnectRequest] = React.useState<EndpointRequest | null>(null);
   const inspectionRevision = React.useRef(0);
   const inventoryRevision = React.useRef(resource.data);
@@ -65,10 +66,12 @@ export function Networks({ api, resource, networkDetails }: {
   };
   const remove = async (network: NetworkSummary) => {
     const id = resourceReference(network);
+    setRemovalNotice('');
     if (!requireCurrent(id)) return;
     await api.networks.remove(id);
     if (inspection.id === id) setInspection(EMPTY_INSPECTION);
     await resource.reload();
+    setRemovalNotice(`Network ${id} was removed; refreshed bounded inventory.`);
   };
   const inspect = async (network: NetworkSummary) => {
     const id = resourceReference(network);
@@ -159,6 +162,7 @@ export function Networks({ api, resource, networkDetails }: {
     </Row> : null}
     {creation.state === 'error' ? <Text label={boundedMessage(creation.error)} color="danger" wrap /> : null}
     {creation.state === 'success' ? <Text label={`Created network ${creation.name}.`} color="positive" wrap /> : null}
+    {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
     <Entry value={container} placeholder="Complete container ID" enabled={operation.state !== 'loading'}
       onChange={(event) => {
         setContainer(String(event.value ?? ''));

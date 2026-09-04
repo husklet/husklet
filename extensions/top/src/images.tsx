@@ -128,6 +128,7 @@ export function Images({ api, resource, imageDetails }: {
     setConfirm('');
     if (detail?.id === item.id) setDetail(null);
     await resource.reload();
+    setNotice(`Image removal completed for ${item.id}; refreshed bounded inventory.`);
   });
   const prune = () => run('prune', async () => {
     const result = await api.images.prune();
