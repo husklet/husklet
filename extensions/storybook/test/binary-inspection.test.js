@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { HEX_VIEW_BYTE_LIMIT, formatHex } from '../src/binary-inspection.js';
+import { HEX_VIEW_BYTE_LIMIT, formatHex } from '../dist/binary-inspection.js';
 
 test('binary projection has 16-byte rows and printable substitution', () => {
   const rendered = formatHex(Uint8Array.from([0x41, 0, 0x7a]));

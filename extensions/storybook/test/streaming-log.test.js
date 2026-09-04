@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { LOG_CHUNK_LIMIT, STREAMING_LOG_STORY, StreamingLogStory } from '../src/streaming-log.js';
-import { Playground } from '../src/app.js';
+import { LOG_CHUNK_LIMIT, STREAMING_LOG_STORY, StreamingLogStory } from '../dist/streaming-log.js';
+import { Playground } from '../dist/app.js';
 import { host } from './host.js';
 
 function labelled(patches, tag, label) {

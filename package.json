@@ -1,0 +1,12 @@
+{
+  "name": "@husklet/repository",
+  "private": true,
+  "type": "module",
+  "description": "Husklet JavaScript packages and first-party extensions.",
+  "workspaces": ["packages/client", "packages/react", "extensions/storybook", "extensions/workspace-manager"],
+  "scripts": {
+    "prepublish:check": "node tools/npm/prepublish-check.js",
+    "postpublish:check": "node tools/npm/postpublish-check.js"
+  },
+  "engines": { "node": ">=20" }
+}

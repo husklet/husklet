@@ -1,4 +1,5 @@
 /target/
+node_modules/
 **/target/
 # These are C source directories, not Cargo build output.
 !src/runtime/hl-native/src/native/engine/target/

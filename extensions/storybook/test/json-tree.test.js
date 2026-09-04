@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Playground } from '../src/app.js';
-import { JSON_TREE_STORY, JsonTreeStory } from '../src/json-tree.js';
+import { Playground } from '../dist/app.js';
+import { JSON_TREE_STORY, JsonTreeStory } from '../dist/json-tree.js';
 import { host } from './host.js';
 
 test('JSON tree story is composed, bounded, and reports interactions', () => {

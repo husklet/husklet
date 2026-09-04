@@ -33,8 +33,8 @@ mod unix {
         assert!(gtk::init().is_ok(), "run this test under Xvfb");
         let repository = repository();
         assert!(
-            repository.join("extensions/node_modules/@husklet/react").exists(),
-            "run `npm ci` in extensions before the GTK Storybook E2E"
+            repository.join("node_modules/@husklet/react").exists(),
+            "run `npm ci` at the repository root before the GTK Storybook E2E"
         );
         for (index, story) in STORIES.iter().enumerate() {
             render_story(&repository, story, index);
@@ -46,7 +46,7 @@ mod unix {
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).expect("the Storybook test socket binds");
         let mut child = Command::new("node")
-            .arg(repository.join("extensions/storybook/src/main.js"))
+            .arg(repository.join("extensions/storybook/dist/main.js"))
             .env("HUSKLET_EXTENSION_SOCKET", &socket)
             .env("HUSKLET_STORYBOOK_STORY", story)
             .current_dir(repository.join("extensions/storybook"))
@@ -130,13 +130,11 @@ mod unix {
         // A ColumnView realizes and recycles list-item children through a live
         // native root. Manually allocating it while unrooted exercises no valid
         // GTK lifecycle and leaves its factories measuring stale children.
-        let _realized_window = (story == "DataTable").then(|| {
-            let window = gtk::Window::new();
-            window.set_child(Some(&root));
-            window.present();
-            settle_toolkit();
-            window
-        });
+        let realized_window = gtk::Window::new();
+        realized_window.set_default_size(1_200, 800);
+        realized_window.set_child(Some(&root));
+        realized_window.present();
+        settle_toolkit();
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
@@ -156,6 +154,7 @@ mod unix {
                 );
             }
         }
+        capture_story(&realized_window, story);
         if story == "DataTable" {
             settle_toolkit();
             let requests = surface.requests(1);
@@ -393,6 +392,43 @@ mod unix {
             "the long-running entrypoint should only end when killed"
         );
         std::fs::remove_file(socket).expect("test socket is removed");
+    }
+
+    fn capture_story(window: &gtk::Window, story: &str) {
+        let Some(directory) = std::env::var_os("STORYBOOK_SHOT") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("Storybook screenshot directory is created");
+        let name = story
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
+        let node = (0..20)
+            .find_map(|_| {
+                window.queue_draw();
+                settle_toolkit();
+                let snapshot = gtk::Snapshot::new();
+                paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), 1_200.0, 800.0);
+                let node = snapshot.to_node();
+                if node.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                node
+            })
+            .expect("Storybook window produces a render node");
+        let renderer = window.renderer().expect("Storybook window has a renderer");
+        renderer
+            .render_texture(&node, None)
+            .save_to_png(directory.join(format!("{name}.png")))
+            .expect("Storybook screenshot is written");
     }
 
     fn receive_rerender(wire: &mut Wire<std::os::unix::net::UnixStream>, story: &str) -> hl_gui::Frame {

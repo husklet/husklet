@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import reactCatalogue from '../../react/catalogue.json' with { type: 'json' };
+import reactCatalogue from '../../../packages/react/catalogue.json' with { type: 'json' };
 
 import { components } from '@husklet/react';
 
-import catalogue, { enums, families, grouped, props, tags } from '../src/catalogue.js';
+import catalogue, { enums, families, grouped, props, tags } from '../dist/catalogue.js';
 
 test('the catalogue describes the whole library', () => {
   assert.equal(catalogue.version, 1);

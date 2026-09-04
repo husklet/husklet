@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 
-import { AcquisitionProgressStory, acquisitionStates } from '../src/acquisition.js';
+import { AcquisitionProgressStory, acquisitionStates } from '../dist/acquisition.js';
 import { host } from './host.js';
 
 const { createElement: h } = React;

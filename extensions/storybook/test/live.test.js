@@ -7,8 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { PACKAGE } from './host.js';
-import { FLOW_STORIES } from '../src/app.js';
-import { grouped, tags } from '../src/catalogue.js';
+import { FLOW_STORIES } from '../dist/app.js';
+import { grouped, tags } from '../dist/catalogue.js';
 
 const { KIND, Reader, encode } = await import(new URL('src/wire.js', `file://${PACKAGE}`));
 
@@ -88,7 +88,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     server.listen(socket, resolve);
   });
 
-  const child = spawn(process.execPath, ['src/main.js'], {
+  const child = spawn(process.execPath, ['dist/main.js'], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
     stdio: ['ignore', 'pipe', 'pipe'],

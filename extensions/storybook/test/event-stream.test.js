@@ -9,8 +9,8 @@ import {
   EVENT_WINDOW_LIMIT,
   EventStreamStory,
   TimelineSource,
-} from '../src/event-stream.js';
-import { Playground } from '../src/app.js';
+} from '../dist/event-stream.js';
+import { Playground } from '../dist/app.js';
 import { host } from './host.js';
 
 function labelled(patches, tag, label) {

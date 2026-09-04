@@ -7,7 +7,7 @@ import {
   NETWORK_DETAIL_SOURCE, NETWORK_DETAIL_WINDOW_LIMIT, NetworkDetailsSource,
   VOLUME_DETAIL_SOURCE, VOLUME_DETAIL_WINDOW_LIMIT, VolumeDetailsSource,
   bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId,
-} from '../src/model.js';
+} from '../dist/model.js';
 
 test('container rename validation matches the native byte grammar exactly', () => {
   for (const valid of ['a', 'Worker_2.prod', `a${'-'.repeat(127)}`]) assert.equal(containerNameError(valid), '');

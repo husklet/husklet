@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 
-import { Playground } from '../src/app.js';
-import { CONFIRMATION_STORY, ConfirmationStory } from '../src/confirmation.js';
+import { Playground } from '../dist/app.js';
+import { CONFIRMATION_STORY, ConfirmationStory } from '../dist/confirmation.js';
 import { host } from './host.js';
 
 const h = React.createElement;

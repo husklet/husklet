@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FILE_SOURCE, FileSource } from '../src/file-browser.js';
+import { FILE_SOURCE, FileSource } from '../dist/file-browser.js';
 
 test('file browsing materializes only the requested bounded window', () => {
   const source = new FileSource();

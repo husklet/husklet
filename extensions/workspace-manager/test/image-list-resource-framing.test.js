@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { connect, workspace } from '../../react/src/index.js';
-import { KIND, Reader, encode } from '../../react/src/wire.js';
-import { WorkspaceManager } from '../src/app.js';
+import { connect, workspace } from '../../../packages/react/src/index.js';
+import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
+import { WorkspaceManager } from '../dist/app.js';
 import { host } from './host.js';
 
 test('image inventory removes stale destructive controls across real framed refresh states', { timeout: 5_000 }, async () => {

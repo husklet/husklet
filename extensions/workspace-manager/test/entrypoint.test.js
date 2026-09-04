@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { KIND, Reader, encode } from '../../react/src/wire.js';
+import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
 
 test('the production entrypoint handshakes and renders through a real Unix socket', { timeout: 8_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'husklet-workspace-manager-'));
@@ -97,7 +97,7 @@ test('the production entrypoint handshakes and renders through a real Unix socke
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  const child = spawn(process.execPath, ['src/main.js'], {
+  const child = spawn(process.execPath, ['dist/main.js'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socketPath }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';

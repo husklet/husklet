@@ -75,9 +75,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    defaults:
-      run:
-        working-directory: extensions
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -105,7 +102,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
-          cache-dependency-path: extensions/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install the locked package graph
         run: npm ci
@@ -126,13 +123,13 @@ jobs:
           set -euo pipefail
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
-          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix client/examples/starter
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix packages/client/examples/starter
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
-          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix react/examples/starter
-          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix react/examples/starter
-          sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" react/examples/starter/Dockerfile
-          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" client/examples/starter/extension.toml
-          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" react/examples/starter/extension.toml
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix packages/react/examples/starter
+          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix packages/react/examples/starter
+          sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" packages/react/examples/starter/Dockerfile
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/client/examples/starter/extension.toml
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/react/examples/starter/extension.toml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
@@ -141,10 +138,10 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import client from './client/package.json' with { type: 'json' };
-          import clientStarter from './client/examples/starter/package.json' with { type: 'json' };
-          import react from './react/package.json' with { type: 'json' };
-          import starter from './react/examples/starter/package.json' with { type: 'json' };
+          import client from './packages/client/package.json' with { type: 'json' };
+          import clientStarter from './packages/client/examples/starter/package.json' with { type: 'json' };
+          import react from './packages/react/package.json' with { type: 'json' };
+          import starter from './packages/react/examples/starter/package.json' with { type: 'json' };
           const expected = process.env.RELEASE_VERSION;
           for (const [name, actual] of [
             ['@husklet/client', client.version],
@@ -171,7 +168,7 @@ jobs:
         id: publication
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: node tools/publication-plan.js
+        run: node tools/npm/publication-plan.js
 
       - name: Publish client with npm trusted publishing
         if: steps.publication.outputs.client == 'true'
@@ -243,16 +240,16 @@ jobs:
               --load \
               --tag "$image" \
               --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
-              --file extensions/react/Dockerfile \
-              extensions
+              --file extensions/base/Dockerfile \
+              .
             .github/scripts/smoke-extension-image.sh "$image" "$RELEASE_VERSION" base "$architecture"
           done
 
       - name: Build and publish one multi-architecture manifest
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: extensions
-          file: extensions/react/Dockerfile
+          context: .
+          file: extensions/base/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

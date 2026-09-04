@@ -1,5 +1,5 @@
 // Developer example: two independent React roots owned by one extension
-// session. This is deliberately separate from src/main.js so Storybook remains
+// session. This is deliberately separate from src/main.ts so Storybook remains
 // the canonical component catalogue rather than opening surprise panes.
 
 import React, { useState } from 'react';
