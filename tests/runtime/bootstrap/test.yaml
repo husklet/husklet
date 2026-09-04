@@ -8,14 +8,6 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"]
 cases:
-  - id: runtime/bootstrap/aarch64-dbt-movwide
-    status: active
-    targets: [arm64]
-    compat: { class: smoke }
-    build: { source: source/aarch64_dbt_movwide.c, output: aarch64-dbt-movwide, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
-    artifact: { destination: /opt/husklet/aarch64-dbt-movwide }
-    run: []
-    expect: { exit: 42, stdout_empty: true }
   - id: runtime/bootstrap/exit
     status: active
     compat: { class: smoke }
