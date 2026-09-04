@@ -149,7 +149,6 @@ export const PROTOCOL_SPECIFICATION_VERSION: ${schema.specification_version};
 export const PROTOCOL_VERSION: ${schema.protocol_version};
 export const PROTOCOL_BOUNDS: Readonly<${type({ kind: 'struct', fields: Object.entries(schema.bounds).map(([name]) => ({name, optional:false, schema:{kind:'integer',signed:false}})) })}>;
 export type ExtensionCapability = ${schema.capabilities.map(({wire}) => JSON.stringify(wire)).join(' | ')};
-export type Topic = ${schema.topics.map(({wire}) => JSON.stringify(wire)).join(' | ')};
 ${Object.entries(schema.definitions).map(([name, definition]) => `export type ${name} = ${type(definition)};`).join('\n')}
 export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};

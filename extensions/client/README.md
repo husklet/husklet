@@ -21,6 +21,12 @@ removes the completed execution record, and restores the container's initial
 stopped state. A failed wait/log operation remains recoverable through
 `ExecutionOperationError.executionId`; the example does not auto-remove it.
 
+`examples/agent-workspace-control.mjs` proves administrative create/start/stop/
+delete for a unique workspace name. It acknowledges lifecycle observation before
+each mutation, requires strictly increasing matching revisions, and deletes with
+the immutable generation returned by creation. It does not operate on the
+extension's hosting workspace.
+
 Every discovered pane has one framework-neutral text projection. Terminal panes
 return their interpreted visible screen and cursor snapshot; native and extension
 UI panes return bounded semantic XML:
@@ -101,8 +107,10 @@ const { execution, output } = await host.containers.execAndWait(container.id, {
 ```
 
 All options are validated before creation. A wait or log failure throws
-`ExecutionOperationError` with the retained `executionId` and failing `phase`;
-the client never removes that execution automatically.
+`ExecutionOperationError` with the retained `executionId` and failing `phase`.
+When waiting completed but log retrieval failed, `error.execution` also retains
+the authoritative completed summary so cleanup decisions do not require a
+racy second inspection. The client never removes that execution automatically.
 
 Signals can be coupled to an exact observed execution transition. The default
 waits for exit; use `state: 'changed'` when a non-terminating signal has a
@@ -198,6 +206,11 @@ title. The host-returned tab identity is verified against bounded pane inventory
 const opened = await host.terminal.openTabAndWait('Agent tools', { timeoutMs: 10_000 });
 if (opened.changed) console.log(opened.tab, opened.pane.slot);
 ```
+
+If the tab is created but its bounded inventory verification fails,
+`openTabAndWait` throws `TerminalOperationError`; `error.result` retains the exact
+host-returned `{ tab, title }` so the caller can recover without matching a
+mutable title. Failures before creation remain the original host error.
 
 For a framework-neutral extension, copy the complete starter from the installed
 package. It contains no React dependency or monorepo-relative import:

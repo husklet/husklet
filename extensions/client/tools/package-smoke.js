@@ -456,7 +456,7 @@ try {
     void acted; void xml; void request; void event; void protocol; void lifecycle; void cancellable.info();
   `);
   execFileSync(path.resolve(root, '../node_modules/.bin/tsc'), [
-    '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022',
+    '--noEmit', '--strict', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
   ], { cwd: consumer, stdio: 'pipe' });
 } finally {

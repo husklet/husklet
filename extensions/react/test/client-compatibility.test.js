@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Session as ClientSession, workspace as clientWorkspace } from '@husklet/client';
-import { Session, workspace } from '../src/index.js';
+import * as client from '@husklet/client';
+import * as react from '../src/index.js';
 
 test('React preserves the framework-neutral client exports by identity', () => {
-  assert.equal(Session, ClientSession);
-  assert.equal(workspace, clientWorkspace);
+  for (const [name, value] of Object.entries(client)) {
+    if (name === 'connect') continue;
+    assert.equal(react[name], value, `@husklet/react is missing the client ${name} export`);
+  }
+  assert.notEqual(react.connect, client.connect, 'React retains its render-aware connect override');
 });

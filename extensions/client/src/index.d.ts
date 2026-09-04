@@ -142,6 +142,14 @@ export class ExecutionOperationError extends Error {
   readonly executionId: string;
   readonly phase: 'wait' | 'logs';
   readonly cause: unknown;
+  /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
+  readonly execution?: ExecutionSummary;
+}
+
+export class TerminalOperationError extends Error {
+  readonly operation: 'open-tab';
+  readonly result: Readonly<{ tab: string; title: string }>;
+  readonly cause: unknown;
 }
 
 export interface ConnectOptions {
@@ -327,7 +335,7 @@ export interface WorkspaceApi {
     tabs(): Promise<TabSummary[]>;
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
-    /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. */
+    /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. Observation failures retain the created tab in TerminalOperationError. */
     openTabAndWait(title: string, options?: { timeoutMs?: number }): Promise<
       | { changed: true; tab: string; pane: InspectablePane }
       | { changed: false; tab: string; title: string }

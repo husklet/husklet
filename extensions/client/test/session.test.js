@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, ExecutionOperationError, Session, workspace } from '../src/index.js';
+import { connect, ExecutionOperationError, Session, TerminalOperationError, workspace } from '../src/index.js';
 import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
@@ -1062,6 +1062,42 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
   }
 });
 
+test('real Unix openTabAndWait retains the created tab when inventory verification fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-open-tab-recovery-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'event_subscribe' || frame.payload.call === 'event_unsubscribe') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+      } else if (frame.payload.call === 'terminal_open_tab') {
+        socket.write(encode({ channel: 130, kind: KIND.event, payload: {
+          snapshot: 'pane_changes', of: { slot: 'new-pane', kind: 'terminal', generation: 1, revision: 1, coalesced: 0 },
+        } }));
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'tab-created' } }));
+      } else if (frame.payload.call === 'pane_list') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'inventory unavailable' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'open-tab-recovery', granted: ['pane-observe', 'terminal-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).terminal.openTabAndWait('Recovery'), (error) => {
+      assert(error instanceof TerminalOperationError); assert.equal(error.operation, 'open-tab');
+      assert.deepEqual(error.result, { tab: 'tab-created', title: 'Recovery' });
+      assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['event_subscribe', 'terminal_open_tab', 'pane_list', 'event_unsubscribe']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix inspectAndAct validates live semantic authority before revision-bound action', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-inspect-act-'));
   const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set(); let reads = 0;
@@ -1175,6 +1211,42 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
       assert.equal(error.phase, 'wait'); assert.equal(error.cause?.kind, 'failed'); return true;
     });
     assert.deepEqual(calls, ['container_exec', 'execution_wait']);
+    assert(!calls.includes('execution_remove'));
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix execAndWait preserves the completed execution when bounded log retrieval fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-log-failure-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const containerId = 'c'.repeat(64); const executionId = 'd'.repeat(32);
+  const execution = { id: executionId, container_id: containerId, running: false, exit_code: 7, pid: 42, command: ['false'], user: 'root' };
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => { for (const frame of reader.take(chunk)) {
+      if (frame.channel !== 2) continue; calls.push(frame.payload.call);
+      if (frame.payload.call === 'container_exec') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
+      } else if (frame.payload.call === 'execution_wait') {
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'execution', with: execution } }));
+      } else if (frame.payload.call === 'execution_logs') {
+        socket.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'failed', detail: 'logs unavailable' } }));
+      }
+    } });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { protocol: 1, peer: 'exec-log-failure', granted: ['container-read', 'container-control'] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(workspace(session).containers.execAndWait(containerId, { command: ['false'] }), (error) => {
+      assert(error instanceof ExecutionOperationError); assert.equal(error.executionId, executionId);
+      assert.equal(error.phase, 'logs'); assert.deepEqual(error.execution, execution);
+      assert.equal(error.cause?.kind, 'failed'); return true;
+    });
+    assert.deepEqual(calls, ['container_exec', 'execution_wait', 'execution_logs']);
     assert(!calls.includes('execution_remove'));
     await session.close();
   } finally {

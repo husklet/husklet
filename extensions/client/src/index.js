@@ -11,11 +11,23 @@ import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from
 
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
-  constructor(executionId, phase, cause) {
+  constructor(executionId, phase, cause, execution = undefined) {
     super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = 'ExecutionOperationError';
     this.executionId = executionId;
     this.phase = phase;
+    this.cause = cause;
+    this.execution = execution;
+  }
+}
+
+/** A terminal authority succeeded, but its bounded observation could not be completed. */
+export class TerminalOperationError extends Error {
+  constructor(operation, result, cause) {
+    super(`terminal ${operation} observation failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'TerminalOperationError';
+    this.operation = operation;
+    this.result = Object.freeze({ ...result });
     this.cause = cause;
   }
 }
@@ -264,13 +276,14 @@ export function workspace(session, { signal } = {}) {
         const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
         const executionId = await api.containers.exec(containerId, { command: argv, user, workingDirectory });
         let phase = 'wait';
+        let execution;
         try {
-          const execution = await api.containers.waitExecution(executionId, { timeoutMs });
+          execution = await api.containers.waitExecution(executionId, { timeoutMs });
           phase = 'logs';
           const output = await api.containers.executionLogs(executionId, { stdout, stderr });
           return { execution, output };
         } catch (cause) {
-          throw new ExecutionOperationError(executionId, phase, cause);
+          throw new ExecutionOperationError(executionId, phase, cause, execution);
         }
       },
       attachTerminal: (id, command) => session.call('container_attach_terminal', {
@@ -733,8 +746,9 @@ export function workspace(session, { signal } = {}) {
     const observed = new Promise((resolve) => { changed = resolve; });
     const stop = await api.watchPaneChanges((change) => changed(change));
     let timer;
+    let tab;
     try {
-      const tab = await api.terminal.openTab(wanted);
+      tab = await api.terminal.openTab(wanted);
       const change = await Promise.race([
         observed,
         new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
@@ -746,6 +760,9 @@ export function workspace(session, { signal } = {}) {
         ? 'opened tab cannot be verified from a truncated pane inventory'
         : 'opened tab has no observable pane');
       return { changed: true, tab, pane };
+    } catch (cause) {
+      if (tab === undefined) throw cause;
+      throw new TerminalOperationError('open-tab', { tab, title: wanted }, cause);
     } finally {
       clearTimeout(timer);
       await stop();

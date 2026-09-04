@@ -11,6 +11,7 @@ USER root
 COPY --chown=node:node extension.toml /etc/husklet/extension.toml
 RUN test -n "${HUSKLET_EXTENSION_VERSION}" \
     && test -n "${HUSKLET_REACT_VERSION}" \
+    && test "$(node -p "require('@husklet/client/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
     && sed -i "s/^version = .*/version = \"${HUSKLET_EXTENSION_VERSION}\"/" /etc/husklet/extension.toml
 USER node
@@ -20,4 +21,5 @@ CMD ["node", "/app/src/main.js"]
 LABEL husklet.extension.protocol="1"
 LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"
 LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"
+LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"
 LABEL husklet.extension.manifest="/etc/husklet/extension.toml"

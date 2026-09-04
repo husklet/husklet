@@ -15,6 +15,7 @@ expect_literal() {
 }
 
 expect_literal extensions/react/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/react/Dockerfile 'LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"'
 expect_literal extensions/.dockerignore 'node_modules'
 expect_literal extensions/.dockerignore '**/node_modules'
 expect_literal extensions/.dockerignore 'npm-debug.log*'
@@ -79,11 +80,14 @@ for extension in storybook workspace-manager; do
   expect_literal "$dockerfile" 'FROM ${HUSKLET_REACT_IMAGE}'
   expect_literal "$dockerfile" 'ARG HUSKLET_EXTENSION_VERSION'
   expect_literal "$dockerfile" 'ARG HUSKLET_REACT_VERSION'
+  expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/client/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
+  expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/react/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" 'LABEL husklet.extension.manifest="/etc/husklet/extension.toml"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"'
+  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"'
 
   [[ "$(sed -n 's/^name = "\([^"]*\)"$/\1/p' "$root/$manifest")" == "$extension" ]] \
     || fail "$manifest must declare name = \"$extension\""

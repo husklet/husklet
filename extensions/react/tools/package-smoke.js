@@ -216,18 +216,23 @@ try {
     cwd: consumer, stdio: 'pipe',
   });
   const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
-    import { Button, CommandPaletteView, ConfirmAction, ResourceState, TerminalTranscript, acceptsChildren, connect, tags, workspace } from '@husklet/react';
+    import { Button, CommandPaletteView, ConfirmAction, ResourceState, TerminalTranscript, acceptsChildren, connect, protocolSurface, requestCapability, tags, validateUiEvent, workspace } from '@husklet/react';
     import catalogue from '@husklet/react/catalogue' with { type: 'json' };
     if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function' || typeof CommandPaletteView !== 'function' || typeof ConfirmAction !== 'function' || typeof ResourceState !== 'function') process.exit(1);
     if (Button !== 'Button' || !acceptsChildren('Column')) process.exit(2);
     if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
+    if (protocolSurface.requests.workspace_info.api !== 'info' || requestCapability('workspace_info') !== 'workspace-read') process.exit(4);
+    if (validateUiEvent({ interaction: 'focus', trigger: 'Focus', node: 1, id: 'focus-1', focused: true }).interaction !== 'focus') process.exit(5);
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
+  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.join(root, 'image-runtime/package.json'), 'utf8'));
   for (const field of ['cpu', 'os', 'libc']) {
     assert.equal(manifest[field], undefined, `React SDK gained an architecture restriction in ${field}`);
   }
   assert.equal(manifest.dependencies['@husklet/client'], manifest.version, 'React SDK must depend on the same public client version');
+  assert.equal(manifest.dependencies['react-reconciler'], imageRuntimeManifest.dependencies['react-reconciler'],
+    'published SDK reconciler must exactly match the multi-architecture base runtime');
   assert.equal(manifest.exports['.'].types, './src/index.d.ts');
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
@@ -280,9 +285,13 @@ try {
   assert.match(starterManifest, /^capabilities = \["interface"\]$/m);
 
   fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
-    import { CommandPaletteView, ConfirmAction, TerminalTranscript, render, useHostEvents, usePaneSelection, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
+    import { CommandPaletteView, ConfirmAction, TerminalTranscript, protocolSurface, render, requestCapability, useHostEvents, usePaneSelection, validateUiEvent, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
+    const requiredGrant: string = requestCapability('workspace_info');
+    const infoMethod: string = protocolSurface.requests.workspace_info.kind;
+    const validatedEvent: HostEvent = validateUiEvent({ interaction: 'focus', trigger: 'Focus', node: 1, id: 'focus-1', focused: true });
+    void requiredGrant; void infoMethod; void validatedEvent;
     const cancellable = api.withSignal(new AbortController().signal);
     const table: Promise<ProcessList> = api.containers.processes('container');
     const attachmentGrant: ExtensionCapability = 'container-attach';
