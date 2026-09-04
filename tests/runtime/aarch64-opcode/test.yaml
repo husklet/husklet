@@ -1,0 +1,40 @@
+targets: [arm64]
+image: alpine:3.20
+execution: { translated: true, translated_diagnostics: true }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc }
+  flags: [-nostdlib, -static, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
+cases:
+  - id: runtime/aarch64-opcode/terminal-families
+    status: active
+    compat: { class: compatibility }
+    build: { source: terminal.S, output: terminal }
+    artifact: { destination: /opt/husklet/aarch64-opcode-terminal }
+    run: []
+    expect:
+      exit: 0
+      stdout_empty: true
+      diagnostics:
+        - { counter: body_retired, equals: 12 }
+        - { counter: major0, equals: 0 }
+        - { counter: major1, equals: 0 }
+        - { counter: major2, equals: 0 }
+        - { counter: major3, equals: 0 }
+        - { counter: major4, equals: 0 }
+        - { counter: major5, equals: 0 }
+        - { counter: major6, equals: 0 }
+        - { counter: major7, equals: 0 }
+        - { counter: major8, equals: 1 }
+        - { counter: major9, equals: 2 }
+        - { counter: major10, equals: 7 }
+        - { counter: major11, equals: 2 }
+        - { counter: major12, equals: 0 }
+        - { counter: major13, equals: 0 }
+        - { counter: major14, equals: 0 }
+        - { counter: major15, equals: 0 }
+        - { counter: reserved, equals: 0 }
+        - { counter: load_store, equals: 0 }
+        - { counter: dp_register, equals: 0 }
+        - { counter: dp_immediate, equals: 3 }
+        - { counter: branch_system, equals: 9 }
+        - { counter: simd_fp, equals: 0 }
