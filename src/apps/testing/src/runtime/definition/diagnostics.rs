@@ -9,13 +9,14 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The records that carry named counters; other `hl-native-*` lines are per-site histograms.
-const RECORDS: [&str; 6] = [
+const RECORDS: [&str; 7] = [
     "[prof]",
     "hl-c:",
     "hl-native:",
     "hl-native-detail:",
     "hl-native-entry:",
     "hl-interp:",
+    "[diag] aarch64-opcode",
 ];
 
 /// The counters written into every result row, in this order. Deliberately a subset: five emitted
