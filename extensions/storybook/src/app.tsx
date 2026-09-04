@@ -12,7 +12,6 @@ import {
   Entry,
   Heading,
   InlineMessage,
-  List,
   ListItemButton,
   ListSubheader,
   NumberEntry,
@@ -137,8 +136,8 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
   const query = search.trim().toLocaleLowerCase();
   const results = searchResults(families, query);
   return (
-    <Scroll width={'fill'} height={'fill'}>
-      <List pad={1}>
+    <Scroll width={{ chars: 26 }} height={'fill'}>
+      <Column pad={1} gap={1}>
         <ListSubheader
           key={'find'}
           label={'Find a story'}
@@ -194,7 +193,7 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
           selected={tag.name === selected}
           onInvoke={() => onSelect(tag.name)} />),
           ]}
-      </List>
+      </Column>
     </Scroll>
   );
 }
@@ -400,7 +399,7 @@ export function Inspector({ name, properties, triggers, props, onChange }) {
     current.rows.push(row);
   }
   return (
-    <Scroll width={'fill'} height={'fill'}>
+    <Scroll width={{ chars: 32 }} height={'fill'}>
       <Column pad={3} gap={2}>
         <Heading key={'title'} label={`${name} properties`} scale={'caption'} wrap={true} />
         <Text key={'note'} label={notes.values} color={'text-dim'} wrap={true} />

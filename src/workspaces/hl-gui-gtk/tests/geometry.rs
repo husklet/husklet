@@ -114,7 +114,34 @@ fn geometry_is_what_the_description_asked_for() {
     padding_lands_on_the_side_it_names();
     alignment_follows_the_axis_of_its_container();
     a_size_range_becomes_a_floor_the_toolkit_honours();
+    a_character_width_applies_to_a_scrolling_container();
+    a_list_button_ellipsizes_from_its_reading_edge();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
+}
+
+fn a_character_width_applies_to_a_scrolling_container() {
+    let mut stage = Stage::new();
+    let list = stage.producer.create(Tag::List);
+    stage.producer.set(list, Prop::Width, PropValue::Length(Length::Chars(26)));
+    stage.producer.append(NodeId::ROOT, list);
+    stage.draw();
+
+    let widget = stage.tagged(Tag::List);
+    let (minimum, _, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    assert!(minimum >= 130, "26 character navigation collapsed to {minimum}px");
+}
+
+fn a_list_button_ellipsizes_from_its_reading_edge() {
+    let mut stage = Stage::new();
+    let item = stage.producer.create(Tag::ListItemButton);
+    stage.producer.set(item, Prop::Label, PropValue::text("A deliberately long navigation destination"));
+    stage.producer.append(NodeId::ROOT, item);
+    stage.draw();
+
+    let button = stage.tagged(Tag::ListItemButton).downcast::<gtk::Button>().expect("list item is a button");
+    let label = button.child().and_then(|child| child.downcast::<gtk::Label>().ok()).expect("list item owns its label");
+    assert_eq!(label.xalign(), 0.0);
+    assert_eq!(label.ellipsize(), gtk::pango::EllipsizeMode::End);
 }
 
 /// Storybook's catalogue and inspector are scrolling panes. They must share the

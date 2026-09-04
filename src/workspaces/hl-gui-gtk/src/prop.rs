@@ -238,7 +238,17 @@ fn characters(widget: &gtk::Widget, count: u16) {
     }
     if let Some(label) = widget.downcast_ref::<gtk::Label>() {
         label.set_width_chars(count.into());
+        return;
     }
+    // Containers and scrolling views do not expose `width-chars`, but Chars is
+    // a universal layout value. Resolve it through the widget's actual font so
+    // a 26-character navigation pane does not silently collapse to a few pixels.
+    let units = widget.pango_context().metrics(None, None).approximate_char_width();
+    let pixels = units
+        .saturating_mul(i32::from(count))
+        .saturating_add(gtk::pango::SCALE - 1)
+        / gtk::pango::SCALE;
+    widget.set_size_request(pixels.max(1), widget.height_request());
 }
 
 /// A floor and a ceiling on one axis.

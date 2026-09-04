@@ -9,6 +9,7 @@ import {
   FLOW_STORIES,
   Playground,
   Preview,
+  Sidebar,
   SEARCH_RESULT_LIMIT,
   interactionDetail,
   interactionProps,
@@ -83,6 +84,16 @@ test('the playground renders flows and only one bounded component family', () =>
   assert.ok(built.filter((tag) => tag === 'ListItemButton').length < tags.length / 2);
   assert.ok(built.includes('Scroll'), 'the sidebar and the inspector scroll');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
+});
+
+test('the sidebar uses one native scroller without nesting a List scroller', () => {
+  const frame = host().render(h(Sidebar, {
+    families: grouped(), selected: 'Button', activeFamily: 'buttons',
+    onFamily: () => {}, onSelect: () => {},
+  }));
+  const built = created(frame.patches).map((entry) => entry.tag);
+  assert.equal(built.filter((tag) => tag === 'Scroll').length, 1);
+  assert.equal(built.filter((tag) => tag === 'List').length, 0, 'nested native scrollers collapse the navigation');
 });
 
 test('global navigation finds an unknown-family component without materializing the catalogue', () => {

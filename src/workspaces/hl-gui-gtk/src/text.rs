@@ -45,6 +45,13 @@ fn mark(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
         label.set_text(content);
         return true;
     }
+    if tag == Tag::ListItemButton {
+        if let (Some(button), Some(label)) = (widget.downcast_ref::<gtk::Button>(), slot::caption(widget)) {
+            label.set_text(content);
+            button.update_property(&[gtk::accessible::Property::Label(content)]);
+            return true;
+        }
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.set_label(content);
         return true;
