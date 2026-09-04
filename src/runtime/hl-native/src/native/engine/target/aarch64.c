@@ -1188,7 +1188,8 @@ HL_API int hl_aarch64_reserved_register_test(void) {
    receives has already been imported into engine storage, so the guest PROT_NONE ledger must not be
    consulted about it.  Both target TUs export the probe because both compile that syscall layer. */
 HL_API int hl_aarch64_imported_path_guard_test(void) {
-    return hl_linux_imported_path_guard_probe();
+    int result = hl_linux_imported_path_guard_probe();
+    return result == 0 ? hl_vfs_cursor_origin_preservation_test() : result;
 }
 
 HL_API int hl_aarch64_clone3_extended_args_test(uint32_t scenario) {

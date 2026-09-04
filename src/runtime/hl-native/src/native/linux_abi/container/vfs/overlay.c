@@ -52,6 +52,7 @@ static int hl_vfs_cursor_mount_authority(const char *guest, hl_vfs_cursor_author
         return 0;
     }
     int error = hl_vfs_cursor_authority_clone(&source, output);
+    if (error == 0) output->origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_VOLUME, volume};
     return error != 0 ? error : 1;
 }
 
@@ -164,13 +165,17 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *outp
     hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
     for (int index = 0; index < g_nlower; index++)
         if (g_linux_box != NULL && g_lower_handle[index] != HL_HOST_HANDLE_INVALID) {
+            memset(&lowers[index], 0, sizeof lowers[index]);
             lowers[index].kind = HL_VFS_CURSOR_AUTHORITY_HOST;
             lowers[index].value.host.handle = g_lower_handle[index];
             lowers[index].value.host.services = g_host_services;
         } else {
             lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
         }
+    for (int index = 0; index < g_nlower; index++)
+        lowers[index].origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_LOWER, index};
     hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    upper.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UPPER, 0};
     if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
         upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
         upper.value.host.handle = g_root_handle;
@@ -185,7 +190,10 @@ static int hl_vfs_cursor_namespace_root_native_lowers(hl_vfs_cursor *output) {
     hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
     for (int index = 0; index < g_nlower; index++)
         lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
+    for (int index = 0; index < g_nlower; index++)
+        lowers[index].origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_LOWER, index};
     hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    upper.origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UPPER, 0};
     if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
         upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
         upper.value.host.handle = g_root_handle;

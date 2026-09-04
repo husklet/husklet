@@ -21,8 +21,26 @@ typedef enum hl_vfs_cursor_authority_kind {
     HL_VFS_CURSOR_AUTHORITY_HOST = 2,
 } hl_vfs_cursor_authority_kind;
 
+typedef enum hl_vfs_cursor_origin_kind {
+    HL_VFS_CURSOR_ORIGIN_UNKNOWN = 0,
+    HL_VFS_CURSOR_ORIGIN_UPPER = 1,
+    HL_VFS_CURSOR_ORIGIN_LOWER = 2,
+    HL_VFS_CURSOR_ORIGIN_VOLUME = 3,
+    HL_VFS_CURSOR_ORIGIN_NAME_BIND = 4,
+} hl_vfs_cursor_origin_kind;
+
+typedef struct hl_vfs_cursor_origin {
+    hl_vfs_cursor_origin_kind kind;
+    int index;
+} hl_vfs_cursor_origin;
+
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_origin_is_lower(const hl_vfs_cursor_origin *origin, int index) {
+    return origin != NULL && origin->kind == HL_VFS_CURSOR_ORIGIN_LOWER && origin->index == index;
+}
+
 typedef struct hl_vfs_cursor_authority {
     hl_vfs_cursor_authority_kind kind;
+    hl_vfs_cursor_origin origin;
 
     union {
         int descriptor;
@@ -33,6 +51,11 @@ typedef struct hl_vfs_cursor_authority {
         } host;
     } value;
 } hl_vfs_cursor_authority;
+
+static void hl_vfs_cursor_authority_inherit_origin(hl_vfs_cursor_authority *output,
+                                                   const hl_vfs_cursor_authority *source) {
+    if (output != NULL && source != NULL) output->origin = source->origin;
+}
 
 typedef struct hl_vfs_cursor {
     hl_vfs_cursor_authority layers[HL_VFS_CURSOR_LAYERS];
@@ -106,6 +129,7 @@ static int hl_vfs_cursor_authority_clone(const hl_vfs_cursor_authority *source, 
         int descriptor = fcntl(source->value.descriptor, F_DUPFD_CLOEXEC, 0);
         if (descriptor < 0) return -errno;
         *output = hl_vfs_cursor_native(descriptor);
+        hl_vfs_cursor_authority_inherit_origin(output, source);
         return 0;
     }
     if (source->kind != HL_VFS_CURSOR_AUTHORITY_HOST || source->value.host.services == NULL ||
@@ -118,6 +142,7 @@ static int hl_vfs_cursor_authority_clone(const hl_vfs_cursor_authority *source, 
     output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
     output->value.host.handle = cloned.value;
     output->value.host.services = source->value.host.services;
+    hl_vfs_cursor_authority_inherit_origin(output, source);
     return 0;
 }
 
@@ -234,6 +259,7 @@ static int hl_vfs_cursor_authority_probe(const hl_vfs_cursor_authority *authorit
     held.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
     held.value.host.handle = opened.value;
     held.value.host.services = authority->value.host.services;
+    hl_vfs_cursor_authority_inherit_origin(&held, authority);
     hl_host_result described = file->metadata(authority->value.host.services->context, opened.value, &metadata_slot);
     error = hl_vfs_cursor_host_error(described);
     if (error != 0) {
@@ -253,6 +279,7 @@ static int hl_vfs_cursor_authority_open_child(const hl_vfs_cursor_authority *aut
         int descriptor = openat(authority->value.descriptor, component, flags);
         if (descriptor < 0) return -errno;
         *output = hl_vfs_cursor_native(descriptor);
+        hl_vfs_cursor_authority_inherit_origin(output, authority);
         return 0;
     }
     if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
@@ -267,6 +294,7 @@ static int hl_vfs_cursor_authority_open_child(const hl_vfs_cursor_authority *aut
     output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
     output->value.host.handle = opened.value;
     output->value.host.services = authority->value.host.services;
+    hl_vfs_cursor_authority_inherit_origin(output, authority);
     return 0;
 }
 
@@ -286,6 +314,7 @@ static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *auth
 #endif
         if (descriptor < 0) return -errno;
         *output = hl_vfs_cursor_native(descriptor);
+        hl_vfs_cursor_authority_inherit_origin(output, authority);
         return 0;
     }
     if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
@@ -299,6 +328,7 @@ static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *auth
     output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
     output->value.host.handle = opened.value;
     output->value.host.services = authority->value.host.services;
+    hl_vfs_cursor_authority_inherit_origin(output, authority);
     return 0;
 }
 
@@ -389,9 +419,12 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_root(int upper, const int *lowers,
     hl_vfs_cursor source;
     memset(&source, 0, sizeof source);
     source.layers[source.count++] = hl_vfs_cursor_native(upper);
+    source.layers[0].origin = (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_UPPER, 0};
     for (size_t index = 0; index < lower_count; index++) {
         if (lowers[index] < 0) return -EINVAL;
         source.layers[source.count++] = hl_vfs_cursor_native(lowers[index]);
+        source.layers[source.count - 1].origin =
+            (hl_vfs_cursor_origin){HL_VFS_CURSOR_ORIGIN_LOWER, (int)index};
     }
     snprintf(source.guest, sizeof source.guest, "/");
     return hl_vfs_cursor_clone(&source, output);
@@ -419,6 +452,48 @@ static int hl_vfs_cursor_native_descriptor(const hl_vfs_cursor *cursor) {
                ? cursor->layers[0].value.descriptor
                : -1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+static int hl_vfs_cursor_origin_preservation_test(void) {
+    int directory = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directory < 0) return 1;
+    const hl_vfs_cursor_origin origins[] = {
+        {HL_VFS_CURSOR_ORIGIN_UNKNOWN, 0},
+        {HL_VFS_CURSOR_ORIGIN_UPPER, 0},
+        {HL_VFS_CURSOR_ORIGIN_LOWER, 3},
+        {HL_VFS_CURSOR_ORIGIN_VOLUME, 4},
+        {HL_VFS_CURSOR_ORIGIN_NAME_BIND, 5},
+    };
+    int failure = 0;
+    for (size_t index = 0; index < sizeof origins / sizeof origins[0] && failure == 0; index++) {
+        hl_vfs_cursor_authority source = hl_vfs_cursor_native(directory);
+        source.origin = origins[index];
+        hl_vfs_cursor_authority clone = {0}, child = {0};
+        if (hl_vfs_cursor_authority_clone(&source, &clone) != 0 ||
+            hl_vfs_cursor_authority_open_child(&source, ".", 1, &child) != 0 ||
+            memcmp(&clone.origin, &origins[index], sizeof origins[index]) != 0 ||
+            memcmp(&child.origin, &origins[index], sizeof origins[index]) != 0)
+            failure = 2;
+        hl_vfs_cursor_authority_close(&child);
+        hl_vfs_cursor_authority_close(&clone);
+    }
+    int lower = directory;
+    hl_vfs_cursor root = {0};
+    if (failure == 0 && hl_vfs_cursor_root(directory, &lower, 1, &root) != 0)
+        failure = 3;
+    else if (failure == 0 &&
+             (root.count != 2 || root.layers[0].origin.kind != HL_VFS_CURSOR_ORIGIN_UPPER ||
+              !hl_vfs_cursor_origin_is_lower(&root.layers[1].origin, 0)))
+        failure = 4;
+    hl_vfs_cursor_release(&root);
+    close(directory);
+    return failure;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+static int hl_vfs_cursor_origin_preservation_test(void) {
+    return 0;
+}
+#endif
 
 static int hl_vfs_cursor_component_valid(const char *component) {
     return component != NULL && component[0] && strcmp(component, ".") && strcmp(component, "..") &&
