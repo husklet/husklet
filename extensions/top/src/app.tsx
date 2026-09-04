@@ -1,18 +1,36 @@
-// @ts-nocheck -- the model types are tightened independently of the JSX migration.
+// @ts-nocheck -- operational pages are migrated after the strict overview shell.
 import React from 'react';
 import {
   Badge, Button, Card, CardActions, CardContent, CardHeader, Column, Entry,
   ConfirmAction, EmptyState, Heading, KeyValueTable, List, ListItemButton, LogView, Meter, ObjectInspector, ResourceState, Row, Scroll, Separator, Spinner, Text,
   LOG_VIEW_CHARACTER_LIMIT,
+  type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
+  type TabSummary, type VolumeSummary, type WorkspaceApi,
 } from '@husklet/react';
 import { ContainerDetailsSource, EXECUTION_DETAIL_SOURCE, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource, LOG_LIMIT, bounded, boundedMessage, bytes, containerNameError, endpointAliases, immutableContainerId, logText, processRows, resourceReference, shortId } from './model.js';
+import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
+
+export { Overview, SECTIONS } from './overview.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
-export const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'];
+type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
+type TopProps = {
+  api: WorkspaceApi;
+  selections?: Selections;
+  containerDetails?: ContainerDetailsSource;
+  executionDetails?: ExecutionDetailsSource;
+  imageDetails?: ImageDetailsSource;
+  networkDetails?: NetworkDetailsSource;
+  volumeDetails?: VolumeDetailsSource;
+  initial?: Partial<{
+    containers: ContainerSummary[]; executions: ExecutionSummary[]; images: ImageSummary[];
+    volumes: VolumeSummary[]; networks: NetworkSummary[]; terminals: TabSummary[];
+  }>;
+};
 const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 const PROCESS_SAMPLING_CONCURRENCY = 8;
 
-function StructuredDetail({ value }) {
+function StructuredDetail({ value }: { value: unknown }) {
   return (
     <ObjectInspector
       value={value}
@@ -21,8 +39,8 @@ function StructuredDetail({ value }) {
   );
 }
 
-export function Top({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }) {
-  const [section, setSection] = useState('overview');
+export function Top({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }: TopProps) {
+  const [section, setSection] = useState<Section>('overview');
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -54,7 +72,7 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     };
   }, [api, section, executions.replace]);
   useEffect(() => selections?.subscribe((event) => {
-    if (SECTIONS.includes(event?.pane_provider)) setSection(event.pane_provider);
+    if ('pane_provider' in event && SECTIONS.includes(event.pane_provider as Section)) setSection(event.pane_provider as Section);
     if (event?.snapshot === 'containers') void containers.reload();
     if (event?.snapshot === 'images') void images.reload();
     if (event?.snapshot === 'volumes') void volumes.reload();
@@ -118,77 +136,6 @@ export function Top({ api, selections, containerDetails, executionDetails, image
       <Separator orientation={'vertical'} />
       {body}
     </Row>
-  );
-}
-
-function Navigation({ section, onSelect }) {
-  return (
-    <Column width={{ chars: 22 }} height={'fill'} pad={2} gap={1}>
-      <Heading label={'Workspace'} scale={'title'} />
-      <Text label={'Runtime resources'} color={'text-dim'} />
-      <List grow={true}>
-        {SECTIONS.map((name) => <ListItemButton
-          key={name}
-          label={title(name)}
-          variant={section === name ? 'filled' : 'ghost'}
-          onInvoke={() => onSelect(name)} />)}
-      </List>
-    </Column>
-  );
-}
-
-export function Overview({ containers, images, volumes, networks, terminals = { data: [], loading: false, error: null }, onOpen }) {
-  const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
-  const imagesSummary = resourceSummary(images, () => 'Available locally');
-  const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
-  const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
-  const terminalsSummary = resourceSummary(terminals, (records) => `${records.filter((tab) => tab.pinned).length} pinned`);
-  return (
-    <Scroll grow={true} height={'fill'}>
-      <Column pad={4} gap={3}>
-        <Heading label={'Workspace overview'} scale={'title'} />
-        <Text
-          label={'Inspect and operate the resources in this workspace.'}
-          color={'text-dim'} />
-        <Row gap={2} wrap={true}>
-          <Summary
-            title={'Containers'}
-            {...containersSummary}
-            onOpen={() => onOpen('containers')} />
-          <Summary title={'Images'} {...imagesSummary} onOpen={() => onOpen('images')} />
-          <Summary title={'Volumes'} {...volumesSummary} onOpen={() => onOpen('volumes')} />
-          <Summary title={'Networks'} {...networksSummary} onOpen={() => onOpen('networks')} />
-          <Summary
-            title={'Terminal tabs'}
-            {...terminalsSummary}
-            onOpen={() => onOpen('terminals')} />
-        </Row>
-        <ErrorText
-          error={containers.error ?? images.error ?? volumes.error ?? networks.error ?? terminals.error} />
-      </Column>
-    </Scroll>
-  );
-}
-
-function resourceSummary(resource, readyDetail) {
-  if (resource.loading) return { value: '…', detail: 'Reading inventory…' };
-  if (resource.error) return { value: 'Unavailable', detail: 'Refresh failed' };
-  const records = resource.data ?? [];
-  return { value: String(records.length), detail: readyDetail(records) };
-}
-
-function Summary({ title: label, value, detail, onOpen }) {
-  return (
-    <Card width={{ minimum: { chars: 24 } }} variant={'outline'}>
-      <CardHeader label={label} />
-      <CardContent gap={1}>
-        <Heading label={value} scale={'title'} />
-        <Text label={detail} color={'text-dim'} />
-      </CardContent>
-      <CardActions>
-        <Button label={'Open'} variant={'ghost'} onInvoke={onOpen} />
-      </CardActions>
-    </Card>
   );
 }
 
@@ -1700,7 +1647,7 @@ export function Terminals({ api, resource }) {
   );
 }
 
-function Page({ title: label, subtitle, children }) { return (
+function Page({ title: label, subtitle, children }: { title: string; subtitle: string; children?: React.ReactNode }) { return (
   <Scroll grow={true} height={'fill'}>
     <Column pad={4} gap={2}>
       <Heading label={label} scale={'title'} />
@@ -1709,29 +1656,31 @@ function Page({ title: label, subtitle, children }) { return (
     </Column>
   </Scroll>
 ); }
-function Toolbar({ loading, onRefresh }) { return (
+function Toolbar({ loading, onRefresh }: { loading: boolean; onRefresh: () => void | Promise<void> }) { return (
   <Row gap={1} align={'center'}>
     {loading ? <Spinner /> : null}
     <Button label={'Refresh'} enabled={!loading} onInvoke={onRefresh} />
   </Row>
 ); }
-function ErrorText({ error }) { return error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null; }
-function InventoryEmpty({ resource, records, label, detail }) {
+function ErrorText({ error }: { error: unknown }) { return error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null; }
+function InventoryEmpty<T>({ resource, records, label, detail }: {
+  resource: Pick<Resource<T>, 'loading' | 'error'>; records: T[]; label: string; detail: string;
+}) {
   return !resource.loading && !resource.error && records.length === 0
     ? <EmptyState label={label} detail={detail} />
     : null;
 }
-function Omitted({ count }) { return count > 0 ? <Text
+function Omitted({ count }: { count: number }) { return count > 0 ? <Text
   label={`${count} more records omitted to keep this view bounded.`}
   color={'text-dim'} /> : null; }
 
-function title(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
-function stateTone(state) { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
+function title(value: string): string { return value.charAt(0).toUpperCase() + value.slice(1); }
+function stateTone(state: string): 'positive' | 'warning' | 'neutral' { return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral'; }
 
-function useResource(loader, initial) {
-  const [data, setData] = useState(initial);
+function useResource<T>(loader: () => Promise<T[]>, initial?: T[]): Resource<T> {
+  const [data, setData] = useState<T[] | undefined>(initial);
   const [loading, setLoading] = useState(initial === undefined);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<unknown>(null);
   const revision = useRef(0);
   const reload = useCallback(async () => {
     const requested = ++revision.current;
@@ -1746,7 +1695,7 @@ function useResource(loader, initial) {
       if (requested === revision.current) setLoading(false);
     }
   }, [loader]);
-  const replace = useCallback((value) => { revision.current += 1; setData(value); setError(null); setLoading(false); }, []);
+  const replace = useCallback((value: T[]) => { revision.current += 1; setData(value); setError(null); setLoading(false); }, []);
   useEffect(() => {
     if (initial === undefined) void reload();
     return () => { revision.current += 1; };

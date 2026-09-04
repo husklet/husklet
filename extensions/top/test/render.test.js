@@ -16,7 +16,8 @@ const api = {
 test('the test host receives overview and every resource navigation choice', () => {
   const frame = host().render(h(Top, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
-  for (const label of ['Workspace overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
+  for (const label of ['Top', 'Resource overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
+  assert.equal(labels.includes('Workspace'), false, 'the resource manager does not impersonate the Workspace settings extension');
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
   assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
 });
