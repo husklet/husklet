@@ -232,7 +232,7 @@ The image label points at the included manifest; the host validates that
 manifest when installing the image.
 
 There is no separate published client-only Husklet base image. The published
-`extension-react-base` contains both SDK packages; this framework-neutral
+`extension-base` contains both SDK packages; this framework-neutral
 starter stays smaller by using pinned Node and copying the exact client from
 `npm install`. Its image build performs no npm registry resolution, but a fully
 offline OCI build still requires the pinned Node base to be present in the

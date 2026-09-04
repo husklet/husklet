@@ -57,8 +57,8 @@ workflow="$root/.github/workflows/release.yml"
 node -e '
   const fs = require("node:fs");
   const workflow = fs.readFileSync(process.argv[1], "utf8");
-  const job = workflow.match(/^  react-extension-base:\n(?<body>[\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n)/m)?.groups.body;
-  if (!job) throw new Error("release lacks react-extension-base job");
+  const job = workflow.match(/^  extension-base:\n(?<body>[\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n)/m)?.groups.body;
+  if (!job) throw new Error("release lacks extension-base job");
   const needs = job.match(/^    needs: \[(?<jobs>[^\]]+)\]$/m)?.groups.jobs.split(",").map((item) => item.trim()) ?? [];
   if (!needs.includes("react-package")) throw new Error("React base publication must wait for the exact published npm package pair");
 ' "$workflow"
@@ -75,9 +75,9 @@ for extension in extensions storybook top workspace; do
   dockerfile="extensions/$extension/Dockerfile"
   manifest="extensions/$extension/extension.toml"
 
-  expect_literal "$dockerfile" 'ARG HUSKLET_REACT_IMAGE'
+  expect_literal "$dockerfile" 'ARG HUSKLET_BASE_IMAGE'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
-  expect_literal "$dockerfile" 'FROM ${HUSKLET_REACT_IMAGE}'
+  expect_literal "$dockerfile" 'FROM ${HUSKLET_BASE_IMAGE}'
   expect_literal "$dockerfile" 'ARG HUSKLET_EXTENSION_VERSION'
   expect_literal "$dockerfile" 'ARG HUSKLET_REACT_VERSION'
   expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/client/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
@@ -86,7 +86,7 @@ for extension in extensions storybook top workspace; do
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
-  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"'
+  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_BASE_IMAGE}"'
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"'
 
   [[ "$(sed -n 's/^name = "\([^"]*\)"$/\1/p' "$root/$manifest")" == "$extension" ]] \

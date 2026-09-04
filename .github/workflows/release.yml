@@ -127,7 +127,7 @@ jobs:
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix packages/react/examples/starter
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix packages/react/examples/starter
-          sed -i "s|^ARG HUSKLET_REACT_IMAGE=.*|ARG HUSKLET_REACT_IMAGE=ghcr.io/husklet/husklet/extension-react-base:$RELEASE_VERSION|" packages/react/examples/starter/Dockerfile
+          sed -i "s|^ARG HUSKLET_BASE_IMAGE=.*|ARG HUSKLET_BASE_IMAGE=ghcr.io/husklet/husklet/extension-base:$RELEASE_VERSION|" packages/react/examples/starter/Dockerfile
           sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/client/examples/starter/extension.toml
           sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/react/examples/starter/extension.toml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
@@ -183,8 +183,8 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm run postpublish:check
 
-  react-extension-base:
-    name: Publish React extension base / multi-architecture
+  extension-base:
+    name: Publish extension base / multi-architecture
     needs: [smoke, native-linux-reproducibility, react-package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           for architecture in amd64 arm64; do
-            image="husklet/react-base-smoke:$architecture"
+            image="husklet/extension-base-smoke:$architecture"
             docker buildx build \
               --platform "linux/$architecture" \
               --load \
@@ -253,8 +253,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}/extension-react-base:latest
+            ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/extension-base:latest
           build-args: HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max
           sbom: true
@@ -262,12 +262,12 @@ jobs:
       - name: Verify both images from the published registry manifest
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          IMAGE: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
         run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" base
 
   first-party-extensions:
     name: Publish ${{ matrix.extension }} / multi-architecture
-    needs: [smoke, native-linux-reproducibility, react-extension-base]
+    needs: [smoke, native-linux-reproducibility, extension-base]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -318,7 +318,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           EXTENSION: ${{ matrix.extension }}
-          REACT_IMAGE: ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+          BASE_IMAGE: ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           for architecture in amd64 arm64; do
@@ -327,7 +327,7 @@ jobs:
               --platform "linux/$architecture" \
               --load \
               --tag "$image" \
-              --build-arg "HUSKLET_REACT_IMAGE=$REACT_IMAGE" \
+              --build-arg "HUSKLET_BASE_IMAGE=$BASE_IMAGE" \
               --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
               --build-arg "HUSKLET_EXTENSION_VERSION=$RELEASE_VERSION" \
               --file "extensions/$EXTENSION/Dockerfile" \
@@ -347,7 +347,7 @@ jobs:
             ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
             ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:latest
           build-args: |
-            HUSKLET_REACT_IMAGE=ghcr.io/${{ github.repository }}/extension-react-base:${{ steps.version.outputs.version }}
+            HUSKLET_BASE_IMAGE=ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
             HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
             HUSKLET_EXTENSION_VERSION=${{ steps.version.outputs.version }}
           provenance: mode=max

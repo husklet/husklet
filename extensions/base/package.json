@@ -1,5 +1,5 @@
 {
-  "name": "husklet-extension-image-runtime",
+  "name": "husklet-extension-base-image",
   "version": "1.0.0",
   "private": true,
   "type": "module",

@@ -1,4 +1,4 @@
-# The base image every React extension builds FROM.
+# The base image every TypeScript extension builds FROM.
 #
 # An extension adds its own source and its own manifest label; everything it
 # needs to reach the host — the runtime, this package, React — is already here.

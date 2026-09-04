@@ -254,9 +254,9 @@ try {
   assert.equal(starterPackage.dependencies.react, '18.3.1');
   assert.match(
     starterDockerfile,
-    new RegExp(`^ARG HUSKLET_REACT_IMAGE=ghcr\\.io/husklet/husklet/extension-react-base:${manifest.version.replaceAll('.', '\\.')}$`, 'm'),
+    new RegExp(`^ARG HUSKLET_BASE_IMAGE=ghcr\\.io/husklet/husklet/extension-base:${manifest.version.replaceAll('.', '\\.')}$`, 'm'),
   );
-  assert.match(starterDockerfile, /^FROM \$\{HUSKLET_REACT_IMAGE\}$/m);
+  assert.match(starterDockerfile, /^FROM \$\{HUSKLET_BASE_IMAGE\}$/m);
   assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
   assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);
   assert.match(starterDockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);

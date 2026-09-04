@@ -32,7 +32,7 @@ is bound to the same version as the package that supplied the starter. The manif
 label names the file inside the image—the host
 does not accept an inline placeholder—and `COPY --chown=node:node` preserves the
 base image's non-root runtime. The starter defaults to the version-matched
-base-image tag released with this SDK; override `HUSKLET_REACT_IMAGE`
+base-image tag released with this SDK; override `HUSKLET_BASE_IMAGE`
 deliberately when testing against another runtime, or pin that argument to a
 registry digest when the extension build itself must be immutable.
 
