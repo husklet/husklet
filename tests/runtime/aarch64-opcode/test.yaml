@@ -8,7 +8,10 @@ cases:
   - id: runtime/aarch64-opcode/terminal-families
     status: active
     compat: { class: compatibility }
-    build: { source: terminal.S, output: terminal }
+    build:
+      source: terminal.S
+      output: terminal
+      flags: [-nostdlib, -static, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
     artifact: { destination: /opt/husklet/aarch64-opcode-terminal }
     run: []
     expect:
