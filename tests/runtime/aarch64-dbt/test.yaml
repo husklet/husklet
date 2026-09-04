@@ -15,6 +15,7 @@ cases:
     expect:
       exit: 42
       stdout_empty: true
+      stderr: [" r0=*", " fall_total=*"]
       diagnostics:
         - { counter: translated_entries, equals: 1 }
         - { counter: interpreted_entries, equals: 0 }
