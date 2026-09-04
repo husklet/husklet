@@ -4,17 +4,19 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 specification="$root/src/workspaces/hl-extension/protocol/v1.json"
 
-[[ ! -e "$root/apps/storybook" ]] || {
-  echo "extension contracts: retired apps/storybook must remain absent; Storybook lives in extensions/storybook" >&2
-  exit 1
-}
+for retired in "$root/apps/storybook" "$root/src/apps/storybook"; do
+  [[ ! -e "$retired" ]] || {
+    echo "extension contracts: retired ${retired#"$root/"} must remain absent; Storybook lives in extensions/storybook" >&2
+    exit 1
+  }
+done
 node -e '
   const fs = require("node:fs");
   const path = require("node:path");
   const root = process.argv[1];
   const workspaces = JSON.parse(fs.readFileSync(path.join(root, "package.json"))).workspaces;
-  if (!Array.isArray(workspaces) || workspaces.filter((value) => value === "extensions/storybook").length !== 1) {
-    throw new Error("package.json must include the Storybook extension workspace exactly once");
+  if (!Array.isArray(workspaces)) {
+    throw new Error("package.json workspaces must be an array");
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "extensions/storybook/package.json")));
   if (manifest.name !== "@husklet/storybook") {
@@ -29,8 +31,9 @@ node -e '
     const location = path.join(directory, entry.name);
     return entry.isDirectory() ? walk(location) : [location];
   });
-  for (const directory of fs.readdirSync(path.join(root, "extensions"), { withFileTypes: true })) {
-    if (!directory.isDirectory() || directory.name === "base" || directory.name === "node_modules") continue;
+  const runnable = fs.readdirSync(path.join(root, "extensions"), { withFileTypes: true })
+    .filter((directory) => directory.isDirectory() && directory.name !== "base" && directory.name !== "node_modules");
+  for (const directory of runnable) {
     const extension = path.join(root, "extensions", directory.name);
     if (!fs.existsSync(path.join(extension, "extension.toml"))) {
       throw new Error(`extensions/${directory.name} has no runnable extension manifest`);
@@ -39,6 +42,15 @@ node -e '
     if (javascript.length !== 0) {
       throw new Error(`extension source must be TypeScript: ${javascript.join(", ")}`);
     }
+  }
+  for (const directory of runnable) {
+    const expected = `extensions/${directory.name}`;
+    if (workspaces.filter((value) => value === expected).length !== 1) {
+      throw new Error(`package.json must include runnable ${expected} exactly once`);
+    }
+  }
+  if (fs.existsSync(path.join(root, "extensions/base/extension.toml"))) {
+    throw new Error("extensions/base is a build base, not a runnable extension");
   }
 ' "$root"
 
