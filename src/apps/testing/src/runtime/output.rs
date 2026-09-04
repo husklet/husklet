@@ -783,6 +783,42 @@ fn backend_tree(stderr: &str) -> Result<Option<BTreeMap<&str, u64>>, Error> {
     Ok(Some(fields))
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct JccPathEvidence {
+    /// The v4-v13 wire name is `jcc_ibtc_hits`, but this counter executes only in the shared stub;
+    /// an inline IBTC hit jumps directly to the cached body and cannot reach it.
+    jcc_ibtc_stub_hits: u64,
+    /// Existing direct/prelinked JCC evidence, summed across the per-process translator reports.
+    /// Absence remains explicit because product-only reporting does not carry this local counter.
+    jcc_link_taken: Option<u64>,
+}
+
+fn jcc_path_evidence(stderr: &[u8]) -> Result<JccPathEvidence, Error> {
+    let product = backend_shape_product(stderr, true)?
+        .ok_or("backend-shape product diagnostic is unavailable")?;
+    let text = std::str::from_utf8(stderr).map_err(|_| "JCC path evidence is not UTF-8")?;
+    let mut jcc_link_taken = None::<u64>;
+    for record in text.lines().filter_map(|line| line.strip_prefix("[prof] translit: ")) {
+        let mut record_value = None;
+        for field in record.split_whitespace() {
+            let Some(value) = field.strip_prefix("jcc_link_taken=") else { continue };
+            if record_value.is_some() {
+                return Err("translit profile duplicates jcc_link_taken".into());
+            }
+            record_value = Some(value.parse::<u64>()
+                .map_err(|_| "translit profile jcc_link_taken is not an integer")?);
+        }
+        if let Some(value) = record_value {
+            jcc_link_taken = Some(jcc_link_taken.unwrap_or(0).checked_add(value)
+                .ok_or("translit profile jcc_link_taken total overflow")?);
+        }
+    }
+    Ok(JccPathEvidence {
+        jcc_ibtc_stub_hits: product["jcc_ibtc_hits"],
+        jcc_link_taken,
+    })
+}
+
 fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     let records = stderr
         .lines()
@@ -1342,13 +1378,20 @@ pub(crate) fn backend_execution_digest(stderr: &[u8]) -> String {
     let Ok(Some(fields)) = backend_shape_product(stderr, true) else {
         return String::new();
     };
+    let Ok(evidence) = jcc_path_evidence(stderr) else {
+        return String::new();
+    };
+    let direct = evidence.jcc_link_taken
+        .map_or_else(|| "unavailable".to_owned(), |value| value.to_string());
     format!(
-        "backend-shape crossings={} translated_entries={} interpreted_entries={} translated_steps={} interpreted_steps={}",
+        "backend-shape crossings={} translated_entries={} interpreted_entries={} translated_steps={} interpreted_steps={} jcc_ibtc_stub_hits={} jcc_link_taken={}",
         fields["crossings"],
         fields["translated_entries"],
         fields["interpreted_entries"],
         fields["translated_steps"],
-        fields["interpreted_steps"]
+        fields["interpreted_steps"],
+        evidence.jcc_ibtc_stub_hits,
+        direct,
     )
 }
 
@@ -2136,6 +2179,38 @@ mod tests {
                 .contains("expected 0")
         );
         assert!(validate_backend_tree(format!("{TREE}{PRODUCT_SHAPE_ON}").as_bytes(), true).is_err());
+    }
+
+    #[test]
+    fn jcc_path_evidence_names_legacy_hits_as_stub_hits_and_direct_links_separately() {
+        let product = product_v13();
+        let stderr = format!(
+            "{product}[prof] translit: blocks=2 jcc_link_taken=7\n\
+             [prof] translit: blocks=3 jcc_link_taken=11\n"
+        );
+        assert_eq!(jcc_path_evidence(stderr.as_bytes()).unwrap(), JccPathEvidence {
+            jcc_ibtc_stub_hits: 1,
+            jcc_link_taken: Some(18),
+        });
+        assert_eq!(jcc_path_evidence(product.as_bytes()).unwrap(), JccPathEvidence {
+            jcc_ibtc_stub_hits: 1,
+            jcc_link_taken: None,
+        });
+
+        let digest = backend_execution_digest(stderr.as_bytes());
+        assert!(digest.contains("jcc_ibtc_stub_hits=1"), "{digest}");
+        assert!(digest.contains("jcc_link_taken=18"), "{digest}");
+        let no_profile = backend_execution_digest(product.as_bytes());
+        assert!(no_profile.contains("jcc_link_taken=unavailable"), "{no_profile}");
+
+        for (profile, message) in [
+            ("[prof] translit: jcc_link_taken=1 jcc_link_taken=2\n", "duplicates jcc_link_taken"),
+            ("[prof] translit: jcc_link_taken=inline\n", "not an integer"),
+        ] {
+            let input = format!("{PRODUCT_SHAPE_ON}{profile}");
+            let error = jcc_path_evidence(input.as_bytes()).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+        }
     }
 
     #[test]
