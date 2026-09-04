@@ -519,11 +519,19 @@ fn stage_fixture(options: &Options, root: &Path, mode: Mode, script: &str) -> Re
     write_workload_tree(&work, script)?;
     let argv = stage_argv(options, root, mode);
     let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("developer fixture staging failed".into())
+    if !status.success() {
+        return Err("developer fixture staging failed".into());
     }
+    if mode == Mode::Translated && options.warm_translation_cache {
+        // The null correction launches `bin/true`, whereas staging launches `bin/sh`.
+        // Warm both executable identities so neither measured launch populates its own cache.
+        let argv = measured_argv(options, root, mode, "bin/true", &[]);
+        let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
+        if !status.success() {
+            return Err("developer null fixture cache warm-up failed".into());
+        }
+    }
+    Ok(())
 }
 
 fn write_workload_tree(work: &Path, script: &str) -> Result<(), Error> {
