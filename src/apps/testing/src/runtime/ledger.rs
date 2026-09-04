@@ -332,7 +332,7 @@ mod tests {
         let text = super::Runtime::format(&rows[&key("runtime/a")]).unwrap();
         assert!(text.contains("\t10\t9\t8\t7\t6\t"), "{text}");
         assert_eq!(text.matches('\t').count(), 19);
-        let fields = text.trim_end().split('\t').collect::<Vec<_>>();
+        let fields = text.trim_end_matches('\n').split('\t').collect::<Vec<_>>();
         let parsed = super::Runtime::parse(&fields, &BTreeSet::from([key("runtime/a")]))
             .unwrap().unwrap();
         assert_eq!(parsed.campaign, measured("p", "baseline", 1));
