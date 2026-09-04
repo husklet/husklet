@@ -14,6 +14,11 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
   let peer;
   let acquisitions = 0;
   let cancelled = false;
+  let installed = [
+    { name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'duty', version: '0.1.0', enabled: true, pane_providers: [] },
+    { name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`, status: 'fault:3', version: '0.1.0', enabled: true, pane_providers: [] },
+    { name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby', version: '0.1.0', enabled: false, pane_providers: [] },
+  ];
   const server = net.createServer((socket) => {
     peer = socket;
     const reader = new Reader();
@@ -27,12 +32,11 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       calls.push(frame.payload);
       if (call === 'extension_acquisition_start') acquisitions += 1;
       if (call === 'extension_acquisition_cancel') cancelled = true;
+      if (call === 'extension_disable') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'standby', enabled: false } : item);
+      if (call === 'extension_enable' || call === 'extension_retry') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'duty', enabled: true } : item);
+      if (call === 'extension_update') installed = installed.map((item) => item.name === 'resources' ? { ...item, image_digest: `sha256:${'b'.repeat(64)}`, version: '2.0.0', status: 'duty', enabled: true } : item);
       const payload = call === 'extension_list'
-        ? { reply: 'extensions', with: [
-          { name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'duty', version: '0.1.0', enabled: true, pane_providers: [] },
-          { name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`, status: 'fault:3', version: '0.1.0', enabled: true, pane_providers: [] },
-          { name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`, status: 'standby', version: '0.1.0', enabled: false, pane_providers: [] },
-        ] }
+        ? { reply: 'extensions', with: installed }
         : call === 'extension_acquisition_start'
           ? { reply: 'extension_acquisition_job', with: { job: `job-${acquisitions}` } }
           : call === 'extension_acquisition_status'
@@ -50,6 +54,9 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
           ? { reply: 'identity', with: 'extensions-catalogue' }
           : { reply: 'done' };
       socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload }));
+      if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_update'].includes(call)) {
+        socket.write(encode({ channel: 30, kind: KIND.event, payload: { snapshot: 'extensions', of: installed } }));
+      }
     } });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
@@ -70,21 +77,25 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     assert.ok(renderedLabels(calls).includes('Retry'), 'a faulted extension can be retried');
     assert.ok(renderedLabels(calls).includes('Enable'), 'a standby extension can be enabled');
     assert.deepEqual(calls.find(({ call }) => call === 'event_subscribe').with, { topic: 'extensions' });
+    const enablePaused = invoke(calls, 'Enable');
     peer.write(encode({ channel: 20, kind: KIND.event, payload: invoke(calls, 'Disable') }));
     await until(() => calls.some(({ call }) => call === 'extension_disable'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_disable').with, {
       name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`,
     });
+    await until(() => renderedLabels(calls).includes('resources disabled and verified.'));
     peer.write(encode({ channel: 21, kind: KIND.event, payload: invoke(calls, 'Retry') }));
     await until(() => calls.some(({ call }) => call === 'extension_retry'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_retry').with, {
       name: 'broken', image_digest: `sha256:${'c'.repeat(64)}`,
     });
-    peer.write(encode({ channel: 22, kind: KIND.event, payload: invoke(calls, 'Enable') }));
+    await until(() => renderedLabels(calls).includes('broken recovered and verified.'));
+    peer.write(encode({ channel: 22, kind: KIND.event, payload: enablePaused }));
     await until(() => calls.some(({ call }) => call === 'extension_enable'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_enable').with, {
       name: 'paused', image_digest: `sha256:${'d'.repeat(64)}`,
     });
+    await until(() => renderedLabels(calls).includes('paused enabled and verified.'));
     peer.write(encode({ channel: 7, kind: KIND.event, payload: change(calls, 'registry.example/extension:version', 'registry.example/extension:2') }));
     await until(() => renderedLabels(calls).includes('Inspect'));
     peer.write(encode({ channel: 8, kind: KIND.event, payload: invoke(calls, 'Inspect') }));
@@ -95,6 +106,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     assert.deepEqual(calls.find(({ call }) => call === 'extension_update').with, {
       job: 'job-1', revision: 3, granted: ['containers:control'],
     });
+    await until(() => renderedLabels(calls).includes('resources updated and verified.'));
     const beforeSlow = calls.filter(({ call }) => call === 'interface_render_at').length;
     peer.write(encode({ channel: 11, kind: KIND.event, payload: change(calls, 'registry.example/extension:version', 'registry.example/slow:1') }));
     await until(() => calls.filter(({ call }) => call === 'interface_render_at').length > beforeSlow);
@@ -109,8 +121,8 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     peer.write(encode({ channel: 13, kind: KIND.event, payload: invoke(calls, 'Cancel') }));
     await until(() => calls.some(({ call }) => call === 'extension_acquisition_cancel'));
     assert.deepEqual(calls.find(({ call }) => call === 'extension_acquisition_cancel').with, { job: 'job-2', revision: 4 });
-    assert.equal(calls.filter(({ call }) => call === 'extension_acquisition_status').length, 3,
-      'one initial read per job plus the cancellation refresh replaces repeated polling');
+    assert.equal(calls.filter(({ call }) => call === 'extension_acquisition_status').length, 4,
+      'initial reads, exact pre-commit reinspection, and cancellation refresh replace repeated polling');
     assert.equal(stderr, '');
   } finally {
     const closed = child.exitCode === null ? new Promise((resolve) => child.once('close', resolve)) : Promise.resolve();

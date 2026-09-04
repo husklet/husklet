@@ -14,6 +14,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
+  const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
@@ -32,7 +33,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const inspect = async () => {
     const wanted = reference.trim();
     if (!wanted || busy) return;
-    setBusy('inspect'); setError(''); setAcquisition(null); candidateKey.current = '';
+    setBusy('inspect'); setError(''); setNotice(null); setAcquisition(null); candidateKey.current = '';
     try {
       const started = await api.extensions.startAcquisition(wanted);
       cancelledJob.current = '';
@@ -59,8 +60,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     const updating = Boolean(acquisition.candidate.installed_image_digest);
     setBusy(updating ? 'update' : 'install');
     try {
-      await api.extensions[updating ? 'update' : 'install'](acquisition.job, acquisition.revision, granted);
+      const result = await api.extensions[updating ? 'updateAndWait' : 'installAndWait'](acquisition.job, acquisition.revision, granted);
       setAcquisition(null); setReference(''); await reload();
+      setNotice(result.changed
+        ? { label: `${result.extension.name} ${updating ? 'updated' : 'installed'} and verified.`, uncertain: false }
+        : { label: `${updating ? 'Update' : 'Install'} was accepted, but the resulting extension was not observed. Refresh before acting again.`, uncertain: true });
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(''); }
   };
@@ -77,8 +81,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     finally { cancelling.current = false; setBusy(''); }
   };
   const lifecycle = async (extension: ExtensionSummary, action: 'enable' | 'disable' | 'retry' | 'remove') => {
-    setBusy(`${action}:${extension.name}`);
-    try { await api.extensions[action](extension.name, extension.image_digest); await reload(); }
+    setBusy(`${action}:${extension.name}`); setError(''); setNotice(null);
+    try {
+      const result = await api.extensions[`${action}AndWait`](extension.name, extension.image_digest);
+      await reload();
+      setNotice(result.changed
+        ? { label: `${extension.name} ${lifecycleResult(action)} and verified.`, uncertain: false }
+        : { label: `${capitalize(action)} was accepted, but the resulting extension state was not observed. Refresh before acting again.`, uncertain: true });
+    }
     catch (cause) { setError(message(cause)); }
     finally { setBusy(''); }
   };
@@ -123,6 +133,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           )}
         </Card>
         {error && <InlineMessage label={error} tone="danger" />}
+        {notice && <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />}
         <Heading label="Installed" scale="title" />
         {installed.length === 0 && <EmptyState label="No extensions installed" detail="Install an OCI extension above." />}
         {installed.map((extension) => (
@@ -161,3 +172,9 @@ function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const amount = progress.current === null ? '' : progress.total === null ? ` · ${progress.current} bytes` : ` · ${progress.current}/${progress.total} bytes`;
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
+
+function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): string {
+  return action === 'enable' ? 'enabled' : action === 'disable' ? 'disabled' : action === 'retry' ? 'recovered' : 'removed';
+}
+
+function capitalize(value: string): string { return `${value[0].toUpperCase()}${value.slice(1)}`; }
