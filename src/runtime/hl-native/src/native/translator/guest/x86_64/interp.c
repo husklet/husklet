@@ -3731,8 +3731,11 @@ static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest in
         g_x64_pc_launch_only_reset_bus = 0;
         jit_guest_bus_reset_after_rewind(hl_linux_bus_generation(), hl_linux_bus_active());
         if (g_coldprof)
-            fprintf(stderr, "[pcache-v1] nested_exec=disabled bus_active=%d rwx_guest=%d alias=%d\n",
-                    jit_guest_bus_active(), g_rwx_guest, jit86_store_alias_observation_active());
+            fprintf(stderr,
+                    "[pcache-v1] nested_exec=disabled bus_active=%d rwx_guest=%d alias=%d "
+                    "post_disable_census_sites=%llu\n",
+                    jit_guest_bus_active(), g_rwx_guest, jit86_store_alias_observation_active(),
+                    (unsigned long long)translit_pcache_census_emitted_while_disabled);
     }
     if (!g_pcache) return;
     g_x64_pc_observe_library_ns = 0;

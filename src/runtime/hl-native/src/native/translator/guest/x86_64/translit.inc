@@ -428,6 +428,10 @@ static uint64_t translit_pcache_census_count[UINT16_MAX];
 static uint64_t translit_pcache_census_order[UINT16_MAX];
 static uint64_t translit_pcache_census_sequence;
 static uint16_t translit_pcache_census_next;
+/* Observation remains latched across launch-only exec so the final cache outcome is still reported.
+ * Count any census site emitted after persistence authority was withdrawn: this is production-observable
+ * evidence that observation did not accidentally keep its per-block instrumentation alive. */
+static uint64_t translit_pcache_census_emitted_while_disabled;
 typedef struct {
     uint32_t site_offset, fallback_offset;
     uint64_t source, target;

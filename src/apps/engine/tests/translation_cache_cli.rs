@@ -33,6 +33,25 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
         cold.contains("[pcache-v1] nested_exec=disabled bus_active=0"),
         "nested developer exec retained persistence's guarded-code mode: {cold}"
     );
+    let assert_observed_without_nested_census = |label: &str, stderr: &str| {
+        let nested = stderr
+            .lines()
+            .filter(|line| line.starts_with("[pcache-v1] nested_exec=disabled "))
+            .collect::<Vec<_>>();
+        assert!(
+            nested.len() > 1,
+            "{label}: fixture did not cross a second nested-exec boundary: {stderr}"
+        );
+        assert!(
+            nested.iter().all(|line| line.ends_with(" post_disable_census_sites=0")),
+            "{label}: observation emitted census instrumentation after launch-only disable: {nested:?}"
+        );
+        assert!(
+            stderr.contains("[pcache-v1] outcome="),
+            "{label}: disabling nested census also disabled cache outcome observation: {stderr}"
+        );
+    };
+    assert_observed_without_nested_census("cold", &cold);
     assert!(
         cache.path().read_dir().unwrap().next().is_some(),
         "cold run published no cache artifact: {cold}"
@@ -43,10 +62,19 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
             .read_dir()
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "x64pcache"))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "x64pcache")
+            })
             .count()
     };
-    assert_eq!(artifacts(), 1, "nested developer tools published unauthorised cache artifacts");
+    assert_eq!(
+        artifacts(),
+        1,
+        "nested developer tools published unauthorised cache artifacts"
+    );
     let warm = run("warm");
     assert!(
         warm.contains("[pcache] HIT (translation skipped)"),
@@ -56,5 +84,10 @@ fn raw_worker_publishes_and_reuses_its_translation_cache() {
         warm.contains("[pcache-v1] nested_exec=disabled bus_active=0"),
         "warm nested exec retained persistence's guarded-code mode: {warm}"
     );
-    assert_eq!(artifacts(), 1, "warm nested execs expanded the authenticated cache surface");
+    assert_observed_without_nested_census("warm", &warm);
+    assert_eq!(
+        artifacts(),
+        1,
+        "warm nested execs expanded the authenticated cache surface"
+    );
 }
