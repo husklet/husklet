@@ -90,6 +90,10 @@ uint64_t hl_x86_decode_authorized_hits(void);
 uint64_t hl_x86_decode_authorized_hits_after_fork(void);
 void hl_x86_decode_after_fork_rebind(void);
 void hl_x86_decode_set_diagnostics(int enabled);
+typedef struct {
+    uint64_t calls, window_hits, refills, copied_bytes, cross_page_fallbacks;
+} hl_x86_decode_build_census;
+hl_x86_decode_build_census hl_x86_decode_build_census_read(void);
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *insn);
 typedef int (*hl_x86_instruction_fetch_fn)(uint64_t, void *, size_t);

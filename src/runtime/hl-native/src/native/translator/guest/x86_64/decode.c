@@ -22,6 +22,18 @@ static _Atomic uint64_t g_decode_authorized_hits_after_fork;
 static _Atomic uint64_t *g_decode_authorized_hits_after_fork_shared;
 static _Atomic int g_decode_after_fork;
 static int g_decode_diagnostics;
+static _Atomic uint64_t g_decode_build_calls, g_decode_build_window_hits;
+static _Atomic uint64_t g_decode_build_refills, g_decode_build_copied_bytes;
+static _Atomic uint64_t g_decode_build_cross_page_fallbacks;
+
+hl_x86_decode_build_census hl_x86_decode_build_census_read(void) {
+    return (hl_x86_decode_build_census){
+        atomic_load_explicit(&g_decode_build_calls, memory_order_relaxed),
+        atomic_load_explicit(&g_decode_build_window_hits, memory_order_relaxed),
+        atomic_load_explicit(&g_decode_build_refills, memory_order_relaxed),
+        atomic_load_explicit(&g_decode_build_copied_bytes, memory_order_relaxed),
+        atomic_load_explicit(&g_decode_build_cross_page_fallbacks, memory_order_relaxed)};
+}
 
 enum { DECODE_MEMO_SLOTS = HL_X86_DECODE_MEMO_SLOTS, X86_MAX_INSN = HL_X86_MAX_INSN };
 typedef hl_x86_decode_memo_entry decode_memo_entry;
@@ -544,6 +556,8 @@ int hl_x86_decode_context_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86
    then touch the next page only when the decoded length proves it is needed. */
 int hl_x86_decode_transaction_bytes(hl_x86_hot_context *context, uint64_t pc, hl_x86_insn *I,
                                     uint8_t decoded_bytes[HL_X86_MAX_INSN]) {
+    if (g_decode_diagnostics)
+        atomic_fetch_add_explicit(&g_decode_build_calls, 1, memory_order_relaxed);
     if (context == NULL || context->authority_state != 1)
         return context == NULL ? -1 : hl_x86_decode_context_bytes(context, pc, I, decoded_bytes);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -563,6 +577,8 @@ int hl_x86_decode_transaction_bytes(hl_x86_hot_context *context, uint64_t pc, hl
         pc - context->transaction_window_pc <= context->transaction_window_length)
         available = context->transaction_window_length - (size_t)(pc - context->transaction_window_pc);
     if (available < needed) {
+        if (g_decode_diagnostics)
+            atomic_fetch_add_explicit(&g_decode_build_refills, 1, memory_order_relaxed);
         size_t length = page_available;
         if (length > HL_X86_TRANSACTION_WINDOW) length = HL_X86_TRANSACTION_WINDOW;
         int fetched = context->fetch_fn != NULL
@@ -576,13 +592,19 @@ int hl_x86_decode_transaction_bytes(hl_x86_hot_context *context, uint64_t pc, hl
         context->transaction_window_pc = pc;
         context->transaction_window_length = (uint16_t)length;
         available = length;
+    } else if (g_decode_diagnostics) {
+        atomic_fetch_add_explicit(&g_decode_build_window_hits, 1, memory_order_relaxed);
     }
 
     uint8_t bytes[X86_MAX_INSN] = {0};
     size_t present = available < sizeof bytes ? available : sizeof bytes;
     memcpy(bytes, context->transaction_window + (size_t)(pc - context->transaction_window_pc), present);
+    if (g_decode_diagnostics)
+        atomic_fetch_add_explicit(&g_decode_build_copied_bytes, present, memory_order_relaxed);
     int length = decode_bytes(bytes, I);
     if (length > (int)present) {
+        if (g_decode_diagnostics)
+            atomic_fetch_add_explicit(&g_decode_build_cross_page_fallbacks, 1, memory_order_relaxed);
         int fetched = context->fetch_fn != NULL
                           ? context->fetch_fn(context->fetch_opaque, pc, bytes, sizeof bytes)
                           : instruction_fetch(pc, bytes, sizeof bytes);

@@ -171,6 +171,7 @@ static uint64_t translit_decode_lookahead_consumed;
 static uint64_t translit_build_guest_insns;
 static uint64_t translit_build_owner_ranges;
 static uint64_t translit_build_instruction_ranges;
+static uint64_t translit_build_owner_plain, translit_build_owner_preserve, translit_build_owner_dynamic;
 static uint64_t translit_build_published;
 static uint64_t translit_build_attempted;
 static uint64_t translit_build_duplicate_first_classify;
@@ -6336,6 +6337,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         (void)__atomic_fetch_add(&translit_build_instruction_ranges, instruction_range_count,
                                  __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_build_published, 1, __ATOMIC_RELAXED);
+        for (uint32_t i = 0; i < owner_count; i++) {
+            uint64_t *counter = owners[i].guest == JIT_BODY_OWNER_DYNAMIC_RIP
+                                    ? &translit_build_owner_dynamic
+                                    : owners[i].preserve_registers != 0
+                                          ? &translit_build_owner_preserve
+                                          : &translit_build_owner_plain;
+            (void)__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+        }
     }
     if (mixed_sse_transition_count != 0) {
         if (translit_attempt_staging) {
@@ -9787,6 +9796,7 @@ static int translit_unsupported_report(char *out, size_t size) {
 // this backend was selected and then silently refused. Written here rather than there because the
 // refusal predicates are this file's; the caller needs no #ifdef either way.
 static int translit_report(char *out, size_t size) {
+    hl_x86_decode_build_census decode_build = hl_x86_decode_build_census_read();
     uint64_t blocks = __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED);
     uint64_t entries = __atomic_load_n(&translit_entries, __ATOMIC_RELAXED);
     uint64_t declined = __atomic_load_n(&translit_declined, __ATOMIC_RELAXED);
@@ -10009,9 +10019,13 @@ static int translit_report(char *out, size_t size) {
                     " mixed_sse_disabled_boundaries=%llu body_owner_low_rotations=%llu"
                     " body_owner_low_retranslations=%llu"
                     " build_insns=%llu build_owner_ranges=%llu build_instruction_ranges=%llu"
+                    " build_owner_plain=%llu build_owner_preserve=%llu build_owner_dynamic=%llu"
                     " build_attempted=%llu build_published=%llu build_rejected=%llu"
                     " build_first_reclassify=%llu"
-                    " build_refresh=%llu build_stub_checks=%llu build_map_puts=%llu\n",
+                    " build_refresh=%llu build_stub_checks=%llu build_map_puts=%llu"
+                    " decode_window_calls=%llu decode_window_hits=%llu decode_window_refills=%llu"
+                    " decode_window_copied=%llu decode_window_fallbacks=%llu"
+                    " map_probes=%llu map_cache_invalidations=%llu\n",
                     (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined,
                     (unsigned long long)stitch_candidates, (unsigned long long)stitch_admitted,
                     (unsigned long long)rip_indirect_lowered, (unsigned long long)provenance_fallback,
@@ -10050,6 +10064,9 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)__atomic_load_n(&translit_build_guest_insns, __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_owner_ranges, __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_instruction_ranges, __ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&translit_build_owner_plain, __ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&translit_build_owner_preserve, __ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&translit_build_owner_dynamic, __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_attempted, __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_published, __ATOMIC_RELAXED),
                     (unsigned long long)(__atomic_load_n(&translit_build_attempted, __ATOMIC_RELAXED) -
@@ -10058,7 +10075,15 @@ static int translit_report(char *out, size_t size) {
                                                        __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_refresh_calls, __ATOMIC_RELAXED),
                     (unsigned long long)__atomic_load_n(&translit_build_stub_checks, __ATOMIC_RELAXED),
-                    (unsigned long long)__atomic_load_n(&translit_build_map_puts, __ATOMIC_RELAXED));
+                    (unsigned long long)__atomic_load_n(&translit_build_map_puts, __ATOMIC_RELAXED),
+                    (unsigned long long)decode_build.calls,
+                    (unsigned long long)decode_build.window_hits,
+                    (unsigned long long)decode_build.refills,
+                    (unsigned long long)decode_build.copied_bytes,
+                    (unsigned long long)decode_build.cross_page_fallbacks,
+                    (unsigned long long)__atomic_load_n(&g_build_diag_map_probes, __ATOMIC_RELAXED),
+                    (unsigned long long)__atomic_load_n(&g_build_diag_map_cache_invalidations,
+                                                       __ATOMIC_RELAXED));
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.

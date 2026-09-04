@@ -586,7 +586,9 @@ static __attribute__((noinline, noclone)) hl_map_host_cache_entry *map_host_cach
     return g_map_host_cache;
 }
 
+static uint64_t g_build_diag_map_probes, g_build_diag_map_cache_invalidations;
 static void map_host_cache_invalidate(void) {
+    if (g_prof) (void)__atomic_fetch_add(&g_build_diag_map_cache_invalidations, 1, __ATOMIC_RELAXED);
     uint64_t next = __atomic_add_fetch(&g_map_host_generation, 1, __ATOMIC_RELEASE);
     if (next == 0) __atomic_store_n(&g_map_host_generation, 1, __ATOMIC_RELEASE);
 }
@@ -1329,7 +1331,9 @@ static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest
     uint32_t h = (uint32_t)((gpc >> G_GPC_HASH_SHIFT) * 2654435761u) & table->mask;
     uint32_t first_tombstone = UINT32_MAX;
     uint32_t destination = UINT32_MAX;
+    uint32_t probes = 0;
     for (uint32_t i = 0; i < table->capacity; i++) {
+        probes++;
         uint32_t j = (h + i) & table->mask;
         if (table->map[j].generation != g_map_epoch) {
             if (table->map[j].tombstone_epoch == g_map_epoch) {
@@ -1340,6 +1344,7 @@ static map_put_result map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest
             break;
         }
     }
+    if (g_prof) (void)__atomic_fetch_add(&g_build_diag_map_probes, probes, __ATOMIC_RELAXED);
     if (destination == UINT32_MAX) destination = first_tombstone;
     if (destination != UINT32_MAX) {
         int reused_tombstone = table->map[destination].tombstone_epoch == g_map_epoch;
