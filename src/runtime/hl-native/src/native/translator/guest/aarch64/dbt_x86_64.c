@@ -19,6 +19,7 @@ enum {
 };
 
 _Static_assert(offsetof(struct cpu, x) == 0, "AArch64 x86 DBT x[] offset drifted");
+_Static_assert(offsetof(struct cpu, sp) == OFF_SP, "AArch64 x86 DBT sp offset drifted");
 _Static_assert(offsetof(struct cpu, pc) == 256, "AArch64 x86 DBT pc offset drifted");
 _Static_assert(offsetof(struct cpu, reason) == 272, "AArch64 x86 DBT reason offset drifted");
 _Static_assert(offsetof(struct cpu, host_sp) == 280, "AArch64 x86 DBT host-sp offset drifted");
@@ -62,6 +63,16 @@ static inline void hl_a64_x86_store_x(hl_x64_asm *assembler, int guest_register)
                           guest_register * (int)sizeof(uint64_t));
 }
 
+static inline void hl_a64_x86_load_gpr_sp(hl_x64_asm *assembler, unsigned guest_register) {
+    hl_x64_reg_mem_disp32(assembler, 0x8B, HL_A64_X86_VALUE_REG, HL_A64_X86_CPU_REG,
+                          guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t));
+}
+
+static inline void hl_a64_x86_store_gpr_sp(hl_x64_asm *assembler, unsigned guest_register) {
+    hl_x64_reg_mem_disp32(assembler, 0x89, HL_A64_X86_VALUE_REG, HL_A64_X86_CPU_REG,
+                          guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t));
+}
+
 /* Keep the complete interpreter as the fallback translator.  Rename only its
  * three dispatcher seam symbols; all architectural helpers remain shared. */
 #define translate_block hl_a64_interp_translate_block
@@ -91,6 +102,50 @@ static inline void hl_a64_x86_or_reg(hl_x64_asm *assembler, int destination, int
     hl_x64_u8(assembler, (uint8_t)(0x48 | ((source >= 8) ? 4 : 0) | ((destination >= 8) ? 1 : 0)));
     hl_x64_u8(assembler, 0x09);
     hl_x64_u8(assembler, (uint8_t)(0xC0 | ((source & 7) << 3) | (destination & 7)));
+}
+
+static inline void hl_a64_x86_sub_reg(hl_x64_asm *assembler, int destination, int source) {
+    hl_x64_u8(assembler, (uint8_t)(0x48 | ((source >= 8) ? 4 : 0) | ((destination >= 8) ? 1 : 0)));
+    hl_x64_u8(assembler, 0x29);
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((source & 7) << 3) | (destination & 7)));
+}
+
+static int hl_a64_x86_emit_pc_relative(hl_x64_asm *assembler, uint32_t instruction, uint64_t guest_pc) {
+    if ((instruction & 0x1F000000u) != 0x10000000u) return 0;
+    unsigned destination = instruction & 31u;
+    int64_t immediate = (int64_t)((int32_t)((((instruction >> 5) & 0x7FFFFu) << 13) |
+                                             ((instruction >> 29) & 3u) << 11)) >> 11;
+    uint64_t base = pcrel_base(guest_pc);
+    uint64_t value = instruction & 0x80000000u
+                         ? (base & ~UINT64_C(0xFFF)) + ((uint64_t)immediate << 12)
+                         : base + (uint64_t)immediate;
+    if (destination != 31u) {
+        hl_x64_mov_imm64(assembler, HL_A64_X86_VALUE_REG, value);
+        hl_a64_x86_store_x(assembler, (int)destination);
+    }
+    return 1;
+}
+
+static int hl_a64_x86_emit_add_sub_immediate(hl_x64_asm *assembler, uint32_t instruction) {
+    if ((instruction & 0x3F000000u) != 0x11000000u) return 0; /* excludes flag-setting forms */
+    unsigned sf = instruction >> 31;
+    unsigned subtract = (instruction >> 30) & 1u;
+    unsigned source = (instruction >> 5) & 31u;
+    unsigned destination = instruction & 31u;
+    uint64_t immediate = (instruction >> 10) & 0xFFFu;
+    if (instruction & (1u << 22)) immediate <<= 12;
+    hl_a64_x86_load_gpr_sp(assembler, source);
+    hl_x64_mov_imm64(assembler, 1, immediate);
+    if (subtract)
+        hl_a64_x86_sub_reg(assembler, HL_A64_X86_VALUE_REG, 1);
+    else
+        hl_x64_add_reg(assembler, HL_A64_X86_VALUE_REG, 1);
+    if (!sf) {
+        hl_x64_mov_imm64(assembler, 1, UINT64_C(0xFFFFFFFF));
+        hl_a64_x86_and_reg(assembler, HL_A64_X86_VALUE_REG, 1);
+    }
+    hl_a64_x86_store_gpr_sp(assembler, destination);
+    return 1;
 }
 
 static int hl_a64_x86_emit_mov_wide(hl_x64_asm *assembler, uint32_t instruction) {
@@ -134,7 +189,10 @@ static void hl_a64_x86_emit_cpu_u64(hl_x64_asm *assembler, int offset, uint64_t 
 struct hl_a64_x86_block_header {
     uint64_t magic;
     uint64_t retired_steps;
+    uint64_t exit_kind;
+    uint64_t reserved;
 };
+_Static_assert(sizeof(struct hl_a64_x86_block_header) % 16u == 0, "AArch64 x86 DBT entry lost alignment");
 
 enum { HL_A64_X86_MAX_BLOCK_BYTES = 4096 };
 _Static_assert(HL_A64_X86_MAX_BLOCK_BYTES <= CACHE_EMIT_HEADROOM,
@@ -175,13 +233,27 @@ static void *translate_block(uint64_t guest_pc) {
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);
         if (!fetch_ok) break;
         if (hl_a64_x86_emit_mov_wide(&assembler, instruction)) continue;
-        if (!hl_a64_x86_is_svc(instruction)) break;
-        hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
-        hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
+        if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
+        if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
+        unsigned exit_kind;
+        if (hl_a64_x86_is_svc(instruction)) {
+            hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
+            hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
+            exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
+        } else if ((instruction & 0xFC000000u) == 0x14000000u) {
+            int64_t displacement = (int64_t)(int32_t)(instruction << 6) >> 4;
+            hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor + (uint64_t)displacement);
+            hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_BRANCH);
+            exit_kind = HL_BACKEND_SHAPE_T_DIRECT_JUMP;
+        } else {
+            break;
+        }
         hl_a64_x86_emit_return(&assembler);
         if (assembler.overflow) break;
         header->magic = HL_A64_X86_BLOCK_MAGIC;
         header->retired_steps = (uint64_t)count + 1;
+        header->exit_kind = exit_kind;
+        header->reserved = 0;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, cursor + 4, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
@@ -210,11 +282,11 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
-     * begin with an eight-byte descriptor magic, while generated blocks begin
-     * with movabs (48 b8) because MOV-wide and the terminal stores both
-     * materialize through rax. Consequently generated bytes cannot equal the
-     * descriptor magic (little-endian 54 42), and reading the first word is
-     * within the published source object in either case. */
+     * begin with an eight-byte descriptor magic. Generated blocks begin with
+     * either movabs (48 b8: MOV-wide/ADR) or a cpu-record load (49 8b:
+     * ADD/SUB immediate), while a terminal-only block also begins with movabs.
+     * None can equal descriptor magic (little-endian 54 42), and reading the
+     * first word is within the published source object in either case. */
     const struct interp_block *descriptor = (const struct interp_block *)code;
     if (descriptor->magic == INTERP_BLOCK_MAGIC) {
         hl_a64_interp_run_block(cpu, code);
@@ -232,7 +304,7 @@ static void run_block(struct cpu *cpu, void *code) {
          * this slice, hence no synchronous-fault provenance interval to add. */
         hl_backend_tree_run_begin(1, header->retired_steps);
         hl_a64_x86_dbt_enter(cpu, code);
-        hl_a64_x86_record_translated_exit(HL_BACKEND_SHAPE_T_SYSCALL);
+        hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);
         hl_backend_tree_reason(cpu->reason);
     }
 }

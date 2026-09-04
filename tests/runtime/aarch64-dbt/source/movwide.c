@@ -1,13 +1,20 @@
-/* Exact first-slice program for the AArch64-on-x86 DBT.  It intentionally
- * exercises discarded XZR writes, W-register zero extension, MOVK merge, and
- * the dispatcher-owned SVC path before exiting 42. */
+/* Exact address/arithmetic/branch slice for the AArch64-on-x86 DBT. */
 __asm__(".global _start\n"
         ".type _start,%function\n"
         "_start:\n"
-        "movz x0,#0xffff,lsl #32\n"
+        "adr x2,_start\n"
+        "adrp x0,_start\n"
+        "sub x0,x0,#0x400,lsl #12\n"
+        "add x0,x0,#42\n"
+        "add sp,x0,#8\n"
+        "sub w0,wsp,#8\n"
+        "b 2f\n"
+        "movz x0,#1\n"
+        "1:\n"
+        "movz x3,#0xffff,lsl #32\n"
         "movz xzr,#0x1234\n"
-        "movz w0,#0\n"
-        "movk w0,#42\n"
         "movz x8,#93\n"
         "svc #0\n"
+        "2:\n"
+        "b 1b\n"
         ".size _start,.-_start\n");
