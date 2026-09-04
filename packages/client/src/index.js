@@ -738,6 +738,48 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
+  api.terminal.resizeGridAndWait = async (slot, generation, revision, columns, rows, { lines, timeoutMs = 30_000 } = {}) => {
+    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal resize wait requires a nonempty slot');
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new TypeError('terminal resize wait requires nonnegative safe integer generation and revision');
+    }
+    if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) {
+      throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
+    }
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('terminal resize wait lines must be a nonnegative safe integer');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw new RangeError('terminal resize wait timeout must be between 1 and 30000ms');
+    }
+    let changed;
+    const observed = new Promise((resolve) => { changed = resolve; });
+    const stop = await api.watchPaneChanges((change) => {
+      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+    });
+    let timer;
+    try {
+      const before = await api.terminal.read(slot, lines);
+      if (before.generation !== generation || before.revision !== revision) {
+        throw new Error('terminal screen cursor changed before resize authority');
+      }
+      await api.terminal.resizeGridObserved(slot, generation, revision, columns, rows);
+      const change = await Promise.race([
+        observed,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      ]);
+      if (change === null) return { changed: false, columns, rows, before };
+      const after = await api.terminal.read(slot, lines);
+      if (after.generation !== generation) throw new Error('resized pane slot was replaced before verification');
+      if (after.revision === revision || after.columns !== columns || after.rows !== rows) {
+        throw new Error('pane changed without applying the requested terminal grid');
+      }
+      return { changed: true, columns, rows, before, after };
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
+  };
   api.terminal.openTabAndWait = async (title, { timeoutMs = 30_000 } = {}) => {
     const wanted = exactPaneTitle(title);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {

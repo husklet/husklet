@@ -391,6 +391,12 @@ export interface WorkspaceApi {
       >;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
     resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
+    /** Arm and read before CAS resize, then verify the exact terminal grid on a later screen revision. */
+    resizeGridAndWait(slot: string, generation: number, revision: number, columns: number, rows: number,
+      options?: { lines?: number; timeoutMs?: number }): Promise<
+        | { changed: true; columns: number; rows: number; before: PaneText; after: PaneText }
+        | { changed: false; columns: number; rows: number; before: PaneText }
+      >;
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
     /** Arm pane changes before CAS close and prove absence only from a complete inventory. */

@@ -18,6 +18,8 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
   const [title, setTitle] = React.useState('');
   const [newTabTitle, setNewTabTitle] = React.useState('');
   const [command, setCommand] = React.useState('');
+  const [columns, setColumns] = React.useState('');
+  const [rows, setRows] = React.useState('');
   const paneRevision = React.useRef(0);
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
@@ -53,6 +55,10 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       const next = await api.terminal.toText(slot, { lines: 200 });
       if (requested !== paneRevision.current) return;
       setReadable(next); setSelected(slot);
+      if (next.kind === 'terminal') {
+        setColumns(next.snapshot.columns == null ? '' : String(next.snapshot.columns));
+        setRows(next.snapshot.rows == null ? '' : String(next.snapshot.rows));
+      } else { setColumns(''); setRows(''); }
     } catch (cause) {
       if (requested === paneRevision.current) setError(cause);
     } finally {
@@ -93,6 +99,26 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
       if (requested === paneRevision.current) setBusy('');
     }
   };
+  const resizeGrid = async () => {
+    if (!cursor || readable?.kind !== 'terminal' || !selected) return;
+    const nextColumns = gridDimension(columns, 'Columns');
+    const nextRows = gridDimension(rows, 'Rows');
+    const slot = selected;
+    const requested = ++paneRevision.current;
+    setBusy(`resize:${slot}`); setError(null);
+    try {
+      const result = await api.terminal.resizeGridAndWait(
+        slot, cursor.generation, cursor.revision, nextColumns, nextRows, { lines: 200 },
+      );
+      if (!result.changed) throw new Error(`Pane ${slot} did not reach the requested ${nextColumns}×${nextRows} grid; refresh before retrying.`);
+      if (requested !== paneRevision.current) return;
+      setReadable({ kind: 'terminal', text: result.after.lines.join('\n'), snapshot: result.after });
+    } catch (cause) {
+      if (requested === paneRevision.current) setError(cause);
+    } finally {
+      if (requested === paneRevision.current) setBusy('');
+    }
+  };
   const mutatePane = async (operation: 'split-beside' | 'split-below' | 'retitle' | 'close') => {
     if (!cursor || !selected) return;
     const slot = selected;
@@ -103,7 +129,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
         const result = await api.terminal.closeAndWait(slot, cursor.generation, cursor.revision);
         if (!result.changed) throw new Error(`Pane ${slot} did not close before the observation window ended; refresh and try again.`);
         if (requested !== paneRevision.current) return;
-        setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand('');
+        setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand(''); setColumns(''); setRows('');
       } else if (operation === 'retitle') {
         const requestedTitle = title.trim();
         if (!requestedTitle) return;
@@ -129,7 +155,7 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
     const present = (resource.data ?? []).some((tab) => tab.panes.some((pane) => pane.slot === selected));
     if (present) return;
     paneRevision.current += 1;
-    setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand('');
+    setSelected(''); setReadable(null); setInput(''); setTitle(''); setCommand(''); setColumns(''); setRows('');
   }, [resource.data, selected]);
   return <Page title="Terminal tabs" subtitle="Read terminal output or semantic UI text, send revision-bound input, focus panes, and pin tabs.">
     <Row gap={1} wrap>
@@ -188,6 +214,14 @@ export function Terminals({ api, resource }: { api: WorkspaceApi; resource: Reso
                 <Button label="Spawn command" enabled={busy === '' && Boolean(cursor) && command.trim().length > 0}
                   onInvoke={() => { void spawnCommand(); }} />
               </Row> : null}
+              {readable.kind === 'terminal' ? <Row gap={1} wrap>
+                <Entry value={columns} placeholder="Columns (1–1000)" enabled={busy === '' && Boolean(cursor)}
+                  onChange={(event) => setColumns(String(event.value ?? ''))} />
+                <Entry value={rows} placeholder="Rows (1–1000)" enabled={busy === '' && Boolean(cursor)}
+                  onChange={(event) => setRows(String(event.value ?? ''))} />
+                <Button label="Resize grid" enabled={busy === '' && Boolean(cursor) && columns.length > 0 && rows.length > 0}
+                  onInvoke={() => { void resizeGrid(); }} />
+              </Row> : null}
               <Row gap={1} wrap>
                 <Button label="Split beside" enabled={busy === '' && Boolean(cursor)}
                   onInvoke={() => { void mutatePane('split-beside'); }} />
@@ -237,6 +271,13 @@ function commandArgv(value: string): string[] {
     throw new TypeError('Command must contain 1–64 NUL-free arguments, with a non-empty program, at most 4096 UTF-8 bytes each and 32768 bytes total.');
   }
   return parsed;
+}
+
+function gridDimension(value: string, label: string): number {
+  if (!/^[1-9][0-9]{0,3}$/.test(value)) throw new TypeError(`${label} must be an integer from 1 to 1000.`);
+  const dimension = Number(value);
+  if (dimension > 1_000) throw new TypeError(`${label} must be an integer from 1 to 1000.`);
+  return dimension;
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {

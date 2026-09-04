@@ -7,6 +7,30 @@ import { ExtensionError, PROTOCOL_CAPABILITIES, Session, protocolCoverage, proto
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
+test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
+  const calls = []; let publish;
+  const api = workspace({ granted: [], call() { throw new Error('raw call was not stubbed'); }, onEvent() { return () => {}; } });
+  api.watchPaneChanges = async (listener) => { publish = listener; calls.push('subscribe'); return async () => calls.push('unsubscribe'); };
+  let reads = 0;
+  api.terminal.read = async (...args) => {
+    calls.push(['read', ...args]); reads += 1;
+    return reads === 1
+      ? { slot: 'pane-1', generation: 4, revision: 9, columns: 80, rows: 24, lines: [], truncated: false }
+      : { slot: 'pane-1', generation: 4, revision: 10, columns: 120, rows: 40, lines: [], truncated: false };
+  };
+  api.terminal.resizeGridObserved = async (...args) => {
+    calls.push(['resize', ...args]);
+    publish({ slot: 'pane-1', kind: 'terminal', generation: 4, revision: 10, coalesced: 0 });
+  };
+  const result = await api.terminal.resizeGridAndWait('pane-1', 4, 9, 120, 40, { lines: 5 });
+  assert.equal(result.changed, true);
+  assert.deepEqual([result.after.columns, result.after.rows], [120, 40]);
+  assert.deepEqual(calls, [
+    'subscribe', ['read', 'pane-1', 5], ['resize', 'pane-1', 4, 9, 120, 40],
+    ['read', 'pane-1', 5], 'unsubscribe',
+  ]);
+});
+
 async function pair(options) {
   const server = net.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -236,6 +236,10 @@ test('terminal management opens tabs and spawns exact argv through observed oper
       calls.push(['spawn', ...args]);
       return { changed: true, before: {}, after: { slot: args[0], generation: 7, revision: 12, lines: ['$ make test', 'ok'], truncated: false } };
     },
+    resizeGridAndWait: async (...args) => {
+      calls.push(['resize', ...args]);
+      return { changed: true, before: {}, after: { slot: args[0], generation: 7, revision: 13, columns: args[3], rows: args[4], lines: ['$ make test', 'ok'], truncated: false } };
+    },
     pinTab: async () => {}, focus: async () => {},
   };
   const resource = {
@@ -247,9 +251,12 @@ test('terminal management opens tabs and spawns exact argv through observed oper
   invoke(stage, 'Inspect pane-1'); await settled(); await settled();
   change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', '["make","test"]');
   invoke(stage, 'Spawn command'); await settled(); await settled();
+  change(stage, 'Columns (1–1000)', '120'); change(stage, 'Rows (1–1000)', '40');
+  invoke(stage, 'Resize grid'); await settled(); await settled();
   assert.deepEqual(calls, [
     ['open', 'Tests'], ['reload'],
     ['spawn', 'pane-1', 7, 11, ['make', 'test'], { lines: 200 }],
+    ['resize', 'pane-1', 7, 12, 120, 40, { lines: 200 }],
   ]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ make test\nok');
   assert.equal(fieldValue(stage, 'Command argv, e.g. ["sh","-lc","make test"]'), '');
