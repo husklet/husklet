@@ -14,6 +14,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
   let peer;
   let acquisitions = 0;
   let cancelled = false;
+  let failNextList = false;
   let responses = Promise.resolve();
   let installed = [
     { name: 'resources', image_digest: `sha256:${'a'.repeat(64)}`, status: 'duty', version: '0.1.0', enabled: true, pane_providers: [] },
@@ -32,13 +33,17 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
       if (!call) continue;
       calls.push(frame.payload);
       const firstList = call === 'extension_list' && calls.filter(({ call: seen }) => seen === 'extension_list').length === 1;
+      const failingList = call === 'extension_list' && failNextList;
+      if (failingList) failNextList = false;
       if (call === 'extension_acquisition_start') acquisitions += 1;
       if (call === 'extension_acquisition_cancel') cancelled = true;
       if (call === 'extension_disable') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'standby', enabled: false } : item);
       if (call === 'extension_enable' || call === 'extension_retry') installed = installed.map((item) => item.name === frame.payload.with.name ? { ...item, status: 'duty', enabled: true } : item);
       if (call === 'extension_remove') installed = installed.filter((item) => item.name !== frame.payload.with.name || item.image_digest !== frame.payload.with.image_digest);
       if (call === 'extension_update') installed = installed.map((item) => item.name === 'resources' ? { ...item, image_digest: `sha256:${'b'.repeat(64)}`, version: '2.0.0', status: 'duty', enabled: true } : item);
-      const payload = call === 'extension_list'
+      const payload = failingList
+        ? { error: 'failed', detail: 'extension inventory unavailable' }
+        : call === 'extension_list'
         ? { reply: 'extensions', with: installed }
         : call === 'extension_acquisition_start'
           ? { reply: 'extension_acquisition_job', with: { job: `job-${acquisitions}` } }
@@ -57,7 +62,7 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
           ? { reply: 'identity', with: 'extensions-catalogue' }
           : { reply: 'done' };
       const respond = () => {
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: 1, payload }));
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, flags: failingList ? 3 : 1, payload }));
         if (['extension_disable', 'extension_enable', 'extension_retry', 'extension_remove', 'extension_update'].includes(call)) {
           socket.write(encode({ channel: 30, kind: KIND.event, payload: { snapshot: 'extensions', of: installed } }));
         }
@@ -84,6 +89,17 @@ test('the Vite production entrypoint lists and renders Extensions over a Unix so
     catch (cause) { throw new Error(`${cause.message}; calls=${JSON.stringify(calls.map(({ call }) => call))}; stderr=${JSON.stringify(stderr)}`); }
     assert.ok(renderedLabels(calls).includes('resources'));
     assert.ok(renderedLabels(calls).includes('Refresh'));
+    const initialResources = renderedLabels(calls).filter((label) => label === 'resources').length;
+    let listCalls = calls.filter(({ call }) => call === 'extension_list').length;
+    failNextList = true;
+    peer.write(encode({ channel: 19, kind: KIND.event, payload: invoke(calls, 'Refresh') }));
+    await until(() => calls.filter(({ call }) => call === 'extension_list').length > listCalls
+      && renderedLabels(calls).includes('extension inventory unavailable'));
+    assert.equal(renderedLabels(calls).includes('No extensions installed'), false, 'failure never claims an empty inventory');
+    listCalls = calls.filter(({ call }) => call === 'extension_list').length;
+    peer.write(encode({ channel: 19, kind: KIND.event, payload: invoke(calls, 'Retry') }));
+    await until(() => calls.filter(({ call }) => call === 'extension_list').length > listCalls
+      && renderedLabels(calls).filter((label) => label === 'resources').length > initialResources);
     assert.ok(renderedLabels(calls).includes('Disable'), 'a duty extension can be disabled');
     assert.ok(renderedLabels(calls).includes('Retry'), 'a faulted extension can be retried');
     assert.ok(renderedLabels(calls).includes('Enable'), 'a standby extension can be enabled');
