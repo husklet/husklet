@@ -138,9 +138,15 @@ impl Schema for Runtime {
 
     fn validate_complete(rows: &BTreeMap<WorkKey, Row>) -> Result<(), Error> {
         let mut pairs: BTreeMap<(&str, u32), Vec<&CampaignEvidence>> = BTreeMap::new();
+        let mut host_identity = None;
         for row in rows.values() {
             row.campaign.validate()?;
             if row.campaign.pair != "-" {
+                match host_identity {
+                    Some(identity) => (identity == row.campaign.host_identity)
+                        .require("runtime campaign journal mixes host identities")?,
+                    None => host_identity = Some(row.campaign.host_identity.as_str()),
+                }
                 pairs.entry((&row.campaign.pair, row.campaign.sample)).or_default().push(&row.campaign);
             }
         }
@@ -151,6 +157,22 @@ impl Schema for Runtime {
                 && first.semantic_output_sha256 == second.semantic_output_sha256 && first.arm != second.arm
                 && [first.order, second.order].into_iter().collect::<BTreeSet<_>>() == BTreeSet::from([1, 2]))
                 .require("runtime campaign pair evidence does not match")?;
+        }
+        Ok(())
+    }
+
+
+    fn validate_resumption(rows: &BTreeMap<WorkKey, Row>) -> Result<(), Error> {
+        let mut identity = None;
+        for row in rows.values() {
+            row.campaign.validate()?;
+            if row.campaign.pair != "-" {
+                match identity {
+                    Some(expected) => (expected == row.campaign.host_identity)
+                        .require("runtime campaign resume mixes host identities")?,
+                    None => identity = Some(row.campaign.host_identity.as_str()),
+                }
+            }
         }
         Ok(())
     }
@@ -327,5 +349,36 @@ mod tests {
             (key("runtime/a"), one),
             (key("runtime/b"), campaign_row("runtime/b", other)),
         ])).is_err());
+    }
+
+    #[test]
+    fn separate_pairs_cannot_resume_across_host_identities() {
+        use crate::journal::Schema as _;
+        let mut second_host = measured("q", "baseline", 1);
+        second_host.host_identity = "d".repeat(64);
+        let mut second_host_peer = measured("q", "candidate", 2);
+        second_host_peer.host_identity = "d".repeat(64);
+        let rows = BTreeMap::from([
+            (key("runtime/a"), campaign_row("runtime/a", measured("p", "baseline", 1))),
+            (key("runtime/b"), campaign_row("runtime/b", measured("p", "candidate", 2))),
+            (key("runtime/c"), campaign_row("runtime/c", second_host)),
+            (key("runtime/d"), campaign_row("runtime/d", second_host_peer)),
+        ]);
+        assert!(super::Runtime::validate_complete(&rows).is_err());
+    }
+
+    #[test]
+    fn sentinels_and_unsafe_fields_cannot masquerade_as_measurements() {
+        use crate::journal::Schema as _;
+        let mut sentinel = CampaignEvidence::unmeasured();
+        sentinel.pair = "p".into();
+        sentinel.arm = "baseline".into();
+        sentinel.order = 1;
+        sentinel.sample = 1;
+        assert!(super::Runtime::format(&campaign_row("runtime/a", sentinel)).is_err());
+
+        let mut unsafe_evidence = measured("p", "baseline", 1);
+        unsafe_evidence.backend_digest = "backend\nforged".into();
+        assert!(super::Runtime::format(&campaign_row("runtime/a", unsafe_evidence)).is_err());
     }
 }

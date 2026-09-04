@@ -50,6 +50,10 @@ pub(crate) trait Schema {
         Ok(())
     }
 
+    fn validate_resumption(_rows: &BTreeMap<Self::Key, Self::Row>) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// Reads one row, or `None` when it records work the current run has superseded.
     fn parse(fields: &[&str], keys: &BTreeSet<Self::Key>) -> Result<Option<Self::Row>, Error>;
 }
@@ -83,7 +87,9 @@ impl<S: Schema> Ledger<S> {
         }
         let lock = FileLock::acquire(report.with_extension("lock"))?;
         let prior = if resume && partial.exists() {
-            Self::load(&partial, stamp, keys)?
+            let rows = Self::load(&partial, stamp, keys)?;
+            S::validate_resumption(&rows)?;
+            rows
         } else {
             Self::initialize(&partial, stamp)?;
             BTreeMap::new()
