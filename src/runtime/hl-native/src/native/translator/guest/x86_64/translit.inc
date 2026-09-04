@@ -2083,10 +2083,16 @@ static void translit_emit_jcc_link(hl_x64_asm *a, struct interp_block *target_bl
     translit_emit_reload(a);
     uint8_t *chain = a->cursor;
     hl_x64_jmp_rel32(a, (uint8_t *)target_block + target_block->host_entry_off);
-    hl_x64_patch_rel32(a, irq, a->cursor);
-    uint8_t *fallback = a->cursor;
-    if (__builtin_expect(g_pcache, 0))
+    if (__builtin_expect(g_pcache, 0)) {
+        /* The direct site follows reload, while the IRQ arm still owns the
+           spilled image. Give persistence a distinct live-state fallback;
+           entering the IRQ teardown from the chain would restore guest values
+           as host state and return through a guest-controlled stack. */
+        uint8_t *fallback = a->cursor;
+        translit_emit_exit_const(a, target, R_BRANCH);
         translit_chain_site_note(chain, fallback, source, target);
+    }
+    hl_x64_patch_rel32(a, irq, a->cursor);
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_x64_atomic_inc_abs(a, (uintptr_t)&translit_jcc_link_irq_fallback);
 #endif

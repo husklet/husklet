@@ -2434,6 +2434,12 @@ static int x64_pc_saved_map_library(const uint8_t *record) {
     return x64_pc_library_for(x64_pc_get64(record + 8), x64_pc_get64(record + 16));
 }
 
+static int x64_pc_saved_gpc_fixed(uint64_t gpc, const uint8_t *records,
+                                  const x64_pc_gpc_index_entry *index, uint64_t maps) {
+    const uint8_t *record = x64_pc_gpc_index_find(gpc, records, index, maps);
+    return record != NULL && x64_pc_fixed(x64_pc_get64(record + 8), x64_pc_get64(record + 16));
+}
+
 static uint64_t x64_pc_saved_map_end(const uint8_t *records, uint64_t maps, uint64_t ordinal,
                                      uint64_t arena) {
     return ordinal + 1 < maps ? x64_pc_get64(records + (ordinal + 1) * X64_PC_MAP_SIZE + 24) : arena;
@@ -2686,11 +2692,20 @@ static int pcache_load(uint64_t entry_jump) {
         const uint8_t *record = chain_records + i * X64_PC_CHAIN_SIZE;
         translit_chain_site chain = {x64_pc_get32(record), x64_pc_get32(record + 4),
                                      x64_pc_get64(record + 8), x64_pc_get64(record + 16)};
-        /* Restored edges remain on their authenticated fallback forever. A
-           later cold translation may record new chains, but no restored RX
-           byte needs unlinking when a target is invalidated. */
-        int32_t fallback = (int32_t)(chain.fallback_offset - (chain.site_offset + 5));
-        memcpy((uint8_t *)arena_bytes + chain.site_offset + 1, &fallback, sizeof fallback);
+        int fixed = x64_pc_saved_gpc_fixed(chain.source, map_records, gpc_index, maps) &&
+                    x64_pc_saved_gpc_fixed(chain.target, map_records, gpc_index, maps);
+#ifdef HL_PCACHE_GLOBAL_CHAIN_FALLBACK_MUTATION
+        fixed = 0;
+#endif
+        if (fixed) {
+            fixed_chains[fixed_chain_count++] = chain;
+        } else {
+            /* A chain cannot enter code whose DSO identity is still dormant. The
+               recorded fallback is entered only from the state shape its emitter
+               assigned; fixed-to-fixed chains must retain their direct edge. */
+            int32_t fallback = (int32_t)(chain.fallback_offset - (chain.site_offset + 5));
+            memcpy((uint8_t *)arena_bytes + chain.site_offset + 1, &fallback, sizeof fallback);
+        }
     }
     x64_pc_pristine_rewind();
     if (!jit_wprot(0)) { free(fixed_chains); free(gpc_index); free(allocation); return 0; }

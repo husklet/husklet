@@ -5,7 +5,9 @@ fn restored_library_activation_publishes_metadata_without_reopening_code() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let source = fs::read_to_string(native.join("translator/guest/x86_64/interp.c"))
         .expect("read x86 persistent-cache implementation");
-    let start = source.find("static void x64_pc_activate_ready(uint64_t pc)").expect("activation function");
+    let start = source
+        .find("static void x64_pc_activate_ready(uint64_t pc)")
+        .expect("activation function");
     let end = source[start..]
         .find("\nstatic void pcache_note_libmap")
         .map(|offset| start + offset)
@@ -35,6 +37,40 @@ fn restored_library_activation_publishes_metadata_without_reopening_code() {
         mutation.contains("if (x64_pc_fixed(") && mutation.contains("memcpy(g_cache + start"),
         "the DSO-byte mutation must preserve every fixed-image map span"
     );
+}
+
+#[test]
+fn restored_chains_preserve_fixed_edges_and_defer_dso_edges() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let restore = fs::read_to_string(native.join("translator/guest/x86_64/interp.c"))
+        .expect("read x86 persistent-cache implementation");
+    let classify = restore
+        .split("uint64_t fixed_chain_count = 0;")
+        .nth(1)
+        .and_then(|source| source.split("x64_pc_pristine_rewind();").next())
+        .expect("restored-chain classification");
+    assert!(classify.matches("x64_pc_saved_gpc_fixed(").count() >= 2);
+    assert!(classify.contains("fixed_chains[fixed_chain_count++] = chain;"));
+    assert!(classify.contains("HL_PCACHE_GLOBAL_CHAIN_FALLBACK_MUTATION"));
+    assert!(classify.find("if (fixed)").unwrap() < classify.find("fallback_offset").unwrap());
+
+    let emitter =
+        fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read x86 chain emitter");
+    let backward = emitter
+        .split("translit_emit_spill(a);")
+        .nth(1)
+        .and_then(|source| source.split("translit_emit_return(a, R_BRANCH);").next())
+        .expect("backward JCC chain body");
+    let reload = backward.find("translit_emit_reload(a);").expect("guest-state reload");
+    let chain = backward.find("uint8_t *chain = a->cursor;").expect("direct chain site");
+    let fallback = backward.find("uint8_t *fallback = a->cursor;").expect("IRQ fallback");
+    let cold = backward
+        .find("translit_emit_exit_const(a, target, R_BRANCH);")
+        .expect("live-state persistent fallback");
+    let irq = backward
+        .find("hl_x64_patch_rel32(a, irq, a->cursor);")
+        .expect("spilled-state IRQ fallback");
+    assert!(reload < chain && chain < fallback && fallback < cold && cold < irq);
 }
 
 #[cfg(feature = "native-test-hooks")]
