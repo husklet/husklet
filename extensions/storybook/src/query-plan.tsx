@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Button, Column, Heading, InlineMessage, QueryPlan, QueryPlanMetric, QueryPlanNode, Row } from '@husklet/react';
 
@@ -6,8 +5,20 @@ const { useState } = React;
 
 export const QUERY_PLAN_STORY = 'Query plan';
 export const QUERY_PLAN_MODES = Object.freeze({ full: 'Full plan', hotspot: 'Hotspots', mismatch: 'Estimate mismatches' });
+type QueryPlanMode = keyof typeof QUERY_PLAN_MODES;
+type QueryPlanState = 'normal' | 'hot' | 'estimate_mismatch';
+interface QueryPlanRecord {
+  readonly id: string;
+  readonly operator: string;
+  readonly label: string;
+  readonly relation: string;
+  readonly state: QueryPlanState;
+  readonly detail: string;
+  readonly metrics: Readonly<Record<string, number>>;
+  readonly children: readonly QueryPlanRecord[];
+}
 
-export const queryPlan = Object.freeze({
+export const queryPlan: QueryPlanRecord = Object.freeze<QueryPlanRecord>({
   id: 'root', operator: 'result', label: 'Customer activity report', relation: '', state: 'normal', detail: 'projection',
   metrics: { estimated_rows: 1200, actual_rows: 1184, cost: 840.2, duration_us: 12940, loops: 1 },
   children: [{
@@ -30,19 +41,21 @@ export const queryPlan = Object.freeze({
   }],
 });
 
-function selected(node, mode) {
+function selected(node: QueryPlanRecord, mode: QueryPlanMode): boolean {
   return mode === 'full' || (mode === 'hotspot' && node.state === 'hot') || (mode === 'mismatch' && node.state === 'estimate_mismatch');
 }
 
 /** Keeps matching operators and their complete root path, but no unrelated siblings. */
-export function filterQueryPlan(node, mode) {
-  const children = node.children.map((child) => filterQueryPlan(child, mode)).filter(Boolean);
+export function filterQueryPlan(node: QueryPlanRecord, mode: QueryPlanMode): QueryPlanRecord | null {
+  const children = node.children
+    .map((child) => filterQueryPlan(child, mode))
+    .filter((child): child is QueryPlanRecord => child !== null);
   return selected(node, mode) || children.length > 0 ? { ...node, children } : null;
 }
 
-function count(node) { return 1 + node.children.reduce((total, child) => total + count(child), 0); }
+function count(node: QueryPlanRecord): number { return 1 + node.children.reduce((total, child) => total + count(child), 0); }
 
-function render(node) {
+function render(node: QueryPlanRecord): React.ReactElement {
   return (
     <QueryPlanNode
       key={node.id}
@@ -55,14 +68,14 @@ function render(node) {
 }
 
 export function QueryPlanStory() {
-  const [mode, setMode] = useState('full');
-  const filtered = filterQueryPlan(queryPlan, mode);
+  const [mode, setMode] = useState<QueryPlanMode>('full');
+  const filtered = filterQueryPlan(queryPlan, mode) ?? queryPlan;
   const shown = count(filtered);
   return (
     <Column gap={2}>
       <Heading label={'Query execution plan'} />
       <Row gap={1} wrap={true}>
-        {Object.entries(QUERY_PLAN_MODES).map(([key, label]) => <Button
+        {(Object.entries(QUERY_PLAN_MODES) as [QueryPlanMode, string][]).map(([key, label]) => <Button
           key={key}
           label={label}
           enabled={mode !== key}
