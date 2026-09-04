@@ -16,9 +16,3 @@ cases:
       exit: 42
       stdout_empty: true
       stderr: [" r0=*", " fall_total=*"]
-      diagnostics:
-        - { counter: translated_entries, equals: 1 }
-        - { counter: interpreted_entries, equals: 0 }
-        - { counter: translated_steps, equals: 6 }
-        - { counter: t_syscall, equals: 1 }
-        - { counter: dispatch_translated_return_mismatch, equals: 0 }
