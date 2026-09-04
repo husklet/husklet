@@ -53,13 +53,13 @@ const X86_EXIT_FAMILY_FIELDS: &[&str] = &[
     "t_other",
 ];
 
-pub(crate) fn aarch64_opcode_product(stderr: &[u8], enabled: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
+pub(crate) fn aarch64_opcode_product(stderr: &[u8], required: bool, require_nonzero: bool) -> Result<Option<BTreeMap<&str, u64>>, Error> {
     let stderr = std::str::from_utf8(stderr).map_err(|_| "aarch64-opcode diagnostic is not UTF-8")?;
     let records: Vec<_> = stderr
         .lines()
         .filter_map(|line| line.strip_prefix(AARCH64_OPCODE_PREFIX))
         .collect();
-    if !enabled {
+    if !required {
         if records.is_empty() {
             return Ok(None);
         }
@@ -120,8 +120,8 @@ pub(crate) fn aarch64_opcode_product(stderr: &[u8], enabled: bool) -> Result<Opt
     if majors != values["body_retired"] || families != values["body_retired"] {
         return Err("aarch64-opcode counters do not reconcile".into());
     }
-    if values["body_retired"] != 0 && families == 0 {
-        return Err("aarch64-opcode positive census has no family".into());
+    if require_nonzero && values["body_retired"] == 0 {
+        return Err("aarch64-opcode dedicated fixture retired no instructions".into());
     }
     Ok(Some(values))
 }
@@ -1442,13 +1442,13 @@ mod tests {
 
     #[test]
     fn aarch64_opcode_census_is_strict_and_reconciled() {
-        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true).unwrap().unwrap();
+        let parsed = aarch64_opcode_product(A64_OPCODE.as_bytes(), true, true).unwrap().unwrap();
         assert_eq!(parsed["body_retired"], 12);
         assert!(parsed["load_store"] > 0);
         assert!(
             aarch64_opcode_product(
                 A64_OPCODE.replace("body_retired=12", "body_retired=11").as_bytes(),
-                true
+                true, true
             )
             .is_err()
         );
@@ -1457,14 +1457,14 @@ mod tests {
                 A64_OPCODE
                     .replace("major15=1", "major15=18446744073709551615")
                     .as_bytes(),
-                true
+                true, true
             )
             .is_err()
         );
         assert!(
             aarch64_opcode_product(
                 A64_OPCODE.replace(" major15=1", " unknown=1 major15=1").as_bytes(),
-                true
+                true, true
             )
             .is_err()
         );
@@ -1473,11 +1473,21 @@ mod tests {
                 A64_OPCODE
                     .replace(" major8=2 major9=1", " major9=1 major8=2")
                     .as_bytes(),
-                true
+                true, true
             )
             .is_err()
         );
-        assert!(aarch64_opcode_product(A64_OPCODE.as_bytes(), false).is_err());
+        assert!(aarch64_opcode_product(A64_OPCODE.as_bytes(), false, false).is_err());
+        assert!(aarch64_opcode_product(b"ordinary stderr\n", true, false).is_err());
+        let zero = A64_OPCODE
+            .split_ascii_whitespace()
+            .map(|field| field.split_once('=').map_or_else(|| field.to_owned(), |(name, _)| {
+                if matches!(name, "version" | "available") { field.to_owned() } else { format!("{name}=0") }
+            }))
+            .collect::<Vec<_>>()
+            .join(" ") + "\n";
+        aarch64_opcode_product(zero.as_bytes(), true, false).unwrap();
+        assert!(aarch64_opcode_product(zero.as_bytes(), true, true).is_err());
     }
 
     #[test]

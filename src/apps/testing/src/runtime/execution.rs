@@ -480,6 +480,13 @@ impl<'a> CaseExecution<'a> {
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
         let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());
+        let aarch64_interpreter_product = self.execution.diagnostics()
+            && self.execution.is_translated()
+            && self.target == Target::Arm64
+            && cfg!(target_arch = "x86_64");
+        profile_validation = profile_validation.and_then(|()| {
+            output::aarch64_opcode_product(&logs.stderr, aarch64_interpreter_product, false).map(|_| ())
+        });
         if self.execution.is_translated() {
             profile_validation = profile_validation.and_then(|()| output::validate_translated_execution(&logs.stderr));
         }
