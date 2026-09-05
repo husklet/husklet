@@ -3,7 +3,7 @@
 # An extension adds its own source and its own manifest label; everything it
 # needs to reach the host — the runtime, this package, React — is already here.
 
-ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
 FROM ${NODE_IMAGE} AS package
 ARG HUSKLET_REACT_VERSION
 ARG NODE_VERSION=22.23.2
@@ -11,15 +11,15 @@ ARG NPM_VERSION=10.9.8
 WORKDIR /source
 COPY packages/client ./client
 COPY packages/react ./react
-RUN test "$(node --version)" = "v${NODE_VERSION}" \
-    && test "$(npm --version)" = "${NPM_VERSION}" \
-    && test -n "${HUSKLET_REACT_VERSION}" \
-    && npm pkg set "version=${HUSKLET_REACT_VERSION}" --prefix client \
-    && npm pack --ignore-scripts --pack-destination /out --prefix client \
-    && npm pkg set "version=${HUSKLET_REACT_VERSION}" --prefix react \
-    && npm pkg set "dependencies.@husklet/client=${HUSKLET_REACT_VERSION}" --prefix react \
-    && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" react/examples/starter/extension.toml \
-    && npm pack --ignore-scripts --pack-destination /out --prefix react
+RUN test -n "${HUSKLET_REACT_VERSION}"
+RUN node -e "if (process.version !== 'v${NODE_VERSION}') process.exit(1); if (require('/usr/local/lib/node_modules/npm/package.json').version !== '${NPM_VERSION}') process.exit(1)"
+RUN npm --prefix client pkg set "version=${HUSKLET_REACT_VERSION}" \
+    && npm --prefix react pkg set "version=${HUSKLET_REACT_VERSION}" \
+    && npm --prefix react pkg set "dependencies.@husklet/client=${HUSKLET_REACT_VERSION}" \
+    && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" react/examples/starter/extension.toml
+RUN mkdir -p /out/client /out/react \
+    && (cd client && npm pack --ignore-scripts --pack-destination /out/client) \
+    && (cd react && npm pack --ignore-scripts --pack-destination /out/react)
 
 FROM ${NODE_IMAGE}
 ARG NODE_IMAGE
@@ -38,20 +38,25 @@ ARG NPM_VERSION=10.9.8
 WORKDIR /app
 COPY --from=package /out /opt/husklet-sdk
 COPY extensions/base/package.json extensions/base/package-lock.json ./
-RUN test "$(node --version)" = "v${NODE_VERSION}" \
-    && test "$(npm --version)" = "${NPM_VERSION}" \
-    && npm install --global --ignore-scripts --no-audit --no-fund \
-       /opt/husklet-sdk/husklet-client-*.tgz \
-       /opt/husklet-sdk/husklet-react-*.tgz \
+RUN node -e "if (process.version !== 'v${NODE_VERSION}') process.exit(1); if (require('/usr/local/lib/node_modules/npm/package.json').version !== '${NPM_VERSION}') process.exit(1)"
+RUN npm install --global --ignore-scripts --no-audit --no-fund \
+       /opt/husklet-sdk/client/husklet-client-*.tgz \
+       /opt/husklet-sdk/react/husklet-react-*.tgz \
        react@18.3.1 react-reconciler@0.29.2 \
-    && mkdir -p node_modules/@husklet \
+       typescript@5.9.2 vite@7.1.4 @types/node@22.20.1 @types/react@18.3.3 \
+    && mkdir -p node_modules/@husklet node_modules/@types \
     && ln -s "$(npm root --global)/@husklet/client" node_modules/@husklet/client \
     && ln -s "$(npm root --global)/@husklet/react" node_modules/@husklet/react \
     && ln -s "$(npm root --global)/react" node_modules/react \
     && ln -s "$(npm root --global)/react-reconciler" node_modules/react-reconciler \
-    && test "$(node -p "require('@husklet/client/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
-    && test "$(node -p "require('@husklet/react/package.json').version")" = "${HUSKLET_REACT_VERSION}" \
+    && ln -s "$(npm root --global)/typescript" node_modules/typescript \
+    && ln -s "$(npm root --global)/vite" node_modules/vite \
+    && ln -s "$(npm root --global)/@types/node" node_modules/@types/node \
+    && ln -s "$(npm root --global)/@types/react" node_modules/@types/react \
+    && mkdir -p /run/husklet \
+    && touch /run/husklet/extension.sock \
     && npm cache verify
+RUN node -e "if (require('@husklet/client/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1); if (require('@husklet/react/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1)"
 
 WORKDIR /app
 ENV NODE_ENV=production

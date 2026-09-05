@@ -13,6 +13,8 @@ import { Images } from './images.js';
 import { Volumes } from './volumes.js';
 import { Networks } from './networks.js';
 import { Containers } from './containers.js';
+import { Workspace } from './workspace.js';
+import { Extensions } from './extensions.js';
 
 export { Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
@@ -25,6 +27,8 @@ export { ContainerRename } from './container-rename.js';
 export { ContainerCreate } from './container-create.js';
 export { ContainerDetail } from './container-detail.js';
 export { Containers } from './containers.js';
+export { Workspace } from './workspace.js';
+export { Extensions } from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
@@ -107,6 +111,10 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     networks={networks}
     terminals={terminals}
     onOpen={setSection} />
+    : section === 'workspace'
+      ? <Workspace api={api} />
+      : section === 'extensions'
+        ? <Extensions api={api} />
     : section === 'containers'
       ? <Containers
     api={api}

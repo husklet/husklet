@@ -3,18 +3,19 @@
 use hl_engine::{
     activation::GuestIsa,
     composition::{
-        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams, Terminal,
-        TerminalPort,
+        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
+        Terminal, TerminalPort,
     },
     engine::ExitKind,
     launcher::plan::{RuntimeBoxPolicy, RuntimePlan},
     options::Options,
     runtime::Engine,
 };
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use tempfile::TempDir;
@@ -77,7 +78,10 @@ impl TerminalPort for PaneTerminal {
     fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
         let mut closed = self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*closed {
-            closed = self.changed.wait(closed).unwrap_or_else(std::sync::PoisonError::into_inner);
+            closed = self
+                .changed
+                .wait(closed)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         Ok(0)
     }
@@ -136,7 +140,10 @@ fn run_configured(
     let output = Arc::new(Output::default());
     output.input.lock().unwrap().extend_from_slice(b"pipe");
     let plan = RuntimePlan {
-        rootfs: selected.then(|| b"/".to_vec()),
+        rootfs: selected.then(|| {
+            std::env::var_os("HL_NATIVE_TEST_ROOTFS")
+                .map_or_else(|| b"/".to_vec(), |root| root.as_encoded_bytes().to_vec())
+        }),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: std::iter::once(executable.as_os_str().as_encoded_bytes().to_vec())
             .chain(arguments.iter().map(|value| value.as_bytes().to_vec()))
@@ -150,12 +157,12 @@ fn run_configured(
             Default::default()
         },
     };
-    let engine = Engine::with_streams(
-        GuestIsa::X86_64,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let streams = if std::env::var_os("HL_NATIVE_TEST_NO_STREAMS").is_some() {
+        StandardStreams::default()
+    } else {
+        StandardStreams::default().with_output(output.clone())
+    };
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
     engine.start().unwrap();
     let status = engine.wait().unwrap().guest_status;
     engine.destroy().unwrap();
@@ -177,6 +184,26 @@ fn run(executable: &Path, arguments: &[&str], selected: bool) -> (i32, Vec<u8>, 
     run_with_refusal(executable, arguments, selected, None)
 }
 
+#[test]
+fn supervised_node_can_execute_the_npm_cli_when_a_fixture_rootfs_is_supplied() {
+    let Some(root) = std::env::var_os("HL_NATIVE_TEST_ROOTFS") else {
+        return;
+    };
+    let executable = PathBuf::from(root).join("usr/local/bin/node");
+    if !executable.is_file() {
+        return;
+    }
+    let (status, output, error) = run(
+        &executable,
+        &["/usr/local/lib/node_modules/npm/bin/npm-cli.js", "--version"],
+        true,
+    );
+    assert_eq!(status, 0, "stderr: {}", String::from_utf8_lossy(&error));
+    if std::env::var_os("HL_NATIVE_TEST_NO_STREAMS").is_none() {
+        assert!(!output.is_empty());
+    }
+}
+
 fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec<u8>) {
     let mut options = Options::default();
     if let Some(control) = control {
@@ -188,14 +215,20 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
     let plan = RuntimePlan {
         rootfs: (!translated_off).then(|| b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"descendant".to_vec()],
+        arguments: vec![
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            b"descendant".to_vec(),
+        ],
         environment: Vec::new(),
         result_path: None,
         options,
         box_policy: if translated_off {
             RuntimeBoxPolicy::default()
         } else {
-            RuntimeBoxPolicy { hostname: Some(b"native-auto".to_vec()), ..isolated_policy() }
+            RuntimeBoxPolicy {
+                hostname: Some(b"native-auto".to_vec()),
+                ..isolated_policy()
+            }
         },
     };
     let engine = Engine::with_streams(
@@ -296,7 +329,10 @@ fn eligible_auto_equals_explicit_on_and_off_stays_translated() {
     let selected = run_automatic(&executable, Some("1"));
     let translated = run_automatic(&executable, Some("0"));
     assert_eq!((&automatic.0, &automatic.1), (&selected.0, &selected.1));
-    assert_eq!((&automatic.0, automatic.1.as_slice()), (&0, b"descendant-supervised".as_slice()));
+    assert_eq!(
+        (&automatic.0, automatic.1.as_slice()),
+        (&0, b"descendant-supervised".as_slice())
+    );
     assert_ne!((&translated.0, &translated.1), (&automatic.0, &automatic.1));
 }
 
@@ -337,7 +373,10 @@ fn post_selection_failure_never_retries_the_translated_backend() {
         }
     }
     engine.destroy().unwrap();
-    assert!(output.stdout.lock().unwrap().is_empty(), "translated retry executed the guest");
+    assert!(
+        output.stdout.lock().unwrap().is_empty(),
+        "translated retry executed the guest"
+    );
 }
 
 #[test]
@@ -812,7 +851,11 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     std::fs::create_dir_all(root.join("tmp")).unwrap();
     std::fs::create_dir_all(root.join("proc")).unwrap();
     std::fs::create_dir_all(root.join("etc")).unwrap();
-    std::fs::write(root.join("etc/hosts"), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker").unwrap();
+    std::fs::write(
+        root.join("etc/hosts"),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker",
+    )
+    .unwrap();
     std::fs::set_permissions(root.join("etc/hosts"), std::fs::Permissions::from_mode(0o640)).unwrap();
     std::fs::write(root.join("proc/hostile"), b"host").unwrap();
     let executable = root.join("bin/fixture");
@@ -834,8 +877,14 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
     assert_eq!(*output.stdout.lock().unwrap(), b"root-contract-hostname");
-    assert_eq!(std::fs::read(root.join("etc/hosts")).unwrap(), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker");
-    assert_eq!(std::fs::metadata(root.join("etc/hosts")).unwrap().permissions().mode() & 0o7777, 0o640);
+    assert_eq!(
+        std::fs::read(root.join("etc/hosts")).unwrap(),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker"
+    );
+    assert_eq!(
+        std::fs::metadata(root.join("etc/hosts")).unwrap().permissions().mode() & 0o7777,
+        0o640
+    );
 }
 
 #[test]
@@ -936,15 +985,26 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     plan.box_policy.gid = 2345;
     plan.box_policy.volumes =
         Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
-    let streams = StandardStreams::default()
-        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
-    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    assert!(text.windows(b"secure-jail".len()).any(|window| window == b"secure-jail"), "pty={text:?}");
-    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+    let text = terminal
+        .bytes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        text.windows(b"secure-jail".len())
+            .any(|window| window == b"secure-jail"),
+        "pty={text:?}"
+    );
+    assert!(
+        text.windows(b"pty-session".len())
+            .any(|window| window == b"pty-session"),
+        "pty={text:?}"
+    );
     assert_eq!(native_overlay_directories(), before);
 }
 
@@ -955,24 +1015,39 @@ fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"pty-session".to_vec());
-    let streams = StandardStreams::default()
-        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
     let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).unwrap();
     if let Err(error) = engine.start() {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let text = terminal
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         panic!("native terminal start failed: {error:?}, pty={text:?}");
     }
     let waited = engine.wait();
     if let Err(error) = &waited {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let text = terminal
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         panic!("native terminal wait failed: {error:?}, pty={text:?}");
     }
     assert_eq!(waited.unwrap().guest_status, 0);
     engine.destroy().unwrap();
-    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+    let text = terminal
+        .bytes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        text.windows(b"pty-session".len())
+            .any(|window| window == b"pty-session"),
+        "pty={text:?}"
+    );
 }
 
 #[test]
@@ -985,12 +1060,14 @@ fn supervised_terminal_refuses_an_image_supplied_non_tty_character_device() {
     std::fs::create_dir_all(root.join("proc")).unwrap();
     let executable = root.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
-    assert!(std::process::Command::new("mknod")
-        .arg(root.join("dev/tty"))
-        .args(["c", "1", "3"])
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        std::process::Command::new("mknod")
+            .arg(root.join("dev/tty"))
+            .args(["c", "1", "3"])
+            .status()
+            .unwrap()
+            .success()
+    );
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
     plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
@@ -1100,7 +1177,9 @@ fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
     plan.box_policy.volumes = Some(
         format!(
             "ro:/etc/hosts:{},rw:/etc/hostname:{},rw:/etc/resolv.conf:{}",
-            hosts.display(), hostname.display(), resolver.display()
+            hosts.display(),
+            hostname.display(),
+            resolver.display()
         )
         .into_bytes(),
     );
@@ -1117,6 +1196,45 @@ fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
     assert_eq!(std::fs::read(&hosts).unwrap(), b"identity-hosts\n");
     assert_eq!(std::fs::read(&hostname).unwrap(), b"guest-host\n");
     assert_eq!(std::fs::read(&resolver).unwrap(), b"nameserver 127.0.0.1\n");
+}
+
+#[test]
+fn supervised_projector_connects_an_explicitly_bound_unix_socket() {
+    let work = TempDir::new().unwrap();
+    let built = fixture(work.path());
+    let root = work.path().join("root");
+    for path in [root.join("bin"), root.join("proc"), root.join("run/husklet")] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let executable = root.join("bin/fixture");
+    std::fs::copy(built, &executable).unwrap();
+    std::fs::write(root.join("run/husklet/extension.sock"), b"").unwrap();
+    let socket = work.path().join("extension.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.write_all(b"socket").unwrap();
+        let mut reply = [0_u8; 5];
+        peer.read_exact(&mut reply).unwrap();
+        assert_eq!(&reply, b"reply");
+    });
+    let output = Arc::new(Output::default());
+    let mut plan = selected_plan(&executable);
+    plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
+    plan.arguments
+        .extend([b"socket-volume".to_vec(), b"/run/husklet/extension.sock".to_vec()]);
+    plan.box_policy.volumes = Some(format!("rw:/run/husklet/extension.sock:{}", socket.display()).into_bytes());
+    let engine = Engine::with_streams(
+        GuestIsa::X86_64,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 0);
+    engine.destroy().unwrap();
+    server.join().unwrap();
+    assert_eq!(*output.stdout.lock().unwrap(), b"socket-volume");
 }
 
 #[test]
@@ -1179,7 +1297,10 @@ fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_repla
     }
     engine.destroy().unwrap();
     assert_eq!(std::fs::read(root.join("etc/target")).unwrap(), b"attacker-target\n");
-    assert_eq!(std::fs::read(root.join("etc/target.pinned")).unwrap(), b"pinned-target\n");
+    assert_eq!(
+        std::fs::read(root.join("etc/target.pinned")).unwrap(),
+        b"pinned-target\n"
+    );
     assert_eq!(std::fs::read(&source).unwrap(), b"trusted-source\n");
 }
 
@@ -1208,7 +1329,9 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
                 ),
             )) => {}
             Ok(engine) => {
-                if engine.start().is_ok() { assert!(engine.wait().is_err()); }
+                if engine.start().is_ok() {
+                    assert!(engine.wait().is_err());
+                }
                 engine.destroy().unwrap();
             }
             Err(error) => panic!("unexpected refusal: {error:?}"),

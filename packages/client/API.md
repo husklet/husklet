@@ -179,11 +179,11 @@ wrong caller.
 ## Observe before mutating
 
 Inventory, inspection, pane text, file ranges, executions, pulls, and acquisitions
-return the identity/generation/revision fields accepted by their observed or
-destructive counterparts. Keep those exact values through user or agent consent;
+return the identity/generation/revision fields accepted by revision-bound or
+destructive mutations. Keep those exact values through user or agent consent;
 do not replace them with names, prefixes, mutable tags, PIDs, or a newer snapshot.
-Legacy unobserved pane/file methods remain for compatibility, while the `Observed`
-methods are the safe default. Process PIDs are snapshot display values and may be reused.
+Prefer the revision-bound methods whenever a decision is separated from its mutation.
+Process PIDs are snapshot display values and may be reused.
 
 ```js
 const pane = (await host.terminal.panes()).panes[0];

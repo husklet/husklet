@@ -9,7 +9,7 @@ activation = "tab"
 # from inventory. Pane inventory, live terminal output, semantic UI text, and
 # revision-bound input are separate authorities, so consent describes every
 # operation this compact control surface exercises.
-capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "extensions:read", "interface:render"]
+capabilities = ["workspaces:read", "workspaces:control", "workspaces:events", "extensions:read", "extensions:control", "extensions:install", "containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "interface:render"]
 
 [interface]
 tab_title = "Top"
@@ -17,8 +17,18 @@ icon = "utilities-system-monitor-symbolic"
 
 [[pane_providers]]
 id = "overview"
-title = "Resource overview"
+title = "Top overview"
 icon = "utilities-system-monitor-symbolic"
+
+[[pane_providers]]
+id = "workspace"
+title = "Workspace settings"
+icon = "preferences-system-symbolic"
+
+[[pane_providers]]
+id = "extensions"
+title = "Extensions"
+icon = "application-x-addon-symbolic"
 
 [[pane_providers]]
 id = "containers"

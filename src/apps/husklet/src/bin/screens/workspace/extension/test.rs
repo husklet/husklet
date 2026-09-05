@@ -115,6 +115,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
         provider_authority_waits_for_a_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
+        an_empty_wire_slot_addresses_the_overview_surface();
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
         a_stopped_extension_keeps_its_widgets_and_says_so();
@@ -148,6 +149,21 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn an_empty_wire_slot_addresses_the_overview_surface() {
+    let mut fixture = Fixture::new();
+    let frame = fixture.reconciliation.reconcile(&panel("Top"));
+    fixture
+        .post
+        .send(Delivery::FrameAt {
+            slot: String::new(),
+            frame,
+        })
+        .expect("the page is listening");
+
+    assert_eq!(fixture.page.tick(), 1);
+    assert!(fixture.tagged(Tag::Button).is_some(), "the primary wire slot reached the overview");
 }
 
 fn network_waterfall_projects_exact_structured_semantics() {

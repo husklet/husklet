@@ -33,7 +33,7 @@ export async function connect({ path, onRows, onReply, onEvent, onEventError, on
       if (!deliver(session, payload) && onReply) onReply(payload);
     },
   });
-  attached.set(session, { handles: new Set(), slots: new Map() });
+  attached.set(session, { handles: new Set(), slots: new Map(), routesEvents: true });
   return session;
 }
 
@@ -43,9 +43,17 @@ export async function connect({ path, onRows, onReply, onEvent, onEventError, on
  * The tab is opened first because the host refuses a render before one exists.
  * Returns a handle whose `update` re-renders and whose `close` tears down.
  */
-export function render(element, session, { title = 'Extension', split = null } = {}) {
-  const registry = attached.get(session);
+export function render(element, session, { title = 'Extension', split = null, bootstrap = null } = {}) {
+  let registry = attached.get(session);
+  if (!registry && bootstrap !== null) {
+    registry = { handles: new Set(), slots: new Map(), routesEvents: false };
+    attached.set(session, registry);
+  }
   if (!registry) throw new Error('render requires a session returned by connect');
+  if (!registry.routesEvents) {
+    session.onEvent((payload) => deliver(session, payload));
+    registry.routesEvents = true;
+  }
   if (split !== null && (
     typeof split !== 'object'
     || typeof split.slot !== 'string'
@@ -57,10 +65,11 @@ export function render(element, session, { title = 'Extension', split = null } =
     throw new RangeError(`extension surface limit of ${SURFACE_LIMIT} is exhausted`);
   }
   const queued = [];
-  let slot = null;
+  let slot = bootstrap?.slot ?? null;
   let closed = false;
   let failed = null;
   let withdrawal = null;
+  const deliveries = new Set();
   const transmit = (frame) => {
     if (closed || failed) return;
     if (slot === null) {
@@ -71,17 +80,37 @@ export function render(element, session, { title = 'Extension', split = null } =
       queued.push(frame);
       return;
     }
-    void session.call('interface_render_at', { slot, frame }).catch(() => {});
+    const delivery = (async () => {
+      const reply = await session.call('interface_render_at', { slot, frame });
+      if (reply?.reply !== 'done') {
+        throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+      }
+    })();
+    deliveries.add(delivery);
+    delivery.catch((error) => { failed = error; }).finally(() => deliveries.delete(delivery));
   };
-  const surface = new Surface(transmit);
+  if (bootstrap !== null && (
+    typeof bootstrap !== 'object'
+    || typeof bootstrap.slot !== 'string'
+    || bootstrap.sequence !== 1
+    || bootstrap.nextNode !== 2
+    || bootstrap.bootstrapNode !== 1
+  )) throw new TypeError('bootstrap must be a token returned by bootstrapSurface');
+  const surface = new Surface(transmit, bootstrap === null ? undefined : {
+    sequence: bootstrap.sequence,
+    next: bootstrap.nextNode,
+    patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
+  });
   const handle = { surface };
   registry.handles.add(handle);
 
-  const opening = split === null
-    ? session.call('interface_open_tab', { title })
-    : session.call('interface_split', { slot: split.slot, division: split.division });
+  const opening = bootstrap !== null
+    ? Promise.resolve({ reply: 'identity', with: bootstrap.slot })
+    : split === null
+      ? session.call('interface_open_tab', { title })
+      : session.call('interface_split', { slot: split.slot, division: split.division });
   const ready = opening.then((reply) => {
-    if (reply?.reply !== 'identity' || typeof reply.with !== 'string' || reply.with.length === 0) {
+    if (reply?.reply !== 'identity' || typeof reply.with !== 'string' || (bootstrap === null && reply.with.length === 0)) {
       throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected identity`);
     }
     if (closed) return reply.with;
@@ -109,6 +138,11 @@ export function render(element, session, { title = 'Extension', split = null } =
     update(next) {
       reconciler.updateContainer(next, container, null, null);
     },
+    async flush() {
+      await ready;
+      while (deliveries.size > 0) await Promise.all(deliveries);
+      if (failed) throw failed;
+    },
     async source(mutation) {
       const owned = await ready;
       const reply = await session.call('source_resize_at', { slot: owned, mutation });
@@ -121,6 +155,7 @@ export function render(element, session, { title = 'Extension', split = null } =
       registry.handles.delete(handle);
       if (slot !== null) registry.slots.delete(slot);
       withdrawal = ready.then(async (owned) => {
+        if (owned === '') return;
         const reply = await session.call('interface_withdraw', { slot: owned });
         if (reply?.reply !== 'done') {
           throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
@@ -166,21 +201,13 @@ export function deliver(session, payload) {
  */
 function interpret(payload) {
   if (!payload || typeof payload !== 'object') return null;
-  const named = typeof payload.event === 'string' ? payload.event : undefined;
-  const body = named === undefined ? (payload.event ?? payload) : payload;
-  if (typeof body === 'object' && body !== null && !('id' in body)) {
-    // Externally tagged: {"Invoke":{"node":2,"id":"2:Invoke"}}
-    const [trigger, inner] = Object.entries(body)[0] ?? [];
-    if (!inner || typeof inner !== 'object' || typeof inner.id !== 'string') return null;
-    return { ...inner, trigger, value: inner.value ?? null };
-  }
-  if (typeof body !== 'object' || typeof body.id !== 'string') return null;
-  const legacy = typeof body.interaction === 'string'
-    ? `${body.interaction[0].toUpperCase()}${body.interaction.slice(1)}`
-    : undefined;
-  const trigger = body.trigger ?? named ?? legacy;
-  if (trigger === undefined) return null;
-  return { ...body, trigger, value: body.value ?? null };
+  if (typeof payload.interaction !== 'string' || typeof payload.trigger !== 'string'
+      || typeof payload.id !== 'string') return null;
+  const wire = payload.value;
+  const value = wire && typeof wire === 'object'
+    ? (wire.Text ?? wire.Number ?? wire.Integer ?? wire.Flag ?? wire)
+    : (wire ?? null);
+  return { ...payload, value };
 }
 
 /** Every prop and handler name a component accepts, for tooling and tests. */

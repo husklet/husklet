@@ -5,6 +5,7 @@
 // declares is a type error, which is the whole point of generating this.
 
 import type { ComponentType, ReactNode } from 'react';
+import type { SurfaceBootstrap } from '@husklet/client';
 
 export interface CommandPaletteItem {
   id: string;
@@ -5504,6 +5505,8 @@ export interface RenderHandle {
   readonly ready: Promise<string>;
   readonly slot: string | null;
   update(next: ReactNode): void;
+  /** Waits until every reconciliation frame queued so far is acknowledged by the host. */
+  flush(): Promise<void>;
   source(mutation: InterfaceSourceMutation): Promise<void>;
   close(): void;
 }
@@ -5511,7 +5514,11 @@ export interface RenderHandle {
 export function render(
   element: ReactNode,
   session: Session,
-  options?: { title?: string; split?: { slot: string; division: 'beside' | 'below' } },
+  options?: {
+    title?: string;
+    split?: { slot: string; division: 'beside' | 'below' };
+    bootstrap?: SurfaceBootstrap;
+  },
 ): RenderHandle;
 
 export function deliver(session: Session, payload: unknown): boolean;

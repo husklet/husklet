@@ -124,11 +124,13 @@ test('the production entrypoint handshakes and renders through a real Unix socke
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     try {
-      await until(() => calls.includes('interface_open_tab') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.includes('terminal_tabs') && calls.filter((name) => name === 'event_subscribe').length === 5);
+      await until(() => calls.includes('interface_render') && calls.includes('interface_render_at') && calls.includes('container_list') && calls.includes('execution_list') && calls.includes('image_list') && calls.includes('volume_list') && calls.includes('network_list') && calls.includes('terminal_tabs') && calls.filter((name) => name === 'event_subscribe').length === 5
+        && requests.some((request) => request.call === 'interface_render_at'
+          && request.with.frame.patches.some((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Images')));
     } catch (error) {
       throw new Error(`${error.message}; calls=${JSON.stringify(calls)} stderr=${JSON.stringify(stderr)}`);
     }
-    assert.ok(calls.indexOf('interface_render_at') < calls.indexOf('container_list'),
+    assert.ok(calls.indexOf('interface_render') < calls.indexOf('container_list'),
       'the compact shell renders before resource inventory work begins');
     const openingRenders = requests.filter((request) => request.call === 'interface_render_at').length;
     peer.write(encode({ channel: 9, kind: KIND.event, payload: invocation(requests, 'Images') }));
@@ -377,7 +379,7 @@ function invocation(requests, label) {
     return installed >= 0 && active(node) ? patches[installed] : undefined;
   }).find(Boolean);
   assert.ok(handler, `${label} advertises Invoke`);
-  return { slot: 'top', event: 'Invoke', node: handler.SetHandler.id, id: handler.SetHandler.handler.id };
+  return { interaction: 'invoke', trigger: 'Invoke', slot: '', node: handler.SetHandler.id, id: handler.SetHandler.handler.id };
 }
 
 function changeInvocation(requests, placeholder, value) {
@@ -387,7 +389,14 @@ function changeInvocation(requests, placeholder, value) {
     .toReversed().find((patch) => active(patch.SetProp.id))?.SetProp.id;
   const handler = patches.findLast((patch) => patch.SetHandler?.id === node && patch.SetHandler.handler?.trigger === 'Change');
   assert.ok(handler, `${placeholder} advertises Change`);
-  return { slot: 'top', event: 'Change', node, id: handler.SetHandler.handler.id, value };
+  return {
+    interaction: 'change',
+    trigger: 'Change',
+    slot: '',
+    node,
+    id: handler.SetHandler.handler.id,
+    value: { Text: value },
+  };
 }
 
 function activeNodes(patches) {

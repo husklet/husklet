@@ -116,10 +116,6 @@ export interface InterfaceEventBase<I extends string, T extends string> {
   interaction: I; trigger: T; node: number; id: string; slot?: string;
 }
 export type InterfaceEvent = WireUiEvent;
-/** Protocol-1 interface spellings accepted from older hosts by the event router. */
-export type LegacyInterfaceEvent =
-  | { slot?: string; event: string; node: number; id: string; value?: unknown }
-  | { slot?: string; event: Record<string, { node: number; id: string; value?: unknown }> };
 export type SnapshotEvent =
   | { snapshot: 'containers'; of: ContainerSummary[] }
   | { snapshot: 'images'; of: ImageInventory }
@@ -133,8 +129,8 @@ export type SnapshotEvent =
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
-export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
-export function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent | LegacyInterfaceEvent;
+export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
+export function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
 export class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
@@ -194,6 +190,19 @@ export class Session {
 
 export function connect(options?: ConnectOptions): Promise<Session>;
 
+/** A first frame rendered without loading a UI framework. */
+export interface SurfaceBootstrap {
+  readonly slot: string;
+  readonly sequence: 1;
+  readonly nextNode: 2;
+  readonly bootstrapNode: 1;
+}
+
+export function bootstrapSurface(
+  session: Session,
+  options?: { title?: string; label?: string; primary?: boolean },
+): Promise<SurfaceBootstrap>;
+
 export interface WorkspaceApi {
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
@@ -203,7 +212,7 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  /** Assign identity to the exact still-unchanged generation-less legacy record. */
+  /** Assign identity to an imported generation-less workspace record. */
   adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   delete(name: string, generation: string): Promise<void>;

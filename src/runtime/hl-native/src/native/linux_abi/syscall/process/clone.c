@@ -29,7 +29,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         // CLONE_THREAD: stack arg IS the top
         if (a0 & 0x10000) {
-            int64_t result = spawn_thread(c, a0, a1, a3, a2, a4);
+            int64_t result = spawn_thread(c, a0, a1, G_CLONE_TLS(a3, a4), a2, G_CLONE_CTID(a3, a4));
             if (result < 0) fork_diagnostic_emit(c, nr, a0, "thread-spawn", (int)-result, -1, NULL);
             G_RET(c) = (uint64_t)result;
             break;

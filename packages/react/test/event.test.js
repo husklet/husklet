@@ -103,7 +103,7 @@ test('two roots keep independent slots, sequences, sources, and events over one 
     call: 'source_resize_at',
     with: { slot: 'surface-2', mutation: { Length: { source: 7, version: 2, rows: 100_000 } } },
   });
-  await stage.push({ slot: 'surface-2', event: 'Invoke', id: '1:Invoke', node: 1 });
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', slot: 'surface-2', id: '1:Invoke', node: 1 });
   await until(() => secondInvoked === 1);
   assert.equal(firstInvoked, 0, 'an addressed event never fans out to the other root');
   const closing = first.close();
@@ -113,7 +113,7 @@ test('two roots keep independent slots, sequences, sources, and events over one 
     stage.calls.filter((call) => call.call === 'interface_withdraw'),
     [{ call: 'interface_withdraw', with: { slot: 'surface-1' } }],
   );
-  await stage.push({ slot: 'surface-2', event: 'Invoke', id: '1:Invoke', node: 1 });
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', slot: 'surface-2', id: '1:Invoke', node: 1 });
   await until(() => secondInvoked === 2);
   assert.equal(firstInvoked, 0, 'withdrawing one root leaves its sibling live');
   await second.close();
@@ -121,7 +121,7 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   stage.close();
 });
 
-test('a slotless compatibility event never guesses between multiple surfaces', async () => {
+test('a slotless event never guesses between multiple surfaces', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
   let firstInvoked = 0;
@@ -176,12 +176,8 @@ test('a handler runs when the host reports its event', async () => {
   render(h(Column, null, h(Button, { label: 'Go', onInvoke: () => (invoked += 1) })), session, { title: 'Demo' });
   await until(() => stage.calls.length >= 2);
 
-  await stage.push({ event: { Invoke: { node: 1, id: '1:Invoke' } } });
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke', slot: 'surface-1' });
   await until(() => invoked === 1);
-
-  // The other spelling the host may use, so a plain trigger field also lands.
-  await stage.push({ event: 'Invoke', id: '1:Invoke', node: 1 });
-  await until(() => invoked === 2);
 
   session.close();
   stage.close();
@@ -276,7 +272,7 @@ test('a re-render rebinds the callback without a patch', async () => {
   await until(() => stage.calls.length >= 2);
   handle.update(h(Column, null, h(Button, { label: 'Go', onInvoke: () => (latest = 'second') })));
 
-  await stage.push({ event: { Invoke: { node: 1, id: '1:Invoke' } } });
+  await stage.push({ interaction: 'invoke', trigger: 'Invoke', node: 1, id: '1:Invoke', slot: 'surface-1' });
   await until(() => latest === 'second');
   assert.equal(stage.calls.length, 2, 'rebinding a closure is not something the host needs to hear about');
 

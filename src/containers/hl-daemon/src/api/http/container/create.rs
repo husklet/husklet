@@ -71,6 +71,12 @@ pub(in super::super) async fn create(
     };
     let name = query.name;
     let labels = request.labels;
+    let execution = match request.execution {
+        crate::api::CreateExecution::Auto => hl_container::Execution::Auto,
+        crate::api::CreateExecution::Interpreted => hl_container::Execution::Interpreted,
+        crate::api::CreateExecution::Translit => hl_container::Execution::Translit,
+        crate::api::CreateExecution::Native => hl_container::Execution::native(false),
+    };
     let hostname = request.hostname.filter(|value| !value.is_empty());
     let stop_signal = request
         .stop_signal
@@ -91,6 +97,7 @@ pub(in super::super) async fn create(
                 spec = spec.name(name);
             }
             spec.labels = labels;
+            spec = spec.execution(execution);
             if let Some(hostname) = hostname {
                 spec = spec.hostname(hostname);
             }

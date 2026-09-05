@@ -147,6 +147,48 @@ export async function connect(options = {}) {
   return Session.connect(options.path, options);
 }
 
+/**
+ * Opens a surface and paints a dependency-free first frame.
+ *
+ * Extensions can do this before importing React or another renderer, keeping
+ * cold-start feedback independent of framework initialization. Pass the
+ * returned token to the renderer so it continues the same frame sequence.
+ */
+export async function bootstrapSurface(session, { title = 'Extension', label = 'Loading…', primary = false } = {}) {
+  if (typeof title !== 'string' || title.trim().length === 0) throw new TypeError('surface title must be nonblank');
+  if (typeof label !== 'string' || new TextEncoder().encode(label).byteLength > 4096) {
+    throw new TypeError('surface label must be a string of at most 4096 UTF-8 bytes');
+  }
+  if (typeof primary !== 'boolean') throw new TypeError('surface primary must be boolean');
+  let slot = '';
+  if (!primary) {
+    const opened = await session.call('interface_open_tab', { title });
+    if (opened?.reply !== 'identity' || typeof opened.with !== 'string' || opened.with.length === 0) {
+      throw new Error(`host replied ${opened?.reply ?? 'without a tag'}, expected identity`);
+    }
+    slot = opened.with;
+  }
+  const node = 1;
+  const frame = {
+    sequence: 1,
+    patches: [
+      { Create: { id: node, tag: 'Text' } },
+      { SetProp: { id: node, prop: 'Label', value: { Text: label } } },
+      { Insert: { parent: 0, child: node, before: null } },
+    ],
+  };
+  try {
+    const rendered = primary
+      ? await session.call('interface_render', { frame })
+      : await session.call('interface_render_at', { slot, frame });
+    if (rendered?.reply !== 'done') throw new Error(`host replied ${rendered?.reply ?? 'without a tag'}, expected done`);
+  } catch (error) {
+    if (!primary) void session.call('interface_withdraw', { slot }).catch(() => {});
+    throw error;
+  }
+  return Object.freeze({ slot, sequence: 1, nextNode: 2, bootstrapNode: node });
+}
+
 export function workspace(session, { signal } = {}) {
   const hostSession = session;
   if (signal !== undefined) {
@@ -252,12 +294,11 @@ export function workspace(session, { signal } = {}) {
       removeExecution: (id) => done('execution_remove', {
         id: immutableIdentity(id, [32], 'execution'),
       }),
-      create: async (configuration, legacyName) => {
-        const spec = typeof configuration === 'string' ? {
-          image: configuration, name: legacyName, hostname: null, entrypoint: null, command: [], environment: [],
-          working_directory: null, user: null, labels: [], mounts: [], network: null, ports: [],
-          memory_mb: null, cpus: null, pids_limit: null,
-        } : {
+      create: async (configuration) => {
+        if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
+          throw new TypeError('container creation requires a configuration object');
+        }
+        const spec = {
           hostname: null, entrypoint: null, command: [], environment: [], working_directory: null, user: null,
           labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
           pids_limit: null, ...configuration,

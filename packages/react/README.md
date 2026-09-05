@@ -116,8 +116,8 @@ required, while a pointer event exposes its finite phase vocabulary and nullable
 coordinates. A `Container` can bind `onDrag` and `onDrop` for in-process
 reordering: drop reports only the bounded source node identity and local `x`/`y`
 coordinates. Arbitrary files, MIME data, clipboard contents, and cross-process
-payloads are deliberately not exposed. `LegacyInterfaceEvent` is kept separately for protocol-1 hosts
-that used the older `event` envelope; new code should narrow `InterfaceEvent`.
+payloads are deliberately not exposed. Every host emits the same generated
+`InterfaceEvent` union, so application code narrows one canonical event shape.
 
 ## Workspace API
 
@@ -181,7 +181,7 @@ by inventory or inspection. The host compares that generation atomically, so a
 removed and recreated same-name volume needs fresh consent.
 The host publishes bounded change feeds for container and execution inventories,
 image pulls, panes, extensions and their acquisitions, workspace lifecycle and
-input events, plus the legacy image, volume, network, and terminal snapshots. Start and stop those credit-controlled feeds
+input events, plus image, volume, network, and terminal snapshots. Start and stop those credit-controlled feeds
 with `host.subscribe(topic)` and `host.unsubscribe(topic)`, and receive payloads
 through `connect({ onEvent })` or `session.onEvent()`. An acknowledged final
 unsubscribe retires the host channel and discards any coalesced snapshot, so
@@ -190,21 +190,16 @@ later subscriptions start with fresh credit and state.
 Terminal control is pane-addressed and promise-based as well. `terminal.read`
 returns at most 2,000 lines with the cursor and grid dimensions from the same
 authoritative screen snapshot; `terminal.splitObserved(slot, generation, revision, division)`
-splits only that exact snapshot (the legacy `split` remains for compatibility);
-`terminal.spawnObserved(slot, generation, revision, argv)` similarly prevents a
-stale slot from running argv in a replacement terminal (legacy `spawn` remains);
-`terminal.ratioObserved` binds layout resizing to the same cursor while legacy
-`ratio` remains available;
-`terminal.resizeGridObserved` binds PTY resizing to the same cursor while legacy
-`resizeGrid` remains available;
+splits only that exact snapshot. `terminal.spawnObserved(slot, generation, revision, argv)` similarly prevents a
+stale slot from running argv in a replacement terminal. `terminal.ratioObserved`
+and `terminal.resizeGridObserved` bind layout and PTY resizing to the same cursor.
 `terminal.writeInput` accepts at most 65,536 raw
 bytes and appends nothing, and `terminal.resizeGrid` accepts dimensions from 1
 through 1,000. `terminal.closeObserved(slot, generation, revision)` closes only
-the exact pane snapshot returned by inventory/read; legacy `close(slot)` remains
-for compatibility. `terminal.topology()` returns the current nested tab/split tree;
+the exact pane snapshot returned by inventory/read. `terminal.topology()` returns the current nested tab/split tree;
 it is an observation call, not a claimed global change stream.
 Use `terminal.switchOccupantObserved(slot, generation, revision, target)` for an
-observe-then-switch workflow; the generation-only method remains for compatibility.
+observe-then-switch workflow.
 
 `protocolCoverage` is the machine-readable inventory of what this protocol
 version really supports. Its image inventory includes the implemented bounded

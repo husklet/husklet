@@ -110,7 +110,10 @@ impl Workspace {
     /// The socket one extension is given, in a directory of its own so
     /// [`SidecarSpec::prepare`] can confine it without touching anything else.
     fn socket(&self, name: &ExtensionName) -> PathBuf {
-        self.root().join("extensions").join(format!("{name}.sock"))
+        self.root()
+            .join("extensions")
+            .join(name.as_str())
+            .join("extension.sock")
     }
 
     /// The record of the extension that should be running, if there is one.
@@ -452,7 +455,9 @@ impl WorkspaceControl for Store {
 
     fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         if !configuration.generation.is_empty() {
-            return Err(HostError::Conflict("only a generation-less legacy workspace can be adopted".into()));
+            return Err(HostError::Conflict(
+                "only a generation-less legacy workspace can be adopted".into(),
+            ));
         }
         let mut expected = Self::configured(configuration)?;
         expected.generation.clear();
@@ -538,8 +543,27 @@ impl WorkspaceControl for Store {
 #[cfg(test)]
 mod workspace_control_tests {
     use hl_extension::port::WorkspaceControl as _;
+    use hl_extension::ExtensionName;
 
-    use super::Store;
+    use super::{Store, Workspace};
+
+    #[test]
+    fn each_extension_gets_one_private_socket_directory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let mut configuration = crate::config::WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        configuration.storage = Some(temporary.path().join("workspace"));
+        let top = ExtensionName::new("top").expect("name");
+        let storybook = ExtensionName::new("storybook").expect("name");
+
+        assert_eq!(
+            Workspace::extension(&configuration, &top).socket(&top),
+            temporary.path().join("workspace/extensions/top/extension.sock")
+        );
+        assert_eq!(
+            Workspace::extension(&configuration, &storybook).socket(&storybook),
+            temporary.path().join("workspace/extensions/storybook/extension.sock")
+        );
+    }
 
     #[test]
     fn extension_configuration_round_trips_every_persisted_core_field() {

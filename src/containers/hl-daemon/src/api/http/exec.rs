@@ -18,22 +18,50 @@ use super::error::{ApiError, ApiResult};
 use crate::api::{ExecConfig, ExecCreated, ExecLifetime, ExecNetwork, Wait};
 
 #[derive(Deserialize)]
-pub(super) struct ListQuery { limit: Option<u16> }
+pub(super) struct ListQuery {
+    limit: Option<u16>,
+}
 
-pub(super) async fn list(State(state): State<DockerState>, Query(query): Query<ListQuery>) -> ApiResult<Json<crate::api::ExecCatalogue>> {
+pub(super) async fn list(
+    State(state): State<DockerState>,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Json<crate::api::ExecCatalogue>> {
     let limit = usize::from(query.limit.unwrap_or(1024).min(1024));
-    let mut records = state.containers.executions().list().await.map_err(ApiError::container)?;
+    let mut records = state
+        .containers
+        .executions()
+        .list()
+        .await
+        .map_err(ApiError::container)?;
     let truncated = records.len() > limit;
     records.truncate(limit);
-    let executions = records.into_iter().map(inspect::model).collect::<ApiResult<Vec<_>>>()?
-        .into_iter().map(|Json(value)| value).collect();
+    let executions = records
+        .into_iter()
+        .map(inspect::model)
+        .collect::<ApiResult<Vec<_>>>()?
+        .into_iter()
+        .map(|Json(value)| value)
+        .collect();
     Ok(Json(crate::api::ExecCatalogue { executions, truncated }))
 }
 
-pub(super) async fn logs(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<Json<crate::api::ExecOutput>> {
-    let exec_id = id.parse().map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
-    let logs = state.containers.executions().logs(&exec_id).await.map_err(ApiError::container)?;
-    Ok(Json(crate::api::ExecOutput { stdout: logs.stdout, stderr: logs.stderr }))
+pub(super) async fn logs(
+    State(state): State<DockerState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::api::ExecOutput>> {
+    let exec_id = id
+        .parse()
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
+    let logs = state
+        .containers
+        .executions()
+        .logs(&exec_id)
+        .await
+        .map_err(ApiError::container)?;
+    Ok(Json(crate::api::ExecOutput {
+        stdout: logs.stdout,
+        stderr: logs.stderr,
+    }))
 }
 
 #[hl_design::adapter]

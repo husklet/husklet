@@ -1,45 +1,45 @@
-// The entrypoint the host starts: connect, then render the playground.
+// Paint through the framework-neutral client before loading the component catalogue.
 
-import React from 'react';
-import { connect, render } from '@husklet/react';
-import type { InterfaceSourceMutation, RenderHandle, Session } from '@husklet/react';
+import { bootstrapSurface, connect } from '@husklet/client';
+import type { InterfaceSourceMutation, RenderHandle } from '@husklet/react';
 
-import { Playground } from './app.js';
-import { LargeRecordSource } from './large-table.js';
-import { TimelineSource } from './event-stream.js';
-import { KeyValueSource } from './key-value-inspector.js';
-import { FileSource } from './file-browser.js';
-
+type RowSource = { answer(request: unknown): unknown; publish(): Promise<unknown> };
 type SourceSender = (_call: string, argument: { mutation: InterfaceSourceMutation }) => Promise<void>;
-type SourceConstructor<T> = new (send: SourceSender) => T;
+type SourceConstructor = new (send: SourceSender) => RowSource;
 
-let session: Session;
 let surface: RenderHandle;
-const send: SourceSender = (_call, argument) => surface.source(argument.mutation);
-const source = new (LargeRecordSource as unknown as SourceConstructor<LargeRecordSource>)(send);
-const timeline = new (TimelineSource as unknown as SourceConstructor<TimelineSource>)(send);
-const keyValues = new (KeyValueSource as unknown as SourceConstructor<KeyValueSource>)(send);
-const files = new (FileSource as unknown as SourceConstructor<FileSource>)(send);
-const PlaygroundComponent = Playground as React.ComponentType<{
-  largeSource: LargeRecordSource;
-  timelineSource: TimelineSource;
-  keyValueSource: KeyValueSource;
-  fileSource: FileSource;
-  initialStory?: string;
-}>;
-session = await connect({
-  onRows: (request, channel) => {
-    const window = source.answer(request) ?? timeline.answer(request) ?? keyValues.answer(request) ?? files.answer(request);
+let sources: RowSource[] = [];
+const session = await connect({
+  onRows(request, channel) {
+    const window = sources.map((source) => source.answer(request)).find(Boolean);
     if (window) session.answer(channel, window);
   },
 });
-surface = render(<PlaygroundComponent
-  largeSource={source}
-  timelineSource={timeline}
-  keyValueSource={keyValues}
-  fileSource={files}
-  initialStory={process.env.HUSKLET_STORYBOOK_STORY} />, session, { title: 'Storybook' });
-setTimeout(() => void source.publish(), 0);
-setTimeout(() => void timeline.publish(), 0);
-setTimeout(() => void keyValues.publish(), 0);
-setTimeout(() => void files.publish(), 0);
+const bootstrap = await bootstrapSurface(session, {
+  title: 'Components',
+  label: 'Loading component playground…',
+  primary: true,
+});
+const [React, react, app, large, events, keyValues, files] = await Promise.all([
+  import('react').then((module) => module.default),
+  import('@husklet/react'),
+  import('./app.js'),
+  import('./large-table.js'),
+  import('./event-stream.js'),
+  import('./key-value-inspector.js'),
+  import('./file-browser.js'),
+]);
+const send: SourceSender = (_call, argument) => surface.source(argument.mutation);
+sources = [large.LargeRecordSource, events.TimelineSource, keyValues.KeyValueSource, files.FileSource]
+  .map((Source) => new (Source as unknown as SourceConstructor)(send));
+const [source, timeline, keyValueSource, fileSource] = sources;
+const Playground = app.Playground as unknown as React.ComponentType<Record<string, unknown>>;
+surface = react.render(React.createElement(Playground, {
+  largeSource: source,
+  timelineSource: timeline,
+  keyValueSource,
+  fileSource,
+  initialStory: process.env.HUSKLET_STORYBOOK_STORY,
+}), session, { title: 'Components', bootstrap });
+await surface.flush();
+for (const sourceModel of sources) void sourceModel.publish();

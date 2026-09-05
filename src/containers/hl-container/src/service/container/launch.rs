@@ -107,13 +107,20 @@ impl Service {
         } else {
             Vec::new()
         };
-        let checkpoint = Some(crate::service::CheckpointRole::Coordinator(CheckpointConfig {
-            image: self
-                .checkpoints
-                .open(&checkpoint_namespace)
-                .map_err(|error| Error::Runtime(error.to_string()))?,
-            restore: container.checkpoint.is_some(),
-        }));
+        // Native-supervised processes are deliberately live, not checkpoint members. They are
+        // selected for rebuildable jobs (notably image-build RUN steps and extension sidecars),
+        // and the native backend cannot currently capture or restore a guest process tree.
+        let checkpoint = if container.spec.execution.is_native() {
+            None
+        } else {
+            Some(crate::service::CheckpointRole::Coordinator(CheckpointConfig {
+                image: self
+                    .checkpoints
+                    .open(&checkpoint_namespace)
+                    .map_err(|error| Error::Runtime(error.to_string()))?,
+                restore: container.checkpoint.is_some(),
+            }))
+        };
         let process = self
             .runtime
             .start(ProcessConfig {

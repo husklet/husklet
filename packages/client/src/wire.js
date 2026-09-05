@@ -4,6 +4,8 @@
 // flags, and two reserved bytes that must be zero. The host refuses anything
 // else, so this file is the one place the layout is written down on this side.
 
+import { Buffer } from 'node:buffer';
+
 export const KIND = {
   request: 1,
   response: 2,
@@ -62,7 +64,7 @@ export class Reader {
       const room = CAPACITY - this.#held.length;
       if (room === 0) throw new Error(`frame exceeds the ${PAYLOAD_LIMIT} byte payload limit`);
       const part = chunk.subarray(offset, offset + room);
-      this.#held = this.#held.length === 0 ? part : Buffer.concat([this.#held, part]);
+      this.#held = this.#held.length === 0 ? Buffer.from(part) : Buffer.concat([this.#held, part]);
       offset += part.length;
       for (;;) {
         const frame = this.#next();

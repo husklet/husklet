@@ -55,7 +55,7 @@ impl Shelf {
         })
     }
 
-    /// Mounts enabled pages in product order: Workspace, Extensions, then name.
+    /// Mounts enabled pages in product order: Top, then third-party names.
     pub fn install(self: &Rc<Self>) {
         let mut entries = self.roster.borrow().entries();
         entries.sort_by(|left, right| order(left).cmp(&order(right)));
@@ -188,9 +188,8 @@ impl Shelf {
 
 fn order(entry: &Entry) -> (u8, &str) {
     let rank = match entry.name.as_str() {
-        "workspace" => 0,
-        "extensions" => 1,
-        _ => 2,
+        "top" => 0,
+        _ => 1,
     };
     (rank, entry.name.as_str())
 }

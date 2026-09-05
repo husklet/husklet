@@ -79,7 +79,8 @@ test('host events type the pane chooser identity as well as subscribed snapshots
   assert.match(generatedClientDeclarations, /\{ interaction: "key" \} & \{ "trigger": string; "node": number; "id": string; "slot"\?: string \| null; "key": string; "keycode": number; "modifiers": number; "pressed": boolean \}/);
   assert.match(generatedClientDeclarations, /export type UiPointerPhase = "enter" \| "motion" \| "leave" \| "press" \| "release";/);
   assert.match(generatedClientDeclarations, /"x"\?: number \| null; "y"\?: number \| null; "button": number; "modifiers": number/);
-  assert.match(clientDeclarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent \| LegacyInterfaceEvent;/);
+  assert.match(clientDeclarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/);
+  assert.doesNotMatch(clientDeclarations, /LegacyInterfaceEvent/);
   assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
   assert.doesNotMatch(
     clientDeclarations,

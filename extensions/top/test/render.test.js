@@ -13,13 +13,35 @@ const api = {
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
 };
 
-test('the test host receives overview and every resource navigation choice', () => {
+test('Top presents workspace, extensions, and every resource navigation choice', () => {
   const frame = host().render(h(Top, { api, initial: { containers: [], executions: [], images: [], volumes: [], networks: [] } }));
   const labels = frame.patches.filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label').map((patch) => patch.SetProp.value.Text);
-  for (const label of ['Top', 'Resource overview', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
-  assert.equal(labels.includes('Workspace'), false, 'the resource manager does not impersonate the Workspace settings extension');
+  for (const label of ['Top', 'Resource overview', 'Workspace', 'Extensions', 'Containers', 'Processes', 'Executions', 'Images', 'Volumes', 'Networks', 'Terminals']) assert.ok(labels.includes(label), label);
   assert.equal(frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'), true);
   assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
+});
+
+test('Top owns workspace settings and extension management in the same tab', async () => {
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => ({
+      generation: 'a'.repeat(32), name: 'daily', architecture: 'amd64', image: 'alpine:3.20', storage: null,
+      shell: '/bin/sh', cpus: 2, memory_mb: 1024, environment: [], mounts: [], docker_socket: false,
+      scrollback: 10000, vpn: null, execution_lifetime: 'live',
+      terminal: { font_family: null, font_size: null, foreground: '#eeeeec', background: '#1e1e1e', cursor_shape: null, cursor_blink: false },
+    }),
+    extensions: { list: async () => [], },
+    watchExtensions: async () => () => {},
+  };
+  const stage = host();
+  stage.render(h(Top, { api: managed, initial: { containers: [], executions: [], images: [], volumes: [], networks: [], terminals: [] } }));
+  invoke(stage, 'Workspace'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Storage directory'));
+  assert.ok(labelled(stage, 'Save workspace'));
+  invoke(stage, 'Extensions'); await settled(); await settled();
+  assert.ok(labelled(stage, 'Install an extension'));
+  assert.ok(labelled(stage, 'No extensions installed'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {

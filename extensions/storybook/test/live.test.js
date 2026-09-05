@@ -67,9 +67,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
         if (frame.channel === 0) continue;
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
-        const payload = frame.payload.call === 'interface_open_tab'
-          ? { reply: 'identity', with: 'storybook-main' }
-          : { reply: 'done' };
+        const payload = { reply: 'done' };
         stream.write(encode({
           channel: frame.channel,
           kind: KIND.response,
@@ -113,10 +111,11 @@ test('the shipped entrypoint connects and renders the complete playground over a
     () => calls.find((call) => call.call === 'source_resize_at'),
     `storybook never published its large source; stderr=${stderr}`,
   );
-  assert.deepEqual(calls[0], { call: 'interface_open_tab', with: { title: 'Storybook' } });
-  assert.equal(rendered.with.slot, 'storybook-main');
-  assert.equal(rendered.with.frame.sequence, 1);
-  assert.equal(length.with.slot, 'storybook-main');
+  assert.equal(calls[0].call, 'interface_render');
+  assert.equal(calls[0].with.frame.sequence, 1);
+  assert.equal(rendered.with.slot, '');
+  assert.equal(rendered.with.frame.sequence, 2);
+  assert.equal(length.with.slot, '');
   assert.deepEqual(length.with.mutation.Length, { source: 100, version: 1, rows: 100_000 });
   assert.ok(rendered.with.frame.patches.length < 1_200, 'the live frame exceeded the host patch budget');
   assert.equal(
@@ -136,7 +135,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   for (const tag of tags) {
     let before = calls.filter((call) => call.call === 'interface_render_at').length;
     accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-      slot: 'storybook-main', event: 'Change', id: `${search}:Change`, node: search, value: tag.name,
+      interaction: 'change', trigger: 'Change', slot: '', id: `${search}:Change`, node: search, value: { Text: tag.name },
     } }));
     const searchFrame = await until(
       () => calls.filter((call) => call.call === 'interface_render_at')[before],
@@ -149,7 +148,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
 
     before = calls.filter((call) => call.call === 'interface_render_at').length;
     accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-      slot: 'storybook-main', event: 'Invoke', id: `${choice}:Invoke`, node: choice,
+      interaction: 'invoke', trigger: 'Invoke', slot: '', id: `${choice}:Invoke`, node: choice,
     } }));
     const componentFrame = await until(
       () => calls.filter((call) => call.call === 'interface_render_at')[before],
@@ -168,7 +167,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   // Keyboard and pointer input use the same live event channel as selection.
   let renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-    slot: 'storybook-main', event: 'Change', id: `${search}:Change`, node: search, value: 'Button',
+    interaction: 'change', trigger: 'Change', slot: '', id: `${search}:Change`, node: search, value: { Text: 'Button' },
   } }));
   const buttonSearch = await until(
     () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
@@ -179,7 +178,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.ok(buttonChoice, 'Button is absent from live search results');
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-    slot: 'storybook-main', event: 'Invoke', id: `${buttonChoice}:Invoke`, node: buttonChoice,
+    interaction: 'invoke', trigger: 'Invoke', slot: '', id: `${buttonChoice}:Invoke`, node: buttonChoice,
   } }));
   const buttonFrame = await until(
     () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
@@ -189,28 +188,28 @@ test('the shipped entrypoint connects and renders the complete playground over a
   const previewButton = node(buttonFrame.with.frame.patches, 'Button', 'Button');
   assert.ok(previewButton, 'the selected Button preview is absent');
   for (const payload of [
-    { event: 'Key', key: 'Enter', keycode: 36, pressed: true, modifiers: 0 },
-    { event: 'Pointer', phase: 'press', x: 8, y: 5, button: 1, modifiers: 0 },
+    { interaction: 'key', trigger: 'Key', key: 'Enter', keycode: 36, pressed: true, modifiers: 0 },
+    { interaction: 'pointer', trigger: 'Pointer', phase: 'press', x: 8, y: 5, button: 1, modifiers: 0 },
   ]) {
     renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
     accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-      slot: 'storybook-main', id: `${previewButton}:${payload.event}`, node: previewButton, ...payload,
+      slot: '', id: `${previewButton}:${payload.trigger}`, node: previewButton, ...payload,
     } }));
     const interaction = await until(
       () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
-      `${payload.event} never returned from the extension; stderr=${stderr}`,
+      `${payload.interaction} never returned from the extension; stderr=${stderr}`,
     );
-    assert.ok(interaction.with.frame.patches.length < 64, `${payload.event} response exceeded its patch budget`);
+    assert.ok(interaction.with.frame.patches.length < 64, `${payload.interaction} response exceeded its patch budget`);
     assert.ok(interaction.with.frame.patches.some((patch) =>
-      patch.SetProp?.value?.Text?.includes(`${payload.event} received`)),
-    `${payload.event} did not reach the visible bounded interaction console`);
+      patch.SetProp?.value?.Text?.includes(`${payload.trigger} received`)),
+    `${payload.interaction} did not reach the visible bounded interaction console`);
     apply(live, interaction.with.frame.patches);
   }
 
   // Return to the composed-flow navigation before exercising its controls.
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-    slot: 'storybook-main', event: 'Change', id: `${search}:Change`, node: search, value: '',
+    interaction: 'change', trigger: 'Change', slot: '', id: `${search}:Change`, node: search, value: { Text: '' },
   } }));
   const cleared = await until(
     () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
@@ -221,7 +220,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.ok(story, 'container operations is not selectable from the live sidebar');
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-    slot: 'storybook-main', event: 'Invoke', id: `${story}:Invoke`, node: story,
+    interaction: 'invoke', trigger: 'Invoke', slot: '', id: `${story}:Invoke`, node: story,
   } }));
   const storyFrame = await until(
     () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
@@ -231,7 +230,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.ok(inspect, 'container operations has no inspection action');
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(encode({ channel: 2, kind: KIND.event, payload: {
-    slot: 'storybook-main', event: 'Invoke', id: `${inspect}:Invoke`, node: inspect,
+    interaction: 'invoke', trigger: 'Invoke', slot: '', id: `${inspect}:Invoke`, node: inspect,
   } }));
   const inspection = await until(
     () => calls.filter((call) => call.call === 'interface_render_at').slice(renderCount)

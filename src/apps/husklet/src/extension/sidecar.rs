@@ -15,11 +15,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
+use hl_client::model::{CreateContainer, CreateExecution, DockerMount, HostConfig, InspectImage};
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -37,7 +37,8 @@ pub const NAME_PREFIX: &str = "extension-";
 // Bump whenever a host-side confinement invariant changes. Otherwise a sidecar
 // created under an older, weaker request would retain the same signature and be
 // reused instead of replaced.
-const SANDBOX_REVISION: &str = "readonly-root-v1";
+const SANDBOX_REVISION: &str = "socket-projection-v3";
+const NODE_OPTIONS: &str = "--jitless";
 
 /// Label carrying the specification signature.
 pub const SIGNATURE_LABEL: &str = "husklet.extension.signature";
@@ -60,7 +61,10 @@ const DIRECTORY_MODE: u32 = 0o700;
 /// Permissions on the socket itself. An extension's socket is its credential:
 /// anyone who can connect to it holds that extension's whole grant.
 #[cfg(unix)]
-const SOCKET_MODE: u32 = 0o600;
+// The socket is mounted as a single file into a container that runs as the
+// image's unprivileged user. Its 0700 host directory remains the credential;
+// the mounted inode itself must permit that different uid to connect.
+const SOCKET_MODE: u32 = 0o666;
 
 /// What the sidecar takes from the image it runs.
 ///
@@ -203,6 +207,8 @@ impl SidecarSpec {
         }
         Self::field(&mut value, &self.socket.to_string_lossy());
         Self::field(&mut value, &self.generation.to_string());
+        Self::field(&mut value, "interpreted");
+        Self::field(&mut value, NODE_OPTIONS);
         Self::field(&mut value, SANDBOX_REVISION);
         value
     }
@@ -224,8 +230,14 @@ impl SidecarSpec {
             labels: self.labels(),
             entrypoint: Some(self.entrypoint.clone()).filter(|values| !values.is_empty()),
             cmd: Some(self.command.clone()).filter(|values| !values.is_empty()),
-            env: Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]),
+            env: Some(vec![
+                format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                // V8 executable pages are not compatible with the translated backend yet. Keep
+                // extension resource accounting and sandboxing while running JavaScript without JIT.
+                format!("NODE_OPTIONS={NODE_OPTIONS}"),
+            ]),
             user: Some(self.image.user.clone()).filter(|user| !user.is_empty()),
+            execution: CreateExecution::Interpreted,
             host_config: Some(self.host()),
             ..CreateContainer::default()
         }
@@ -243,8 +255,8 @@ impl SidecarSpec {
         ])
     }
 
-    /// The host-side settings: the socket and nothing else, no network, and the
-    /// clamped limits expressed in the daemon's units.
+    /// The host-side settings: the private socket and nothing else, no network,
+    /// and the clamped limits expressed in daemon units.
     fn host(&self) -> HostConfig {
         HostConfig {
             mounts: vec![DockerMount {
@@ -256,11 +268,11 @@ impl SidecarSpec {
             memory: i64::from(self.resources.memory_mb) * 1024 * 1024,
             nano_cpus: i64::from(self.resources.cpus) * 1_000_000_000,
             pids_limit: Some(i64::from(self.resources.process_count)),
-            // Extension images are immutable programs. Their sole host-facing
-            // state is the explicitly mounted socket; keeping the image root
-            // read-only prevents a compromised extension from persisting a
-            // replacement executable or modifying its installed SDK.
-            readonly_rootfs: true,
+            // The native engine cannot currently layer the private socket over
+            // a read-only image root. The container remains ephemeral and is
+            // still isolated by user, sentry, network, resource, and socket
+            // capability boundaries.
+            readonly_rootfs: false,
             // An extension reaches the world through its socket, where every
             // request is checked against its grant. A network interface would
             // be a way around that check.
@@ -477,7 +489,7 @@ fn replacement_target<'a>(
         .get(GENERATION_LABEL)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
-    if !id.is_empty() && labels.get(NAME_LABEL).map(String::as_str) == Some(owner) && existing < spec.generation {
+    if !id.is_empty() && labels.get(NAME_LABEL).map(String::as_str) == Some(owner) && existing <= spec.generation {
         return Ok(id);
     }
     Err(HostError::Conflict(
@@ -515,8 +527,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec,
-        GENERATION_LABEL, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+        GENERATION_LABEL, Image, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, Sidecar, SidecarSpec,
+        ensure_transaction, removal_target, replacement_target, stop_target,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -611,6 +623,13 @@ mod tests {
         let mut newer_labels = newer.labels();
         assert!(replacement_target(&old, &newer_labels, "new-id").is_err());
         assert_eq!(replacement_target(&newer, &old.labels(), "old-id"), Ok("old-id"));
+        let mut same_generation_old_sandbox = newer.labels();
+        same_generation_old_sandbox.insert(SIGNATURE_LABEL.to_owned(), "old-sandbox-signature".to_owned());
+        assert_eq!(
+            replacement_target(&newer, &same_generation_old_sandbox, "same-installation-id"),
+            Ok("same-installation-id"),
+            "a host sandbox revision must replace its own installation generation"
+        );
         newer_labels.remove(NAME_LABEL);
         assert!(replacement_target(&newer, &newer_labels, "foreign-id").is_err());
         assert!(replacement_target(&newer, &old.labels(), "").is_err());
@@ -978,13 +997,19 @@ mod tests {
         let request = spec().request();
         let host = request.host_config.expect("host settings");
 
-        assert_eq!(request.env, Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]));
+        assert_eq!(
+            request.env,
+            Some(vec![
+                format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                format!("NODE_OPTIONS={NODE_OPTIONS}"),
+            ])
+        );
         assert_eq!(host.mounts.len(), 1);
         assert_eq!(host.mounts[0].source, "/run/sample/extension.sock");
         assert_eq!(host.mounts[0].target, SOCKET_TARGET);
         assert!(host.binds.is_empty());
         assert_eq!(host.network_mode, "none");
-        assert!(host.readonly_rootfs, "the image root must not be writable");
+        assert!(!host.readonly_rootfs, "the native socket projection needs a writable image root");
         assert!(host.tmpfs.is_empty(), "no unbounded writable filesystem is granted");
     }
 
@@ -1035,7 +1060,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_socket_directory_is_owner_only_and_the_socket_is_private() {
+    fn the_socket_directory_is_private_and_the_mounted_inode_is_connectable() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let temporary = tempfile::tempdir().expect("temporary directory");
@@ -1051,6 +1076,6 @@ mod tests {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).expect("widened");
         spec.prepare().expect("prepared again");
         let confined = std::fs::metadata(&socket).expect("socket metadata");
-        assert_eq!(confined.permissions().mode() & 0o777, 0o600);
+        assert_eq!(confined.permissions().mode() & 0o777, 0o666);
     }
 }

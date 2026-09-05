@@ -1,13 +1,13 @@
 import React from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Column, Heading, List, ListItemButton,
+  Button, Card, CardActions, CardContent, CardHeader, Column, Heading,
   Row, Scroll, Spinner, Text,
   type ContainerSummary, type ExecutionSummary, type ImageSummary, type NetworkSummary, type TabSummary,
   type VolumeSummary,
 } from '@husklet/react';
 import { boundedMessage } from './model.js';
 
-export const SECTIONS = ['overview', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'] as const;
+export const SECTIONS = ['overview', 'workspace', 'extensions', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'] as const;
 export type Section = typeof SECTIONS[number];
 
 export type Resource<T> = {
@@ -19,16 +19,16 @@ export type Resource<T> = {
 };
 
 export function Navigation({ section, onSelect }: { section: Section; onSelect: (section: Section) => void }) {
-  return <Column width={{ chars: 22 }} height="fill" pad={2} gap={1}>
+  return <Column grow={false} width={{ chars: 20 }} height="fill" pad={2} gap={1}>
     <Heading label="Top" scale="title" />
-    <Text label="Runtime resources" color="text-dim" />
-    <List grow>
-      {SECTIONS.map((name) => <ListItemButton
+    <Text label="Workspace control" color="text-dim" />
+    <Scroll grow height="fill"><Column gap={1}>
+      {SECTIONS.map((name) => <Button
         key={name}
         label={title(name)}
         variant={section === name ? 'filled' : 'ghost'}
         onInvoke={() => onSelect(name)} />)}
-    </List>
+    </Column></Scroll>
   </Column>;
 }
 

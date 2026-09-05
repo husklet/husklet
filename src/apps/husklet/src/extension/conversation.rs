@@ -53,7 +53,12 @@ pub struct Queue {
 
 impl Queue {
     /// Maximum interface operations one extension may leave behind the GUI.
-    pub const LIMIT: usize = 128;
+    ///
+    /// A single rich, atomic React commit can legitimately describe hundreds
+    /// of native nodes. The delivery queue still bounds frames separately and
+    /// GTK drains only eight per tick, while this weighted ceiling prevents a
+    /// large initial tree from being mistaken for a runaway producer.
+    pub const LIMIT: usize = 4_096;
     /// An empty queue.
     #[must_use]
     pub fn new() -> Self {
@@ -217,7 +222,10 @@ impl Conversation {
         Ok(Self {
             wire: Wire::new(stream),
             control,
-            session: Session::new(authority),
+            // The workspace overview exists before the sidecar connects. Its
+            // empty slot is the extension's primary surface; extra tab/split
+            // surfaces are acquired explicitly through the terminal port.
+            session: Session::new(authority).with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
             channels: Channels::new(),

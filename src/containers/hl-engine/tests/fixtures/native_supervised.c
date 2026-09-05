@@ -7,6 +7,8 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/epoll.h>
 #include <sys/mount.h>
 #include <sys/ioctl.h>
 #include <sys/ptrace.h>
@@ -36,12 +38,59 @@ static void *checkpoint_thread(void *argument) {
     return NULL;
 }
 
+static void *socket_volume_thread(void *argument) {
+    const char *path = argument;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    if (fd < 0 || strlen(path) >= sizeof(address.sun_path)) return (void *)70;
+    strcpy(address.sun_path, path);
+    int outer = epoll_create1(EPOLL_CLOEXEC);
+    int inner = epoll_create1(EPOLL_CLOEXEC);
+    struct epoll_event interest = {.events = EPOLLIN | EPOLLOUT | EPOLLET, .data.fd = fd};
+    if (outer < 0 || inner < 0 || epoll_ctl(inner, EPOLL_CTL_ADD, fd, &interest) != 0) return (void *)72;
+    struct epoll_event nested = {.events = EPOLLIN | EPOLLET, .data.fd = inner};
+    if (epoll_ctl(outer, EPOLL_CTL_ADD, inner, &nested) != 0) return (void *)72;
+    int connected = connect(fd, (struct sockaddr *)&address, sizeof(address));
+    if (connected != 0 && errno != EINPROGRESS) return (void *)73;
+    char reply[6];
+    ssize_t received = read(fd, reply, sizeof(reply));
+    for (int attempt = 0; attempt < 20 && received < 0 &&
+                          (errno == EAGAIN || errno == EWOULDBLOCK); attempt++) {
+        struct epoll_event ready;
+        if (epoll_wait(outer, &ready, 1, 50) < 0 ||
+            epoll_wait(inner, &ready, 1, 0) < 0) return (void *)75;
+        received = read(fd, reply, sizeof(reply));
+    }
+    if (received != sizeof(reply) || memcmp(reply, "socket", sizeof(reply))) return (void *)75;
+    interest.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+    if (epoll_ctl(inner, EPOLL_CTL_MOD, fd, &interest) != 0) return (void *)76;
+    struct epoll_event ready;
+    if (epoll_wait(outer, &ready, 1, 1000) != 1 ||
+        epoll_wait(inner, &ready, 1, 0) != 1 || !(ready.events & EPOLLOUT)) return (void *)77;
+    struct iovec vector = {.iov_base = "reply", .iov_len = 5};
+    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1};
+    if (sendmsg(fd, &message, MSG_NOSIGNAL) != 5) return (void *)78;
+    close(inner);
+    close(outer);
+    close(fd);
+    return NULL;
+}
+
 static int has_argument(int argc, char **argv, const char *argument) {
     for (int index = 1; index < argc; index++) if (!strcmp(argv[index], argument)) return 1;
     return 0;
 }
 
 int main(int argc, char **argv) {
+    if (argc > 2 && !strcmp(argv[1], "socket-volume")) {
+        pthread_t thread;
+        void *result = NULL;
+        if (pthread_create(&thread, NULL, socket_volume_thread, argv[2]) != 0 ||
+            pthread_join(thread, &result) != 0) return 71;
+        if (result) return (int)(intptr_t)result;
+        fputs("socket-volume", stdout);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "network-none")) {
         struct stat netns;
         if (stat("/proc/self/ns/net", &netns) != 0) return 72;

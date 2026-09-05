@@ -3,7 +3,7 @@ use super::context::Context;
 use super::copy::CopyContext;
 use super::remote::RemoteSources;
 use super::{Build, BuildError, BuildNetwork, Builder};
-use hl_container::{ContainerSpec, ExitStatus, Guest, Mount, Process, VolumeSpec};
+use hl_container::{ContainerSpec, Execution, ExitStatus, Guest, Mount, Process, VolumeSpec};
 use hl_images::RuntimeOverrides;
 use hl_images::build::{CacheSharing, RunMount, Step};
 use hl_images::snapshot::Ownerships;
@@ -65,7 +65,9 @@ impl Builder {
             }
             let (mounts, _locks) = self.run_mounts(context, built, mounts).await?;
             let spec = mounts.into_iter().fold(
-                ContainerSpec::from_directory(root, process).guest(self.guest()?),
+                ContainerSpec::from_directory(root, process)
+                    .guest(self.guest()?)
+                    .execution(Execution::native(false)),
                 ContainerSpec::mount,
             );
             let spec = self.network.container(spec);
@@ -94,7 +96,11 @@ impl Builder {
         if status == ExitStatus::Code(0) {
             Ok(())
         } else {
-            Err(BuildError::Run(status))
+            let logs = self.containers.logs(id).await?;
+            let mut bytes = logs.stdout;
+            bytes.extend_from_slice(&logs.stderr);
+            let output = String::from_utf8_lossy(&bytes).trim().to_owned();
+            Err(BuildError::Run { status, output })
         }
     }
 

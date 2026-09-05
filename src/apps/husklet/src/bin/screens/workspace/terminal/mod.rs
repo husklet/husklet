@@ -854,16 +854,26 @@ impl Window {
                 PaneView::new(&tw, &t).split(o);
             }
         }
-        // Debug: HL_TERM_OVERVIEW selects the overview (first) tab for screenshotting.
-        if AppConfig::get().overview {
-            let first = tw.entries.borrow().first().map(|e| e.name.clone());
-            if let Some(n) = first {
-                Page::new(&tw, &n).select();
-            }
+        // Top is the workspace's home surface. Session restoration may select
+        // its last shell as a side effect, so restore focus to the first,
+        // non-persisted overview tab once every saved tab has been rebuilt.
+        let first = tw.entries.borrow().first().map(|e| e.name.clone());
+        if let Some(n) = first {
+            Page::new(&tw, &n).select();
         }
 
         window.set_child(Some(&root));
         window.present();
+        // A restored VTE can claim the visible stack page while it is first
+        // mapped. Reassert the home tab after that mapping turn so opening a
+        // workspace consistently lands in Top, independent of saved shells.
+        let home = Rc::clone(&tw);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+            let first = home.entries.borrow().first().map(|entry| entry.name.clone());
+            if let Some(name) = first {
+                Page::new(&home, &name).select();
+            }
+        });
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
         Screenshot::schedule_resize(&window);

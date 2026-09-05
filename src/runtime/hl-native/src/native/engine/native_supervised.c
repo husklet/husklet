@@ -193,7 +193,9 @@ static int hl_native_supervised_volumes_open(const char *spec, hl_native_supervi
         if (host_root >= 0) close(host_root);
         if (source < 0) goto failed;
         struct stat source_status;
-        if (fstat(source, &source_status) != 0 || (!S_ISDIR(source_status.st_mode) && !S_ISREG(source_status.st_mode))) {
+        if (fstat(source, &source_status) != 0 ||
+            (!S_ISDIR(source_status.st_mode) && !S_ISREG(source_status.st_mode) &&
+             !S_ISSOCK(source_status.st_mode))) {
             close(source);
             goto failed;
         }
@@ -231,12 +233,49 @@ static int hl_native_supervised_volumes_contains(const hl_native_supervised_volu
     return 0;
 }
 
+/* Docker bind targets need not exist in an image. Create a mount point in the
+ * private writable layer while walking beneath a pinned root descriptor; the
+ * subsequent openat2 check still authenticates the exact target before mount. */
+static int hl_native_supervised_volume_target_prepare(int root, const char *guest, int directory) {
+    char *path = strdup(guest + 1);
+    if (path == NULL) return -1;
+    int parent = dup(root);
+    if (parent < 0) { free(path); return -1; }
+    char *part = path;
+    for (;;) {
+        char *slash = strchr(part, '/');
+        if (slash != NULL) *slash = 0;
+        int last = slash == NULL;
+        int descriptor = -1;
+        if (!last || directory) {
+            descriptor = openat(parent, part, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (descriptor < 0 && errno == ENOENT && mkdirat(parent, part, 0755) == 0)
+                descriptor = openat(parent, part, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        } else {
+            descriptor = openat(parent, part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0644);
+            if (descriptor < 0 && errno == EEXIST)
+                descriptor = openat(parent, part, O_PATH | O_CLOEXEC | O_NOFOLLOW);
+        }
+        if (descriptor < 0) { int saved = errno; close(parent); free(path); errno = saved; return -1; }
+        close(parent);
+        parent = descriptor;
+        if (last) break;
+        part = slash + 1;
+    }
+    close(parent);
+    free(path);
+    return 0;
+}
+
 static int hl_native_supervised_volumes_mount(const char *rootfs, const hl_native_supervised_volumes *volumes,
                                               const hl_options *options) {
     int root = open(rootfs, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root < 0) return -1;
     for (size_t index = 0; index < volumes->count; ++index) {
         const hl_native_supervised_volume *volume = &volumes->entries[index];
+        if (hl_native_supervised_volume_target_prepare(root, volume->guest, volume->directory) != 0) {
+            close(root); return -1;
+        }
         struct open_how how = {.flags = O_PATH | O_CLOEXEC | (volume->directory ? O_DIRECTORY : 0),
                                .resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS};
         int target = (int)syscall(SYS_openat2, root, volume->guest + 1, &how, sizeof(how));
@@ -513,7 +552,7 @@ static const char *hl_native_supervised_policy_rejection(const hl_engine_config 
         return "network-mode";
     }
     if ((box->flags & ~(HL_ENGINE_BOX_ROOTFS_READ_ONLY | HL_ENGINE_BOX_NETWORK_ISOLATED |
-                        HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED)) != 0)
+                        HL_ENGINE_BOX_TRANSLATION_CACHE_DISABLED | HL_ENGINE_BOX_SENTRY_ONLY)) != 0)
         return "box-flags";
     return NULL;
 }
@@ -999,8 +1038,8 @@ static int hl_native_supervised_clone_namespaces(uint64_t flags) {
 static int hl_native_supervised_ioctl_allowed(uint64_t request) {
     return request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
            request == TIOCGWINSZ || request == TIOCSWINSZ || request == TIOCGPGRP || request == TIOCSPGRP ||
-           request == TIOCGSID || request == HL_NATIVE_TCGETS2 || request == FIONREAD || request == TIOCGPTN ||
-           request == TIOCSPTLCK;
+           request == TIOCGSID || request == HL_NATIVE_TCGETS2 || request == FIONREAD || request == FIONBIO ||
+           request == TIOCGPTN || request == TIOCSPTLCK;
 }
 
 static int hl_native_supervised_single_child(pid_t parent, pid_t *child) {

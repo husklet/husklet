@@ -442,7 +442,7 @@ impl WindowSession<'_> {
             paneroot.set_hexpand(true);
             paneroot.set_vexpand(true);
             let mut pids = Vec::new();
-            let (widget, first) = self.build_pane_widget(&tab.root, &storage, &mut pids, launcher);
+            let (widget, _first) = self.build_pane_widget(&tab.root, &storage, &mut pids, launcher);
             paneroot.append(&widget);
             let title = if tab.title.is_empty() {
                 format!("shell {n}")
@@ -451,9 +451,6 @@ impl WindowSession<'_> {
             };
             let name = Tabs::new(tw).add_persisted(&title, None, &paneroot, true, tab.pinned);
             tw.pids.borrow_mut().entry(name).or_default().extend(pids);
-            if let Some(t) = first {
-                t.grab_focus();
-            }
         }
         launcher.observe(RestoreEvent::Completed);
     }

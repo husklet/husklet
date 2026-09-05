@@ -262,7 +262,7 @@ test('separately typed GUI interaction events remain deliverable and return cred
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
-test('generated UI event validation owns current payloads while protocol-1 legacy remains accepted', () => {
+test('generated UI event validation accepts only the canonical payload', () => {
   const current = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', slot: 'pane-1', source: 4, x: 2.5, y: 8 };
   assert.equal(validateUiEvent(current), current);
   const omitted = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 };
@@ -270,8 +270,7 @@ test('generated UI event validation owns current payloads while protocol-1 legac
   assert.equal(validateUiEvent(omitted), omitted);
   assert.equal(validateUiEvent(nullable), nullable);
   assert.throws(() => validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', x: 2.5, y: 8 }), /ui event/);
-  const legacy = { slot: 'pane-1', event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } } };
-  assert.equal(validateUiEvent(legacy), legacy);
+  assert.throws(() => validateUiEvent({ slot: 'pane-1', event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } } }), /interaction/);
 });
 
 test('concurrent pane-change waits share their host subscription until the last disposer', async () => {
@@ -961,6 +960,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
 
 test('configured container creation preserves its bounded typed specification', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
+  await assert.rejects(
+    workspace(stage.session).containers.create('alpine:3.20'),
+    /requires a configuration object/,
+  );
   const spec = {
     image: 'alpine:3.20', name: 'worker', hostname: 'h'.repeat(253), entrypoint: ['/init'], command: ['serve'],
     environment: [['MODE', 'agent']], working_directory: '/work', user: '1000',

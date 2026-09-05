@@ -57,7 +57,10 @@ const HEALTH_POLL: Duration = Duration::from_millis(200);
 
 /// The longest a connected extension may hold a sidecar without producing its
 /// first interface frame.
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+// Cold translated JavaScript must load Node, React, and the renderer before it
+// can answer the greeting. Process-exit polling still reports real crashes
+// immediately, while this bound gives a healthy first generation room to boot.
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What is shown when the workspace has no extension installed.
 ///
@@ -186,7 +189,9 @@ impl WeakEvents {
     /// Observes while the subscribed Host still owns the queue.
     /// Returns false once the observer is stale so callers can prune it.
     pub fn observe(&self, event: hl_extension::WorkspaceEvent) -> bool {
-        let Some(events) = self.inner.upgrade() else { return false };
+        let Some(events) = self.inner.upgrade() else {
+            return false;
+        };
         Events { inner: events }.observe(event);
         true
     }
@@ -238,7 +243,10 @@ mod event_buffer_tests {
         events.observe(press.clone());
         events.observe(motion(4.0));
 
-        assert_eq!(events.drain().unwrap().events, vec![motion(1.0), other, press, motion(4.0)]);
+        assert_eq!(
+            events.drain().unwrap().events,
+            vec![motion(1.0), other, press, motion(4.0)]
+        );
     }
 
     #[test]
@@ -377,7 +385,7 @@ pub trait Supply: Send + Sync + 'static {
     /// How long a newly connected generation may take to draw its first frame.
     ///
     /// Supplies normally use the product deadline. The hook exists so the
-    /// socket lifecycle can be tested deterministically without a ten-second
+    /// socket lifecycle can be tested deterministically without a production
     /// sleep.
     fn ready_timeout(&self) -> Duration {
         READY_TIMEOUT
@@ -583,6 +591,7 @@ impl Hall {
 
     /// Says why the extension stopped, once, to both the page and the standing.
     fn loss(&self, reason: String) {
+        hl_log::hl_error!(hl_log::tag::RUNTIME, "extension host stopped: {reason}");
         self.stand(Standing::Loss(reason.clone()));
         self.deliver(Report::Loss(reason));
     }
@@ -767,15 +776,9 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
     }
     hall.duty();
     let extension = plan.record.name.to_string();
-    let passage = pump(
-        hall,
-        &queue,
-        &voice,
-        &ended,
-        supply.ready_timeout(),
-        &extension,
-        || supply.startup_failure(plan),
-    );
+    let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension, || {
+        supply.startup_failure(plan)
+    });
     if matches!(passage, Passage::Unready(_)) {
         // Stop the process before joining the conversation that process owns;
         // reversing this order can make listener teardown wait on a peer that
@@ -1716,7 +1719,10 @@ tab_title = "Sample"
         let host = Host::open(bench, gallery.audience());
 
         assert!(
-            until(|| gallery.losses().iter().any(|loss| loss.contains("terminated by signal 11"))),
+            until(|| gallery
+                .losses()
+                .iter()
+                .any(|loss| loss.contains("terminated by signal 11"))),
             "the durable container result becomes the visible failure"
         );
         assert!(

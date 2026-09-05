@@ -93,6 +93,13 @@ impl Session {
         }
     }
 
+    /// Adds a surface the host already owns, such as the workspace overview.
+    #[must_use]
+    pub fn with_surface(mut self, slot: impl Into<String>) -> Self {
+        self.surfaces.insert(slot.into());
+        self
+    }
+
     /// The tab this session owns, if it has opened one.
     #[must_use]
     pub fn tab(&self) -> Option<&str> {

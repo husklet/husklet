@@ -24,8 +24,11 @@ export class Surface {
   #handlers = new Map();
   #send;
 
-  constructor(send) {
+  constructor(send, { sequence = 0, next = 1, patches = [] } = {}) {
     this.#send = send;
+    this.#sequence = sequence;
+    this.#next = next;
+    this.#queue.push(...patches);
   }
 
   /** The sequence of the last frame sent. The host refuses a gap. */

@@ -1,8 +1,6 @@
 ARG HUSKLET_BASE_IMAGE
 FROM ${HUSKLET_BASE_IMAGE} AS build
 USER root
-RUN npm install --no-save --ignore-scripts --no-audit --no-fund \
-    typescript@5.9.2 vite@7.1.4 @types/node@22.20.1 @types/react@18.3.3
 COPY src ./src
 COPY tsconfig.json vite.config.ts ./
 RUN tsc --noEmit && vite build
@@ -22,7 +20,8 @@ RUN test -n "${HUSKLET_EXTENSION_VERSION}" \
     && sed -i "s/^version = .*/version = \"${HUSKLET_EXTENSION_VERSION}\"/" /etc/husklet/extension.toml
 USER node
 
-CMD ["node", "/app/dist/main.js"]
+ENTRYPOINT ["/usr/local/bin/node"]
+CMD ["/app/dist/main.js"]
 
 LABEL husklet.extension.protocol="1"
 LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"
