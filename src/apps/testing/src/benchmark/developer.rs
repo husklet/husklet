@@ -894,8 +894,9 @@ fn warm_cache_receipt(stderr: &str) -> Result<&str, Error> {
         .skip(1)
         .filter_map(|field| field.split_once('='))
         .collect::<std::collections::BTreeMap<_, _>>();
-    if fields.get("outcome") != Some(&"HIT") {
-        return Err("warm translated arm did not report a persistent-cache HIT".into());
+    let outcome = *fields.get("outcome").ok_or("persistent-cache receipt omitted outcome")?;
+    if outcome != "HIT" && outcome != "PARTIAL" {
+        return Err("warm translated arm did not report a persistent-cache HIT or PARTIAL restore".into());
     }
     let restored = fields
         .get("restored")
@@ -905,8 +906,11 @@ fn warm_cache_receipt(stderr: &str) -> Result<&str, Error> {
         .get("new_translations")
         .ok_or("persistent-cache HIT omitted new_translations")?
         .parse::<u64>()?;
-    if restored == 0 || new_translations != 0 {
-        return Err("persistent-cache HIT did not restore code without retranslating it".into());
+    if restored == 0
+        || (outcome == "HIT" && new_translations != 0)
+        || (outcome == "PARTIAL" && new_translations == 0)
+    {
+        return Err("persistent-cache receipt has inconsistent restored and translated counts".into());
     }
     Ok(records[0])
 }
@@ -1383,6 +1387,12 @@ mod tests {
         .is_err());
         assert!(warm_cache_receipt(
             "[pcache-v1] outcome=HIT restored=2326 new_translations=1"
+        )
+        .is_err());
+        let partial = "[pcache-v1] outcome=PARTIAL restored=1451 new_translations=1002";
+        assert_eq!(warm_cache_receipt(partial).unwrap(), partial);
+        assert!(warm_cache_receipt(
+            "[pcache-v1] outcome=PARTIAL restored=1451 new_translations=0"
         )
         .is_err());
         assert!(warm_cache_receipt("[pcache] exec HIT patches=12").is_err());
