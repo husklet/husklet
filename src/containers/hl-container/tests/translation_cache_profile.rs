@@ -1612,12 +1612,35 @@ int main(void) {
                     })
                     .ok_or("warm HIT emitted no restored-chain authority receipt")?;
                 let bytes = fs::read(state.path())?;
-                require(bytes.len() == 16, "restored-chain authority receipt shape changed")?;
+                require(bytes.len() == 24, "restored-chain authority receipt shape changed")?;
                 let saved = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-                let fixed = u64::from_le_bytes(bytes[8..].try_into().unwrap());
+                let direct = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+                let fallback = u64::from_le_bytes(bytes[16..].try_into().unwrap());
                 require(
-                    fixed > 0 && fixed < saved,
-                    "warm HIT did not preserve fixed chains while deferring DSO-dependent chains",
+                    direct > 0 && direct < saved && direct + fallback <= saved,
+                    "warm HIT did not classify restored chains by initial reachability",
+                )
+            })
+            .and_then(|()| {
+                let state = entries
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(19)
+                            .any(|part| part == b".library-activated-")
+                    })
+                    .ok_or("warm HIT emitted no library-chain activation receipt")?;
+                let bytes = fs::read(state.path())?;
+                require(bytes.len() == 32, "library-chain activation receipt shape changed")?;
+                let maps = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+                let deferred = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+                let chains = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+                let relinked = u64::from_le_bytes(bytes[24..].try_into().unwrap());
+                require(
+                    maps > 0 && deferred == 0 && chains > 0 && relinked == chains,
+                    "authenticated DSO activation did not relink every live current-generation chain",
                 )
             })
             .and_then(|()| {

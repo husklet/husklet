@@ -2370,18 +2370,25 @@ static void x64_pc_stage_receipt(const char *stage) {
 #endif
 }
 
-static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
+static int x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
     uint8_t *site = g_cache + chain->site_offset;
     uint8_t *target = g_cache + chain->fallback_offset;
     if (direct) {
+        struct interp_block *source = map_host(chain->source);
         struct interp_block *block = map_host(chain->target);
-        if (block != NULL) target = (uint8_t *)block + block->host_entry_off;
+        if (source == NULL || block == NULL || source->magic != INTERP_BLOCK_MAGIC ||
+            block->magic != INTERP_BLOCK_MAGIC || source->generation != g_cache_gen ||
+            block->generation != g_cache_gen || block->host_entry_off == 0)
+            return 0;
+        target = (uint8_t *)block + block->host_entry_off;
     }
     int64_t delta = target - (site + 5);
     if (site[0] == 0xe9 && delta >= INT32_MIN && delta <= INT32_MAX) {
         int32_t encoded = (int32_t)delta;
         memcpy(site + 1, &encoded, sizeof encoded);
+        return 1;
     }
+    return 0;
 }
 
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi) {
@@ -2389,7 +2396,7 @@ static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi) {
     if (!jit_wprot(0)) return;
     for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
         translit_chain_site *chain = &g_x64_pc_chains[i];
-        if (chain->target >= lo && chain->target < hi) x64_pc_chain_patch(chain, 0);
+        if (chain->target >= lo && chain->target < hi) (void)x64_pc_chain_patch(chain, 0);
     }
     (void)jit_wprot(1);
 }
@@ -2687,30 +2694,32 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_gpc_index_entry *gpc_index = maps == 0 ? NULL : malloc((size_t)maps * sizeof *gpc_index);
     if (maps != 0 && gpc_index == NULL) { free(allocation); return 0; }
     x64_pc_gpc_index_build(map_records, maps, gpc_index);
-    translit_chain_site *fixed_chains = chains == 0 ? NULL : malloc((size_t)chains * sizeof *fixed_chains);
-    if (chains != 0 && fixed_chains == NULL) { free(gpc_index); free(allocation); return 0; }
-    uint64_t fixed_chain_count = 0;
+    translit_chain_site *loaded_chains = chains == 0 ? NULL : malloc((size_t)chains * sizeof *loaded_chains);
+    if (chains != 0 && loaded_chains == NULL) { free(gpc_index); free(allocation); return 0; }
+    uint64_t direct_chain_count = 0, fixed_fallback_count = 0;
     for (uint64_t i = 0; i < chains; i++) {
         const uint8_t *record = chain_records + i * X64_PC_CHAIN_SIZE;
         translit_chain_site chain = {x64_pc_get32(record), x64_pc_get32(record + 4),
                                      x64_pc_get64(record + 8), x64_pc_get64(record + 16)};
-        int fixed = x64_pc_saved_gpc_fixed(chain.source, map_records, gpc_index, maps) &&
-                    x64_pc_saved_gpc_fixed(chain.target, map_records, gpc_index, maps);
+        loaded_chains[i] = chain;
+        int source_fixed = x64_pc_saved_gpc_fixed(chain.source, map_records, gpc_index, maps);
+        int target_fixed = x64_pc_saved_gpc_fixed(chain.target, map_records, gpc_index, maps);
 #ifdef HL_PCACHE_GLOBAL_CHAIN_FALLBACK_MUTATION
-        fixed = 0;
+        target_fixed = 0;
 #endif
-        if (fixed) {
-            fixed_chains[fixed_chain_count++] = chain;
-        } else {
-            /* A chain cannot enter code whose DSO identity is still dormant. The
-               recorded fallback is entered only from the state shape its emitter
-               assigned; fixed-to-fixed chains must retain their direct edge. */
+        if (source_fixed && target_fixed) {
+            direct_chain_count++;
+        } else if (source_fixed) {
+            /* A reachable fixed-image chain cannot enter code whose DSO identity is still dormant.
+               A DSO-source site remains unreachable until activation publishes every authenticated
+               library map, so its saved intra-arena displacement can remain direct. */
             int32_t fallback = (int32_t)(chain.fallback_offset - (chain.site_offset + 5));
             memcpy((uint8_t *)arena_bytes + chain.site_offset + 1, &fallback, sizeof fallback);
+            fixed_fallback_count++;
         }
     }
     x64_pc_pristine_rewind();
-    if (!jit_wprot(0)) { free(fixed_chains); free(gpc_index); free(allocation); return 0; }
+    if (!jit_wprot(0)) { free(loaded_chains); free(gpc_index); free(allocation); return 0; }
 #ifdef HL_PCACHE_DEFER_LIBRARY_BYTES_MUTATION
     memset(g_cache, 0, (size_t)arena);
     uint64_t prefix = maps == 0 ? arena : x64_pc_get64(map_records + 24);
@@ -2748,12 +2757,12 @@ static int pcache_load(uint64_t entry_jump) {
         uint32_t helper, delta_offset, instruction_length;
         if (!x64_pc_helper_reloc_shape(g_cache + offset, encoded_helper,
                                        &helper, &delta_offset, &instruction_length)) {
-            x64_pc_pristine_rollback(1); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+            x64_pc_pristine_rollback(1); free(loaded_chains); free(gpc_index); free(allocation); return 0;
         }
         uint8_t *target = helper == 0 ? translit_jcc_ibtc_stub_entry : translit_direct_jmp_ibtc_stub_entry;
         int64_t delta = target == NULL ? INT64_MAX : target - (g_cache + offset + instruction_length);
         if (target == NULL || delta < INT32_MIN || delta > INT32_MAX) {
-            x64_pc_pristine_rollback(1); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+            x64_pc_pristine_rollback(1); free(loaded_chains); free(gpc_index); free(allocation); return 0;
         }
         int32_t encoded = (int32_t)delta;
         memcpy(g_cache + offset + delta_offset, &encoded, sizeof encoded);
@@ -2767,7 +2776,7 @@ static int pcache_load(uint64_t entry_jump) {
     int fixed_reprotected = jit_wprot(1);
     if (!fixed_reprotected || !jit_publish_code(J_RX(g_cache), (size_t)arena)) {
         x64_pc_pristine_rollback(!fixed_reprotected);
-        free(fixed_chains); free(gpc_index); free(allocation); return 0;
+        free(loaded_chains); free(gpc_index); free(allocation); return 0;
     }
     for (uint64_t i = 0; i < maps; i++) {
         const uint8_t *record = map_records + i * X64_PC_MAP_SIZE;
@@ -2775,20 +2784,20 @@ static int pcache_load(uint64_t entry_jump) {
         struct interp_block *block = (struct interp_block *)(g_cache + x64_pc_get64(record + 32));
         if (map_put(x64_pc_get64(record), x64_pc_get64(record + 8), x64_pc_get64(record + 16),
                     g_cache + x64_pc_get64(record + 24), block) != MAP_PUT_OK) {
-            x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+            x64_pc_pristine_rewind(); free(loaded_chains); free(gpc_index); free(allocation); return 0;
         }
         translit_perf_map_publish(block, (uint8_t *)block + block->host_entry_off,
                                   block->host_len, block->profile_insns, 0);
         fixed_maps++;
     }
     if (g_source_index_overflow) {
-        x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+        x64_pc_pristine_rewind(); free(loaded_chains); free(gpc_index); free(allocation); return 0;
     }
     if (owners != 0) {
         jit_body_owner_set *set = jit_body_owner_set_for(g_cache_gen, 1);
         jit_body_owner_entry *entries = set == NULL ? NULL : atomic_load_explicit(&set->entry, memory_order_acquire);
         if (entries == NULL) {
-            x64_pc_pristine_rewind(); free(fixed_chains); free(gpc_index); free(allocation); return 0;
+            x64_pc_pristine_rewind(); free(loaded_chains); free(gpc_index); free(allocation); return 0;
         }
         jit_body_owner_preserve *preserves = jit_body_owner_preserves(entries);
         uint32_t live_owners = 0;
@@ -2823,7 +2832,7 @@ static int pcache_load(uint64_t entry_jump) {
     g_cp = g_cache + arena;
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
-    free(g_x64_pc_chains); g_x64_pc_chains = fixed_chains; g_x64_pc_chain_count = fixed_chain_count;
+    free(g_x64_pc_chains); g_x64_pc_chains = loaded_chains; g_x64_pc_chain_count = chains;
     g_x64_pc_restored_maps = maps;
     g_x64_pc_restored_live = fixed_maps;
     g_x64_pc_activated_maps = 0;
@@ -2857,7 +2866,7 @@ static int pcache_load(uint64_t entry_jump) {
     char chain_receipt[1024];
     int chain_length = snprintf(chain_receipt, sizeof chain_receipt, "%s.chain-restore-state-%lld", path,
                                 (long long)getpid());
-    uint64_t chain_state[2] = {chains, fixed_chain_count};
+    uint64_t chain_state[3] = {chains, direct_chain_count, fixed_fallback_count};
     if (chain_length > 0 && (size_t)chain_length < sizeof chain_receipt)
         (void)x64_pc_artifact_store(chain_receipt, chain_state, sizeof chain_state);
 #endif
@@ -3938,6 +3947,19 @@ static void x64_pc_activate_ready(uint64_t pc) {
         g_x64_pc_deferred_count--;
     }
     atomic_store_explicit(&set->count, owner_at, memory_order_release);
+    uint64_t relinked_chains = 0;
+#if !defined(HL_PCACHE_CHAIN_RELINK_MUTATION)
+    if (g_x64_pc_chain_count != 0) {
+        if (!jit_wprot(0)) goto cold;
+        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++)
+            relinked_chains += (uint64_t)x64_pc_chain_patch(&g_x64_pc_chains[i], 1);
+        int reprotected = jit_wprot(1);
+        if (!reprotected || !jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) {
+            if (!reprotected) (void)jit_fail(HL_STATUS_CORRUPT, "pcache chain reprotection failed", 32);
+            goto cold;
+        }
+    }
+#endif
     for (uint32_t library = 0; library < g_x64_pc_lib_count; library++)
         g_x64_pc_lib_state[library] = X64_PC_LIB_ACTIVE;
     if (g_coldprof) {
@@ -3952,7 +3974,8 @@ static void x64_pc_activate_ready(uint64_t pc) {
     char path[1024], receipt[1024];
     if (x64_pc_file(path, sizeof path)) {
         int length = snprintf(receipt, sizeof receipt, "%s.library-activated-%lld", path, (long long)getpid());
-        uint64_t state[2] = {g_x64_pc_activated_maps, g_x64_pc_deferred_count};
+        uint64_t state[4] = {g_x64_pc_activated_maps, g_x64_pc_deferred_count,
+                             g_x64_pc_chain_count, relinked_chains};
         if (length > 0 && (size_t)length < sizeof receipt)
             (void)x64_pc_artifact_store(receipt, state, sizeof state);
     }
