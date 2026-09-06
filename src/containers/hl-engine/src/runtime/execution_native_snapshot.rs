@@ -10,8 +10,9 @@ use std::io;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
-#[cfg(target_arch = "x86_64")]
-use std::time::{Duration, Instant};
+#[cfg(any(target_os = "linux", target_arch = "x86_64"))]
+use std::time::Duration;
+use std::time::Instant;
 
 const MAGIC: &[u8; 8] = b"HLNXREG\0";
 const VERSION: u16 = 1;
@@ -906,7 +907,7 @@ fn capture_with_until(
     Ok(X86RegisterRecord { signal_mask, registers })
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_os = "linux")]
 fn process_is_stopped(pid: libc::pid_t) -> io::Result<bool> {
     let status = std::fs::read(format!("/proc/{pid}/status"))?;
     let state = status
