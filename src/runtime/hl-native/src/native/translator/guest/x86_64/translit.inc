@@ -703,6 +703,7 @@ static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_riprel_load_bridge_gate_test(void);
 static int translit_riprel_integer_corpus_test(void);
 static int translit_tzcnt_fixture_test(void);
+static int translit_simd_integer_fixture_test(void);
 static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
@@ -1526,6 +1527,7 @@ static int translit_classify_two(const struct insn *insn) {
         // MOVDQU uses mandatory F3; MOVUPS/MOVAPS use no mandatory prefix. Stores remain eligible only
         // while translit_image_ok() proves no executable/shared alias observation is active.
         if (insn->rep && (op == 0x6F || (op == 0x7F && insn->is_mem))) return TL_SSE2;
+        if (insn->rep && op == 0x2A) return TL_SSE2; // CVTSI2SS xmm,r/m32|64
         if (!insn->rep &&
             (op == 0x10 || op == 0x28 || ((op == 0x11 || op == 0x29) && insn->is_mem)))
             return TL_SSE2;
@@ -1540,9 +1542,10 @@ static int translit_classify_two(const struct insn *insn) {
         return TL_SSE2;
     if (insn->p66 && !insn->rep && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg &&
         !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm) {
-        if (op == 0x6F || op == 0xDB ||
+        if (op == 0x6F || op == 0x62 || op == 0xDB ||
             ((op == 0x6C || op == 0x6E || op == 0xDF || op == 0xEB || op == 0xEF) && insn->mod == 3))
             return TL_SSE2;
+        if (op == 0x70 && insn->imm_bytes == 1) return TL_SSE2; // PSHUFD xmm,xmm/m128,imm8
         // First landing keeps 7E to its register destination: a guest-memory store has separate SMC and
         // store-observer retirement requirements and is not silently treated as an ordinary host store.
         if (op == 0x7E && insn->mod == 3) return TL_SSE2;
@@ -3630,9 +3633,9 @@ static int translit_lower_natural_riprel_integer(hl_x64_asm *a, const struct ins
 
 // A copied RIP-relative SSE memory operation can retain its disp32 only while the code arena is
 // within reach of the guest datum. Materialise the exact storage address through R11 otherwise.
-// The original MOVAPS/MOVUPS opcode performs the store, preserving their distinct alignment-fault
-// contracts; the surrounding MOV/GS operations are flags-neutral. Store admission remains behind
-// translit_image_ok(), so executable/shared aliases still use the mediated interpreter path.
+// The original opcode performs the access, preserving its alignment and floating-point contracts;
+// the surrounding MOV/GS operations are flags-neutral. Store admission remains behind translit_image_ok(),
+// so executable/shared aliases still use the mediated interpreter path.
 static int translit_lower_sse_riprel(hl_x64_asm *a, const struct insn *insn,
                                      const uint8_t *bytes, uint64_t storage_target,
                                      uint8_t **save_end, uint8_t **op_end) {
@@ -3640,12 +3643,17 @@ static int translit_lower_sse_riprel(hl_x64_asm *a, const struct insn *insn,
                 (insn->op == 0x10 || insn->op == 0x11);
     int vector_store = !insn->repne && !insn->rep && !insn->p66 &&
                        (insn->op == 0x11 || insn->op == 0x29);
-    if (!insn->two || (!movsd && !vector_store) || insn->lock || insn->addr32 || insn->seg ||
+    int scalar_integer_load = insn->rep && !insn->repne && !insn->p66 && insn->op == 0x2A;
+    int integer_vector_load = insn->p66 && !insn->rep && !insn->repne &&
+                              (insn->op == 0x62 || insn->op == 0x70);
+    int expected_immediate = insn->op == 0x70 ? 1 : 0;
+    if (!insn->two || (!movsd && !vector_store && !scalar_integer_load && !integer_vector_load) ||
+        insn->lock || insn->addr32 || insn->seg ||
         insn->vex || insn->evex || insn->map3 || !insn->has_modrm || !insn->is_mem ||
-        !insn->rip_rel || insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != 0)
+        !insn->rip_rel || insn->mod != 0 || insn->rm != 5 || insn->imm_bytes != expected_immediate)
         return 0;
-    int modrm_offset = insn->len - 5;
-    if (modrm_offset < 2 || modrm_offset + 5 != insn->len) return 0;
+    int modrm_offset = insn->len - insn->imm_bytes - 5;
+    if (modrm_offset < 2 || modrm_offset + 5 + insn->imm_bytes != insn->len) return 0;
 
     hl_x64_store_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
     *save_end = a->cursor;
@@ -3671,6 +3679,7 @@ static int translit_lower_sse_riprel(hl_x64_asm *a, const struct insn *insn,
             hl_x64_u8(a, (uint8_t)(bytes[i] | (i == rex_offset ? 1 : 0)));
     }
     hl_x64_u8(a, (uint8_t)((bytes[modrm_offset] & 0xF8) | 3));
+    for (int i = 0; i < insn->imm_bytes; ++i) hl_x64_u8(a, bytes[modrm_offset + 5 + i]);
     *op_end = a->cursor;
     return !a->overflow;
 }
@@ -5162,6 +5171,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 301) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_simd_integer_fixture_test());
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 218) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -5797,15 +5815,18 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             int sse2_gpr_source = insn.op == 0x6E;
             int destination = insn.op == 0x73 ? insn.rm_reg : insn.reg;
             // MOVD/MOVQ sources a canonical guest GPR and overwrites the complete XMM destination.
-            if (sse2_gpr_source) {
+            if (insn.op == 0x2A) {
+                // CVTSI2SS reads a GPR/memory source while preserving the destination's upper 96 bits.
+                translit_xmm_cpu(a, insn.reg, 1);
+            } else if (sse2_gpr_source) {
                 // No XMM preload.
             } else if (sse2_store) {
                 translit_xmm_cpu(a, insn.reg, 1);
-            } else if (insn.op == 0x12 || insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
+            } else if (insn.op == 0x12 || insn.op == 0x62 || insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
                        insn.op == 0xEF) {
                 translit_xmm_cpu(a, insn.reg, 1);
                 if (!insn.is_mem && insn.rm_reg != insn.reg) translit_xmm_cpu(a, insn.rm_reg, 1);
-            } else if (insn.op == 0x6F || insn.op == 0x10 || insn.op == 0x28) {
+            } else if (insn.op == 0x6F || insn.op == 0x10 || insn.op == 0x28 || insn.op == 0x70) {
                 if (!insn.is_mem) translit_xmm_cpu(a, insn.rm_reg, 1);
             } else if (insn.op == 0x73) {
                 translit_xmm_cpu(a, insn.rm_reg, 1);
@@ -6581,6 +6602,184 @@ static uint64_t translit_tzcnt_native(unsigned width, uint64_t source, uint64_t 
                          : "cc", "memory");
     }
     *flags = captured;
+    return result;
+}
+
+static void translit_simd_native(unsigned family, unsigned width, unsigned control, uint64_t source,
+                                  const uint64_t input[2], uint64_t output[2]) {
+    __m128i value;
+    memcpy(&value, input, 16);
+    if (family == 0) {
+        if (width == 8)
+            __asm__ volatile("cvtsi2ssq %1,%0" : "+x"(value) : "r"(source) : "cc");
+        else
+            __asm__ volatile("cvtsi2ssl %k1,%0" : "+x"(value) : "r"(source) : "cc");
+    } else if (family == 1) {
+        __m128i rhs = _mm_set_epi64x((long long)UINT64_C(0x8899aabbccddeeff),
+                                     (long long)source);
+        __asm__ volatile("punpckldq %1,%0" : "+x"(value) : "x"(rhs));
+    } else {
+        if (control == 0x00)
+            __asm__ volatile("pshufd $0x00,%0,%0" : "+x"(value));
+        else if (control == 0xff)
+            __asm__ volatile("pshufd $0xff,%0,%0" : "+x"(value));
+        else
+            __asm__ volatile("pshufd $0x1b,%0,%0" : "+x"(value));
+    }
+    memcpy(output, &value, 16);
+}
+
+static int translit_simd_integer_fixture_test(void) {
+    static const uint64_t cvt_values[] = {0, 1, UINT64_C(0x00ffffff), UINT64_C(0x01000001),
+        UINT64_C(0x7fffffff), UINT64_C(0x80000000), UINT64_C(0x7fffffffffffffff),
+        UINT64_C(0x8000000000000000), UINT64_MAX};
+    const size_t size = 8192, source_offset = 128, data_offset = 4096;
+    uint8_t *arena = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) return 245;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx; uint64_t saved_generation = g_cache_gen;
+    g_cache = arena; g_rw2rx = 0; translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest; translit_fall_fixture_length = size;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = context == NULL ? 246 : 0;
+    const uint64_t initial_xmm[2] = {UINT64_C(0x0123456789abcdef), UINT64_C(0xfedcba9876543210)};
+    for (unsigned family = 0; result == 0 && family < 3; ++family) {
+        unsigned cases = family == 0 ? (unsigned)(sizeof cvt_values / sizeof cvt_values[0]) : 3;
+        for (unsigned index = 0; result == 0 && index < cases; ++index) {
+            uint64_t value = family == 0 ? cvt_values[index]
+                                         : UINT64_C(0x0011223344556677) ^ (UINT64_C(0x3333333333333333) * index);
+            unsigned control = index == 0 ? 0x00 : index == 1 ? 0x1b : 0xff;
+            unsigned width = family == 0 && index < 6 ? 4 : 8;
+            for (unsigned memory = 0; result == 0 && memory < 2; ++memory) {
+                uint8_t *code = guest + source_offset; size_t length = 0;
+                if (family == 0 && !memory) {
+                    uint8_t bytes[] = {0xf3, width == 8 ? 0x4d : 0x45, 0x0f, 0x2a, 0xc8};
+                    memcpy(code, bytes, sizeof bytes); length = sizeof bytes;
+                } else if (family == 1 && !memory) {
+                    uint8_t bytes[] = {0x66,0x45,0x0f,0x62,0xca}; memcpy(code, bytes, sizeof bytes); length = sizeof bytes;
+                } else if (family == 2 && !memory) {
+                    uint8_t bytes[] = {0x66,0x45,0x0f,0x70,0xca,(uint8_t)control}; memcpy(code, bytes, sizeof bytes); length = sizeof bytes;
+                } else {
+                    code[0] = family == 0 ? 0xf3 : 0x66;
+                    code[1] = family == 0 && width == 8 ? 0x4c : 0x44;
+                    code[2] = 0x0f; code[3] = family == 0 ? 0x2a : family == 1 ? 0x62 : 0x70; code[4] = 0x0d;
+                    length = family == 2 ? 10 : 9;
+                    int32_t disp = (int32_t)(data_offset - source_offset - length);
+                    memcpy(code + 5, &disp, 4); if (family == 2) code[9] = (uint8_t)control;
+                    if (family == 0) memcpy(guest + data_offset, &value, width);
+                    else if (family == 1) {
+                        memcpy(guest + data_offset, &value, 8);
+                        memcpy(guest + data_offset + 8, initial_xmm + 1, 8);
+                    } else {
+                        memcpy(guest + data_offset, initial_xmm, 16);
+                    }
+                }
+                code[length] = 0x0f; code[length + 1] = 0x0b;
+                struct insn decoded; uint64_t source_pc = (uint64_t)(uintptr_t)code;
+                if (hl_x86_decode_context(context, source_pc, &decoded) <= 0 || decoded.len != length ||
+                    translit_classify(&decoded) != TL_SSE2) { result = 247; break; }
+                unsigned old_mxcsr = _mm_getcsr(), mxcsr = 0x1f80u | ((index & 3u) << 13);
+                uint64_t expected[2];
+                uint64_t source_xmm[2] = {value, UINT64_C(0x8899aabbccddeeff)};
+                if (family == 2) memcpy(source_xmm, initial_xmm, 16);
+                _mm_setcsr(mxcsr); translit_simd_native(family, width, control, value, initial_xmm, expected);
+                unsigned native_mxcsr = _mm_getcsr();
+                struct cpu interpreted = {0}; interpreted.rip = source_pc; interpreted.r[8] = value;
+                memcpy(&interpreted.v[18], initial_xmm, 16); memcpy(&interpreted.v[20], source_xmm, 16);
+                _mm_setcsr(mxcsr); (void)interp_step(&interpreted, &decoded, source_pc, source_pc + length);
+                unsigned interpreted_mxcsr = _mm_getcsr();
+                memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+                g_cache_gen = UINT64_MAX - 0x800 - family * 32 - index * 2 - memory; map_clear();
+                struct interp_block *block = (struct interp_block *)arena;
+                void *body = translit_build(context, block, source_pc, NULL);
+                struct cpu candidate = {0}; candidate.rip = source_pc; candidate.r[8] = value;
+                for (unsigned reg = 0; reg < 16; ++reg) candidate.r[reg] = interpreted.r[reg] = UINT64_C(0x1111000000000000) + reg;
+                candidate.r[8] = interpreted.r[8] = value;
+                memcpy(&candidate.v[18], initial_xmm, 16); memcpy(&candidate.v[20], source_xmm, 16);
+                block->magic = INTERP_BLOCK_MAGIC; block->gpc = source_pc;
+                uint64_t flags = UINT64_C(0xad7); translit_flags_out(&candidate, flags);
+                uint64_t canonical_flags = translit_flags_in(&candidate);
+                _mm_setcsr(mxcsr); if (body != NULL) run_block(context, &candidate, block);
+                unsigned candidate_mxcsr = _mm_getcsr(); _mm_setcsr(old_mxcsr);
+                uint64_t *candidate_xmm = &candidate.v[18]; uint64_t *interpreted_xmm = &interpreted.v[18];
+                if (body == NULL || block->profile_insns != 1 || memcmp(candidate_xmm, expected, 16) != 0 ||
+                    memcmp(interpreted_xmm, expected, 16) != 0 || candidate_mxcsr != native_mxcsr ||
+                    interpreted_mxcsr != native_mxcsr ||
+                    translit_flags_in(&candidate) != canonical_flags) { result = 248; break; }
+                for (unsigned reg = 0; result == 0 && reg < 16; ++reg)
+                    if (candidate.r[reg] != interpreted.r[reg]) result = 249;
+                jit_body_owner_drop_generation(g_cache_gen); map_clear();
+            }
+        }
+    }
+    if (result == 0) {
+        static const struct {
+            uint8_t bytes[8];
+            uint8_t length;
+        } refused[] = {
+            {{0xf3,0x67,0x0f,0x2a,0x00},5},       // address-size override
+            {{0xf2,0xf3,0x0f,0x2a,0xc0},5},       // conflicting mandatory prefixes
+            {{0xf0,0xf3,0x0f,0x2a,0xc0},5},       // LOCK
+            {{0x64,0xf3,0x0f,0x2a,0x00},5},       // segment override
+            {{0xc5,0xfa,0x2a,0xc0},4},            // VEX VCVTSI2SS
+            {{0xf3,0x66,0x0f,0x62,0xc1},5},       // conflicting PUNPCKLDQ prefix
+            {{0xf2,0x66,0x0f,0x70,0xc1,0x1b},6},  // conflicting PSHUFD prefix
+        };
+        for (unsigned i = 0; result == 0 && i < sizeof refused / sizeof refused[0]; ++i) {
+            memcpy(guest + source_offset, refused[i].bytes, refused[i].length);
+            struct insn decoded;
+            int length = hl_x86_decode_context(context, (uint64_t)(uintptr_t)(guest + source_offset), &decoded);
+            if (length > 0 && translit_classify(&decoded) == TL_SSE2) result = 255;
+        }
+    }
+    // Every memory member shares the deferred-retirement fault contract: until the copied operation
+    // completes, the source guest RIP and old architectural XMM destination remain authoritative.
+    for (unsigned family = 0; result == 0 && family < 3; ++family) {
+        uint8_t *code = guest + source_offset;
+        code[0] = family == 0 ? 0xf3 : 0x66; code[1] = family == 0 ? 0x4c : 0x44;
+        code[2] = 0x0f; code[3] = family == 0 ? 0x2a : family == 1 ? 0x62 : 0x70; code[4] = 0x0d;
+        size_t length = family == 2 ? 10 : 9;
+        int32_t disp = (int32_t)(data_offset - source_offset - length); memcpy(code + 5, &disp, 4);
+        if (family == 2) code[9] = 0x1b;
+        code[length] = 0x0f; code[length + 1] = 0x0b;
+        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x900 - family; map_clear();
+        uint64_t source_pc = (uint64_t)(uintptr_t)code;
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = translit_build(context, block, source_pc, NULL);
+        struct cpu faulted = {0}; faulted.rip = source_pc;
+        faulted.r[HL_X64_R11] = UINT64_C(0x8877665544332211);
+        memcpy(&faulted.v[18], initial_xmm, 16);
+        if (body == NULL || block->profile_insns != 1) { result = 250; break; }
+        uint64_t emitted_pc = 0;
+        for (uint8_t *probe = arena + sizeof *block; probe + 1 < g_cp; ++probe) {
+            uint64_t mapped_guest = 0;
+            if (probe[0] == 0x0f && probe[1] == code[3] &&
+                jit_instruction_map_lookup((uint64_t)(uintptr_t)probe, &mapped_guest, NULL) &&
+                mapped_guest == source_pc) { emitted_pc = (uint64_t)(uintptr_t)probe; break; }
+        }
+        ucontext_t native = {0}; HL_HOST_UC_PC(&native) = (greg_t)emitted_pc;
+        HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] = (greg_t)(uintptr_t)(guest + data_offset);
+        unsigned saved_mxcsr = _mm_getcsr(), fault_mxcsr = 0x7f80u;
+        _mm_setcsr(fault_mxcsr);
+        int saved_selected = translit_selected; translit_selected = 1;
+        int delivered = translit_test_deliver_guest_fault(&faulted, &native,
+                                                           (uint64_t)(uintptr_t)(guest + data_offset));
+        translit_selected = saved_selected;
+        unsigned recovered_mxcsr = _mm_getcsr(); _mm_setcsr(saved_mxcsr);
+        if (emitted_pc == 0 || !delivered || faulted.rip != source_pc || faulted.sync_signal != SIGSEGV ||
+            faulted.sync_address != (uint64_t)(uintptr_t)(guest + data_offset) ||
+            faulted.r[HL_X64_R11] != UINT64_C(0x8877665544332211) || recovered_mxcsr != fault_mxcsr ||
+            memcmp(&faulted.v[18], initial_xmm, 16) != 0)
+            result = 251 + (int)family;
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen); g_cache = saved_cache; g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx; g_cache_gen = saved_generation; munmap(arena, size); munmap(guest, size);
     return result;
 }
 
