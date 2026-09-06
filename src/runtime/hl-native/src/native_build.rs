@@ -261,7 +261,7 @@ fn archive(
         .definitions(engine_definitions())
         .definitions([Definition::flag(target.os.feature_definition())])
         .language(LanguageStandard::C11)
-        .optimization(if sanitizer.compiler().is_some() { 1 } else { 3 })
+        .optimization(if sanitizer.compiler().is_some() { 1 } else { 2 })
         .debug(environment.profile != hl_cc::Profile::Release)
         .pic(true)
         .visibility(Visibility::Hidden)
