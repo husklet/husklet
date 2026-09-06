@@ -175,17 +175,6 @@ fn output_until(
     arguments: &[String],
     timeout: Duration,
 ) -> Result<std::process::Output, Error> {
-    fn kill_and_reap(child: &mut std::process::Child) {
-        #[cfg(unix)]
-        {
-            let _ = Command::new("kill")
-                .args(["-KILL", "--", &format!("-{}", child.id())])
-                .status();
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
     let stdout = tempfile::NamedTempFile::new()?;
     let stderr = tempfile::NamedTempFile::new()?;
     let mut command = Command::new(program);
@@ -200,20 +189,18 @@ fn output_until(
     let mut child = command.spawn()?;
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(error) => {
-                kill_and_reap(&mut child);
-                return Err(format!(
-                    "cannot observe {} before its deadline; process group was killed and reaped: {error}",
-                    program.display()
-                )
-                .into());
-            }
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if Instant::now() >= deadline {
-            kill_and_reap(&mut child);
+            #[cfg(unix)]
+            {
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .status();
+            }
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(format!(
                 "{} exceeded its {timeout:?} deadline and was killed and reaped",
                 program.display()
