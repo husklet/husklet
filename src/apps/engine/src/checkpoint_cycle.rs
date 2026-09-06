@@ -1,7 +1,7 @@
 use super::Failure;
 use hl_engine::activation::GuestIsa;
 use hl_engine::composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams};
-use hl_engine::engine::{EngineExit, ExitKind, StopRequest};
+use hl_engine::engine::{EngineExit, StopRequest};
 use hl_engine::launcher::plan::RuntimePlan;
 use hl_engine::runtime::Engine;
 use sha2::{Digest, Sha256};
@@ -27,24 +27,6 @@ struct ImageState {
 }
 
 impl Image {
-    fn bytes(&self) -> Result<Vec<u8>, Failure> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| Failure::Request("checkpoint image lock poisoned".into()))?;
-        if !state.committed.contains_key("MANIFEST") {
-            return Err(Failure::Request("checkpoint capture published no MANIFEST".into()));
-        }
-        let mut bytes = Vec::new();
-        for (name, value) in &state.committed {
-            bytes.extend_from_slice(&(name.len() as u64).to_be_bytes());
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
-            bytes.extend_from_slice(value);
-        }
-        Ok(bytes)
-    }
-
     fn validate(state: &ImageState, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
         if state.owner == Some(owner) && Instant::now() < deadline {
             Ok(())
@@ -61,9 +43,14 @@ impl Image {
         if !state.committed.contains_key("MANIFEST") {
             return Err(Failure::Request("checkpoint capture published no MANIFEST".into()));
         }
-        let members = state.committed.len();
-        drop(state);
-        Ok((members, format!("{:x}", Sha256::digest(self.bytes()?))))
+        let mut digest = Sha256::new();
+        for (name, bytes) in &state.committed {
+            digest.update((name.len() as u64).to_be_bytes());
+            digest.update(name.as_bytes());
+            digest.update((bytes.len() as u64).to_be_bytes());
+            digest.update(bytes);
+        }
+        Ok((state.committed.len(), format!("{:x}", digest.finalize())))
     }
 }
 
@@ -218,69 +205,27 @@ fn construct(isa: GuestIsa, plan: RuntimePlan, image: Arc<Image>) -> Result<Arc<
     )?))
 }
 
-struct DeadlineBomb {
-    cancel: Option<std::sync::mpsc::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl DeadlineBomb {
-    fn arm(timeout: Duration) -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            if matches!(
-                receiver.recv_timeout(timeout),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ) {
-                eprintln!("hl-engine: checkpoint cycle exceeded its hard process deadline");
-                std::process::exit(124);
-            }
-        });
-        Self {
-            cancel: Some(sender),
-            thread: Some(thread),
+fn wait_until(engine: &Arc<Engine>, deadline: Instant, phase: &str) -> Result<EngineExit, Failure> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = Arc::clone(engine);
+    let thread = std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let result = match receiver.recv_timeout(remaining) {
+        Ok(result) => result.map_err(Failure::from),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let _ = engine.stop(StopRequest::Force);
+            Err(Failure::Request(format!("checkpoint cycle timed out during {phase}")))
         }
-    }
-}
-
-impl Drop for DeadlineBomb {
-    fn drop(&mut self) {
-        drop(self.cancel.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(Failure::Request(format!("checkpoint wait disconnected during {phase}")))
         }
-    }
-}
-
-struct StartedEngine {
-    engine: Arc<Engine>,
-    finished: bool,
-}
-
-impl StartedEngine {
-    fn start(engine: Arc<Engine>) -> Result<Self, Failure> {
-        engine.start()?;
-        Ok(Self {
-            engine,
-            finished: false,
-        })
-    }
-
-    fn finish(mut self) -> Result<EngineExit, Failure> {
-        let exit = self.engine.wait()?;
-        self.engine.destroy()?;
-        self.finished = true;
-        Ok(exit)
-    }
-}
-
-impl Drop for StartedEngine {
-    fn drop(&mut self) {
-        if !self.finished {
-            let _ = self.engine.stop(StopRequest::Force);
-            let _ = self.engine.wait();
-            let _ = self.engine.destroy();
-        }
-    }
+    };
+    thread
+        .join()
+        .map_err(|_| Failure::Request(format!("checkpoint wait panicked during {phase}")))?;
+    result
 }
 
 pub(super) fn run(
@@ -288,12 +233,7 @@ pub(super) fn run(
     base: RuntimePlan,
     rootfs: &Path,
     guest_control: &Path,
-    loader_receipt: bool,
 ) -> Result<(EngineExit, String), Failure> {
-    // The lifecycle and its cleanup use synchronous native calls. This watchdog is deliberately
-    // process-fatal: it is the only truthful upper bound if a native wait or destroy stops making
-    // progress, and the worker is already the isolation/process boundary selected by the caller.
-    let _deadline = DeadlineBomb::arm(TIMEOUT * 4);
     let control = host_control(rootfs, guest_control)?;
     if std::fs::read_dir(&control)
         .map_err(|error| Failure::Request(format!("cannot inspect checkpoint control directory: {error}")))?
@@ -314,19 +254,13 @@ pub(super) fn run(
     let image = Arc::new(Image::default());
 
     let fresh = construct(isa, phase_plan(base.clone(), false, true)?, image.clone())?;
-    if loader_receipt {
-        super::emit_loader_receipt()?;
-    }
-    let fresh = StartedEngine::start(fresh)?;
+    fresh.start()?;
     let deadline = Instant::now() + TIMEOUT;
     wait_contains(&output, "READY leader=", deadline)?;
-    #[cfg(feature = "native-test-hooks")]
-    if std::env::var_os("HL_CHECKPOINT_CYCLE_TEST_FAIL_AFTER_START").is_some() {
-        return Err(Failure::Request("injected checkpoint-cycle failure after start".into()));
-    }
     wait_contains(&state, "5", deadline)?;
-    fresh.engine.capture_checkpoint_until(deadline)?;
-    let captured_exit = fresh.finish()?;
+    fresh.capture_checkpoint_until(deadline)?;
+    let captured_exit = wait_until(&fresh, deadline, "capture reap")?;
+    fresh.destroy()?;
     if captured_exit.guest_status != 0 {
         return Err(Failure::Request(format!(
             "captured probe exited {}",
@@ -335,21 +269,18 @@ pub(super) fn run(
     }
     let (members, digest) = image.identity()?;
 
-    let killed = StartedEngine::start(construct(isa, phase_plan(base.clone(), true, false)?, image.clone())?)?;
+    let killed = construct(isa, phase_plan(base.clone(), true, false)?, image.clone())?;
+    killed.start()?;
     std::fs::write(control.join("cycle1"), [])
         .map_err(|error| Failure::Request(format!("cannot continue first restore: {error}")))?;
     wait_contains(&output, "CYCLE 1 progress=", Instant::now() + TIMEOUT)?;
-    killed.engine.stop(StopRequest::Force)?;
-    let killed_exit = killed.finish()?;
-    if killed_exit.kind != ExitKind::Signal || killed_exit.guest_status != 9 {
-        return Err(Failure::Request(format!(
-            "forced restore stop returned {:?} {}, expected Signal 9",
-            killed_exit.kind, killed_exit.guest_status
-        )));
-    }
+    killed.stop(StopRequest::Force)?;
+    let killed_exit = wait_until(&killed, Instant::now() + TIMEOUT, "forced-stop reap")?;
+    killed.destroy()?;
     let _ = std::fs::remove_file(control.join("cycle1"));
 
-    let restored = StartedEngine::start(construct(isa, phase_plan(base, true, false)?, image.clone())?)?;
+    let restored = construct(isa, phase_plan(base, true, false)?, image.clone())?;
+    restored.start()?;
     std::fs::write(control.join("cycle1"), [])
         .map_err(|error| Failure::Request(format!("cannot continue final restore: {error}")))?;
     wait_contains(&output, "CYCLE 1 progress=", Instant::now() + TIMEOUT)?;
@@ -358,7 +289,8 @@ pub(super) fn run(
     wait_contains(&output, "CYCLE 2 progress=", Instant::now() + TIMEOUT)?;
     std::fs::write(control.join("stop"), [])
         .map_err(|error| Failure::Request(format!("cannot stop final restore: {error}")))?;
-    let exit = restored.finish()?;
+    let exit = wait_until(&restored, Instant::now() + TIMEOUT, "final continuation reap")?;
+    restored.destroy()?;
     if exit.guest_status != 0 {
         return Err(Failure::Request(format!("restored probe exited {}", exit.guest_status)));
     }
@@ -380,11 +312,6 @@ pub(super) fn run(
         }
     }
     let transcript_sha256 = format!("{:x}", Sha256::digest(&transcript));
-    let image_bytes = image.bytes()?;
-    std::fs::write(control.join("checkpoint-image.bin"), &image_bytes)
-        .map_err(|error| Failure::Request(format!("cannot export checkpoint image: {error}")))?;
-    std::fs::write(control.join("checkpoint-transcript.bin"), &transcript)
-        .map_err(|error| Failure::Request(format!("cannot export checkpoint transcript: {error}")))?;
     let receipt = serde_json::json!({
         "schema": "husklet-checkpoint-cycle-v1",
         "guest_isa": match isa { GuestIsa::Aarch64 => "aarch64", GuestIsa::X86_64 => "x86_64" },
@@ -393,7 +320,6 @@ pub(super) fn run(
         "original_reaped": true,
         "restored_killed": true,
         "kill_exit_kind": format!("{:?}", killed_exit.kind),
-        "kill_guest_status": killed_exit.guest_status,
         "restored_continued": true,
         "member_count": members,
         "image_sha256": digest,

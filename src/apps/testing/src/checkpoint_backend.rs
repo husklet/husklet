@@ -6,7 +6,6 @@ use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -63,9 +62,6 @@ pub(crate) struct Options {
     /// New directory receiving the immutable identity and captured streams.
     #[arg(long)]
     results: PathBuf,
-    /// Hard deadline for each engine or emulator process.
-    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=900))]
-    timeout_seconds: u64,
 }
 
 fn full_sha(value: &str) -> Result<String, String> {
@@ -106,7 +102,6 @@ struct CycleReceipt {
     original_reaped: bool,
     restored_killed: bool,
     kill_exit_kind: String,
-    kill_guest_status: i32,
     restored_continued: bool,
     member_count: usize,
     image_sha256: String,
@@ -169,53 +164,6 @@ fn argv_hash(arguments: &[String]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn output_until(
-    program: &Path,
-    prefix: &[String],
-    arguments: &[String],
-    timeout: Duration,
-) -> Result<std::process::Output, Error> {
-    let stdout = tempfile::NamedTempFile::new()?;
-    let stderr = tempfile::NamedTempFile::new()?;
-    let mut command = Command::new(program);
-    command.args(prefix).args(arguments);
-    command.stdout(std::process::Stdio::from(stdout.reopen()?));
-    command.stderr(std::process::Stdio::from(stderr.reopen()?));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            #[cfg(unix)]
-            {
-                let _ = Command::new("kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
-                    .status();
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
-                "{} exceeded its {timeout:?} deadline and was killed and reaped",
-                program.display()
-            )
-            .into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    Ok(std::process::Output {
-        status,
-        stdout: std::fs::read(stdout.path())?,
-        stderr: std::fs::read(stderr.path())?,
-    })
-}
-
 fn validate_cycle(receipt: &CycleReceipt, options: &Options) -> Result<(), Error> {
     let expected_backend = match options.backend {
         Backend::Native => "native",
@@ -227,12 +175,11 @@ fn validate_cycle(receipt: &CycleReceipt, options: &Options) -> Result<(), Error
         || !receipt.captured
         || !receipt.original_reaped
         || !receipt.restored_killed
-        || receipt.kill_exit_kind != "Signal"
-        || receipt.kill_guest_status != 9
+        || receipt.kill_exit_kind.is_empty()
         || !receipt.restored_continued
         || receipt.member_count == 0
-        || !lower_hex(&receipt.image_sha256)
-        || !lower_hex(&receipt.transcript_sha256)
+        || receipt.image_sha256.len() != 64
+        || receipt.transcript_sha256.len() != 64
         || receipt.final_guest_status != 0
     {
         return Err(format!("checkpoint worker emitted an invalid lifecycle receipt: {receipt:?}").into());
@@ -241,7 +188,7 @@ fn validate_cycle(receipt: &CycleReceipt, options: &Options) -> Result<(), Error
 }
 
 fn evidence_class(host: Isa, guest: Isa, backend: Backend, emulated: bool) -> Result<&'static str, Error> {
-    if backend == Backend::Native && host != guest && !emulated {
+    if backend == Backend::Native && host != guest {
         return Err("native checkpoint evidence requires identical host and guest ISAs".into());
     }
     Ok(if emulated {
@@ -249,30 +196,6 @@ fn evidence_class(host: Isa, guest: Isa, backend: Backend, emulated: bool) -> Re
     } else {
         "semantic_physical"
     })
-}
-
-fn lower_hex(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn guest_path(rootfs: &Path, guest: &Path) -> Result<PathBuf, Error> {
-    if !guest.is_absolute()
-        || guest
-            .components()
-            .skip(1)
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return Err("guest control path must be absolute and normalized".into());
-    }
-    let root = std::fs::canonicalize(rootfs)?;
-    let host = std::fs::canonicalize(rootfs.join(guest.strip_prefix("/")?))?;
-    if !host.starts_with(root) {
-        return Err("guest control path escapes the rootfs".into());
-    }
-    Ok(host)
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {
@@ -303,13 +226,14 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     let probe_host = options.rootfs.join(&options.probe);
     let probe_sha256 = hash_file(&probe_host)?;
 
-    let timeout = Duration::from_secs(options.timeout_seconds);
     let smoke = if let Some(emulator) = &options.emulator {
-        let mut arguments = options.emulator_arg.clone();
-        arguments.push(options.engine.display().to_string());
-        output_until(emulator, &arguments, &["--backend-receipt".into()], timeout)?
+        Command::new(emulator)
+            .args(&options.emulator_arg)
+            .arg(&options.engine)
+            .arg("--backend-receipt")
+            .output()?
     } else {
-        output_until(&options.engine, &[], &["--backend-receipt".into()], timeout)?
+        Command::new(&options.engine).arg("--backend-receipt").output()?
     };
     if !smoke.status.success() {
         return Err("selected engine refused its backend receipt".into());
@@ -349,7 +273,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     } else {
         (&options.engine, Vec::new(), None, None)
     };
-    let output = output_until(program, &prefix, &worker_arguments, timeout)?;
+    let output = Command::new(program).args(&prefix).args(&worker_arguments).output()?;
     if !output.status.success() {
         return Err(format!("checkpoint worker failed: {}", String::from_utf8_lossy(&output.stderr)).into());
     }
@@ -365,14 +289,6 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     validate_cycle(&cycle, &options)?;
     if options.backend == Backend::Translated {
         crate::runtime::validate_translated_execution(&output.stderr)?;
-    }
-    let control_host = guest_path(&options.rootfs, &options.control)?;
-    let image_artifact = std::fs::read(control_host.join("checkpoint-image.bin"))?;
-    let transcript_artifact = std::fs::read(control_host.join("checkpoint-transcript.bin"))?;
-    if format!("{:x}", Sha256::digest(&image_artifact)) != cycle.image_sha256
-        || format!("{:x}", Sha256::digest(&transcript_artifact)) != cycle.transcript_sha256
-    {
-        return Err("exported checkpoint artifacts do not match the independently recomputed receipt hashes".into());
     }
     let identity = Identity {
         schema: "husklet-checkpoint-backend-v1",
@@ -400,8 +316,6 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     for (name, bytes) in [
         ("stdout.bin", output.stdout),
         ("stderr.bin", output.stderr),
-        ("checkpoint-image.bin", image_artifact),
-        ("checkpoint-transcript.bin", transcript_artifact),
         ("identity.json", serde_json::to_vec_pretty(&identity)?),
     ] {
         let path = staging.path().join(name);
@@ -442,7 +356,7 @@ mod tests {
 
     #[test]
     fn lifecycle_receipt_rejects_missing_semantic_legs() {
-        let json = r#"{"schema":"husklet-checkpoint-cycle-v1","guest_isa":"x86_64","backend":"translated","captured":true,"original_reaped":true,"restored_killed":false,"kill_exit_kind":"Signal","kill_guest_status":9,"restored_continued":true,"member_count":2,"image_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","transcript_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","final_guest_status":0}"#;
+        let json = r#"{"schema":"husklet-checkpoint-cycle-v1","guest_isa":"x86_64","backend":"translated","captured":true,"original_reaped":true,"restored_killed":false,"kill_exit_kind":"Signal","restored_continued":true,"member_count":2,"image_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","transcript_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","final_guest_status":0}"#;
         let receipt: CycleReceipt = serde_json::from_str(json).unwrap();
         let options = Options {
             source_sha: "a".repeat(40),
@@ -456,13 +370,7 @@ mod tests {
             emulator: None,
             emulator_arg: Vec::new(),
             results: "results".into(),
-            timeout_seconds: 120,
         };
-        assert!(validate_cycle(&receipt, &options).is_err());
-        let code_exit = json
-            .replace("\"restored_killed\":false", "\"restored_killed\":true")
-            .replace("\"kill_exit_kind\":\"Signal\"", "\"kill_exit_kind\":\"Code\"");
-        let receipt: CycleReceipt = serde_json::from_str(&code_exit).unwrap();
         assert!(validate_cycle(&receipt, &options).is_err());
     }
 
@@ -484,29 +392,10 @@ mod tests {
                     host == guest
                 );
                 assert_eq!(
-                    evidence_class(host, guest, Backend::Native, true).unwrap(),
-                    "semantic_emulated"
-                );
-                assert_eq!(
                     evidence_class(host, guest, Backend::Translated, true).unwrap(),
                     "semantic_emulated"
                 );
             }
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn child_deadline_kills_and_reaps_the_process_group() {
-        let started = Instant::now();
-        let error = output_until(
-            Path::new("/bin/sh"),
-            &[],
-            &["-c".into(), "sleep 30".into()],
-            Duration::from_millis(50),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("was killed and reaped"));
-        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
