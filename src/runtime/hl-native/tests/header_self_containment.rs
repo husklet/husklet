@@ -529,6 +529,7 @@ fn executable_cache_identity_follows_pinned_bytes_not_a_reused_path() {
         &source,
         r#"
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "translator/identity.h"
 
@@ -539,15 +540,25 @@ int main(void) {
         0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
         0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
     };
+    static const unsigned char million_a_sha256[32] = {
+        0xcd, 0xc7, 0x6e, 0x5c, 0x99, 0x14, 0xfb, 0x92, 0x81, 0xa1, 0xc7, 0xe2, 0x84, 0xd7, 0x3e, 0x67,
+        0xf1, 0x80, 0x9a, 0x48, 0xa4, 0x97, 0x20, 0x0e, 0x04, 0x6d, 0x39, 0xcc, 0xc7, 0x11, 0x2c, 0xd0,
+    };
     hl_identity_digest pinned = hl_identity_image_digest(first, sizeof first);
     hl_identity_digest same = hl_identity_image_digest(first, sizeof first);
     hl_identity_digest changed = hl_identity_image_digest(replacement, sizeof replacement);
     hl_identity_digest abc = hl_identity_image_digest("abc", 3);
     hl_identity_digest supplied = hl_identity_image_digest_or_pinned(replacement, sizeof replacement, &pinned);
     hl_identity_digest fallback = hl_identity_image_digest_or_pinned(first, sizeof first, NULL);
+    unsigned char *million_a = malloc(1000000);
+    if (million_a == NULL) return 9;
+    memset(million_a, 'a', 1000000);
+    hl_identity_digest long_digest = hl_identity_image_digest(million_a, 1000000);
+    free(million_a);
     if (!hl_identity_digest_equal(&pinned, &same)) return 1;
     if (hl_identity_digest_equal(&pinned, &changed)) return 2;
     if (memcmp(abc.bytes, abc_sha256, sizeof abc.bytes) != 0) return 3;
+    if (memcmp(long_digest.bytes, million_a_sha256, sizeof long_digest.bytes) != 0) return 10;
     if (!hl_identity_digest_equal(&supplied, &pinned)) return 6;
     if (!hl_identity_digest_equal(&fallback, &pinned)) return 7;
 

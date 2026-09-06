@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <string.h>
 
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
+
 /* cpu.h duplicates the hl_host_isa numbering as literal macros because callers must name the host ISA at
  * PREPROCESSOR time, from emitters that cannot include this header. Drift is not a compile error but a
  * cache-identity hash that stops distinguishing hosts -- one host executing another's machine code. */
@@ -19,14 +24,14 @@ typedef struct sha256_state {
     uint64_t size;
     uint8_t block[64];
     size_t used;
+    int use_sha_ni;
 } sha256_state;
 
 static uint32_t sha_rotr(uint32_t value, unsigned amount) {
     return (value >> amount) | (value << (32u - amount));
 }
 
-static void sha256_compress(sha256_state *state, const uint8_t block[64]) {
-    static const uint32_t constants[64] = {
+static const uint32_t sha256_constants[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
         0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -35,7 +40,9 @@ static void sha256_compress(sha256_state *state, const uint8_t block[64]) {
         0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
         0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-    };
+};
+
+static void sha256_compress_scalar(sha256_state *state, const uint8_t block[64]) {
     uint32_t words[64];
     for (size_t i = 0; i < 16; ++i)
         words[i] = ((uint32_t)block[i * 4] << 24) | ((uint32_t)block[i * 4 + 1] << 16) |
@@ -50,7 +57,7 @@ static void sha256_compress(sha256_state *state, const uint8_t block[64]) {
     for (size_t i = 0; i < 64; ++i) {
         uint32_t s1 = sha_rotr(e, 6) ^ sha_rotr(e, 11) ^ sha_rotr(e, 25);
         uint32_t choice = (e & f) ^ (~e & g);
-        uint32_t first = h + s1 + choice + constants[i] + words[i];
+        uint32_t first = h + s1 + choice + sha256_constants[i] + words[i];
         uint32_t s0 = sha_rotr(a, 2) ^ sha_rotr(a, 13) ^ sha_rotr(a, 22);
         uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
         uint32_t second = s0 + majority;
@@ -73,12 +80,78 @@ static void sha256_compress(sha256_state *state, const uint8_t block[64]) {
     state->h[7] += h;
 }
 
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+/* SHA-NI performs the expensive round function while the scalar schedule keeps
+ * this path small and auditable.  The target attribute keeps SHA instructions
+ * out of the portable body; CPUID is checked before the first call. */
+__attribute__((target("sha,sse4.1")))
+static void sha256_compress_sha_ni(sha256_state *state, const uint8_t block[64]) {
+    uint32_t words[64];
+    for (size_t i = 0; i < 16; ++i)
+        words[i] = ((uint32_t)block[i * 4] << 24) | ((uint32_t)block[i * 4 + 1] << 16) |
+                   ((uint32_t)block[i * 4 + 2] << 8) | block[i * 4 + 3];
+    for (size_t i = 16; i < 64; ++i) {
+        uint32_t s0 = sha_rotr(words[i - 15], 7) ^ sha_rotr(words[i - 15], 18) ^ (words[i - 15] >> 3);
+        uint32_t s1 = sha_rotr(words[i - 2], 17) ^ sha_rotr(words[i - 2], 19) ^ (words[i - 2] >> 10);
+        words[i] = words[i - 16] + s0 + words[i - 7] + s1;
+    }
+
+    __m128i abcd = _mm_loadu_si128((const __m128i *)&state->h[0]);
+    __m128i efgh = _mm_loadu_si128((const __m128i *)&state->h[4]);
+    __m128i shuffled = _mm_shuffle_epi32(abcd, 0xb1);
+    efgh = _mm_shuffle_epi32(efgh, 0x1b);
+    __m128i state0 = _mm_alignr_epi8(shuffled, efgh, 8);
+    __m128i state1 = _mm_blend_epi16(efgh, shuffled, 0xf0);
+    const __m128i saved0 = state0, saved1 = state1;
+
+    for (size_t round = 0; round < 64; round += 4) {
+        __m128i message = _mm_set_epi32((int)(words[round + 3] + sha256_constants[round + 3]),
+                                        (int)(words[round + 2] + sha256_constants[round + 2]),
+                                        (int)(words[round + 1] + sha256_constants[round + 1]),
+                                        (int)(words[round] + sha256_constants[round]));
+        state1 = _mm_sha256rnds2_epu32(state1, state0, message);
+        message = _mm_shuffle_epi32(message, 0x0e);
+        state0 = _mm_sha256rnds2_epu32(state0, state1, message);
+    }
+    state0 = _mm_add_epi32(state0, saved0);
+    state1 = _mm_add_epi32(state1, saved1);
+
+    shuffled = _mm_shuffle_epi32(state0, 0x1b);
+    state1 = _mm_shuffle_epi32(state1, 0xb1);
+    state0 = _mm_blend_epi16(shuffled, state1, 0xf0);
+    state1 = _mm_alignr_epi8(state1, shuffled, 8);
+    _mm_storeu_si128((__m128i *)&state->h[0], state0);
+    _mm_storeu_si128((__m128i *)&state->h[4], state1);
+}
+
+static int sha256_has_sha_ni(void) {
+    unsigned eax, ebx, ecx, edx;
+    return __get_cpuid_max(0, NULL) >= 7 && __get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx) &&
+           (ebx & bit_SHA) != 0;
+}
+#endif
+
+static void sha256_compress(sha256_state *state, const uint8_t block[64]) {
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    if (state->use_sha_ni) {
+        sha256_compress_sha_ni(state, block);
+        return;
+    }
+#endif
+    sha256_compress_scalar(state, block);
+}
+
 static void sha256_init(sha256_state *state) {
     const uint32_t initial[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     memcpy(state->h, initial, sizeof initial);
     state->size = 0;
     state->used = 0;
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    state->use_sha_ni = sha256_has_sha_ni();
+#else
+    state->use_sha_ni = 0;
+#endif
 }
 
 static void sha256_update(sha256_state *state, const void *bytes, size_t size) {
