@@ -1071,19 +1071,149 @@ static int hl_native_supervised_single_child(pid_t parent, pid_t *child) {
     return 0;
 }
 
-static int hl_native_supervised_single_thread_no_children(pid_t process) {
-    char path[64];
-    if (snprintf(path, sizeof(path), "/proc/%d/task", process) >= (int)sizeof(path)) return -1;
+/* Closed-world, read-only preflight for the native phase-1 coordinator.  Keeping
+ * this separate from capture is intentional: an admitted process still receives
+ * the existing freeze-only refusal below. */
+static int hl_native_checkpoint_path(char *path, size_t capacity, const char *proc_root, pid_t process,
+                                     const char *suffix) {
+    return snprintf(path, capacity, "%s/%d/%s", proc_root, process, suffix) < (int)capacity ? 0 : -1;
+}
+
+static int hl_native_checkpoint_tasks_admissible(const char *proc_root, pid_t process) {
+    char path[PATH_MAX];
+    if (hl_native_checkpoint_path(path, sizeof path, proc_root, process, "task") != 0) return -1;
     DIR *tasks = opendir(path);
     if (tasks == NULL) return -1;
     size_t count = 0;
     struct dirent *entry;
-    while ((entry = readdir(tasks)) != NULL)
-        if (entry->d_name[0] != '.' && ++count > 1) break;
+    char sole[32] = {0};
+    while ((entry = readdir(tasks)) != NULL) {
+        char *end = NULL;
+        long task = strtol(entry->d_name, &end, 10);
+        if (*entry->d_name == 0 || *end != 0 || task <= 0 || task > INT_MAX) continue;
+        ++count;
+        if (count == 1) snprintf(sole, sizeof sole, "%ld", task);
+    }
     closedir(tasks);
-    pid_t child;
-    return count == 1 && hl_native_supervised_single_child(process, &child) != 0 ? 0 : -1;
+    if (count != 1 || strtol(sole, NULL, 10) != process) return -1;
+    if (snprintf(path, sizeof path, "%s/%d/task/%s/children", proc_root, process, sole) >= (int)sizeof path)
+        return -1;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char children[128];
+    ssize_t length = read(fd, children, sizeof children);
+    close(fd);
+    if (length < 0) return -1;
+    for (ssize_t index = 0; index < length; ++index)
+        if (children[index] != ' ' && children[index] != '\t' && children[index] != '\r' &&
+            children[index] != '\n')
+            return -1;
+    return 0;
 }
+
+static int hl_native_checkpoint_fds_admissible(const char *proc_root, pid_t process,
+                                                const int *private_fds, size_t private_count) {
+    char path[PATH_MAX];
+    if (hl_native_checkpoint_path(path, sizeof path, proc_root, process, "fd") != 0) return -1;
+    DIR *fds = opendir(path);
+    if (fds == NULL) return -1;
+    int admissible = 1;
+    struct dirent *entry;
+    while ((entry = readdir(fds)) != NULL && admissible) {
+        char *end = NULL;
+        long descriptor = strtol(entry->d_name, &end, 10);
+        if (*entry->d_name == 0 || *end != 0) continue;
+        if (descriptor < 0 || descriptor > INT_MAX) { admissible = 0; break; }
+        if (descriptor <= STDERR_FILENO) continue;
+        int recognized = 0;
+        for (size_t index = 0; index < private_count; ++index)
+            if (private_fds[index] == descriptor) { recognized = 1; break; }
+        if (!recognized) admissible = 0;
+    }
+    closedir(fds);
+    return admissible ? 0 : -1;
+}
+
+static int hl_native_checkpoint_maps_admissible(const char *proc_root, pid_t process) {
+    char path[PATH_MAX];
+    if (hl_native_checkpoint_path(path, sizeof path, proc_root, process, "maps") != 0) return -1;
+    FILE *maps = fopen(path, "re");
+    if (maps == NULL) return -1;
+    char *line = NULL;
+    size_t capacity = 0;
+    int admissible = 1;
+    while (admissible && getline(&line, &capacity, maps) >= 0) {
+        unsigned long long start, end, offset, inode;
+        unsigned major, minor;
+        char perms[5] = {0}, mapped[PATH_MAX] = {0};
+        int fields = sscanf(line, "%llx-%llx %4s %llx %x:%x %llu %4095[^\n]",
+                            &start, &end, perms, &offset, &major, &minor, &inode, mapped);
+        (void)start; (void)end; (void)offset; (void)major; (void)minor; (void)inode;
+        if (fields < 7 || strlen(perms) != 4 || perms[3] != 'p' || (perms[1] == 'w' && perms[2] == 'x')) {
+            admissible = 0; break;
+        }
+        char *name = fields == 8 ? mapped : mapped + sizeof(mapped) - 1;
+        while (*name == ' ' || *name == '\t') ++name;
+        if (*name == 0) { if (perms[2] == 'x') admissible = 0; continue; }
+        if (strstr(name, " (deleted)") != NULL) { admissible = 0; break; }
+        if (name[0] == '[') {
+            int kernel = strcmp(name, "[vdso]") == 0 || strcmp(name, "[vvar]") == 0 ||
+                         strcmp(name, "[vvar_vclock]") == 0 || strcmp(name, "[vsyscall]") == 0;
+            int anonymous = strcmp(name, "[heap]") == 0 || strncmp(name, "[stack", 6) == 0;
+            if ((!kernel && !anonymous) || (anonymous && perms[2] == 'x')) admissible = 0;
+            continue;
+        }
+        if (name[0] != '/') { admissible = 0; break; }
+        char rooted[PATH_MAX];
+        if (snprintf(rooted, sizeof rooted, "%s/%d/root%s", proc_root, process, name) >= (int)sizeof rooted) {
+            admissible = 0; break;
+        }
+        struct stat status;
+        if (stat(rooted, &status) != 0 || !S_ISREG(status.st_mode) || (status.st_mode & 0222) != 0) {
+            admissible = 0;
+        }
+    }
+    free(line);
+    if (ferror(maps)) admissible = 0;
+    fclose(maps);
+    return admissible ? 0 : -1;
+}
+
+static int hl_native_checkpoint_locks_admissible(const char *proc_root, pid_t process) {
+    char path[PATH_MAX];
+    if (snprintf(path, sizeof path, "%s/locks", proc_root) >= (int)sizeof path) return -1;
+    FILE *locks = fopen(path, "re");
+    if (locks == NULL) return -1;
+    char *line = NULL;
+    size_t capacity = 0;
+    int admissible = 1;
+    while (getline(&line, &capacity, locks) >= 0) {
+        long owner = -1;
+        if (sscanf(line, "%*s %*s %*s %*s %ld", &owner) != 1) { admissible = 0; break; }
+        if (owner == process) { admissible = 0; break; }
+    }
+    free(line);
+    if (ferror(locks)) admissible = 0;
+    fclose(locks);
+    return admissible ? 0 : -1;
+}
+
+static int hl_native_checkpoint_admissible_at(const char *proc_root, pid_t process,
+                                              const int *private_fds, size_t private_count) {
+    if (process <= 0 || hl_native_checkpoint_tasks_admissible(proc_root, process) != 0) return -2;
+    if (hl_native_checkpoint_fds_admissible(proc_root, process, private_fds, private_count) != 0) return -3;
+    if (hl_native_checkpoint_maps_admissible(proc_root, process) != 0) return -4;
+    if (hl_native_checkpoint_locks_admissible(proc_root, process) != 0) return -5;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
+HL_API int hl_native_checkpoint_admission_test(const char *proc_root, int process,
+                                               const int *private_fds, size_t private_count) {
+    if (proc_root == NULL || (private_count != 0 && private_fds == NULL)) return -1;
+    return hl_native_checkpoint_admissible_at(proc_root, (pid_t)process, private_fds, private_count);
+}
+#endif
 
 static int hl_native_supervised_stopped(pid_t process) {
     char path[64], bytes[256];
@@ -1099,21 +1229,25 @@ static int hl_native_supervised_stopped(pid_t process) {
 }
 
 static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t generation, const hl_options *options) {
-    if (workload <= 0 || hl_native_supervised_single_thread_no_children(workload) != 0) {
-        hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
-        (void)hl_ckpt_channel_acquire();
-        (void)hl_ckpt_channel_notify(&refusal, "native phase-1 refuses descendants or multiple threads");
-        const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
-        if (receipt != NULL)
-            (void)hl_native_supervised_write_text(receipt,
-                                                  "registered=0 frozen=0 thawed=0 refusal=unsupported-state\n");
-        return -1;
-    }
-    if (kill(workload, SIGSTOP) != 0) return -1;
+    if (workload <= 0 || kill(workload, SIGSTOP) != 0) return -1;
     int frozen = 0;
     for (int attempt = 0; attempt < 1000 && !frozen; ++attempt) {
         frozen = hl_native_supervised_stopped(workload);
         if (!frozen) usleep(1000);
+    }
+    if (!frozen || hl_native_checkpoint_admissible_at("/proc", workload, NULL, 0) != 0) {
+        hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
+        (void)hl_ckpt_channel_acquire();
+        (void)hl_ckpt_channel_notify(&refusal, "native phase-1 read-only admission rejected process state");
+        int thawed = kill(workload, SIGCONT) == 0;
+        const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
+        if (receipt != NULL) {
+            char line[128];
+            snprintf(line, sizeof line, "registered=0 frozen=%d thawed=%d refusal=unsupported-state\n",
+                     frozen, thawed);
+            (void)hl_native_supervised_write_text(receipt, line);
+        }
+        return -1;
     }
     int registered = 0;
     if (frozen && hl_options_get(options, "HL_NATIVE_CKPT_TEST_SKIP_REGISTER") == NULL) {

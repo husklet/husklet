@@ -25,6 +25,8 @@ pub(crate) type TriggerBump = unsafe extern "C" fn(*mut c_void) -> c_uint;
 pub(crate) type TriggerDestroy = unsafe extern "C" fn(*mut c_void, c_int);
 pub(crate) type CheckpointAdopt = unsafe extern "C" fn(c_uint, c_int, c_int) -> c_int;
 pub(crate) type InterruptSignal = unsafe extern "C" fn(c_uint) -> c_int;
+#[cfg(feature = "native-test-hooks")]
+pub(crate) type NativeCheckpointAdmission = unsafe extern "C" fn(*const c_char, c_int, *const c_int, usize) -> c_int;
 pub(crate) type CheckpointConfigure = unsafe extern "C" fn(*mut Backend, c_int, c_int) -> c_int;
 pub(crate) type ExecutableOpen = unsafe extern "C" fn(*const c_void, *const c_char, *mut c_void) -> c_int;
 pub(crate) type ExecutableDiscard = unsafe extern "C" fn(*const c_void, *mut c_void);
@@ -150,6 +152,7 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_translit_displaced: ScenarioTest,
     pub(crate) native_supervised_hostname_projection: ScenarioTest,
     pub(crate) native_supervised_name_projection: ScenarioTest,
+    pub(crate) native_checkpoint_admission: NativeCheckpointAdmission,
     pub(crate) aarch64_reserved_register: NoArgumentTest,
     pub(crate) x86_64_reserved_register: NoArgumentTest,
     pub(crate) aarch64_imported_path_guard: NoArgumentTest,
@@ -545,6 +548,7 @@ impl TestApi {
                 ScenarioTest
             ),
             native_supervised_name_projection: symbol!("hl_native_supervised_name_projection_test", ScenarioTest),
+            native_checkpoint_admission: symbol!("hl_native_checkpoint_admission_test", NativeCheckpointAdmission),
             aarch64_reserved_register: symbol!("hl_aarch64_reserved_register_test", NoArgumentTest),
             x86_64_reserved_register: symbol!("hl_x86_64_reserved_register_test", NoArgumentTest),
             aarch64_imported_path_guard: symbol!("hl_aarch64_imported_path_guard_test", NoArgumentTest),
@@ -554,10 +558,7 @@ impl TestApi {
             aarch64_backend_tree_census: symbol!("hl_aarch64_backend_tree_census_test", ScenarioTest),
             x86_64_backend_tree_census: symbol!("hl_x86_64_backend_tree_census_test", ScenarioTest),
             #[cfg(test)]
-            aarch64_stw_translated_lifecycle: symbol!(
-                "hl_aarch64_stw_translated_lifecycle_test",
-                NoArgumentTest
-            ),
+            aarch64_stw_translated_lifecycle: symbol!("hl_aarch64_stw_translated_lifecycle_test", NoArgumentTest),
             #[cfg(test)]
             x86_64_stw_cpu_slot_lifecycle: symbol!("hl_x86_64_stw_cpu_slot_lifecycle_test", NoArgumentTest),
             aarch64_clone3_extended_args: symbol!("hl_aarch64_clone3_extended_args_test", ScenarioTest),
