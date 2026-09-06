@@ -850,8 +850,7 @@ fn backend_receipt(
         | ExecutionBackend::Aarch64Transliterator
         | ExecutionBackend::Aarch64DbtWithInterpreterFallback => {
             if measured.iter().any(|value| value == "--translation-cache") {
-                let hit = stderr.lines().find(|line| line.starts_with("[pcache] exec HIT"))
-                    .ok_or("warm translated arm did not prove a persistent-cache hit")?;
+                let hit = warm_cache_receipt(stderr)?;
                 return Ok(format!("guest_isa={} backend={backend:?} cache=warm {hit}", guest_isa.as_str()));
             }
             let shape = crate::runtime::backend_shape_product(stderr.as_bytes(), true)?
@@ -873,6 +872,40 @@ fn backend_receipt(
         "guest_isa={} backend={backend:?} {evidence}{route}",
         guest_isa.as_str()
     ))
+}
+
+fn warm_cache_receipt(stderr: &str) -> Result<&str, Error> {
+    let records = stderr
+        .lines()
+        .filter(|line| line.starts_with("[pcache-v1] "))
+        .collect::<Vec<_>>();
+    if records.len() != 1 {
+        return Err(format!(
+            "warm translated arm emitted {} persistent-cache receipts, expected once",
+            records.len()
+        )
+        .into());
+    }
+    let fields = records[0]
+        .split_ascii_whitespace()
+        .skip(1)
+        .filter_map(|field| field.split_once('='))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if fields.get("outcome") != Some(&"HIT") {
+        return Err("warm translated arm did not report a persistent-cache HIT".into());
+    }
+    let restored = fields
+        .get("restored")
+        .ok_or("persistent-cache HIT omitted restored")?
+        .parse::<u64>()?;
+    let new_translations = fields
+        .get("new_translations")
+        .ok_or("persistent-cache HIT omitted new_translations")?
+        .parse::<u64>()?;
+    if restored == 0 || new_translations != 0 {
+        return Err("persistent-cache HIT did not restore code without retranslating it".into());
+    }
+    Ok(records[0])
 }
 
 fn x86_jcc_route_receipt(stderr: &str) -> Result<String, Error> {
@@ -1329,6 +1362,27 @@ mod tests {
         assert!(!warm.iter().any(|value| value == "--diagnostics"));
         assert!(warm.iter().any(|value| value == "--translation-cache-process-tree"));
         assert_eq!(ORDER.len(), 6);
+    }
+
+    #[test]
+    fn warm_cache_receipt_requires_a_unique_restored_hit_without_retranslation() {
+        let hit = "[pcache-v1] outcome=HIT restored=2326 live=2326 deferred=0 new_translations=0 load_ns=1";
+        assert_eq!(warm_cache_receipt(hit).unwrap(), hit);
+        assert!(warm_cache_receipt("").is_err());
+        assert!(warm_cache_receipt(&format!("{hit}\n{hit}")).is_err());
+        assert!(warm_cache_receipt(
+            "[pcache-v1] outcome=MISS restored=0 new_translations=2326"
+        )
+        .is_err());
+        assert!(warm_cache_receipt(
+            "[pcache-v1] outcome=HIT restored=0 new_translations=0"
+        )
+        .is_err());
+        assert!(warm_cache_receipt(
+            "[pcache-v1] outcome=HIT restored=2326 new_translations=1"
+        )
+        .is_err());
+        assert!(warm_cache_receipt("[pcache] exec HIT patches=12").is_err());
     }
 
     #[test]
