@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 hl-log = { path = "../../packages/hl-log" }
 hl-native = { path = "../../runtime/hl-native" }
+sha2.workspace = true
 
 [features]
 native-test-hooks = ["hl-native/native-test-hooks"]

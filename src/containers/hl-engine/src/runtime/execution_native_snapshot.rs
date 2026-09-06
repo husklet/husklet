@@ -4,9 +4,10 @@
 //! ptrace lifetime and the fixed register codec needed by a later whole-process capture transaction.
 #![allow(dead_code)] // Intentionally staged before the coordinator transaction is wired to it.
 
+use sha2::{Digest as _, Sha256};
 use std::io;
 #[cfg(target_os = "linux")]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 #[cfg(target_arch = "x86_64")]
 use std::time::{Duration, Instant};
@@ -18,9 +19,9 @@ pub(super) const RECORD_SIZE: usize = 256;
 const REGISTER_COUNT: usize = 27;
 const REGISTER_OFFSET: usize = 32;
 const MEMORY_MAGIC: &[u8; 8] = b"HLNXMEM\0";
-const MEMORY_VERSION: u16 = 1;
+const MEMORY_VERSION: u16 = 2;
 const MEMORY_HEADER_SIZE: usize = 32;
-const MEMORY_ENTRY_SIZE: usize = 64;
+const MEMORY_ENTRY_SIZE: usize = 96;
 const MAX_MAPPINGS: usize = 4096;
 const MAX_CAPTURE_BYTES: usize = 1 << 30;
 const MAX_PATH_BYTES: usize = 4096;
@@ -48,6 +49,7 @@ pub(super) struct NativeMapping {
     pub(super) inode: u64,
     pub(super) kernel_special: bool,
     pub(super) root_relative: Option<Vec<u8>>,
+    pub(super) file_digest: Option<[u8; 32]>,
     pub(super) bytes: Vec<u8>,
 }
 
@@ -118,6 +120,7 @@ impl NativeMemoryImage {
             out.extend_from_slice(&(path_len as u32).to_le_bytes());
             out.extend_from_slice(&(mapping.bytes.len() as u64).to_le_bytes());
             out.extend_from_slice(&[0; 4]);
+            out.extend_from_slice(mapping.file_digest.as_ref().unwrap_or(&[0; 32]));
         }
         for mapping in &self.mappings {
             if let Some(path) = &mapping.root_relative {
@@ -197,6 +200,7 @@ impl NativeMemoryImage {
                 protection: input[at + 40],
                 kernel_special: kind == 2,
                 root_relative,
+                file_digest: (kind == 1).then(|| input[at + 64..at + 96].try_into().expect("digest field")),
                 bytes,
             });
         }
@@ -230,6 +234,7 @@ fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImag
                 || mapping.inode != 0
                 || mapping.device_major != 0
                 || mapping.device_minor != 0
+                || mapping.file_digest.is_some()
             {
                 return Err(InvalidMemoryImage::Kind);
             }
@@ -237,23 +242,25 @@ fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImag
         }
         match &mapping.root_relative {
             Some(path) => {
-                if path.is_empty()
+                if !canonical_relative(path)
                     || path.len() > MAX_PATH_BYTES
-                    || path[0] == b'/'
                     || path.contains(&0)
                     || !mapping.bytes.is_empty()
+                    || mapping.file_digest.is_none()
                 {
                     return Err(InvalidMemoryImage::Path);
                 }
             }
             None => {
-                if mapping.offset != 0 || mapping.inode != 0 || mapping.device_major != 0 || mapping.device_minor != 0 {
+                if mapping.offset != 0
+                    || mapping.inode != 0
+                    || mapping.device_major != 0
+                    || mapping.device_minor != 0
+                    || mapping.file_digest.is_some()
+                {
                     return Err(InvalidMemoryImage::Kind);
                 }
-                if mapping.protection & 1 != 0 && mapping.bytes.len() as u64 != length {
-                    return Err(InvalidMemoryImage::Payload);
-                }
-                if mapping.protection & 1 == 0 && !mapping.bytes.is_empty() {
+                if mapping.bytes.len() as u64 != length {
                     return Err(InvalidMemoryImage::Payload);
                 }
                 copied = copied
@@ -266,6 +273,14 @@ fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImag
         return Err(InvalidMemoryImage::Overflow);
     }
     Ok(())
+}
+
+fn canonical_relative(path: &[u8]) -> bool {
+    !path.is_empty()
+        && path[0] != b'/'
+        && path
+            .split(|byte| *byte == b'/')
+            .all(|part| !part.is_empty() && part != b"." && part != b"..")
 }
 
 fn le_u16(bytes: &[u8], at: usize) -> Result<u16, InvalidMemoryImage> {
@@ -317,27 +332,54 @@ pub(super) fn capture_stopped_memory(pid: libc::pid_t, deadline: Instant) -> io:
         ));
     }
     let root = PathBuf::from(format!("/proc/{pid}/root"));
-    let specifications = parse_maps(&before, &root)?;
+    let specifications = parse_maps(&before, &root, deadline)?;
+    let memory = std::fs::File::open(format!("/proc/{pid}/mem"))?;
     let mut copied = 0usize;
     let mut mappings = Vec::with_capacity(specifications.len());
     for mut mapping in specifications {
         check_deadline(deadline)?;
-        if !mapping.kernel_special && mapping.root_relative.is_none() && mapping.protection & 1 != 0 {
+        if !mapping.kernel_special && mapping.root_relative.is_none() {
             let length = usize::try_from(mapping.end - mapping.start)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "mapping length exceeds host"))?;
             copied = copied
                 .checked_add(length)
                 .filter(|total| *total <= MAX_CAPTURE_BYTES)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "anonymous memory exceeds capture bound"))?;
-            mapping.bytes = read_process_exact(pid, mapping.start, length, deadline)?;
+            mapping.bytes = read_process_mem_exact(&memory, mapping.start, length, deadline)?;
         }
         mappings.push(mapping);
     }
     check_deadline(deadline)?;
+    revalidate_file_mappings(&mappings, &root, deadline)?;
     ensure_same_maps(&before, &std::fs::read(maps_path)?)?;
     validate_mappings(&mappings)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid VMA table: {error:?}")))?;
     Ok(NativeMemoryImage { mappings })
+}
+
+#[cfg(target_os = "linux")]
+fn revalidate_file_mappings(mappings: &[NativeMapping], root: &Path, deadline: Instant) -> io::Result<()> {
+    for mapping in mappings {
+        let (Some(path), Some(expected)) = (&mapping.root_relative, mapping.file_digest) else {
+            continue;
+        };
+        check_deadline(deadline)?;
+        let path = std::str::from_utf8(path)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 mapping path"))?;
+        let file = std::fs::File::open(root.join(path))?;
+        let metadata = file.metadata()?;
+        if metadata.ino() != mapping.inode
+            || libc::major(metadata.dev()) as u32 != mapping.device_major
+            || libc::minor(metadata.dev()) as u32 != mapping.device_minor
+            || hash_file_range(&file, mapping.offset, mapping.end - mapping.start, deadline)? != expected
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "file mapping content identity changed",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -352,7 +394,7 @@ pub(super) fn capture_stopped_memory(
 }
 
 #[cfg(target_os = "linux")]
-fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
+fn parse_maps(input: &[u8], root: &Path, deadline: Instant) -> io::Result<Vec<NativeMapping>> {
     let text =
         std::str::from_utf8(input).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 process maps"))?;
     let mut mappings = Vec::new();
@@ -406,7 +448,10 @@ fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
                 "unescaped whitespace in mapping path",
             ));
         }
-        let path = fields.get(5).copied().unwrap_or("");
+        let encoded_path = fields.get(5).copied().unwrap_or("");
+        let decoded_path = decode_maps_path(encoded_path.as_bytes())?;
+        let path = std::str::from_utf8(&decoded_path)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 mapping path"))?;
         let kernel_special = matches!(path, "[vdso]" | "[vvar]" | "[vvar_vclock]" | "[vsyscall]");
         let root_relative = if path.starts_with('/') {
             if path.ends_with(" (deleted)") {
@@ -416,10 +461,11 @@ fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
                 ));
             }
             let relative = path.strip_prefix('/').expect("absolute path");
-            if relative.is_empty() || relative.as_bytes().len() > MAX_PATH_BYTES {
+            if !canonical_relative(relative.as_bytes()) || relative.as_bytes().len() > MAX_PATH_BYTES {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "mapping path exceeds bound"));
             }
-            let metadata = std::fs::metadata(root.join(relative))?;
+            let file = std::fs::File::open(root.join(relative))?;
+            let metadata = file.metadata()?;
             if metadata.ino() != inode
                 || libc::major(metadata.dev()) as u32 != device_major
                 || libc::minor(metadata.dev()) as u32 != device_minor
@@ -429,7 +475,10 @@ fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
                     "file mapping identity changed",
                 ));
             }
-            Some(relative.as_bytes().to_vec())
+            Some((
+                relative.as_bytes().to_vec(),
+                hash_file_range(&file, offset, end - start, deadline)?,
+            ))
         } else {
             if inode != 0 || device_major != 0 || device_minor != 0 || offset != 0 {
                 return Err(io::Error::new(
@@ -439,6 +488,8 @@ fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
             }
             None
         };
+        let (root_relative, file_digest) =
+            root_relative.map_or((None, None), |(path, digest)| (Some(path), Some(digest)));
         mappings.push(NativeMapping {
             start,
             end,
@@ -449,10 +500,80 @@ fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
             inode,
             kernel_special,
             root_relative,
+            file_digest,
             bytes: Vec::new(),
         });
     }
     Ok(mappings)
+}
+
+#[cfg(target_os = "linux")]
+fn decode_maps_path(encoded: &[u8]) -> io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(encoded.len());
+    let mut at = 0;
+    while at < encoded.len() {
+        if encoded[at] != b'\\' {
+            out.push(encoded[at]);
+            at += 1;
+            continue;
+        }
+        let escape = encoded
+            .get(at + 1..at + 4)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed maps escape"))?;
+        let byte = match escape {
+            b"040" => b' ',
+            b"011" => b'\t',
+            b"012" => b'\n',
+            b"134" => b'\\',
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown maps escape")),
+        };
+        out.push(byte);
+        at += 4;
+    }
+    Ok(out)
+}
+
+#[cfg(target_os = "linux")]
+fn hash_file_range(file: &std::fs::File, offset: u64, mapping_len: u64, deadline: Instant) -> io::Result<[u8; 32]> {
+    let available = file.metadata()?.len().saturating_sub(offset).min(mapping_len);
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0u8; (1 << 20).min(usize::try_from(available).unwrap_or(1 << 20))];
+    let mut done = 0u64;
+    while done < available {
+        check_deadline(deadline)?;
+        let count = buffer
+            .len()
+            .min(usize::try_from(available - done).unwrap_or(buffer.len()));
+        let read = file.read_at(&mut buffer[..count], offset + done)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "file mapping changed while hashing",
+            ));
+        }
+        hash.update(&buffer[..read]);
+        done += read as u64;
+    }
+    Ok(hash.finalize().into())
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_mem_exact(memory: &std::fs::File, start: u64, length: usize, deadline: Instant) -> io::Result<Vec<u8>> {
+    let mut bytes = vec![0u8; length];
+    let mut done = 0usize;
+    while done < length {
+        check_deadline(deadline)?;
+        let count = (length - done).min(1 << 20);
+        let read = memory.read_at(&mut bytes[done..done + count], start + done as u64)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unreadable anonymous process mapping",
+            ));
+        }
+        done += read;
+    }
+    Ok(bytes)
 }
 
 #[cfg(target_os = "linux")]
@@ -852,6 +973,7 @@ mod tests {
                 inode: 0,
                 kernel_special: false,
                 root_relative: None,
+                file_digest: None,
                 bytes: vec![0x5a; 0x1000],
             }],
         };
@@ -859,7 +981,7 @@ mod tests {
         assert_eq!(NativeMemoryImage::decode(&encoded), Ok(image));
         for (at, value, expected) in [
             (0, b'X', InvalidMemoryImage::Magic),
-            (8, 2, InvalidMemoryImage::Version),
+            (8, 3, InvalidMemoryImage::Version),
             (10, 1, InvalidMemoryImage::Reserved),
             (24, 1, InvalidMemoryImage::Reserved),
             (MEMORY_HEADER_SIZE + 41, 2, InvalidMemoryImage::Kind),
@@ -878,6 +1000,120 @@ mod tests {
             NativeMemoryImage::decode(&encoded[..encoded.len() - 1]),
             Err(InvalidMemoryImage::Size)
         );
+    }
+
+    #[test]
+    fn memory_codec_rejects_noncanonical_file_paths() {
+        for path in [b"/absolute".as_slice(), b"a//b", b"a/./b", b"a/../b", b"a/\0b"] {
+            let image = NativeMemoryImage {
+                mappings: vec![NativeMapping {
+                    start: 0x1000,
+                    end: 0x2000,
+                    offset: 0,
+                    protection: 1,
+                    device_major: 1,
+                    device_minor: 2,
+                    inode: 3,
+                    kernel_special: false,
+                    root_relative: Some(path.to_vec()),
+                    file_digest: Some([7; 32]),
+                    bytes: vec![],
+                }],
+            };
+            assert_eq!(image.encode(), Err(InvalidMemoryImage::Path), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn proc_maps_path_escapes_are_strict_and_canonical() {
+        assert_eq!(decode_maps_path(br"a\040b\011c\012d\134e").unwrap(), b"a b\tc\nd\\e");
+        for malformed in [br"a\".as_slice(), br"a\04", br"a\041", br"a\000"] {
+            assert_eq!(
+                decode_maps_path(malformed).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_file_digest_changes_with_the_mapped_range() {
+        let file = tempfile::tempfile().unwrap();
+        file.write_all_at(b"before", 0).unwrap();
+        let first = hash_file_range(&file, 0, 6, Instant::now() + Duration::from_secs(1)).unwrap();
+        file.write_all_at(b"after!", 0).unwrap();
+        let second = hash_file_range(&file, 0, 6, Instant::now() + Duration::from_secs(1)).unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn file_mapping_revalidation_rejects_in_place_content_change() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("mapped file");
+        std::fs::write(&path, b"before").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let metadata = file.metadata().unwrap();
+        let mapping = NativeMapping {
+            start: 0x1000,
+            end: 0x1006,
+            offset: 0,
+            protection: 1,
+            device_major: libc::major(metadata.dev()) as u32,
+            device_minor: libc::minor(metadata.dev()) as u32,
+            inode: metadata.ino(),
+            kernel_special: false,
+            root_relative: Some(b"mapped file".to_vec()),
+            file_digest: Some(hash_file_range(&file, 0, 6, Instant::now() + Duration::from_secs(1)).unwrap()),
+            bytes: vec![],
+        };
+        std::fs::write(path, b"after!").unwrap();
+        assert_eq!(
+            revalidate_file_mappings(&[mapping], root.path(), Instant::now() + Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn stopped_child_prot_none_memory_is_captured_losslessly() {
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe {
+                libc::close(pipe[0]);
+                let page = libc::mmap(
+                    std::ptr::null_mut(),
+                    4096,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                assert_ne!(page, libc::MAP_FAILED);
+                std::ptr::write_bytes(page.cast::<u8>(), 0x6e, 4096);
+                assert_eq!(libc::mprotect(page, 4096, libc::PROT_NONE), 0);
+                let address = page as u64;
+                libc::write(pipe[1], (&raw const address).cast(), 8);
+                libc::raise(libc::SIGSTOP);
+                libc::pause();
+            }
+        }
+        unsafe { libc::close(pipe[1]) };
+        let mut address = 0u64;
+        assert_eq!(unsafe { libc::read(pipe[0], (&raw mut address).cast(), 8) }, 8);
+        unsafe { libc::close(pipe[0]) };
+        wait_until_stopped(pid);
+        let image = capture_stopped_memory(pid, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(image_bytes(&image, address, 16), vec![0x6e; 16]);
+        assert!(
+            image
+                .mappings
+                .iter()
+                .any(|mapping| mapping.start <= address && address < mapping.end && mapping.protection == 0)
+        );
+        kill_and_reap(pid);
     }
 
     #[test]
@@ -944,11 +1180,18 @@ mod tests {
         );
         let root = Path::new("/");
         assert_eq!(
-            parse_maps(b"not-a-map\n", root).unwrap_err().kind(),
+            parse_maps(b"not-a-map\n", root, Instant::now() + Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::InvalidData
         );
         let shared = b"1000-2000 rw-s 00000000 00:00 0\n";
-        assert_eq!(parse_maps(shared, root).unwrap_err().kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            parse_maps(shared, root, Instant::now() + Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 
     fn image_bytes(image: &NativeMemoryImage, address: u64, length: usize) -> Vec<u8> {
