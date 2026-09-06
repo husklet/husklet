@@ -10,8 +10,13 @@ function labelled(patches, tag, label) {
   let candidate = null;
   for (const patch of patches) {
     if (patch.Create?.tag === tag) candidate = patch.Create.id;
-    if (candidate !== null && patch.SetProp?.id === candidate && patch.SetProp.prop === 'Label'
-      && patch.SetProp.value.Text === label) return candidate;
+    if (
+      candidate !== null &&
+      patch.SetProp?.id === candidate &&
+      patch.SetProp.prop === 'Label' &&
+      patch.SetProp.value.Text === label
+    )
+      return candidate;
   }
   return null;
 }

@@ -10,13 +10,11 @@ const byName = new Map(props.map((prop) => [prop.name, prop]));
 test('every declared property gets a control, and no other property does', () => {
   for (const tag of tags) {
     const all = rows(tag.name);
-    assert.deepEqual(
-      all.map((row) => row.prop).sort(),
-      component(tag.name).props.slice().sort(),
-    );
+    assert.deepEqual(all.map((row) => row.prop).sort(), component(tag.name).props.slice().sort());
     for (const row of all) {
       assert.ok(row.name && row.editor && row.group);
-      if (row.editor === 'enum') assert.ok(row.members.length > 0, `${row.name} has an empty Select`);
+      if (row.editor === 'enum')
+        assert.ok(row.members.length > 0, `${row.name} has an empty Select`);
       if (row.editor === 'length' || row.editor === 'edges') assert.ok(row.maximum > 0);
     }
   }
@@ -30,7 +28,10 @@ test('components with different contracts get different property rows', () => {
 
 test('the editable properties come first', () => {
   const editable = rows('Button').map((row) => row.editable);
-  assert.deepEqual(editable, editable.slice().sort((left, right) => Number(right) - Number(left)));
+  assert.deepEqual(
+    editable,
+    editable.slice().sort((left, right) => Number(right) - Number(left)),
+  );
 });
 
 test('a Select is populated from the catalogue, in the spelling JSX uses', () => {

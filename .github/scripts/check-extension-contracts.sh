@@ -42,6 +42,12 @@ node -e '
     if (javascript.length !== 0) {
       throw new Error(`extension source must be TypeScript: ${javascript.join(", ")}`);
     }
+    const packageManifest = JSON.parse(fs.readFileSync(path.join(extension, "package.json")));
+    for (const script of ["lint", "format", "format:check"]) {
+      if (typeof packageManifest.scripts?.[script] !== "string") {
+        throw new Error(`extensions/${directory.name} must define an npm ${script} script`);
+      }
+    }
   }
   for (const directory of runnable) {
     const expected = `extensions/${directory.name}`;

@@ -8,9 +8,9 @@
 
 import catalogue from './catalogue.json' with { type: 'json' };
 
-export type Family = typeof catalogue.families[number];
-export type Tag = typeof catalogue.tags[number];
-export type Property = typeof catalogue.props[number];
+export type Family = (typeof catalogue.families)[number];
+export type Tag = (typeof catalogue.tags)[number];
+export type Property = (typeof catalogue.props)[number];
 export type Vocabulary = keyof typeof catalogue.enums;
 
 /** The document shape this playground understands. */
@@ -37,7 +37,9 @@ export function grouped() {
   for (const tag of tags) {
     const group = byFamily.get(tag.family);
     if (group === undefined) {
-      throw new Error(`<${tag.name}> claims family ${tag.family}, which the catalogue does not declare`);
+      throw new Error(
+        `<${tag.name}> claims family ${tag.family}, which the catalogue does not declare`,
+      );
     }
     group.tags.push(tag);
   }

@@ -10,115 +10,197 @@ import { KIND, Reader, encode } from '../../../packages/react/src/wire.js';
 import { Top } from '../dist/app.js';
 import { host } from './host.js';
 
-test('container catalogue removes stale authority across framed loading, failure, retry and empty states', { timeout: 5_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'husklet-container-list-resource-'));
-  const socketPath = join(directory, 'host.sock');
-  const id = 'c'.repeat(32);
-  let attempts = 0;
-  let removed = false;
-  const removals = [];
-  const server = net.createServer((socket) => {
-    const reader = new Reader();
-    socket.write(encode({ channel: 0, kind: KIND.open, payload: {
-      protocol: 1, extension: 'container-list-resource-test', granted: ['containers:read', 'containers:control'],
-    } }));
-    socket.on('data', (chunk) => {
-      for (const frame of reader.take(chunk)) {
-        const call = frame.payload?.call;
-        if (!call) continue;
-        let flags = 1;
-        let payload = { reply: 'done' };
-        let observation = null;
-        if (call === 'container_list') {
-          attempts += 1;
-          if (attempts === 2) {
-            flags = 3;
-            payload = { error: 'failed', detail: 'container inventory unavailable' };
-          } else {
-            payload = { reply: 'containers', with: attempts === 3 || removed ? [] : [
-              { id, name: attempts === 1 ? 'stale-worker' : 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 },
-            ] };
+test(
+  'container catalogue removes stale authority across framed loading, failure, retry and empty states',
+  { timeout: 5_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'husklet-container-list-resource-'));
+    const socketPath = join(directory, 'host.sock');
+    const id = 'c'.repeat(32);
+    let attempts = 0;
+    let removed = false;
+    const removals = [];
+    const server = net.createServer((socket) => {
+      const reader = new Reader();
+      socket.write(
+        encode({
+          channel: 0,
+          kind: KIND.open,
+          payload: {
+            protocol: 1,
+            extension: 'container-list-resource-test',
+            granted: ['containers:read', 'containers:control'],
+          },
+        }),
+      );
+      socket.on('data', (chunk) => {
+        for (const frame of reader.take(chunk)) {
+          const call = frame.payload?.call;
+          if (!call) continue;
+          let flags = 1;
+          let payload = { reply: 'done' };
+          let observation = null;
+          if (call === 'container_list') {
+            attempts += 1;
+            if (attempts === 2) {
+              flags = 3;
+              payload = { error: 'failed', detail: 'container inventory unavailable' };
+            } else {
+              payload = {
+                reply: 'containers',
+                with:
+                  attempts === 3 || removed
+                    ? []
+                    : [
+                        {
+                          id,
+                          name: attempts === 1 ? 'stale-worker' : 'current-worker',
+                          image: 'alpine:3.20',
+                          state: 'exited',
+                          created: 0,
+                        },
+                      ],
+              };
+            }
+          } else if (call === 'container_remove') {
+            removals.push(frame.payload.with);
+            removed = true;
+            observation = { containers: [], complete: true };
+          } else if (
+            call === 'event_subscribe' &&
+            frame.payload.with?.topic === 'container-inventory'
+          ) {
+            observation = {
+              containers: [
+                { id, name: 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 },
+              ],
+              complete: true,
+            };
           }
-        } else if (call === 'container_remove') {
-          removals.push(frame.payload.with);
-          removed = true;
-          observation = { containers: [], complete: true };
-        } else if (call === 'event_subscribe' && frame.payload.with?.topic === 'container-inventory') {
-          observation = { containers: [{ id, name: 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 }], complete: true };
+          const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
+          setTimeout(
+            () => {
+              socket.write(response);
+              if (observation)
+                socket.write(
+                  encode({
+                    channel: 97,
+                    kind: KIND.event,
+                    payload: { snapshot: 'container_inventory', of: observation },
+                  }),
+                );
+            },
+            call === 'container_list' ? 20 : 0,
+          );
         }
-        const response = encode({ channel: frame.channel, kind: KIND.response, flags, payload });
-        setTimeout(() => {
-          socket.write(response);
-          if (observation) socket.write(encode({ channel: 97, kind: KIND.event, payload: { snapshot: 'container_inventory', of: observation } }));
-        }, call === 'container_list' ? 20 : 0);
-      }
+      });
     });
-  });
-  await new Promise((resolve, reject) => server.listen(socketPath, (error) => error ? reject(error) : resolve()));
+    await new Promise((resolve, reject) =>
+      server.listen(socketPath, (error) => (error ? reject(error) : resolve())),
+    );
 
-  let session;
-  let stage;
-  try {
-    session = await connect({ path: socketPath });
-    const framed = workspace(session);
-    stage = host();
-    stage.render(h(Top, {
-      api: { ...framed, subscribe: undefined, unsubscribe: undefined },
-      initial: { executions: [], images: [], volumes: [], networks: [] },
-    }));
-    invoke(stage, 'Containers');
-    await until(() => labelled(stage, 'Reading containers…'));
-    await until(() => labelled(stage, 'stale-worker'));
-    assert.ok(labelled(stage, 'Start'));
-    invoke(stage, 'Remove');
-    assert.ok(labelled(stage, `Remove inactive container stale-worker with immutable ID ${id}?`));
+    let session;
+    let stage;
+    try {
+      session = await connect({ path: socketPath });
+      const framed = workspace(session);
+      stage = host();
+      stage.render(
+        h(Top, {
+          api: { ...framed, subscribe: undefined, unsubscribe: undefined },
+          initial: { executions: [], images: [], volumes: [], networks: [] },
+        }),
+      );
+      invoke(stage, 'Containers');
+      await until(() => labelled(stage, 'Reading containers…'));
+      await until(() => labelled(stage, 'stale-worker'));
+      assert.ok(labelled(stage, 'Start'));
+      invoke(stage, 'Remove');
+      assert.ok(labelled(stage, `Remove inactive container stale-worker with immutable ID ${id}?`));
 
-    const refreshStart = stage.frames.length;
-    invoke(stage, 'Refresh');
-    await until(() => attempts === 2 && labelled(stage, 'Reading containers…'));
-    assert.ok(stage.frames.slice(refreshStart).flatMap((frame) => frame.patches).some((patch) => 'Remove' in patch),
-      'refresh loading unmounts the prior container cards');
-    await until(() => labelled(stage, 'container inventory unavailable'));
-    assert.equal(stage.frames.slice(refreshStart).flatMap((frame) => frame.patches).some((patch) =>
-      patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Start'), false,
-    'failed refresh does not render replacement stale lifecycle authority');
-    assert.equal(stage.frames.slice(refreshStart).flatMap((frame) => frame.patches).some((patch) =>
-      patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Confirm remove'), false,
-    'failed refresh cannot retain stale removal consent');
+      const refreshStart = stage.frames.length;
+      invoke(stage, 'Refresh');
+      await until(() => attempts === 2 && labelled(stage, 'Reading containers…'));
+      assert.ok(
+        stage.frames
+          .slice(refreshStart)
+          .flatMap((frame) => frame.patches)
+          .some((patch) => 'Remove' in patch),
+        'refresh loading unmounts the prior container cards',
+      );
+      await until(() => labelled(stage, 'container inventory unavailable'));
+      assert.equal(
+        stage.frames
+          .slice(refreshStart)
+          .flatMap((frame) => frame.patches)
+          .some(
+            (patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Start',
+          ),
+        false,
+        'failed refresh does not render replacement stale lifecycle authority',
+      );
+      assert.equal(
+        stage.frames
+          .slice(refreshStart)
+          .flatMap((frame) => frame.patches)
+          .some(
+            (patch) =>
+              patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Confirm remove',
+          ),
+        false,
+        'failed refresh cannot retain stale removal consent',
+      );
 
-    invoke(stage, 'Retry containers');
-    await until(() => labelled(stage, 'No containers'));
-    assert.equal(attempts, 3);
+      invoke(stage, 'Retry containers');
+      await until(() => labelled(stage, 'No containers'));
+      assert.equal(attempts, 3);
 
-    invoke(stage, 'Refresh');
-    await until(() => labelled(stage, 'current-worker'));
-    assert.equal(attempts, 4);
-    assert.ok(labelled(stage, 'Start'), 'ready state restores lifecycle controls for current inventory');
-    invoke(stage, 'Remove');
-    assert.ok(labelled(stage, `Remove inactive container current-worker with immutable ID ${id}?`));
-    invoke(stage, 'Confirm remove');
-    await until(() => removals.length === 1 && labelled(stage, 'No containers'));
-    assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');
-    await until(() => labelled(stage, 'Container removal completed and its absence was verified.'));
-  } finally {
-    stage?.render(null);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    session?.close();
-    await new Promise((resolve) => server.close(resolve));
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+      invoke(stage, 'Refresh');
+      await until(() => labelled(stage, 'current-worker'));
+      assert.equal(attempts, 4);
+      assert.ok(
+        labelled(stage, 'Start'),
+        'ready state restores lifecycle controls for current inventory',
+      );
+      invoke(stage, 'Remove');
+      assert.ok(
+        labelled(stage, `Remove inactive container current-worker with immutable ID ${id}?`),
+      );
+      invoke(stage, 'Confirm remove');
+      await until(() => removals.length === 1 && labelled(stage, 'No containers'));
+      assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');
+      await until(() =>
+        labelled(stage, 'Container removal completed and its absence was verified.'),
+      );
+    } finally {
+      stage?.render(null);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      session?.close();
+      await new Promise((resolve) => server.close(resolve));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 function labelled(stage, label) {
-  return stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
-    patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label).at(-1);
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .at(-1);
 }
 
 function invoke(stage, label) {
-  const nodes = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
-    patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
-    .map((patch) => patch.SetProp.id).reverse();
-  assert.ok(nodes.some((node) => stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null })), `${label} invokes`);
+  const nodes = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id)
+    .reverse();
+  assert.ok(
+    nodes.some((node) =>
+      stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
+    ),
+    `${label} invokes`,
+  );
 }
 
 async function until(done) {

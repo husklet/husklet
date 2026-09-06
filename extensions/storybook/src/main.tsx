@@ -4,7 +4,10 @@ import { bootstrapSurface, connect } from '@husklet/client';
 import type { InterfaceSourceMutation, RenderHandle } from '@husklet/react';
 
 type RowSource = { answer(request: unknown): unknown; publish(): Promise<unknown> };
-type SourceSender = (_call: string, argument: { mutation: InterfaceSourceMutation }) => Promise<void>;
+type SourceSender = (
+  _call: string,
+  argument: { mutation: InterfaceSourceMutation },
+) => Promise<void>;
 type SourceConstructor = new (send: SourceSender) => RowSource;
 
 let surface: RenderHandle;
@@ -30,16 +33,24 @@ const [React, react, app, large, events, keyValues, files] = await Promise.all([
   import('./file-browser.js'),
 ]);
 const send: SourceSender = (_call, argument) => surface.source(argument.mutation);
-sources = [large.LargeRecordSource, events.TimelineSource, keyValues.KeyValueSource, files.FileSource]
-  .map((Source) => new (Source as unknown as SourceConstructor)(send));
+sources = [
+  large.LargeRecordSource,
+  events.TimelineSource,
+  keyValues.KeyValueSource,
+  files.FileSource,
+].map((Source) => new (Source as unknown as SourceConstructor)(send));
 const [source, timeline, keyValueSource, fileSource] = sources;
 const Playground = app.Playground as unknown as React.ComponentType<Record<string, unknown>>;
-surface = react.render(React.createElement(Playground, {
-  largeSource: source,
-  timelineSource: timeline,
-  keyValueSource,
-  fileSource,
-  initialStory: process.env.HUSKLET_STORYBOOK_STORY,
-}), session, { title: 'Components', bootstrap });
+surface = react.render(
+  React.createElement(Playground, {
+    largeSource: source,
+    timelineSource: timeline,
+    keyValueSource,
+    fileSource,
+    initialStory: process.env.HUSKLET_STORYBOOK_STORY,
+  }),
+  session,
+  { title: 'Components', bootstrap },
+);
 await surface.flush();
 for (const sourceModel of sources) void sourceModel.publish();

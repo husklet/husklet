@@ -5,8 +5,7 @@ export function StackTraceStory() {
   return (
     <Column gap={2}>
       <Heading label={'Extension host exited unexpectedly'} scale={'title'} />
-      <Text
-        value={'Every function and source location remains independently selectable.'} />
+      <Text value={'Every function and source location remains independently selectable.'} />
       <Card>
         <CardContent>
           <StackTrace gap={1}>

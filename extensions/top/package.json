@@ -8,6 +8,9 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "format": "prettier --write 'src/**/*.{ts,tsx}' 'test/**/*.js' vite.config.ts",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx}' 'test/**/*.js' vite.config.ts",
+    "lint": "eslint 'src/**/*.{ts,tsx}' vite.config.ts --max-warnings 0",
     "test": "npm run build && node --test 'test/*.test.js'"
   },
   "dependencies": {
@@ -20,5 +23,7 @@
     "typescript": "5.9.2",
     "vite": "7.1.4"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

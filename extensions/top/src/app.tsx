@@ -1,10 +1,23 @@
 import React from 'react';
 import {
-  Row, Separator,
-  type ContainerSummary, type ExecutionSummary, type HostEvent, type ImageSummary, type NetworkSummary,
-  type TabSummary, type VolumeSummary, type WorkspaceApi,
+  Row,
+  Separator,
+  type ContainerSummary,
+  type ExecutionSummary,
+  type HostEvent,
+  type ImageSummary,
+  type NetworkSummary,
+  type TabSummary,
+  type VolumeSummary,
+  type WorkspaceApi,
 } from '@husklet/react';
-import { ContainerDetailsSource, ExecutionDetailsSource, ImageDetailsSource, NetworkDetailsSource, VolumeDetailsSource } from './model.js';
+import {
+  ContainerDetailsSource,
+  ExecutionDetailsSource,
+  ImageDetailsSource,
+  NetworkDetailsSource,
+  VolumeDetailsSource,
+} from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
@@ -41,11 +54,24 @@ type TopProps = {
   networkDetails?: NetworkDetailsSource;
   volumeDetails?: VolumeDetailsSource;
   initial?: Partial<{
-    containers: ContainerSummary[]; executions: ExecutionSummary[]; images: ImageSummary[];
-    volumes: VolumeSummary[]; networks: NetworkSummary[]; terminals: TabSummary[];
+    containers: ContainerSummary[];
+    executions: ExecutionSummary[];
+    images: ImageSummary[];
+    volumes: VolumeSummary[];
+    networks: NetworkSummary[];
+    terminals: TabSummary[];
   }>;
 };
-export function Top({ api, selections, containerDetails, executionDetails, imageDetails, networkDetails, volumeDetails, initial = {} }: TopProps) {
+export function Top({
+  api,
+  selections,
+  containerDetails,
+  executionDetails,
+  imageDetails,
+  networkDetails,
+  volumeDetails,
+  initial = {},
+}: TopProps) {
   const [section, setSection] = useState<Section>('overview');
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
@@ -60,31 +86,47 @@ export function Top({ api, selections, containerDetails, executionDetails, image
     return listing.executions;
   }, [api]);
   const executions = useResource(listExecutions, initial.executions);
+  const replaceExecutions = executions.replace;
   useEffect(() => {
     if (section !== 'executions' || typeof api.watchExecutions !== 'function') return undefined;
     let disposed = false;
     let stop: (() => void) | null = null;
-    void api.watchExecutions((listing) => {
-      if (disposed) return;
-      setExecutionsTruncated(listing.truncated);
-      executions.replace(listing.executions);
-    }).then((dispose) => {
-      if (disposed) void dispose();
-      else stop = dispose;
-    }).catch(() => { /* Explicit Refresh remains available when observation is unsupported. */ });
+    void api
+      .watchExecutions((listing) => {
+        if (disposed) return;
+        setExecutionsTruncated(listing.truncated);
+        replaceExecutions(listing.executions);
+      })
+      .then((dispose) => {
+        if (disposed) void dispose();
+        else stop = dispose;
+      })
+      .catch(() => {
+        /* Explicit Refresh remains available when observation is unsupported. */
+      });
     return () => {
       disposed = true;
       if (stop) void stop();
     };
-  }, [api, section, executions.replace]);
-  useEffect(() => selections?.subscribe((event) => {
-    if ('pane_provider' in event && SECTIONS.includes(event.pane_provider as Section)) setSection(event.pane_provider as Section);
-    if ('snapshot' in event && event.snapshot === 'containers') void containers.reload();
-    if ('snapshot' in event && event.snapshot === 'images') void images.reload();
-    if ('snapshot' in event && event.snapshot === 'volumes') void volumes.reload();
-    if ('snapshot' in event && event.snapshot === 'networks') void networks.reload();
-    if ('snapshot' in event && event.snapshot === 'terminal') void terminals.reload();
-  }), [selections, containers.reload, images.reload, volumes.reload, networks.reload, terminals.reload]);
+  }, [api, section, replaceExecutions]);
+  const reloadContainers = containers.reload;
+  const reloadImages = images.reload;
+  const reloadVolumes = volumes.reload;
+  const reloadNetworks = networks.reload;
+  const reloadTerminals = terminals.reload;
+  useEffect(
+    () =>
+      selections?.subscribe((event) => {
+        if ('pane_provider' in event && SECTIONS.includes(event.pane_provider as Section))
+          setSection(event.pane_provider as Section);
+        if ('snapshot' in event && event.snapshot === 'containers') void reloadContainers();
+        if ('snapshot' in event && event.snapshot === 'images') void reloadImages();
+        if ('snapshot' in event && event.snapshot === 'volumes') void reloadVolumes();
+        if ('snapshot' in event && event.snapshot === 'networks') void reloadNetworks();
+        if ('snapshot' in event && event.snapshot === 'terminal') void reloadTerminals();
+      }),
+    [selections, reloadContainers, reloadImages, reloadVolumes, reloadNetworks, reloadTerminals],
+  );
   useEffect(() => {
     if (typeof api.subscribe !== 'function') return undefined;
     void api.subscribe('containers');
@@ -102,45 +144,51 @@ export function Top({ api, selections, containerDetails, executionDetails, image
       }
     };
   }, [api]);
-  const body = section === 'overview'
-    ? <Overview
-    containers={containers}
-    executions={executions}
-    images={images}
-    volumes={volumes}
-    networks={networks}
-    terminals={terminals}
-    onOpen={setSection} />
-    : section === 'workspace'
-      ? <Workspace api={api} />
-      : section === 'extensions'
-        ? <Extensions api={api} />
-    : section === 'containers'
-      ? <Containers
-    api={api}
-    resource={containers}
-    containerDetails={containerDetails}
-    onOpenExecution={async (id: string) => {
+  const body =
+    section === 'overview' ? (
+      <Overview
+        containers={containers}
+        executions={executions}
+        images={images}
+        volumes={volumes}
+        networks={networks}
+        terminals={terminals}
+        onOpen={setSection}
+      />
+    ) : section === 'workspace' ? (
+      <Workspace api={api} />
+    ) : section === 'extensions' ? (
+      <Extensions api={api} />
+    ) : section === 'containers' ? (
+      <Containers
+        api={api}
+        resource={containers}
+        containerDetails={containerDetails}
+        onOpenExecution={async (id: string) => {
           setRequestedExecution(id);
           await executions.reload();
           setSection('executions');
-        }} />
-      : section === 'processes'
-        ? <Processes api={api} resource={containers} />
-        : section === 'executions'
-          ? <Executions
-    api={api}
-    resource={executions}
-    executionDetails={executionDetails}
-    truncated={executionsTruncated}
-    requestedExecution={requestedExecution} />
-        : section === 'images'
-          ? <Images api={api} resource={images} imageDetails={imageDetails} />
-          : section === 'volumes'
-            ? <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
-            : section === 'networks'
-              ? <Networks api={api} resource={networks} networkDetails={networkDetails} />
-              : <Terminals api={api} resource={terminals} />;
+        }}
+      />
+    ) : section === 'processes' ? (
+      <Processes api={api} resource={containers} />
+    ) : section === 'executions' ? (
+      <Executions
+        api={api}
+        resource={executions}
+        executionDetails={executionDetails}
+        truncated={executionsTruncated}
+        requestedExecution={requestedExecution}
+      />
+    ) : section === 'images' ? (
+      <Images api={api} resource={images} imageDetails={imageDetails} />
+    ) : section === 'volumes' ? (
+      <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
+    ) : section === 'networks' ? (
+      <Networks api={api} resource={networks} networkDetails={networkDetails} />
+    ) : (
+      <Terminals api={api} resource={terminals} />
+    );
   return (
     <Row grow={true} gap={0}>
       <Navigation section={section} onSelect={setSection} />
@@ -161,17 +209,25 @@ function useResource<T>(loader: () => Promise<T[]>, initial?: T[]): Resource<T> 
     try {
       const value = await loader();
       if (requested !== revision.current) return;
-      setData(value); setError(null);
+      setData(value);
+      setError(null);
     } catch (cause) {
       if (requested === revision.current) setError(cause);
     } finally {
       if (requested === revision.current) setLoading(false);
     }
   }, [loader]);
-  const replace = useCallback((value: T[]) => { revision.current += 1; setData(value); setError(null); setLoading(false); }, []);
+  const replace = useCallback((value: T[]) => {
+    revision.current += 1;
+    setData(value);
+    setError(null);
+    setLoading(false);
+  }, []);
   useEffect(() => {
     if (initial === undefined) void reload();
-    return () => { revision.current += 1; };
+    return () => {
+      revision.current += 1;
+    };
   }, [initial, reload]);
   return { data, loading, error, reload, replace };
 }

@@ -30,8 +30,17 @@ test('acquisition states are selectable without materializing every state at onc
   assert.equal(frame.patches.filter((patch) => patch.Create?.tag === 'Card').length, 1);
   const select = frame.patches.find((patch) => patch.Create?.tag === 'Select')?.Create.id;
   assert.ok(select);
-  assert.equal(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: 'ready' }), true);
-  const labels = stage.frames.flatMap(({ patches }) => patches)
+  assert.equal(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: select,
+      id: `${select}:Change`,
+      value: 'ready',
+    }),
+    true,
+  );
+  const labels = stage.frames
+    .flatMap(({ patches }) => patches)
     .filter((patch) => patch.SetProp?.prop === 'Label')
     .map((patch) => patch.SetProp.value?.Text);
   assert.ok(labels.includes('Ready for consent'));

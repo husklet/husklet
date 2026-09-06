@@ -8,6 +8,9 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "format": "prettier --write 'src/**/*.{ts,tsx}' 'examples/**/*.tsx' 'test/**/*.js' vite.config.ts",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx}' 'examples/**/*.tsx' 'test/**/*.js' vite.config.ts",
+    "lint": "eslint 'src/**/*.{ts,tsx}' 'examples/**/*.tsx' vite.config.ts --max-warnings 0",
     "test": "npm run build && node --test 'test/*.test.js'",
     "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > src/catalogue.json"
   },

@@ -29,8 +29,22 @@ test('no default preview is blank', () => {
 test('a leaf carries something to show', () => {
   for (const tag of tags.filter((entry) => !entry.acceptsChildren)) {
     const { props } = defaults(tag.name);
-    const shows = ['label', 'icon', 'uri', 'value', 'fraction', 'checked', 'busy', 'width', 'height', 'choices'];
-    assert.ok(shows.some((name) => props[name] !== undefined), `<${tag.name}> opens with nothing to see`);
+    const shows = [
+      'label',
+      'icon',
+      'uri',
+      'value',
+      'fraction',
+      'checked',
+      'busy',
+      'width',
+      'height',
+      'choices',
+    ];
+    assert.ok(
+      shows.some((name) => props[name] !== undefined),
+      `<${tag.name}> opens with nothing to see`,
+    );
   }
 });
 

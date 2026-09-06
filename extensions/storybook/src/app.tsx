@@ -71,12 +71,39 @@ const INTERACTION_HISTORY = 5;
 export const SEARCH_RESULT_LIMIT = 24;
 export const FLOW_STORIES = Object.freeze([
   DRAG_REORDER_STORY,
-  RESOURCE_STATE_STORY, IMAGE_PULL_STORY, WORKSPACE_FILE_EDIT_STORY, EXTENSION_LIFECYCLE_STORY, WORKSPACE_LAYOUT_STORY, CONTAINER_OPERATIONS_STORY, CONFIRMATION_STORY, COMMAND_PALETTE_STORY, JSON_TREE_STORY, TERMINAL_TRANSCRIPT_STORY,
-  QUERY_PLAN_STORY, DEPENDENCY_GRAPH_STORY, NETWORK_WATERFALL_STORY, COVERAGE_STORY,
-  TEST_REPORT_STORY, TIMELINE_VIEW_STORY, DISASSEMBLY_STORY, MEMORY_STORY, PROFILE_STORY,
-  FILE_BROWSER_STORY, METRICS_STORY, BINARY_STORY, ACQUISITION_STORY, KEYBOARD_STORY,
-  STREAMING_LOG_STORY, EVENT_STREAM_STORY, KEY_VALUE_STORY, JSON_STORY, STACK_STORY,
-  MARKDOWN_STORY, FORM_STORY, DIFF_STORY, NAVIGATION_STORY,
+  RESOURCE_STATE_STORY,
+  IMAGE_PULL_STORY,
+  WORKSPACE_FILE_EDIT_STORY,
+  EXTENSION_LIFECYCLE_STORY,
+  WORKSPACE_LAYOUT_STORY,
+  CONTAINER_OPERATIONS_STORY,
+  CONFIRMATION_STORY,
+  COMMAND_PALETTE_STORY,
+  JSON_TREE_STORY,
+  TERMINAL_TRANSCRIPT_STORY,
+  QUERY_PLAN_STORY,
+  DEPENDENCY_GRAPH_STORY,
+  NETWORK_WATERFALL_STORY,
+  COVERAGE_STORY,
+  TEST_REPORT_STORY,
+  TIMELINE_VIEW_STORY,
+  DISASSEMBLY_STORY,
+  MEMORY_STORY,
+  PROFILE_STORY,
+  FILE_BROWSER_STORY,
+  METRICS_STORY,
+  BINARY_STORY,
+  ACQUISITION_STORY,
+  KEYBOARD_STORY,
+  STREAMING_LOG_STORY,
+  EVENT_STREAM_STORY,
+  KEY_VALUE_STORY,
+  JSON_STORY,
+  STACK_STORY,
+  MARKDOWN_STORY,
+  FORM_STORY,
+  DIFF_STORY,
+  NAVIGATION_STORY,
 ]);
 
 type StoryFamily = Family & { tags: Tag[] };
@@ -88,21 +115,34 @@ type PlaygroundProps = {
   fileSource?: unknown;
   initialStory?: string;
 };
-type SearchResult = { kind: 'flow' | 'component'; name: string; detail: string; family: string | null };
+type SearchResult = {
+  kind: 'flow' | 'component';
+  name: string;
+  detail: string;
+  family: string | null;
+};
 type Interaction = { sequence: number; trigger: string; detail: string };
 
 /** The whole playground. */
-export function Playground({ largeSource, timelineSource, keyValueSource, fileSource, initialStory = OPENING }: PlaygroundProps = {}) {
+export function Playground({
+  largeSource,
+  timelineSource,
+  keyValueSource,
+  fileSource,
+  initialStory = OPENING,
+}: PlaygroundProps = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
-  const [activeFamily, setActiveFamily] = useState(() =>
-    families.find((family) => family.tags.some((tag) => tag.name === initialStory))?.name
-      ?? families.find((family) => family.tags.some((tag) => tag.name === OPENING))?.name
-      ?? families[0]?.name);
+  const [activeFamily, setActiveFamily] = useState(
+    () =>
+      families.find((family) => family.tags.some((tag) => tag.name === initialStory))?.name ??
+      families.find((family) => family.tags.some((tag) => tag.name === OPENING))?.name ??
+      families[0]?.name,
+  );
   const [edited, setEdited] = useState(() => new Map<string, StoryDefaults>());
 
   const flow = FLOW_STORIES.includes(selected);
-  const opened = flow ? null : edited.get(selected) ?? defaults(selected);
+  const opened = flow ? null : (edited.get(selected) ?? defaults(selected));
   const contract = flow ? null : component(selected);
   const properties = flow ? [] : rows(selected);
   const change: Change = (name, value) => {
@@ -120,7 +160,8 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
         selected={selected}
         activeFamily={activeFamily}
         onFamily={setActiveFamily}
-        onSelect={setSelected} />
+        onSelect={setSelected}
+      />
       <Separator key={'first'} orientation={'vertical'} />
       <Preview
         key={`preview-${selected}`}
@@ -130,7 +171,8 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
         timelineSource={timelineSource}
         keyValueSource={keyValueSource}
         fileSource={fileSource}
-        triggers={contract?.triggers ?? []} />
+        triggers={contract?.triggers ?? []}
+      />
       <Separator key={'second'} orientation={'vertical'} />
       <Inspector
         key={'inspector'}
@@ -138,15 +180,25 @@ export function Playground({ largeSource, timelineSource, keyValueSource, fileSo
         properties={properties}
         triggers={contract?.triggers ?? []}
         props={opened?.props ?? {}}
-        onChange={change} />
+        onChange={change}
+      />
     </Row>
   );
 }
 
 /** Every component, under the family it belongs to. */
-export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }: {
-  families: StoryFamily[]; selected: string; activeFamily?: string;
-  onFamily: (family: string) => void; onSelect: (story: string) => void;
+export function Sidebar({
+  families,
+  selected,
+  activeFamily,
+  onFamily,
+  onSelect,
+}: {
+  families: StoryFamily[];
+  selected: string;
+  activeFamily?: string;
+  onFamily: (family: string) => void;
+  onSelect: (story: string) => void;
 }) {
   const [search, setSearch] = useState('');
   const family = families.find((candidate) => candidate.name === activeFamily) ?? families[0];
@@ -158,58 +210,82 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
         <ListSubheader
           key={'find'}
           label={'Find a story'}
-          tooltip={'search every flow and component family'} />
+          tooltip={'search every flow and component family'}
+        />
         <Entry
           key={'search'}
           value={search}
           placeholder={'Search flows and components'}
-          onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))} />
+          onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))}
+        />
         {query.length > 0
           ? [
-              <ListSubheader key={'results'} label={'Search results'} value={String(results.length)} />,
-              ...results.map((result) => <ListItemButton
-                key={`${result.kind}:${result.name}`}
-                label={result.name}
-                tooltip={result.detail}
-                variant={selected === result.name ? 'filled' : 'ghost'}
-                onInvoke={() => {
-                  if (result.family) onFamily(result.family);
-                  onSelect(result.name);
-                }} />),
+              <ListSubheader
+                key={'results'}
+                label={'Search results'}
+                value={String(results.length)}
+              />,
+              ...results.map((result) => (
+                <ListItemButton
+                  key={`${result.kind}:${result.name}`}
+                  label={result.name}
+                  tooltip={result.detail}
+                  variant={selected === result.name ? 'filled' : 'ghost'}
+                  onInvoke={() => {
+                    if (result.family) onFamily(result.family);
+                    onSelect(result.name);
+                  }}
+                />
+              )),
               ...(results.length === 0
-                ? [<Text
-                key={'none'}
-                label={'No flows or components match this search.'}
-                color={'text-dim'}
-                wrap={true} />]
+                ? [
+                    <Text
+                      key={'none'}
+                      label={'No flows or components match this search.'}
+                      color={'text-dim'}
+                      wrap={true}
+                    />,
+                  ]
                 : []),
             ]
           : [
-        <ListSubheader
-          key={'flows'}
-          label={'End-user flows'}
-          tooltip={'whole product states composed from the library'} />,
-        ...FLOW_STORIES.map((story) => <ListItemButton
-          key={story}
-          label={story}
-          variant={selected === story ? 'filled' : 'ghost'}
-          onInvoke={() => onSelect(story)} />),
-        <ListSubheader
-          key={'components'}
-          label={'Components'}
-          tooltip={'choose one bounded catalogue family'} />,
-        <Select
-          key={'family'}
-          value={family.name}
-          choices={families.map((candidate) => ({ value: candidate.name, label: candidate.label }))}
-          onChange={(event) => onFamily(String(event.value))} />,
-        <ListSubheader key={family.name} label={family.label} tooltip={family.note} />,
-        ...family.tags.map((tag) => <ListItemButton
-          key={tag.name}
-          label={tag.name}
-          variant={tag.name === selected ? 'filled' : 'ghost'}
-          onInvoke={() => onSelect(tag.name)} />),
-          ]}
+              <ListSubheader
+                key={'flows'}
+                label={'End-user flows'}
+                tooltip={'whole product states composed from the library'}
+              />,
+              ...FLOW_STORIES.map((story) => (
+                <ListItemButton
+                  key={story}
+                  label={story}
+                  variant={selected === story ? 'filled' : 'ghost'}
+                  onInvoke={() => onSelect(story)}
+                />
+              )),
+              <ListSubheader
+                key={'components'}
+                label={'Components'}
+                tooltip={'choose one bounded catalogue family'}
+              />,
+              <Select
+                key={'family'}
+                value={family.name}
+                choices={families.map((candidate) => ({
+                  value: candidate.name,
+                  label: candidate.label,
+                }))}
+                onChange={(event) => onFamily(String(event.value))}
+              />,
+              <ListSubheader key={family.name} label={family.label} tooltip={family.note} />,
+              ...family.tags.map((tag) => (
+                <ListItemButton
+                  key={tag.name}
+                  label={tag.name}
+                  variant={tag.name === selected ? 'filled' : 'ghost'}
+                  onInvoke={() => onSelect(tag.name)}
+                />
+              )),
+            ]}
       </Column>
     </Scroll>
   );
@@ -217,20 +293,39 @@ export function Sidebar({ families, selected, activeFamily, onFamily, onSelect }
 
 /** A bounded global navigation projection; no query materializes the catalogue. */
 export function searchResults(families: StoryFamily[], query: unknown): SearchResult[] {
-  const normalized = String(query ?? '').trim().toLocaleLowerCase();
+  const normalized = String(query ?? '')
+    .trim()
+    .toLocaleLowerCase();
   if (normalized.length === 0) return [];
-  const flows = FLOW_STORIES
-    .filter((name) => name.toLocaleLowerCase().includes(normalized))
-    .map((name): SearchResult => ({ kind: 'flow', name, detail: 'End-user flow', family: null }));
-  const components = families.flatMap((family) => family.tags
-    .filter((tag) => tag.name.toLocaleLowerCase().includes(normalized))
-    .map((tag): SearchResult => ({ kind: 'component', name: tag.name, detail: family.label, family: family.name })));
+  const flows = FLOW_STORIES.filter((name) => name.toLocaleLowerCase().includes(normalized)).map(
+    (name): SearchResult => ({ kind: 'flow', name, detail: 'End-user flow', family: null }),
+  );
+  const components = families.flatMap((family) =>
+    family.tags
+      .filter((tag) => tag.name.toLocaleLowerCase().includes(normalized))
+      .map((tag): SearchResult => ({
+        kind: 'component',
+        name: tag.name,
+        detail: family.label,
+        family: family.name,
+      })),
+  );
   return [...flows, ...components].slice(0, SEARCH_RESULT_LIMIT);
 }
 
 /** The selected component, alive, with the properties currently set on it. */
-export function Preview({ name, opened, largeSource, timelineSource, keyValueSource, fileSource, triggers = [] }: PlaygroundProps & {
-  name: string; opened: StoryDefaults | null; triggers?: string[];
+export function Preview({
+  name,
+  opened,
+  largeSource,
+  timelineSource,
+  keyValueSource,
+  fileSource,
+  triggers = [],
+}: PlaygroundProps & {
+  name: string;
+  opened: StoryDefaults | null;
+  triggers?: string[];
 }) {
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const sequence = useRef(0);
@@ -245,109 +340,116 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
     <Column grow={true} gap={2} pad={4}>
       <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />
       <Section key={'stage'} pad={4} grow={true}>
-        {name === RESOURCE_STATE_STORY
-          ? <ResourceStateStory />
-          : name === DRAG_REORDER_STORY
-          ? <DragReorderStory />
-          : name === QUERY_PLAN_STORY
-          ? <QueryPlanStory />
-          : name === IMAGE_PULL_STORY
-          ? <ImagePullStory />
-          : name === WORKSPACE_FILE_EDIT_STORY
-          ? <WorkspaceFileEditStory />
-          : name === EXTENSION_LIFECYCLE_STORY
-          ? <ExtensionLifecycleStory />
-          : name === WORKSPACE_LAYOUT_STORY
-          ? <WorkspaceLayoutStory />
-          : name === CONTAINER_OPERATIONS_STORY
-          ? <ContainerOperationsStory />
-          : name === CONFIRMATION_STORY
-          ? <ConfirmationStory />
-          : name === COMMAND_PALETTE_STORY
-          ? <CommandPaletteStory />
-          : name === JSON_TREE_STORY
-          ? <JsonTreeStory />
-          : name === TERMINAL_TRANSCRIPT_STORY
-          ? <TerminalTranscriptStory />
-          : name === DEPENDENCY_GRAPH_STORY
-          ? <DependencyGraphStory />
-          : name === NETWORK_WATERFALL_STORY
-          ? <NetworkWaterfallStory />
-          : name === COVERAGE_STORY
-          ? <CoverageInspectionStory />
-          : name === TEST_REPORT_STORY
-          ? <TestReportStory />
-          : name === TIMELINE_VIEW_STORY
-          ? <TimelineInspectionStory />
-          : name === DISASSEMBLY_STORY
-          ? <DisassemblyInspectionStory />
-          : name === MEMORY_STORY
-          ? <MemoryInspectionStory />
-          : name === PROFILE_STORY
-          ? <ProfileInspectionStory />
-          : name === FILE_BROWSER_STORY && fileSource
-          ? <FileBrowserStory />
-          : name === METRICS_STORY
-          ? <ResourceMetricsStory />
-          : name === BINARY_STORY
-          ? <BinaryInspectionStory />
-          : name === ACQUISITION_STORY
-          ? <AcquisitionProgressStory />
-          : name === DIFF_STORY
-          ? <DiffReviewStory />
-          : name === FORM_STORY
-          ? <ValidatedSettingsFormStory />
-          : name === KEYBOARD_STORY
-          ? <KeyboardAccessibilityStory />
-          : name === STREAMING_LOG_STORY
-          ? <StreamingLogStory />
-          : name === EVENT_STREAM_STORY && timelineSource
-          ? <EventStreamStory source={timelineSource} />
-          : name === KEY_VALUE_STORY && keyValueSource
-          ? <KeyValueInspectorStory source={keyValueSource} />
-          : name === MARKDOWN_STORY
-          ? <MarkdownReviewStory />
-          : name === JSON_STORY
-          ? <JsonResponseStory />
-          : name === STACK_STORY
-          ? <StackTraceStory />
-          : name === NAVIGATION_STORY
-          ? <NavigationDialogsStory />
-          : name === 'DataTable' && largeSource
-          ? <LargeDataTableStory source={largeSource} />
-          : nativeComponent(name, { ...present(instance.props), ...handlers }, instance.children.map(child))}
+        {name === RESOURCE_STATE_STORY ? (
+          <ResourceStateStory />
+        ) : name === DRAG_REORDER_STORY ? (
+          <DragReorderStory />
+        ) : name === QUERY_PLAN_STORY ? (
+          <QueryPlanStory />
+        ) : name === IMAGE_PULL_STORY ? (
+          <ImagePullStory />
+        ) : name === WORKSPACE_FILE_EDIT_STORY ? (
+          <WorkspaceFileEditStory />
+        ) : name === EXTENSION_LIFECYCLE_STORY ? (
+          <ExtensionLifecycleStory />
+        ) : name === WORKSPACE_LAYOUT_STORY ? (
+          <WorkspaceLayoutStory />
+        ) : name === CONTAINER_OPERATIONS_STORY ? (
+          <ContainerOperationsStory />
+        ) : name === CONFIRMATION_STORY ? (
+          <ConfirmationStory />
+        ) : name === COMMAND_PALETTE_STORY ? (
+          <CommandPaletteStory />
+        ) : name === JSON_TREE_STORY ? (
+          <JsonTreeStory />
+        ) : name === TERMINAL_TRANSCRIPT_STORY ? (
+          <TerminalTranscriptStory />
+        ) : name === DEPENDENCY_GRAPH_STORY ? (
+          <DependencyGraphStory />
+        ) : name === NETWORK_WATERFALL_STORY ? (
+          <NetworkWaterfallStory />
+        ) : name === COVERAGE_STORY ? (
+          <CoverageInspectionStory />
+        ) : name === TEST_REPORT_STORY ? (
+          <TestReportStory />
+        ) : name === TIMELINE_VIEW_STORY ? (
+          <TimelineInspectionStory />
+        ) : name === DISASSEMBLY_STORY ? (
+          <DisassemblyInspectionStory />
+        ) : name === MEMORY_STORY ? (
+          <MemoryInspectionStory />
+        ) : name === PROFILE_STORY ? (
+          <ProfileInspectionStory />
+        ) : name === FILE_BROWSER_STORY && fileSource ? (
+          <FileBrowserStory />
+        ) : name === METRICS_STORY ? (
+          <ResourceMetricsStory />
+        ) : name === BINARY_STORY ? (
+          <BinaryInspectionStory />
+        ) : name === ACQUISITION_STORY ? (
+          <AcquisitionProgressStory />
+        ) : name === DIFF_STORY ? (
+          <DiffReviewStory />
+        ) : name === FORM_STORY ? (
+          <ValidatedSettingsFormStory />
+        ) : name === KEYBOARD_STORY ? (
+          <KeyboardAccessibilityStory />
+        ) : name === STREAMING_LOG_STORY ? (
+          <StreamingLogStory />
+        ) : name === EVENT_STREAM_STORY && timelineSource ? (
+          <EventStreamStory source={timelineSource} />
+        ) : name === KEY_VALUE_STORY && keyValueSource ? (
+          <KeyValueInspectorStory source={keyValueSource} />
+        ) : name === MARKDOWN_STORY ? (
+          <MarkdownReviewStory />
+        ) : name === JSON_STORY ? (
+          <JsonResponseStory />
+        ) : name === STACK_STORY ? (
+          <StackTraceStory />
+        ) : name === NAVIGATION_STORY ? (
+          <NavigationDialogsStory />
+        ) : name === 'DataTable' && largeSource ? (
+          <LargeDataTableStory source={largeSource} />
+        ) : (
+          nativeComponent(
+            name,
+            { ...present(instance.props), ...handlers },
+            instance.children.map(child),
+          )
+        )}
       </Section>
       {triggers.length === 0
         ? []
         : [
             <Column key={'interaction-console'} gap={1}>
               <Row key={'heading'} align={'center'} gap={1}>
-                <Text
-                  key={'title'}
-                  label={'Recent interactions'}
-                  color={'text-dim'}
-                  grow={true} />
+                <Text key={'title'} label={'Recent interactions'} color={'text-dim'} grow={true} />
                 {interactions.length === 0
                   ? []
-                  : [<Button
-                  key={'clear'}
-                  label={'Clear'}
-                  variant={'ghost'}
-                  onInvoke={() => setInteractions([])} />]}
+                  : [
+                      <Button
+                        key={'clear'}
+                        label={'Clear'}
+                        variant={'ghost'}
+                        onInvoke={() => setInteractions([])}
+                      />,
+                    ]}
               </Row>
               {interactions.length === 0
                 ? [
                     <InlineMessage
                       key={'empty'}
                       label={`Interact with the preview to inspect ${triggers.map((trigger) => `on${trigger}`).join(', ')}.`}
-                      tone={'neutral'} />,
+                      tone={'neutral'}
+                    />,
                   ]
-                : interactions.map((interaction) =>
+                : interactions.map((interaction) => (
                     <InlineMessage
                       key={interaction.sequence}
                       label={`#${interaction.sequence} ${interaction.trigger} received${interaction.detail ? ` · ${interaction.detail}` : ''}`}
-                      tone={'positive'} />,
-                  )}
+                      tone={'positive'}
+                    />
+                  ))}
             </Column>,
           ]}
     </Column>
@@ -355,8 +457,13 @@ export function Preview({ name, opened, largeSource, timelineSource, keyValueSou
 }
 
 /** Real handlers for every interaction the selected component declares. */
-export function interactionProps(triggers: string[], receive: (trigger: string, event: Report) => void): Record<string, (event: Report) => void> {
-  return Object.fromEntries(triggers.map((trigger) => [`on${trigger}`, (event: Report) => receive(trigger, event)]));
+export function interactionProps(
+  triggers: string[],
+  receive: (trigger: string, event: Report) => void,
+): Record<string, (event: Report) => void> {
+  return Object.fromEntries(
+    triggers.map((trigger) => [`on${trigger}`, (event: Report) => receive(trigger, event)]),
+  );
 }
 
 /** A short, finite payload description suitable for the visible event console. */
@@ -378,7 +485,9 @@ function boundedValue(value: unknown, depth = 0): unknown {
   if (depth >= 2) return '…';
   if (Array.isArray(value)) {
     const shown = value.slice(0, 3).map((entry) => boundedValue(entry, depth + 1));
-    return value.length > shown.length ? [...shown, `… ${value.length - shown.length} more`] : shown;
+    return value.length > shown.length
+      ? [...shown, `… ${value.length - shown.length} more`]
+      : shown;
   }
   const shown: Record<string, unknown> = {};
   const record = value as Record<string, unknown>;
@@ -400,7 +509,11 @@ function child(descriptor: StoryChild, index: number): ReactNode {
   return nativeComponent(descriptor.tag, { key: `child-${index}`, ...descriptor.props });
 }
 
-function nativeComponent(name: string, supplied: Record<string, unknown>, children: ReactNode[] = []): ReactNode {
+function nativeComponent(
+  name: string,
+  supplied: Record<string, unknown>,
+  children: ReactNode[] = [],
+): ReactNode {
   const { key, ...props } = supplied;
   const Component = components[name];
   return React.createElement(Component, { key: key as Key | null | undefined, ...props }, children);
@@ -412,8 +525,18 @@ export function present(props: Record<string, unknown>): Record<string, unknown>
 }
 
 /** One row per property, grouped, with the control its editor hint asks for. */
-export function Inspector({ name, properties, triggers, props, onChange }: {
-  name: string; properties: ControlRow[]; triggers: string[]; props: Record<string, unknown>; onChange: Change;
+export function Inspector({
+  name,
+  properties,
+  triggers,
+  props,
+  onChange,
+}: {
+  name: string;
+  properties: ControlRow[];
+  triggers: string[];
+  props: Record<string, unknown>;
+  onChange: Change;
 }) {
   type Group = { key: string; group: string; editable: boolean; rows: ControlRow[] };
   const groups: Group[] = [];
@@ -433,17 +556,17 @@ export function Inspector({ name, properties, triggers, props, onChange }: {
         <Text key={'note'} label={notes.values} color={'text-dim'} wrap={true} />
         {groups.flatMap((group) => [
           <ListSubheader key={`group-${group.key}`} label={group.group} />,
-          ...group.rows.map((row) =>
-            <Field key={row.name} row={row} value={props[row.name]} onChange={onChange} />,
-          ),
+          ...group.rows.map((row) => (
+            <Field key={row.name} row={row} value={props[row.name]} onChange={onChange} />
+          )),
         ])}
         {triggers.length === 0
           ? []
           : [
               <ListSubheader key={'interactions'} label={'interactions'} />,
-              ...triggers.map((trigger) =>
-                <Text key={`trigger-${trigger}`} label={`on${trigger}`} color={'text-dim'} />,
-              ),
+              ...triggers.map((trigger) => (
+                <Text key={`trigger-${trigger}`} label={`on${trigger}`} color={'text-dim'} />
+              )),
             ]}
       </Column>
     </Scroll>
@@ -451,13 +574,19 @@ export function Inspector({ name, properties, triggers, props, onChange }: {
 }
 
 /** One property, with the control that edits it. */
-export function Field({ row, value, onChange }: { row: ControlRow; value: unknown; onChange: Change }) {
+export function Field({
+  row,
+  value,
+  onChange,
+}: {
+  row: ControlRow;
+  value: unknown;
+  onChange: Change;
+}) {
   return (
     <Row gap={2} align={'center'}>
       <Text key={'name'} label={row.name} tooltip={row.note} width={{ chars: 12 }} />
-      <React.Fragment key={'control'}>
-        {controls(row, value, onChange)}
-      </React.Fragment>
+      <React.Fragment key={'control'}>{controls(row, value, onChange)}</React.Fragment>
     </Row>
   );
 }
@@ -471,14 +600,18 @@ function controls(row: ControlRow, value: unknown, onChange: Change): ReactNode[
           key={'value'}
           value={value === undefined ? '' : String(value)}
           placeholder={row.note}
-          onChange={(event) => onChange(row.name, event.value)} />,
+          onChange={(event) => onChange(row.name, event.value)}
+        />,
       ];
     case 'switch':
       return [
         <Switch
           key={'value'}
           checked={Boolean(value)}
-          onToggle={(event) => onChange(row.name, event.value === null ? !value : Boolean(event.value))} />,
+          onToggle={(event) =>
+            onChange(row.name, event.value === null ? !value : Boolean(event.value))
+          }
+        />,
       ];
     case 'enum':
       return [
@@ -486,14 +619,16 @@ function controls(row: ControlRow, value: unknown, onChange: Change): ReactNode[
           key={'value'}
           choices={row.members ?? []}
           value={value === undefined ? '' : String(value)}
-          onChange={(event) => onChange(row.name, event.value)} />,
+          onChange={(event) => onChange(row.name, event.value)}
+        />,
       ];
     case 'number':
       return [
         <NumberEntry
           key={'value'}
           value={typeof value === 'number' ? value : 0}
-          onChange={(event) => onChange(row.name, Number(event.value))} />,
+          onChange={(event) => onChange(row.name, Number(event.value))}
+        />,
       ];
     case 'length':
     case 'edges': {
@@ -504,7 +639,8 @@ function controls(row: ControlRow, value: unknown, onChange: Change): ReactNode[
           key={'mode'}
           choices={row.modes ?? []}
           value={mode}
-          onChange={(event) => onChange(row.name, lengthValue(event.value, amount))} />,
+          onChange={(event) => onChange(row.name, lengthValue(event.value, amount))}
+        />,
         ...(mode === 'step' || mode === 'chars'
           ? [
               <NumberEntry
@@ -513,7 +649,8 @@ function controls(row: ControlRow, value: unknown, onChange: Change): ReactNode[
                 minimum={0}
                 maximum={mode === 'step' ? row.maximum : 120}
                 step={1}
-                onChange={(event) => onChange(row.name, lengthValue(mode, Number(event.value)))} />,
+                onChange={(event) => onChange(row.name, lengthValue(mode, Number(event.value)))}
+              />,
             ]
           : []),
       ];

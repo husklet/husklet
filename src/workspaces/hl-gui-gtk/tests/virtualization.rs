@@ -127,7 +127,7 @@ fn an_oversized_window_never_reaches_the_gtk_model() {
 }
 
 fn a_real_column_view_resizes_without_materializing_the_logical_source() {
-    const STORY_ROWS: u64 = 100_000;
+    const STORY_ROWS: u64 = 1_000_000;
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), STORY_ROWS);
     let selection = gtk::NoSelection::new(Some(rows.clone()));
@@ -158,7 +158,7 @@ fn a_real_column_view_resizes_without_materializing_the_logical_source() {
     let expanded = descendants(window.clone().upcast_ref()).len();
 
     assert_eq!(u64::from(rows.n_items()), STORY_ROWS);
-    assert!(compact < 1_000, "a 100k-row view materialized {compact} GTK widgets");
+    assert!(compact < 1_000, "a million-row view materialized {compact} GTK widgets");
     assert!(expanded < 2_000, "resizing materialized {expanded} GTK widgets");
     assert!(rows.held() <= hl_gui::RowCache::CAPACITY);
     window.close();

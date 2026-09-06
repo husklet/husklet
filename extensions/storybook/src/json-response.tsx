@@ -1,13 +1,15 @@
 import React from 'react';
 import { Badge, Card, CardContent, Column, Heading, JsonView, Row, Text } from '@husklet/react';
 
-
 export const JSON_STORY = 'Inspect API response';
 
 const RESPONSE = JSON.stringify({
   status: 'ready',
   workspace: { name: 'development', architecture: 'arm64' },
-  panes: [{ slot: 'pane-1', occupant: 'terminal' }, { slot: 'pane-2', occupant: 'extension' }],
+  panes: [
+    { slot: 'pane-1', occupant: 'terminal' },
+    { slot: 'pane-2', occupant: 'extension' },
+  ],
   message: 'punctuation inside strings stays literal: { value, [safe] }',
 });
 

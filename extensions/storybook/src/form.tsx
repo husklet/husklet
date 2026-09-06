@@ -53,9 +53,12 @@ export function ValidatedSettingsFormStory() {
       <Heading key={'title'} label={'Workspace defaults'} scale={'title'} wrap={true} />
       <Text
         key={'intro'}
-        label={'A controlled form that validates on submit and keeps feedback beside the affected field.'}
+        label={
+          'A controlled form that validates on submit and keeps feedback beside the affected field.'
+        }
         color={'text-dim'}
-        wrap={true} />
+        wrap={true}
+      />
       <FormControl key={'name'} gap={1}>
         <FormLabel key={'label'} label={'Workspace name'} />
         <Entry
@@ -64,11 +67,13 @@ export function ValidatedSettingsFormStory() {
           placeholder={'api'}
           tone={invalid ? 'danger' : 'neutral'}
           onChange={changeName}
-          onSubmit={submit} />
+          onSubmit={submit}
+        />
         <FormHelperText
           key={'help'}
           label={invalid ? 'Use at least 3 characters.' : 'Shown in tabs and resource lists.'}
-          tone={invalid ? 'danger' : 'neutral'} />
+          tone={invalid ? 'danger' : 'neutral'}
+        />
       </FormControl>
       <FormControl key={'environment'} gap={1}>
         <FormLabel key={'label'} label={'Environment'} />
@@ -79,7 +84,8 @@ export function ValidatedSettingsFormStory() {
           onChange={(event) => {
             setEnvironment(String(event.value ?? 'development'));
             setSaved(false);
-          }} />
+          }}
+        />
       </FormControl>
       <FormControlLabel key={'restart'} label={'Restart after configuration changes'} gap={2}>
         <Switch
@@ -87,7 +93,8 @@ export function ValidatedSettingsFormStory() {
           onToggle={(event) => {
             setRestart(event.value === null ? !restart : Boolean(event.value));
             setSaved(false);
-          }} />
+          }}
+        />
       </FormControlLabel>
       <FormControl key={'tags'} gap={1}>
         <FormLabel label={'Workspace tags'} />
@@ -100,32 +107,38 @@ export function ValidatedSettingsFormStory() {
             const next = tag.trim();
             if (next && !tags.includes(next)) setTags([...tags, next]);
             setTag('');
-          }} />
+          }}
+        />
         <Column key={'held-tags'} gap={1}>
-          {tags.map((held) => <ToggleButton
-            key={held}
-            label={held}
-            checked={true}
-            tooltip={`Remove ${held}`}
-            onToggle={() => setTags(tags.filter((candidate) => candidate !== held))} />)}
+          {tags.map((held) => (
+            <ToggleButton
+              key={held}
+              label={held}
+              checked={true}
+              tooltip={`Remove ${held}`}
+              onToggle={() => setTags(tags.filter((candidate) => candidate !== held))}
+            />
+          ))}
         </Column>
         <FormHelperText label={'Press Enter to retain a tag; activate a tag to remove it.'} />
       </FormControl>
       {invalid
-        ? [<ValidationSummary
-        key={'invalid'}
-        label={'Fix workspace name.'}
-        detail={reviewed ? 'Ready to correct.' : '1 problem.'}
-        tone={'danger'} />, <Button
-        key={'review'}
-        label={'Review workspace name'}
-        onInvoke={() => setReviewed(true)} />]
+        ? [
+            <ValidationSummary
+              key={'invalid'}
+              label={'Fix workspace name.'}
+              detail={reviewed ? 'Ready to correct.' : '1 problem.'}
+              tone={'danger'}
+            />,
+            <Button
+              key={'review'}
+              label={'Review workspace name'}
+              onInvoke={() => setReviewed(true)}
+            />,
+          ]
         : []}
       {saved
-        ? [<Banner
-        key={'saved'}
-        label={`Defaults saved for ${name.trim()}.`}
-        tone={'positive'} />]
+        ? [<Banner key={'saved'} label={`Defaults saved for ${name.trim()}.`} tone={'positive'} />]
         : []}
       <Row key={'actions'} gap={2} justify={'end'}>
         <Button label={'Save defaults'} tone={'accent'} onInvoke={submit} />

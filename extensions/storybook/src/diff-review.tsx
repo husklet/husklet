@@ -16,15 +16,17 @@ export function DiffReviewStory() {
   return (
     <Column gap={2}>
       <Heading label={'Review configuration diff'} scale={'title'} />
-      <Text
-        label={'Every bounded line remains selectable and semantically inspectable.'} />
+      <Text label={'Every bounded line remains selectable and semantically inspectable.'} />
       <Row justify={'end'}>
         <Button
           label={sideBySide ? 'Show unified' : 'Show side by side'}
-          onInvoke={() => setSideBySide(!sideBySide)} />
+          onInvoke={() => setSideBySide(!sideBySide)}
+        />
       </Row>
       <DiffViewer orientation={sideBySide ? 'horizontal' : 'vertical'} gap={1}>
-        {lines.map(([status, value, tone], index) => <DiffLine key={index} label={status} value={value} tone={tone} />)}
+        {lines.map(([status, value, tone], index) => (
+          <DiffLine key={index} label={status} value={value} tone={tone} />
+        ))}
       </DiffViewer>
     </Column>
   );

@@ -1,7 +1,14 @@
 import React from 'react';
 import {
-  Button, Column, Entry, Heading, Row, Spinner, Text,
-  type ContainerSummary, type WorkspaceApi,
+  Button,
+  Column,
+  Entry,
+  Heading,
+  Row,
+  Spinner,
+  Text,
+  type ContainerSummary,
+  type WorkspaceApi,
 } from '@husklet/react';
 import { boundedMessage, containerNameError, shortId } from './model.js';
 
@@ -51,7 +58,8 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
       <Text
         label={`Current name: ${current || '(unnamed)'}. Immutable ID: ${container.id}`}
         color={'text-dim'}
-        wrap={true} />
+        wrap={true}
+      />
       <Row gap={1} wrap={true} align={'center'}>
         <Entry
           value={draft}
@@ -60,22 +68,32 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
           onChange={(event) => {
             setDraft(String(event.value ?? '').slice(0, 129));
             setResult(idleResult());
-          }} />
+          }}
+        />
         {result.state === 'loading' ? <Spinner /> : null}
         <Button
-          label={result.state === 'loading' ? 'Renaming…' : result.state === 'error' ? 'Retry rename' : 'Rename'}
+          label={
+            result.state === 'loading'
+              ? 'Renaming…'
+              : result.state === 'error'
+                ? 'Retry rename'
+                : 'Rename'
+          }
           enabled={!blocked && result.state !== 'loading' && changed && !validation}
-          onInvoke={rename} />
+          onInvoke={rename}
+        />
       </Row>
       {changed && validation ? <Text label={validation} color={'danger'} wrap={true} /> : null}
-      {result.state === 'error' ? <Text
-        label={boundedMessage(result.error)}
-        color={'danger'}
-        wrap={true} /> : null}
-      {result.state === 'success' ? <Text
-        label={`Renamed to ${result.name}. Inventory identity will update after the authoritative refresh.`}
-        color={'positive'}
-        wrap={true} /> : null}
+      {result.state === 'error' ? (
+        <Text label={boundedMessage(result.error)} color={'danger'} wrap={true} />
+      ) : null}
+      {result.state === 'success' ? (
+        <Text
+          label={`Renamed to ${result.name}. Inventory identity will update after the authoritative refresh.`}
+          color={'positive'}
+          wrap={true}
+        />
+      ) : null}
     </Column>
   );
 }

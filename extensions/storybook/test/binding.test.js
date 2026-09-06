@@ -19,7 +19,13 @@ const SAMPLE = {
 };
 
 /** The control that matches a wire shape, when the catalogue's hint does not. */
-const CONTROL = { Flag: 'switch', Text: 'text', Number: 'number', Integer: 'number', Length: 'length' };
+const CONTROL = {
+  Flag: 'switch',
+  Text: 'text',
+  Number: 'number',
+  Integer: 'number',
+  Length: 'length',
+};
 
 /**
  * The React binding decides a property's wire shape, and the catalogue says
@@ -53,7 +59,10 @@ test('an enum property takes every member the catalogue lists', () => {
     for (const member of control(prop).members) {
       const wire = value(prop.name, member.value);
       const [tag] = Object.keys(wire);
-      assert.ok(prop.values.includes(tag), `${prop.name} encodes as ${tag}, which it does not read`);
+      assert.ok(
+        prop.values.includes(tag),
+        `${prop.name} encodes as ${tag}, which it does not read`,
+      );
     }
   }
 });

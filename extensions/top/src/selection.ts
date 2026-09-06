@@ -7,7 +7,9 @@ export function selections(): {
 } {
   const listeners = new Set<(value: HostEvent) => void>();
   return {
-    publish(value: HostEvent) { for (const listener of listeners) listener(value); },
+    publish(value: HostEvent) {
+      for (const listener of listeners) listener(value);
+    },
     subscribe(listener: (value: HostEvent) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);

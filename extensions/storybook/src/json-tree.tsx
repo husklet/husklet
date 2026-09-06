@@ -22,7 +22,10 @@ export function JsonTreeStory() {
     <Column gap={2} grow={true}>
       <Heading label={'Bounded JSON tree'} scale={'title'} />
       <Text
-        label={'Expand paths, filter nested values, and invoke select or copy callbacks without a web view.'} />
+        label={
+          'Expand paths, filter nested values, and invoke select or copy callbacks without a web view.'
+        }
+      />
       <Row gap={1}>
         <Badge label={'cycle-safe'} tone={'positive'} />
         <Badge label={'bounded'} tone={'warning'} />
@@ -34,7 +37,8 @@ export function JsonTreeStory() {
         maxStringLength={48}
         grow={true}
         onSelect={({ path, type }) => setActivity(`Selected ${path} (${type})`)}
-        onCopy={({ path, text }) => setActivity(`Copy requested for ${path}: ${text}`)} />
+        onCopy={({ path, text }) => setActivity(`Copy requested for ${path}: ${text}`)}
+      />
       <InlineMessage label={activity} />
     </Column>
   );

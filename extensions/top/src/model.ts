@@ -1,28 +1,55 @@
 import type {
-  ContainerOutput, ContainerSummary, ExecutionSummary, ImageDetails, InterfaceSourceMutation,
-  NetworkSummary, ProcessList, VolumeSummary,
+  ContainerOutput,
+  ContainerSummary,
+  ExecutionSummary,
+  ImageDetails,
+  InterfaceSourceMutation,
+  NetworkSummary,
+  ProcessList,
+  VolumeSummary,
 } from '@husklet/react';
 
 type DetailCell = { Text: string } | { Code: string };
 type DetailRow = { id: number; cells: DetailCell[] };
-type RowRequest = { source: number; version: number; id: number; range: { start: number; count: number } };
-type RowWindow = { source: number; version: number; request: number; range: RowRequest['range']; rows: DetailRow[] };
+type RowRequest = {
+  source: number;
+  version: number;
+  id: number;
+  range: { start: number; count: number };
+};
+type RowWindow = {
+  source: number;
+  version: number;
+  request: number;
+  range: RowRequest['range'];
+  rows: DetailRow[];
+};
 type DetailSender = (mutation: InterfaceSourceMutation) => Promise<void>;
 type ResourceReference = { id?: unknown; name?: unknown } | null | undefined;
 
 function detailRows(values: ReadonlyArray<readonly [string, unknown]>): DetailRow[] {
   return values
     .filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
-    .map(([key, value], index) => ({ id: index + 1, cells: [{ Text: key }, { Code: String(value) }] }));
+    .map(([key, value], index) => ({
+      id: index + 1,
+      cells: [{ Text: key }, { Code: String(value) }],
+    }));
 }
 
 function rowRequest(value: unknown): RowRequest | null {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Partial<RowRequest>;
-  if (!Number.isSafeInteger(candidate.source) || !Number.isSafeInteger(candidate.version)
-    || !Number.isSafeInteger(candidate.id) || !candidate.range
-    || !Number.isSafeInteger(candidate.range.start) || candidate.range.start < 0
-    || !Number.isSafeInteger(candidate.range.count) || candidate.range.count < 0) return null;
+  if (
+    !Number.isSafeInteger(candidate.source) ||
+    !Number.isSafeInteger(candidate.version) ||
+    !Number.isSafeInteger(candidate.id) ||
+    !candidate.range ||
+    !Number.isSafeInteger(candidate.range.start) ||
+    candidate.range.start < 0 ||
+    !Number.isSafeInteger(candidate.range.count) ||
+    candidate.range.count < 0
+  )
+    return null;
   return candidate as RowRequest;
 }
 /** Maximum records mounted into a native tree at once. */
@@ -39,7 +66,10 @@ export function containerNameError(name: unknown): string {
 }
 
 /** A bounded view plus the number honestly omitted. */
-export function bounded<T>(records: readonly T[] | null | undefined, limit = RECORD_LIMIT): { records: T[]; omitted: number } {
+export function bounded<T>(
+  records: readonly T[] | null | undefined,
+  limit = RECORD_LIMIT,
+): { records: T[]; omitted: number } {
   const all = Array.isArray(records) ? records : [];
   return { records: all.slice(0, limit), omitted: Math.max(0, all.length - limit) };
 }
@@ -47,12 +77,22 @@ export function bounded<T>(records: readonly T[] | null | undefined, limit = REC
 export function endpointAliases(value: unknown): string[] {
   if (typeof value !== 'string' || value.trim().length === 0) return [];
   const aliases = value.split(',').map((alias) => alias.trim());
-  const valid = aliases.length <= 64
-    && new Set(aliases).size === aliases.length
-    && aliases.every((alias) => alias.length >= 1 && alias.length <= 253
-      && [...alias].every((character, index) => /[A-Za-z0-9]/.test(character)
-        || (index > 0 && '_.-'.includes(character))));
-  if (!valid) throw new TypeError('Network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names.');
+  const valid =
+    aliases.length <= 64 &&
+    new Set(aliases).size === aliases.length &&
+    aliases.every(
+      (alias) =>
+        alias.length >= 1 &&
+        alias.length <= 253 &&
+        [...alias].every(
+          (character, index) =>
+            /[A-Za-z0-9]/.test(character) || (index > 0 && '_.-'.includes(character)),
+        ),
+    );
+  if (!valid)
+    throw new TypeError(
+      'Network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names.',
+    );
   return aliases;
 }
 
@@ -116,7 +156,9 @@ export class ImageDetailsSource {
     ];
     this.rows = detailRows(values).slice(0, IMAGE_DETAIL_LIMIT);
     this.version += 1;
-    await this.send({ Length: { source: IMAGE_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    await this.send({
+      Length: { source: IMAGE_DETAIL_SOURCE, version: this.version, rows: this.rows.length },
+    });
     return this.rows.length;
   }
 
@@ -124,11 +166,20 @@ export class ImageDetailsSource {
     const request = rowRequest(value);
     if (!request) return null;
     if (request.source !== IMAGE_DETAIL_SOURCE || request.version !== this.version) return null;
-    const count = Math.min(request.range.count, IMAGE_DETAIL_WINDOW_LIMIT,
-      Math.max(0, this.rows.length - request.range.start));
+    const count = Math.min(
+      request.range.count,
+      IMAGE_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
     const rows = this.rows.slice(request.range.start, request.range.start + count);
     this.generated += rows.length;
-    return { source: IMAGE_DETAIL_SOURCE, version: this.version, request: request.id, range: request.range, rows };
+    return {
+      source: IMAGE_DETAIL_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows,
+    };
   }
 }
 
@@ -154,7 +205,9 @@ export class ContainerDetailsSource {
     ];
     this.rows = detailRows(values);
     this.version += 1;
-    await this.send({ Length: { source: CONTAINER_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    await this.send({
+      Length: { source: CONTAINER_DETAIL_SOURCE, version: this.version, rows: this.rows.length },
+    });
     return this.rows.length;
   }
 
@@ -162,10 +215,18 @@ export class ContainerDetailsSource {
     const request = rowRequest(value);
     if (!request) return null;
     if (request.source !== CONTAINER_DETAIL_SOURCE || request.version !== this.version) return null;
-    const count = Math.min(request.range.count, CONTAINER_DETAIL_WINDOW_LIMIT,
-      Math.max(0, this.rows.length - request.range.start));
-    return { source: CONTAINER_DETAIL_SOURCE, version: this.version, request: request.id,
-      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
+    const count = Math.min(
+      request.range.count,
+      CONTAINER_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
+    return {
+      source: CONTAINER_DETAIL_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows: this.rows.slice(request.range.start, request.range.start + count),
+    };
   }
 }
 
@@ -185,15 +246,20 @@ export class ExecutionDetailsSource {
     const values: Array<[string, unknown]> = [
       ['Execution ID', details?.id],
       ['Container ID', details?.container_id],
-      ['State', details && 'running' in details ? details.running ? 'running' : 'exited' : null],
-      ['Exit code', details && 'exit_code' in details && !details.running ? String(details.exit_code) : null],
+      ['State', details && 'running' in details ? (details.running ? 'running' : 'exited') : null],
+      [
+        'Exit code',
+        details && 'exit_code' in details && !details.running ? String(details.exit_code) : null,
+      ],
       ['Process ID', details && details.pid > 0 ? String(details.pid) : null],
       ['Command', details?.command?.join(' ')],
       ['User', details && 'user' in details ? details.user || 'default user' : null],
     ];
     this.rows = detailRows(values);
     this.version += 1;
-    await this.send({ Length: { source: EXECUTION_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    await this.send({
+      Length: { source: EXECUTION_DETAIL_SOURCE, version: this.version, rows: this.rows.length },
+    });
     return this.rows.length;
   }
 
@@ -201,10 +267,18 @@ export class ExecutionDetailsSource {
     const request = rowRequest(value);
     if (!request) return null;
     if (request.source !== EXECUTION_DETAIL_SOURCE || request.version !== this.version) return null;
-    const count = Math.min(request.range.count, EXECUTION_DETAIL_WINDOW_LIMIT,
-      Math.max(0, this.rows.length - request.range.start));
-    return { source: EXECUTION_DETAIL_SOURCE, version: this.version, request: request.id,
-      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
+    const count = Math.min(
+      request.range.count,
+      EXECUTION_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
+    return {
+      source: EXECUTION_DETAIL_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows: this.rows.slice(request.range.start, request.range.start + count),
+    };
   }
 }
 
@@ -228,7 +302,9 @@ export class NetworkDetailsSource {
       ['Scope', details?.scope],
     ]);
     this.version += 1;
-    await this.send({ Length: { source: NETWORK_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    await this.send({
+      Length: { source: NETWORK_DETAIL_SOURCE, version: this.version, rows: this.rows.length },
+    });
     return this.rows.length;
   }
 
@@ -236,10 +312,18 @@ export class NetworkDetailsSource {
     const request = rowRequest(value);
     if (!request) return null;
     if (request.source !== NETWORK_DETAIL_SOURCE || request.version !== this.version) return null;
-    const count = Math.min(request.range.count, NETWORK_DETAIL_WINDOW_LIMIT,
-      Math.max(0, this.rows.length - request.range.start));
-    return { source: NETWORK_DETAIL_SOURCE, version: this.version, request: request.id,
-      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
+    const count = Math.min(
+      request.range.count,
+      NETWORK_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
+    return {
+      source: NETWORK_DETAIL_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows: this.rows.slice(request.range.start, request.range.start + count),
+    };
   }
 }
 
@@ -261,7 +345,9 @@ export class VolumeDetailsSource {
       ['Driver', details?.driver],
     ]);
     this.version += 1;
-    await this.send({ Length: { source: VOLUME_DETAIL_SOURCE, version: this.version, rows: this.rows.length } });
+    await this.send({
+      Length: { source: VOLUME_DETAIL_SOURCE, version: this.version, rows: this.rows.length },
+    });
     return this.rows.length;
   }
 
@@ -269,10 +355,18 @@ export class VolumeDetailsSource {
     const request = rowRequest(value);
     if (!request) return null;
     if (request.source !== VOLUME_DETAIL_SOURCE || request.version !== this.version) return null;
-    const count = Math.min(request.range.count, VOLUME_DETAIL_WINDOW_LIMIT,
-      Math.max(0, this.rows.length - request.range.start));
-    return { source: VOLUME_DETAIL_SOURCE, version: this.version, request: request.id,
-      range: request.range, rows: this.rows.slice(request.range.start, request.range.start + count) };
+    const count = Math.min(
+      request.range.count,
+      VOLUME_DETAIL_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
+    return {
+      source: VOLUME_DETAIL_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows: this.rows.slice(request.range.start, request.range.start + count),
+    };
   }
 }
 
@@ -284,17 +378,26 @@ export function bytes(value: unknown): string {
   return `${(amount / 1024 ** rank).toFixed(rank === 0 ? 0 : 1)} ${units[rank]}`;
 }
 
-export function logText(log: ContainerOutput | Uint8Array | readonly number[] | string | null | undefined): string {
+export function logText(
+  log: ContainerOutput | Uint8Array | readonly number[] | string | null | undefined,
+): string {
   if (typeof log === 'string') return log;
-  if (log instanceof Uint8Array || Array.isArray(log)) return new TextDecoder().decode(Uint8Array.from(log));
+  if (log instanceof Uint8Array || Array.isArray(log))
+    return new TextDecoder().decode(Uint8Array.from(log));
   if (log && typeof log === 'object' && 'stdout' in log) {
-    return [log.stdout, log.stderr].filter(Boolean).map((stream) => logText(stream)).join('\n');
+    return [log.stdout, log.stderr]
+      .filter(Boolean)
+      .map((stream) => logText(stream))
+      .join('\n');
   }
   return '';
 }
 
 /** Turns the protocol's title + matrix process list into labelled cells. */
-export function processRows(list: ProcessList, container: string): Array<{ container: string; cells: Record<string, string>; values: string[] }> {
+export function processRows(
+  list: ProcessList,
+  container: string,
+): Array<{ container: string; cells: Record<string, string>; values: string[] }> {
   const titles = Array.isArray(list?.titles) ? list.titles.map(String) : [];
   const rows = Array.isArray(list?.processes) ? list.processes : [];
   return rows.map((cells) => ({

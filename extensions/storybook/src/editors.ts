@@ -6,8 +6,15 @@
 
 import type { Length } from '@husklet/react';
 import {
-  CONTROLLABLE, camel, editable, enums, maximumStep, style, vocabularyOf,
-  type Property, type Vocabulary,
+  CONTROLLABLE,
+  camel,
+  editable,
+  enums,
+  maximumStep,
+  style,
+  vocabularyOf,
+  type Property,
+  type Vocabulary,
 } from './catalogue.js';
 
 type Choice = { value: string; label: string };
@@ -47,7 +54,10 @@ export function control(prop: Property): ControlRow {
   if (editor === 'enum') {
     const vocabulary = vocabularyOf(prop);
     row.vocabulary = vocabulary;
-    row.members = vocabulary === null ? [] : enums[vocabulary].map((member) => ({ value: member.style, label: member.style }));
+    row.members =
+      vocabulary === null
+        ? []
+        : enums[vocabulary].map((member) => ({ value: member.style, label: member.style }));
   }
   if (editor === 'length' || editor === 'edges') {
     row.modes = LENGTH_MODES;
@@ -73,15 +83,18 @@ export const LENGTH_MODES: Choice[] = [
 /** The mode a length value is currently in, so the control can show itself. */
 export function modeOf(value: unknown): LengthMode {
   if (value === 'fill' || value === 'content') return value;
-  if (value && typeof value === 'object' && 'chars' in value && typeof value.chars === 'number') return 'chars';
+  if (value && typeof value === 'object' && 'chars' in value && typeof value.chars === 'number')
+    return 'chars';
   return 'step';
 }
 
 /** The amount a length value carries, for the modes that carry one. */
 export function amountOf(value: unknown): number {
   if (typeof value === 'number') return value;
-  if (value && typeof value === 'object' && 'chars' in value && typeof value.chars === 'number') return value.chars;
-  if (value && typeof value === 'object' && 'step' in value && typeof value.step === 'number') return value.step;
+  if (value && typeof value === 'object' && 'chars' in value && typeof value.chars === 'number')
+    return value.chars;
+  if (value && typeof value === 'object' && 'step' in value && typeof value.step === 'number')
+    return value.step;
   return 0;
 }
 

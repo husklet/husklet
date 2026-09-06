@@ -1,7 +1,6 @@
 import React from 'react';
 import { Card, CardContent, Column, Heading, MarkdownView, Text } from '@husklet/react';
 
-
 export const MARKDOWN_STORY = 'Review release notes';
 
 const NOTES = `# Husklet 0.4
@@ -23,8 +22,7 @@ export function MarkdownReviewStory() {
   return (
     <Column gap={2} grow={true}>
       <Heading label={'Release-note review'} scale={'title'} />
-      <Text
-        value={'Selectable native text with headings, lists, quotes, and fenced code.'} />
+      <Text value={'Selectable native text with headings, lists, quotes, and fenced code.'} />
       <Card>
         <CardContent>
           <MarkdownView value={NOTES} grow={true} />

@@ -12,7 +12,8 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 function labelled(patches, label) {
   let found;
   for (const patch of patches) {
-    if (patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label) found = patch.SetProp.id;
+    if (patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+      found = patch.SetProp.id;
   }
   return found;
 }
@@ -31,11 +32,22 @@ test('confirmation story demonstrates reveal, separate authority, and success', 
   const open = stage.frames.flatMap((frame) => frame.patches);
   assert.ok(labelled(open, 'Remove volume cache generation 7? This cannot be undone.'));
   const confirmation = labelled(open, 'Confirm removal');
-  assert.ok(open.some((patch) => patch.SetProp?.id === confirmation
-    && patch.SetProp.prop === 'Destructive' && patch.SetProp.value?.Flag));
+  assert.ok(
+    open.some(
+      (patch) =>
+        patch.SetProp?.id === confirmation &&
+        patch.SetProp.prop === 'Destructive' &&
+        patch.SetProp.value?.Flag,
+    ),
+  );
   invoke(stage, 'Confirm removal');
   await settle();
-  assert.ok(labelled(stage.frames.flatMap((frame) => frame.patches), 'Volume cache was removed.'));
+  assert.ok(
+    labelled(
+      stage.frames.flatMap((frame) => frame.patches),
+      'Volume cache was removed.',
+    ),
+  );
 });
 
 test('confirmation flow is selectable from the shipped playground', () => {

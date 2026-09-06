@@ -1,14 +1,38 @@
 import React from 'react';
 import {
-  Button, Card, CardActions, CardContent, CardHeader, Column, Heading,
-  Row, Scroll, Spinner, Text,
-  type ContainerSummary, type ExecutionSummary, type ImageSummary, type NetworkSummary, type TabSummary,
+  Button,
+  Card,
+  CardActions,
+  CardContent,
+  CardHeader,
+  Column,
+  Heading,
+  Row,
+  Scroll,
+  Spinner,
+  Text,
+  type ContainerSummary,
+  type ExecutionSummary,
+  type ImageSummary,
+  type NetworkSummary,
+  type TabSummary,
   type VolumeSummary,
 } from '@husklet/react';
 import { boundedMessage } from './model.js';
 
-export const SECTIONS = ['overview', 'workspace', 'extensions', 'containers', 'processes', 'executions', 'images', 'volumes', 'networks', 'terminals'] as const;
-export type Section = typeof SECTIONS[number];
+export const SECTIONS = [
+  'overview',
+  'workspace',
+  'extensions',
+  'containers',
+  'processes',
+  'executions',
+  'images',
+  'volumes',
+  'networks',
+  'terminals',
+] as const;
+export type Section = (typeof SECTIONS)[number];
 
 export type Resource<T> = {
   data: T[] | undefined;
@@ -18,71 +42,151 @@ export type Resource<T> = {
   replace: (value: T[]) => void;
 };
 
-export function Navigation({ section, onSelect }: { section: Section; onSelect: (section: Section) => void }) {
-  return <Column grow={false} width={{ chars: 20 }} height="fill" pad={2} gap={1}>
-    <Heading label="Top" scale="title" />
-    <Text label="Workspace control" color="text-dim" />
-    <Scroll grow height="fill"><Column gap={1}>
-      {SECTIONS.map((name) => <Button
-        key={name}
-        label={title(name)}
-        variant={section === name ? 'filled' : 'ghost'}
-        onInvoke={() => onSelect(name)} />)}
-    </Column></Scroll>
-  </Column>;
+export function Navigation({
+  section,
+  onSelect,
+}: {
+  section: Section;
+  onSelect: (section: Section) => void;
+}) {
+  return (
+    <Column grow={false} width={{ chars: 20 }} height="fill" pad={2} gap={1}>
+      <Heading label="Top" scale="title" />
+      <Text label="Workspace control" color="text-dim" />
+      <Scroll grow height="fill">
+        <Column gap={1}>
+          {SECTIONS.map((name) => (
+            <Button
+              key={name}
+              label={title(name)}
+              variant={section === name ? 'filled' : 'ghost'}
+              onInvoke={() => onSelect(name)}
+            />
+          ))}
+        </Column>
+      </Scroll>
+    </Column>
+  );
 }
 
-export function Overview({ containers, executions, images, volumes, networks, terminals, onOpen }: {
-  containers: Resource<ContainerSummary>; executions: Resource<ExecutionSummary>; images: Resource<ImageSummary>; volumes: Resource<VolumeSummary>;
-  networks: Resource<NetworkSummary>; terminals: Resource<TabSummary>;
+export function Overview({
+  containers,
+  executions,
+  images,
+  volumes,
+  networks,
+  terminals,
+  onOpen,
+}: {
+  containers: Resource<ContainerSummary>;
+  executions: Resource<ExecutionSummary>;
+  images: Resource<ImageSummary>;
+  volumes: Resource<VolumeSummary>;
+  networks: Resource<NetworkSummary>;
+  terminals: Resource<TabSummary>;
   onOpen: (section: Section) => void;
 }) {
   const resources = [containers, executions, images, volumes, networks, terminals];
   const refreshing = resources.some((resource) => resource.loading);
-  const refreshAll = async () => { await Promise.all(resources.map((resource) => resource.reload())); };
-  const containersSummary = resourceSummary(containers, (records) => `${records.filter((item) => item.state === 'running').length} running`);
-  const executionsSummary = resourceSummary(executions, (records) => `${records.filter((item) => item.running).length} running`);
+  const refreshAll = async () => {
+    await Promise.all(resources.map((resource) => resource.reload()));
+  };
+  const containersSummary = resourceSummary(
+    containers,
+    (records) => `${records.filter((item) => item.state === 'running').length} running`,
+  );
+  const executionsSummary = resourceSummary(
+    executions,
+    (records) => `${records.filter((item) => item.running).length} running`,
+  );
   const imagesSummary = resourceSummary(images, () => 'Available locally');
   const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
   const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
-  const terminalsSummary = resourceSummary(terminals, (records) => `${records.filter((tab) => tab.pinned).length} pinned`);
-  return <Scroll grow height="fill"><Column pad={4} gap={3}>
-    <Heading label="Resource overview" scale="title" />
-    <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
-    <Row gap={1} align="center">
-      {refreshing ? <Spinner /> : null}
-      <Button label={refreshing ? 'Refreshing…' : 'Refresh all'} enabled={!refreshing} onInvoke={refreshAll} />
-    </Row>
-    <Row gap={2} wrap>
-      <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
-      <Summary title="Processes" value="On demand" detail="Across running containers" onOpen={() => onOpen('processes')} />
-      <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
-      <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
-      <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
-      <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
-      <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
-    </Row>
-    <ErrorText error={containers.error ?? executions.error ?? images.error ?? volumes.error ?? networks.error ?? terminals.error} />
-  </Column></Scroll>;
+  const terminalsSummary = resourceSummary(
+    terminals,
+    (records) => `${records.filter((tab) => tab.pinned).length} pinned`,
+  );
+  return (
+    <Scroll grow height="fill">
+      <Column pad={4} gap={3}>
+        <Heading label="Resource overview" scale="title" />
+        <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
+        <Row gap={1} align="center">
+          {refreshing ? <Spinner /> : null}
+          <Button
+            label={refreshing ? 'Refreshing…' : 'Refresh all'}
+            enabled={!refreshing}
+            onInvoke={refreshAll}
+          />
+        </Row>
+        <Row gap={2} wrap>
+          <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
+          <Summary
+            title="Processes"
+            value="On demand"
+            detail="Across running containers"
+            onOpen={() => onOpen('processes')}
+          />
+          <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
+          <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
+          <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
+          <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
+          <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
+        </Row>
+        <ErrorText
+          error={
+            containers.error ??
+            executions.error ??
+            images.error ??
+            volumes.error ??
+            networks.error ??
+            terminals.error
+          }
+        />
+      </Column>
+    </Scroll>
+  );
 }
 
-function resourceSummary<T>(resource: Pick<Resource<T>, 'data' | 'loading' | 'error'>, readyDetail: (records: T[]) => string) {
+function resourceSummary<T>(
+  resource: Pick<Resource<T>, 'data' | 'loading' | 'error'>,
+  readyDetail: (records: T[]) => string,
+) {
   if (resource.loading) return { value: '…', detail: 'Reading inventory…' };
   if (resource.error) return { value: 'Unavailable', detail: 'Refresh failed' };
   const records = resource.data ?? [];
   return { value: String(records.length), detail: readyDetail(records) };
 }
 
-function Summary({ title: label, value, detail, onOpen }: { title: string; value: string; detail: string; onOpen: () => void }) {
-  return <Card width={{ minimum: { chars: 18 } }} variant="outline">
-    <CardHeader label={label} />
-    <CardContent gap={1}><Heading label={value} scale="title" /><Text label={detail} color="text-dim" /></CardContent>
-    <CardActions><Button label={`Open ${label}`} variant="ghost" onInvoke={onOpen} /></CardActions>
-  </Card>;
+function Summary({
+  title: label,
+  value,
+  detail,
+  onOpen,
+}: {
+  title: string;
+  value: string;
+  detail: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Card width={{ minimum: { chars: 18 } }} variant="outline">
+      <CardHeader label={label} />
+      <CardContent gap={1}>
+        <Heading label={value} scale="title" />
+        <Text label={detail} color="text-dim" />
+      </CardContent>
+      <CardActions>
+        <Button label={`Open ${label}`} variant="ghost" onInvoke={onOpen} />
+      </CardActions>
+    </Card>
+  );
 }
 
 function ErrorText({ error }: { error: unknown }) {
   return error ? <Text label={boundedMessage(error)} color="danger" wrap /> : null;
 }
 
-function title(value: string): string { return value.charAt(0).toUpperCase() + value.slice(1); }
+function title(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
