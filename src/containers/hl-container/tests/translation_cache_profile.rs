@@ -5,12 +5,17 @@ use hl_container::{
     Sandbox, Stream,
 };
 use hl_images::{Images, Platform, Reference, RuntimeConfig};
+use nix::{
+    fcntl::{OFlag, open, openat},
+    sys::stat::Mode as FileMode,
+};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read as _,
     os::unix::fs::PermissionsExt as _,
-    path::Path,
+    path::{Component, Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -18,6 +23,112 @@ type Error = Box<dyn std::error::Error>;
 
 const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
 const CC1: &str = "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1";
+
+#[derive(Debug, Eq, PartialEq)]
+struct CompilerInput {
+    archive_path: PathBuf,
+    bytes: Vec<u8>,
+    guest: String,
+    basename: String,
+    expected_assembly: String,
+}
+
+impl CompilerInput {
+    fn resolve(
+        root: &Path,
+        relative: Option<&str>,
+        basename: Option<&str>,
+        expected_assembly: Option<&str>,
+    ) -> Result<Self, Error> {
+        let customized = relative.is_some() || basename.is_some();
+        let relative = relative.unwrap_or("work/src/unit_127.c");
+        let relative = Path::new(relative);
+        require(!relative.is_absolute(), "compiler source path must be relative")?;
+        require(
+            relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+            "compiler source path must contain only normal relative components",
+        )?;
+        let bytes = Self::read_beneath(root, relative, || {})?;
+        let actual_basename = relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("compiler source basename is not valid UTF-8")?;
+        let basename = basename.unwrap_or(actual_basename);
+        require(
+            basename == actual_basename,
+            "compiler source basename does not match its path",
+        )?;
+        require(!basename.contains('/'), "compiler source basename contains a separator")?;
+        let expected_assembly = match expected_assembly {
+            Some(digest) => digest,
+            None if !customized => UNIT_127_ASSEMBLY,
+            None => {
+                return Err("custom compiler source requires HL_PCACHE_PROFILE_OUTPUT_SHA256".into());
+            }
+        };
+        require(
+            expected_assembly.len() == 64
+                && expected_assembly
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "expected compiler assembly SHA-256 is not 64 hexadecimal characters",
+        )?;
+        let guest = format!("/{}", relative.to_string_lossy().trim_start_matches('/'));
+        Ok(Self {
+            archive_path: relative.to_owned(),
+            bytes,
+            guest,
+            basename: basename.to_owned(),
+            expected_assembly: expected_assembly.to_ascii_lowercase(),
+        })
+    }
+
+    fn read_beneath(root: &Path, relative: &Path, before_final_open: impl FnOnce()) -> Result<Vec<u8>, Error> {
+        const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+        let root = root.canonicalize()?;
+        let mut directory = open(
+            &root,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            FileMode::empty(),
+        )?;
+        let mut components = relative.components().peekable();
+        while let Some(Component::Normal(component)) = components.next() {
+            let final_component = components.peek().is_none();
+            if final_component {
+                before_final_open();
+            }
+            let flags = if final_component {
+                OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK
+            } else {
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC
+            };
+            let opened = openat(&directory, component, flags, FileMode::empty())?;
+            if final_component {
+                let opened = fs::File::from(opened);
+                let metadata = opened.metadata()?;
+                require(metadata.is_file(), "compiler source is not a regular file")?;
+                require(metadata.len() <= MAX_SOURCE_BYTES, "compiler source exceeds the size limit")?;
+                let mut bytes = Vec::with_capacity(metadata.len() as usize);
+                opened.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
+                require(bytes.len() as u64 <= MAX_SOURCE_BYTES, "compiler source exceeds the size limit")?;
+                return Ok(bytes);
+            }
+            directory = opened;
+        }
+        Err("compiler source path has no final component".into())
+    }
+
+    fn append_snapshot<W: std::io::Write>(&self, archive: &mut tar::Builder<W>) -> Result<(), Error> {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(self.bytes.len() as u64);
+        header.set_cksum();
+        archive.append_data(&mut header, &self.archive_path, self.bytes.as_slice())?;
+        Ok(())
+    }
+}
 
 #[test]
 fn cache_census_owner_budget_contract_is_explicit() {
@@ -237,6 +348,136 @@ fn durable_cache_receipt_requirement_is_non_vacuous() {
     }
 }
 
+#[test]
+fn compiler_input_defaults_are_authenticated_and_custom_inputs_are_bounded() {
+    let root = tempfile::tempdir().expect("temporary compiler root");
+    let directory = root.path().join("work/src");
+    fs::create_dir_all(&directory).expect("compiler source directory");
+    fs::write(directory.join("unit_127.c"), b"default").expect("default compiler source");
+    fs::write(directory.join("larger.c"), b"custom").expect("custom compiler source");
+
+    let default =
+        CompilerInput::resolve(root.path(), None, None, None).expect("default compiler input");
+    assert_eq!(default.guest, "/work/src/unit_127.c");
+    assert_eq!(default.basename, "unit_127.c");
+    assert_eq!(default.expected_assembly, UNIT_127_ASSEMBLY);
+
+    assert!(CompilerInput::resolve(root.path(), Some("work/src/larger.c"), None, None).is_err());
+    assert!(
+        CompilerInput::resolve(
+            root.path(),
+            Some("work/src/larger.c"),
+            Some("wrong.c"),
+            Some(UNIT_127_ASSEMBLY),
+        )
+        .is_err()
+    );
+    assert!(
+        CompilerInput::resolve(
+            root.path(),
+            Some("work/src/larger.c"),
+            None,
+            Some("not-a-digest"),
+        )
+        .is_err()
+    );
+    let custom = CompilerInput::resolve(
+        root.path(),
+        Some("work/src/larger.c"),
+        Some("larger.c"),
+        Some(&UNIT_127_ASSEMBLY.to_ascii_uppercase()),
+    )
+    .expect("bounded custom compiler input");
+    assert_eq!(custom.guest, "/work/src/larger.c");
+    assert_eq!(custom.expected_assembly, UNIT_127_ASSEMBLY);
+}
+
+#[test]
+fn compiler_input_rejects_parent_and_symlink_escape() {
+    let root = tempfile::tempdir().expect("temporary compiler root");
+    let outside = tempfile::tempdir().expect("outside directory");
+    fs::write(outside.path().join("escape.c"), b"escape").expect("outside source");
+    assert!(
+        CompilerInput::resolve(
+            root.path(),
+            Some("../escape.c"),
+            None,
+            Some(UNIT_127_ASSEMBLY),
+        )
+        .is_err()
+    );
+    std::os::unix::fs::symlink(outside.path(), root.path().join("link")).expect("escape symlink");
+    assert!(
+        CompilerInput::resolve(
+            root.path(),
+            Some("link/escape.c"),
+            None,
+            Some(UNIT_127_ASSEMBLY),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn compiler_input_snapshot_survives_a_post_resolution_path_swap() {
+    let root = tempfile::tempdir().expect("temporary compiler root");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let directory = root.path().join("work/src");
+    fs::create_dir_all(&directory).expect("compiler source directory");
+    let source = directory.join("unit_127.c");
+    fs::write(&source, b"authenticated input").expect("authenticated source");
+    fs::write(outside.path().join("unit_127.c"), b"swapped input").expect("outside source");
+    let compiler = CompilerInput::resolve(root.path(), None, None, None).expect("compiler input");
+
+    fs::remove_file(&source).expect("remove authenticated pathname");
+    std::os::unix::fs::symlink(outside.path().join("unit_127.c"), &source).expect("swap pathname");
+    assert_eq!(compiler.bytes, b"authenticated input");
+
+    let mut archive = tar::Builder::new(Vec::new());
+    archive.follow_symlinks(false);
+    archive
+        .append_dir_all(".", root.path())
+        .expect("append path-swapped fixture");
+    compiler.append_snapshot(&mut archive).expect("append snapshot");
+    let archive_bytes = archive.into_inner().expect("finish archive");
+    let extracted = tempfile::tempdir().expect("extracted archive");
+    tar::Archive::new(archive_bytes.as_slice())
+        .unpack(extracted.path())
+        .expect("extract snapshot");
+    assert_eq!(
+        fs::read(extracted.path().join("work/src/unit_127.c")).expect("archived compiler source"),
+        b"authenticated input"
+    );
+}
+
+#[test]
+fn compiler_input_component_walk_pins_parents_and_never_reads_a_fifo() {
+    let root = tempfile::tempdir().expect("temporary compiler root");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let source_directory = root.path().join("work/src");
+    fs::create_dir_all(&source_directory).expect("compiler source directory");
+    fs::write(source_directory.join("input.c"), b"authenticated input").expect("compiler source");
+    fs::write(outside.path().join("input.c"), b"outside input").expect("outside source");
+    let pinned = root.path().join("work/pinned-src");
+    let bytes = CompilerInput::read_beneath(root.path(), Path::new("work/src/input.c"), || {
+        fs::rename(&source_directory, &pinned).expect("move opened parent");
+        std::os::unix::fs::symlink(outside.path(), &source_directory).expect("replace parent with symlink");
+    })
+    .expect("read through pinned parent descriptor");
+    assert_eq!(bytes, b"authenticated input");
+
+    let fifo_root = tempfile::tempdir().expect("FIFO compiler root");
+    let fifo_directory = fifo_root.path().join("work/src");
+    fs::create_dir_all(&fifo_directory).expect("FIFO source directory");
+    let fifo_source = fifo_directory.join("input.c");
+    fs::write(&fifo_source, b"initial input").expect("initial source");
+    let result = CompilerInput::read_beneath(fifo_root.path(), Path::new("work/src/input.c"), || {
+        fs::remove_file(&fifo_source).expect("remove initial source");
+        nix::unistd::mkfifo(&fifo_source, FileMode::from_bits_truncate(0o600)).expect("create FIFO");
+    });
+    assert!(result.is_err(), "FIFO replacement must be rejected without blocking");
+}
+
 #[tokio::test]
 #[ignore = "profile only: the runner supplies an owned compiler fixture and one isolated process arm"]
 async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), Error> {
@@ -250,9 +491,11 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         .ok_or("HL_PCACHE_PROFILE_ROOT must name the exact compiler fixture")?;
     let source = Path::new(&source);
     require(source.is_absolute(), "profile root is not absolute")?;
-    require(
-        source.join("work/src/unit_127.c").is_file(),
-        "profile root has no unit_127 compiler input",
+    let compiler = CompilerInput::resolve(
+        source,
+        std::env::var("HL_PCACHE_PROFILE_SOURCE").ok().as_deref(),
+        std::env::var("HL_PCACHE_PROFILE_BASENAME").ok().as_deref(),
+        std::env::var("HL_PCACHE_PROFILE_OUTPUT_SHA256").ok().as_deref(),
     )?;
     let cache = std::env::var_os("HL_PCACHE_PROFILE_CACHE")
         .ok_or("HL_PCACHE_PROFILE_CACHE must name the runner-owned persistent directory")?;
@@ -324,6 +567,9 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
             source.display()
         )
     })?;
+    // `append_dir_all` may have observed a pathname swap after `CompilerInput::resolve`; replace its
+    // entry last with the exact byte snapshot used for the input receipt and expected-output contract.
+    compiler.append_snapshot(&mut archive)?;
     if mode == Mode::CacheChangedLibrary {
         // A trailing byte leaves the ELF load image and compiler behavior unchanged while changing the
         // complete-content authority. Append the replacement last so the imported image contains the
@@ -467,8 +713,10 @@ int main(void) {
     }
     archive.finish()?;
     drop(archive);
-    let input = fs::read(source.join("work/src/unit_127.c"))?;
-    eprintln!("pcache-profile input_sha256={}", hex(&Sha256::digest(input)));
+    eprintln!(
+        "pcache-profile input_sha256={}",
+        hex(&Sha256::digest(&compiler.bytes))
+    );
 
     let platform = Platform::linux_amd64();
     let name: Reference = "husklet.invalid/pcache-profile:fixture".parse()?;
@@ -913,12 +1161,12 @@ int main(void) {
     } else {
         Process::new(CC1).args([
             "-quiet",
-            "/work/src/unit_127.c",
+            &compiler.guest,
             "-quiet",
             "-dumpdir",
             "/tmp/",
             "-dumpbase",
-            "unit_127.c",
+            &compiler.basename,
             "-dumpbase-ext",
             ".c",
             "-mtune=generic",
@@ -1194,7 +1442,10 @@ int main(void) {
     } else if mode == Mode::CacheNestedToolchainSmc {
         require(logs.stdout == b"smc-ok\n", "immutable SMC fixture output changed")?;
     } else {
-        require(hex(&output) == UNIT_127_ASSEMBLY, "compiler workload output changed")?;
+        require(
+            hex(&output) == compiler.expected_assembly,
+            "compiler workload output changed",
+        )?;
     }
     let mut cache_loaded = false;
     if mode.cached() {
