@@ -45,6 +45,7 @@ enum Mode {
     CacheCold,
     CacheNestedLaunchOnly,
     CacheNestedToolchain,
+    CacheNestedToolchainTiming,
     CacheNestedToolchainUpper,
     CacheNestedToolchainSmc,
     CacheFreshRollover,
@@ -94,6 +95,7 @@ impl Mode {
             "cache-cold" => Ok(Self::CacheCold),
             "cache-nested-launch-only" => Ok(Self::CacheNestedLaunchOnly),
             "cache-nested-toolchain" => Ok(Self::CacheNestedToolchain),
+            "cache-nested-toolchain-timing" => Ok(Self::CacheNestedToolchainTiming),
             "cache-nested-toolchain-upper" => Ok(Self::CacheNestedToolchainUpper),
             "cache-nested-toolchain-smc" => Ok(Self::CacheNestedToolchainSmc),
             "cache-fresh-rollover" => Ok(Self::CacheFreshRollover),
@@ -153,7 +155,10 @@ impl Mode {
 }
 
 fn container_execution(mode: Mode) -> Execution {
-    if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
+    if matches!(
+        mode,
+        Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain
+    ) {
         Execution::Interpreted
     } else if mode == Mode::NativeToolchain {
         Execution::native(false)
@@ -258,6 +263,7 @@ async fn compiler_process_reuses_the_product_translation_cache() -> Result<(), E
         Mode::CacheCold
             | Mode::CacheNestedLaunchOnly
             | Mode::CacheNestedToolchain
+            | Mode::CacheNestedToolchainTiming
             | Mode::CacheNestedToolchainUpper
             | Mode::CacheNestedToolchainSmc
             | Mode::CacheAuthorityReuse
@@ -882,10 +888,16 @@ int main(void) {
         Process::new("/bin/sh").args(["-c".to_owned(), command])
     } else if matches!(
         mode,
-        Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
+        Mode::CacheNestedToolchain
+            | Mode::CacheNestedToolchainTiming
+            | Mode::TranslatedToolchain
+            | Mode::NativeToolchain
     ) {
         let command = "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && /usr/bin/gcc -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain";
-        let command = if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+        let command = if matches!(
+            mode,
+            Mode::CacheNestedToolchainTiming | Mode::TranslatedToolchain | Mode::NativeToolchain
+        ) {
             format!("{command} && times")
         } else {
             command.to_owned()
@@ -993,11 +1005,13 @@ int main(void) {
         )
         .into());
     }
-    let nested_cold_artifacts = if mode == Mode::CacheNestedToolchain {
-        require(
-            std::env::var("HL_PCACHE_PROFILE_OBSERVE").as_deref() == Ok("1"),
-            "nested toolchain witness requires production cache observation",
-        )?;
+    let nested_cold_artifacts = if matches!(mode, Mode::CacheNestedToolchain | Mode::CacheNestedToolchainTiming) {
+        if mode == Mode::CacheNestedToolchain {
+            require(
+                std::env::var("HL_PCACHE_PROFILE_OBSERVE").as_deref() == Ok("1"),
+                "nested toolchain witness requires production cache observation",
+            )?;
+        }
         let mut names = cache
             .read_dir()?
             .filter_map(Result::ok)
@@ -1015,7 +1029,10 @@ int main(void) {
     };
     if matches!(
         mode,
-        Mode::CacheAuthorityReuse | Mode::CacheUpperOverride | Mode::CacheNestedToolchain
+        Mode::CacheAuthorityReuse
+            | Mode::CacheUpperOverride
+            | Mode::CacheNestedToolchain
+            | Mode::CacheNestedToolchainTiming
     ) {
         let repeat_root = images.roots().fork_overlay(unpacked.snapshot())?;
         if mode == Mode::CacheUpperOverride {
@@ -1037,11 +1054,13 @@ int main(void) {
         let repeat = ContainerSpec::new(repeat_root, repeat_process)
             .name("pcache-profile-repeat")
             .guest(Guest::X86_64)
-            .execution(if mode == Mode::CacheNestedToolchain {
-                Execution::Auto
-            } else {
-                Execution::native(false)
-            })
+            .execution(
+                if matches!(mode, Mode::CacheNestedToolchain | Mode::CacheNestedToolchainTiming) {
+                    Execution::Auto
+                } else {
+                    Execution::native(false)
+                },
+            )
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 read_only_root: false,
@@ -1066,7 +1085,23 @@ int main(void) {
             )
             .into());
         }
-        require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
+        if mode == Mode::CacheNestedToolchainTiming {
+            require(
+                repeat_logs.stdout.split(|byte| *byte == b'\n').next()
+                    == logs.stdout.split(|byte| *byte == b'\n').next(),
+                "repeated compiler digest changed",
+            )?;
+            eprintln!(
+                "pcache-profile warm_guest_times={}",
+                String::from_utf8_lossy(&repeat_logs.stdout)
+                    .lines()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        } else {
+            require(repeat_logs.stdout == logs.stdout, "repeated compiler output changed")?;
+        }
         if let Some(cold) = &nested_cold_artifacts {
             let mut warm = cache
                 .read_dir()?
@@ -1079,21 +1114,23 @@ int main(void) {
                 &warm == cold,
                 "warm toolchain changed the set of authenticated executable cache keys",
             )?;
-            let hits = cache
-                .read_dir()?
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry
-                        .file_name()
-                        .as_encoded_bytes()
-                        .windows(18)
-                        .any(|part| part == b".execution-census-")
-                })
-                .count();
-            require(
-                hits >= cold.len(),
-                "warm toolchain did not execute every cold-published key as a production HIT",
-            )?;
+            if mode == Mode::CacheNestedToolchain {
+                let hits = cache
+                    .read_dir()?
+                    .filter_map(Result::ok)
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .as_encoded_bytes()
+                            .windows(18)
+                            .any(|part| part == b".execution-census-")
+                    })
+                    .count();
+                require(
+                    hits >= cold.len(),
+                    "warm toolchain did not execute every cold-published key as a production HIT",
+                )?;
+            }
         }
         eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
@@ -1122,7 +1159,10 @@ int main(void) {
         )?;
     } else if matches!(
         mode,
-        Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
+        Mode::CacheNestedToolchain
+            | Mode::CacheNestedToolchainTiming
+            | Mode::TranslatedToolchain
+            | Mode::NativeToolchain
     ) {
         let fields = String::from_utf8_lossy(&logs.stdout)
             .split_ascii_whitespace()
@@ -1130,14 +1170,20 @@ int main(void) {
             .collect::<Vec<_>>();
         require(
             fields.len()
-                == if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+                == if matches!(
+                    mode,
+                    Mode::CacheNestedToolchainTiming | Mode::TranslatedToolchain | Mode::NativeToolchain
+                ) {
                     6
                 } else {
                     2
                 },
             "toolchain did not emit exactly one executable digest and the requested CPU-time receipt",
         )?;
-        if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+        if matches!(
+            mode,
+            Mode::CacheNestedToolchainTiming | Mode::TranslatedToolchain | Mode::NativeToolchain
+        ) {
             eprintln!("pcache-profile guest_times={}", fields[2..].join(" "));
         }
     } else if mode == Mode::CacheNestedToolchainUpper {
@@ -1254,6 +1300,10 @@ int main(void) {
             Mode::CacheNestedToolchain => require(
                 nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() >= 4),
                 "nested toolchain did not retain its cold authenticated key census",
+            )?,
+            Mode::CacheNestedToolchainTiming => require(
+                nested_cold_artifacts.as_ref().is_some_and(|keys| keys.len() >= 4),
+                "timed nested toolchain did not retain its authenticated key census",
             )?,
             Mode::CacheNestedToolchainUpper => require(
                 entries
