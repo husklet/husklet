@@ -3782,7 +3782,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         int status = 0;
         return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 231;
     }
-    if (scenario == 234 || scenario == 235) {
+    if (scenario == 236 || scenario == 237) {
         pid_t child = fork();
         if (child < 0) return (int)scenario;
         if (child == 0) _exit(translit_jcc_ibtc_fixture_test(scenario));
@@ -9013,7 +9013,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
 
 static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     unsigned requested_scenario = scenario;
-    hl_backend_x86_jcc_route_test_enabled = scenario == 234;
+    hl_backend_x86_jcc_route_test_enabled = scenario == 236;
     translit_test_jcc_guard = 0;
     if (scenario >= 208 && scenario <= 216) {
         static const uint8_t guard_scenarios[] = {90, 92, 93, 94, 95, 99, 98, 90, 90};
@@ -9024,7 +9024,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         scenario = 94;
         translit_test_jcc_guard = 1;
     }
-    if (scenario == 234 || scenario == 235) scenario = 90;
+    if (scenario == 236 || scenario == 237) scenario = 90;
     if (scenario == 89) {
         uint8_t on[2048] = {0}, off[2048] = {0};
         hl_x64_asm a_on = {on, on + sizeof on, 0, 0}, a_off = {off, off + sizeof off, 0, 0};
@@ -9119,7 +9119,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     uint64_t invalid_before = __atomic_load_n(&translit_jcc_ibtc_invalid_refusal, __ATOMIC_RELAXED);
     int result = 136;
 
-    if (requested_scenario == 235) {
+    if (requested_scenario == 237) {
         /* This fingerprint freezes the established, unobserved shared stub.  Route
            diagnostics are absent in ordinary launches, so resolving even one route
            counter must change either these bytes or their length and redden the proof. */
@@ -9146,7 +9146,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         if (length != 1145 || fingerprint != UINT64_C(0xc779936f6cc53b7b))
             fprintf(stderr, "unobserved jcc stub length=%zu fingerprint=%016llx\n", length,
                     (unsigned long long)fingerprint);
-        result = length == 1145 && fingerprint == UINT64_C(0xc779936f6cc53b7b) ? 0 : 235;
+        result = length == 1145 && fingerprint == UINT64_C(0xc779936f6cc53b7b) ? 0 : 237;
         goto done_ibtc;
     }
 
@@ -9269,7 +9269,7 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
         goto done_ibtc;
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
 
-    if (requested_scenario == 234) {
+    if (requested_scenario == 236) {
         ibtc_clear_lazy();
         for (unsigned kind = 0; kind < HL_BACKEND_X86_JCC_ROUTE_COUNT; ++kind)
             atomic_store_explicit(&hl_backend_x86_jcc_route_test[kind], 0, memory_order_relaxed);

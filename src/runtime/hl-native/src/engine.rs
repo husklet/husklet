@@ -685,7 +685,7 @@ mod tests {
         }
         for selector in [
             190, 192, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216,
-            224, 225, 226,
+            224, 225, 226, 236, 237,
         ] {
             assert!(selectors.contains_key(&selector), "unbound selector {selector}");
         }

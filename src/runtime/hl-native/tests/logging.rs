@@ -90,13 +90,13 @@ fn forward_jcc_link_emits_only_a_live_state_jump() {
 #[cfg(feature = "native-test-hooks")]
 #[test]
 fn x86_jcc_route_partitions_every_loaded_pair_and_irq_bypass() {
-    assert_eq!(hl_native::x86_64_translit_displaced_test(234), 0);
+    assert_eq!(hl_native::x86_64_translit_displaced_test(236), 0);
 }
 
 #[cfg(feature = "native-test-hooks")]
 #[test]
 fn x86_jcc_route_absence_preserves_the_established_shared_stub() {
-    assert_eq!(hl_native::x86_64_translit_displaced_test(235), 0);
+    assert_eq!(hl_native::x86_64_translit_displaced_test(237), 0);
 }
 
 #[test]
