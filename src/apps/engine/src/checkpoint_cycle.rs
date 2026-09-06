@@ -13,14 +13,6 @@ use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().fold(String::new(), |mut text, byte| {
-        use std::fmt::Write as _;
-        let _ = write!(text, "{byte:02x}");
-        text
-    })
-}
-
 #[derive(Default)]
 struct Image {
     state: Mutex<ImageState>,
@@ -71,7 +63,7 @@ impl Image {
         }
         let members = state.committed.len();
         drop(state);
-        Ok((members, sha256_hex(&self.bytes()?)))
+        Ok((members, format!("{:x}", Sha256::digest(self.bytes()?))))
     }
 }
 
@@ -387,7 +379,7 @@ pub(super) fn run(
             )));
         }
     }
-    let transcript_sha256 = sha256_hex(&transcript);
+    let transcript_sha256 = format!("{:x}", Sha256::digest(&transcript));
     let image_bytes = image.bytes()?;
     std::fs::write(control.join("checkpoint-image.bin"), &image_bytes)
         .map_err(|error| Failure::Request(format!("cannot export checkpoint image: {error}")))?;
@@ -414,33 +406,10 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckpointSink, CheckpointSource, Image, host_control, sha256_hex};
+    use super::{CheckpointSink, CheckpointSource, Image, host_control};
     use std::num::NonZeroU64;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
-
-    #[test]
-    fn sha256_hex_is_exact_lowercase_and_known() {
-        for (input, expected) in [
-            (
-                b"".as_slice(),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            ),
-            (
-                b"abc".as_slice(),
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            ),
-        ] {
-            let actual = sha256_hex(input);
-            assert_eq!(actual, expected);
-            assert_eq!(actual.len(), 64);
-            assert!(
-                actual
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            );
-        }
-    }
 
     #[test]
     fn control_path_is_absolute_normalized_and_rootfs_bound() {
