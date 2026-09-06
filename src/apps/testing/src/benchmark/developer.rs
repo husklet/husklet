@@ -697,12 +697,15 @@ fn execute(options: &Options, root: &Path, mode: Mode, sample: u32, position: us
         .into_inner()?;
     let phase_ns = validate_phases(&marks, elapsed)?;
     let stderr = String::from_utf8(stderr)?;
+    // Preserve the measured evidence even when a backend receipt rejects the row.  Receipt
+    // failures are precisely where the raw transport is needed to distinguish a runtime miss
+    // from a verifier bug; publishing the ledger still happens only after validation below.
+    atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
+    atomic_bytes(&stderr_path(&options.results, sample, position, mode), stderr.as_bytes())?;
     let receipt = backend_receipt(backend, guest_isa, &stderr, &measured, root,
                                   options.translated_route_observe && mode == Mode::Translated)?;
     let stdout_sha256 = hex(Sha256::digest(&output));
     let stderr_sha256 = hex(Sha256::digest(stderr.as_bytes()));
-    atomic_bytes(&output_path(&options.results, sample, position, mode), &output)?;
-    atomic_bytes(&stderr_path(&options.results, sample, position, mode), stderr.as_bytes())?;
     Ok(Row {
         sample,
         position,
