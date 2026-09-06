@@ -506,7 +506,7 @@ fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
     if mode == Mode::Translated && options.warm_translation_cache {
         let at = argv.iter().position(|value| value == "--").unwrap();
         argv.splice(at..at, ["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
-                            "--translation-cache-observe".into(), "--translation-cache-process-tree".into()]);
+                            "--translation-cache-process-tree".into()]);
     }
     argv
 }
@@ -741,7 +741,7 @@ fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, argu
             measured.extend(["--loader-receipt", "--report-exit"].into_iter().map(OsString::from));
             if mode == Mode::Translated && options.warm_translation_cache {
                 measured.extend(["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
-                                 "--translation-cache-observe".into(), "--translation-cache-process-tree".into()]);
+                                 "--translation-cache-process-tree".into()]);
             } else {
                 measured.push("--diagnostics".into());
             }
@@ -1399,6 +1399,20 @@ mod tests {
     }
 
     #[test]
+    fn cache_outcome_receipt_is_not_gated_by_expensive_observation() {
+        let source = include_str!(
+            "../../../../runtime/hl-native/src/native/translator/guest/x86_64/interp.c"
+        );
+        let body = source
+            .split_once("static void x64_pc_observe_emit(")
+            .and_then(|(_, tail)| tail.split_once("/* Before the first peer exists"))
+            .map(|(body, _)| body)
+            .expect("persistent-cache outcome producer");
+        assert!(body.contains("if (!g_pcache) return;"));
+        assert!(!body.contains("if (!g_coldprof) return;"));
+    }
+
+    #[test]
     fn developer_fixture_closes_over_the_same_guest_path_for_every_backend() {
         let fixture = fixture_source();
         assert!(
@@ -1463,7 +1477,8 @@ mod tests {
         let argv = measured_argv(&options, Path::new("/root"), Mode::Translated, "bin/true", &[]);
         assert_eq!(
             argv.iter().filter(|value| *value == "--translation-cache-observe").count(),
-            1
+            0,
+            "timed warm arms must not enable the perturbing per-block census"
         );
     }
 

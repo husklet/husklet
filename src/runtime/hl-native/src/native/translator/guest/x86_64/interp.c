@@ -2289,7 +2289,9 @@ static void x64_pc_restored_abandon_range(uint64_t lo, uint64_t hi) {
 #endif
 
 static void x64_pc_observe_emit(const char *outcome, uint64_t save_ns) {
-    if (!g_coldprof) return;
+    /* The outcome is production evidence for every cache launch. Keep only the expensive
+       per-block census behind HL_PCACHE_OBSERVE; these aggregate counters already exist. */
+    if (!g_pcache) return;
     uint64_t restored_live = g_x64_pc_restored_live + g_x64_pc_activated_maps;
     uint64_t translated = g_live_map_count > restored_live ? g_live_map_count - restored_live : 0;
     fprintf(stderr,
