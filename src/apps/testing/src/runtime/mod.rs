@@ -41,7 +41,6 @@ pub(crate) use execution::{WorkerOptions, worker};
 pub(crate) use inventory_report::run as inventory;
 pub(crate) use options::Options;
 pub(crate) use output::backend_shape_product;
-pub(crate) use output::validate_translated_execution;
 pub(crate) use stage::Options as StageOptions;
 pub(crate) use stage::artifact_smoke;
 pub(crate) use stage::run as stage;

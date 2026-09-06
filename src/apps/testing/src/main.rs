@@ -15,7 +15,6 @@
 
 mod benchmark;
 mod checkpoint_profile;
-mod checkpoint_backend;
 mod journal;
 mod leaks;
 mod nested;
@@ -57,8 +56,6 @@ enum Command {
     ProfileAttribution(profile_attribution::Options),
     /// Profile real checkpoint/restore phases over a daily-development process tree.
     CheckpointProfile(checkpoint_profile::Options),
-    /// Prove checkpoint lifecycle semantics through one selected production engine worker.
-    CheckpointBackend(checkpoint_backend::Options),
     /// Run self-contained runtime compatibility cases.
     Runtime(runtime::Options),
     /// Print the exact current-host runtime corpus plan without executing cases.
@@ -118,7 +115,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::BenchmarkEngine(options) => benchmark::engine(options),
         Command::ProfileAttribution(options) => profile_attribution::run(options),
         Command::CheckpointProfile(options) => checkpoint_profile::run(options),
-        Command::CheckpointBackend(options) => checkpoint_backend::run(options),
         Command::Runtime(options) => runtime::run(options).await,
         Command::RuntimeInventory => runtime::inventory(),
         Command::RuntimeStage(options) => runtime::stage(options),
@@ -159,7 +155,6 @@ mod cli_tests {
             "benchmark-stage",
             "profile-attribution",
             "checkpoint-profile",
-            "checkpoint-backend",
             "runtime",
             "runtime-inventory",
             "runtime-stage",
