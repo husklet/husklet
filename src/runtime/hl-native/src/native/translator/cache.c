@@ -676,15 +676,25 @@ static inline __attribute__((always_inline)) int jit_resolve_rw_code(void *rwcod
 static void ibtc_drop_target(uint64_t target);
 static void ibtc_clear_lazy(void);
 
-static void jit_instruction_map_put_preserve(uint64_t host, uint64_t end, uint64_t guest,
-                                             uint32_t preserve_registers) {
-    if (host >= end) return;
-    uint32_t index = __atomic_fetch_add(&g_instruction_map_next, 1u, __ATOMIC_RELAXED) & (JIT_INSN_MAP_N - 1u);
+static uint32_t jit_instruction_map_reserve(uint32_t count) {
+    return __atomic_fetch_add(&g_instruction_map_next, count, __ATOMIC_RELAXED);
+}
+
+static void jit_instruction_map_put_reserved(uint32_t reservation, uint32_t offset, uint64_t host,
+                                             uint64_t end, uint64_t guest, uint32_t preserve_registers) {
+    uint32_t index = (reservation + offset) & (JIT_INSN_MAP_N - 1u);
     g_instruction_map[index].host = host;
     g_instruction_map[index].end = end;
     g_instruction_map[index].guest = guest;
     g_instruction_map[index].preserve_registers = preserve_registers;
     __atomic_store_n(&g_instruction_map[index].epoch, g_map_epoch, __ATOMIC_RELEASE);
+}
+
+static void jit_instruction_map_put_preserve(uint64_t host, uint64_t end, uint64_t guest,
+                                             uint32_t preserve_registers) {
+    if (host >= end) return;
+    uint32_t reservation = jit_instruction_map_reserve(1);
+    jit_instruction_map_put_reserved(reservation, 0, host, end, guest, preserve_registers);
 }
 
 static void jit_instruction_map_put(uint64_t host, uint64_t end, uint64_t guest) {
