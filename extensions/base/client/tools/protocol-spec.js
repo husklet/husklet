@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repository = path.resolve(here, '../../..');
+const repository = path.resolve(here, '../../../..');
 const schemaPath = path.join(repository, 'src/workspaces/hl-extension/protocol/v1.json');
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const output = path.resolve(here, '../src');

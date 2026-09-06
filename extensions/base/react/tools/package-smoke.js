@@ -164,7 +164,7 @@ async function runPackedStarterDenied(consumer, starter) {
 }
 
 function packageStageFiles(dockerfile, destination) {
-  const repository = path.resolve(root, '../..');
+  const repository = path.resolve(root, '../../..');
   const packageStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\}$/m, 1)[0];
   for (const line of packageStage.matchAll(/^COPY ([^\n]+)$/gm)) {
     const fields = line[1].trim().split(/\s+/);
@@ -206,7 +206,7 @@ try {
   }))[0].filename;
   const isolatedCache = path.join(scratch, 'npm-cache');
   const imageRuntime = path.join(scratch, 'base-runtime');
-  fs.cpSync(path.resolve(root, '../../extensions/base'), imageRuntime, { recursive: true });
+  fs.cpSync(path.resolve(root, '..'), imageRuntime, { recursive: true });
   execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--cache', isolatedCache], {
     cwd: imageRuntime, stdio: 'pipe',
   });
@@ -227,7 +227,7 @@ try {
   `], { cwd: consumer, encoding: 'utf8' });
   assert.equal(runtime, '');
   const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
-  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.resolve(root, '../../extensions/base/package.json'), 'utf8'));
+  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.resolve(root, '../package.json'), 'utf8'));
   for (const field of ['cpu', 'os', 'libc']) {
     assert.equal(manifest[field], undefined, `React SDK gained an architecture restriction in ${field}`);
   }
@@ -374,12 +374,12 @@ try {
     }
     void ProviderView;
   `);
-  execFileSync(path.resolve(root, '../../node_modules/.bin/tsc'), [
+  execFileSync(path.resolve(root, '../../../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
   ], { cwd: consumer, stdio: 'pipe' });
 
-  const dockerfile = fs.readFileSync(path.resolve(root, '../../extensions/base/Dockerfile'), 'utf8');
+  const dockerfile = fs.readFileSync(path.resolve(root, '../Dockerfile'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(dockerfile, /^ARG NODE_IMAGE=node:22-bookworm-slim@sha256:[0-9a-f]{64}$/m);
   assert.match(dockerfile, /^ARG NODE_VERSION=22\.23\.2$/m);

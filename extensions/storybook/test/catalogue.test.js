@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import reactCatalogue from '../../../packages/react/catalogue.json' with { type: 'json' };
+import reactCatalogue from '../../../extensions/base/react/catalogue.json' with { type: 'json' };
 
 import { components } from '@husklet/react';
 

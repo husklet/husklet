@@ -18,6 +18,15 @@ node -e '
   if (!Array.isArray(workspaces)) {
     throw new Error("package.json workspaces must be an array");
   }
+  for (const name of ["client", "react"]) {
+    if (fs.existsSync(path.join(root, "packages", name))) {
+      throw new Error(`packages/${name} is retired; extension SDK source belongs in extensions/base/${name}`);
+    }
+    const expected = `extensions/base/${name}`;
+    if (!fs.existsSync(path.join(root, expected, "package.json")) || !workspaces.includes(expected)) {
+      throw new Error(`${expected} must contain SDK source and be an npm workspace`);
+    }
+  }
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "extensions/storybook/package.json")));
   if (manifest.name !== "@husklet/storybook") {
     throw new Error("extensions/storybook must remain the @husklet/storybook package");
@@ -67,7 +76,7 @@ node -e '
 cargo check --locked --offline -q -p hl-extension
 cargo run --locked --offline -q -p hl-extension --bin hl-extension-spec -- \
   | cmp - "$specification"
-node "$root/packages/client/tools/protocol-spec.js"
+node "$root/extensions/base/client/tools/protocol-spec.js"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/husklet-extension-contracts.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 
@@ -77,8 +86,8 @@ declarations="$scratch/index.d.ts"
 cargo run --locked --offline -q --manifest-path "$root/Cargo.toml" \
   -p hl-gui --bin catalogue >"$catalogue"
 HUSKLET_CATALOGUE="$catalogue" HUSKLET_DECLARATIONS="$declarations" \
-  node "$root/packages/react/tools/types.js"
+  node "$root/extensions/base/react/tools/types.js"
 
-cmp "$catalogue" "$root/packages/react/catalogue.json"
+cmp "$catalogue" "$root/extensions/base/react/catalogue.json"
 cmp "$catalogue" "$root/extensions/storybook/src/catalogue.json"
-cmp "$declarations" "$root/packages/react/src/index.d.ts"
+cmp "$declarations" "$root/extensions/base/react/src/index.d.ts"

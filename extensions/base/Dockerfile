@@ -9,8 +9,8 @@ ARG HUSKLET_REACT_VERSION
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=10.9.8
 WORKDIR /source
-COPY packages/client ./client
-COPY packages/react ./react
+COPY extensions/base/client ./client
+COPY extensions/base/react ./react
 RUN test -n "${HUSKLET_REACT_VERSION}"
 RUN node -e "if (process.version !== 'v${NODE_VERSION}') process.exit(1); if (require('/usr/local/lib/node_modules/npm/package.json').version !== '${NPM_VERSION}') process.exit(1)"
 RUN npm --prefix client pkg set "version=${HUSKLET_REACT_VERSION}" \

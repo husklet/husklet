@@ -4,8 +4,8 @@
   "type": "module",
   "description": "Husklet JavaScript packages and first-party extensions.",
   "workspaces": [
-    "packages/client",
-    "packages/react",
+    "extensions/base/client",
+    "extensions/base/react",
     "extensions/storybook",
     "extensions/top"
   ],

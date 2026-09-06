@@ -6,11 +6,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const read = (name) => JSON.parse(fs.readFileSync(path.join(root, 'packages', name, 'package.json')));
+const packageRoot = (name) => path.join(root, 'extensions', 'base', name);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(packageRoot(name), 'package.json')));
 const client = read('client');
-const clientStarter = JSON.parse(fs.readFileSync(path.join(root, 'packages/client/examples/starter/package.json')));
+const clientStarter = JSON.parse(
+  fs.readFileSync(path.join(root, 'extensions/base/client/examples/starter/package.json')),
+);
 const react = read('react');
-const starter = JSON.parse(fs.readFileSync(path.join(root, 'packages/react/examples/starter/package.json')));
+const starter = JSON.parse(
+  fs.readFileSync(path.join(root, 'extensions/base/react/examples/starter/package.json')),
+);
 const expected = process.env.RELEASE_VERSION ?? client.version;
 for (const manifest of [client, react]) {
   assert.equal(manifest.version, expected);
@@ -23,7 +28,12 @@ assert.equal(starter.dependencies['@husklet/react'], expected);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-pack-'));
 try {
   const pack = (name) => {
-    const result = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], { cwd: path.join(root, 'packages', name), encoding: 'utf8' }))[0];
+    const result = JSON.parse(
+      execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
+        cwd: packageRoot(name),
+        encoding: 'utf8',
+      }),
+    )[0];
     assert.equal(result.name, `@husklet/${name}`);
     assert(result.integrity.startsWith('sha512-'));
     return path.join(scratch, result.filename);
@@ -32,10 +42,35 @@ try {
   const reactTarball = pack('react');
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
-  fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', clientTarball, reactTarball, 'react@18.3.1'], { cwd: consumer });
-  execFileSync(process.execPath, ['--input-type=module', '--eval', "import { Session, workspace } from '@husklet/client'; import { Session as ReactSession } from '@husklet/react'; if (Session !== ReactSession || typeof workspace !== 'function') process.exit(1)"], { cwd: consumer });
-  fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
+  fs.writeFileSync(
+    path.join(consumer, 'package.json'),
+    JSON.stringify({ private: true, type: 'module' }),
+  );
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      clientTarball,
+      reactTarball,
+      'react@18.3.1',
+    ],
+    { cwd: consumer },
+  );
+  execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { Session, workspace } from '@husklet/client'; import { Session as ReactSession } from '@husklet/react'; if (Session !== ReactSession || typeof workspace !== 'function') process.exit(1)",
+    ],
+    { cwd: consumer },
+  );
+  fs.writeFileSync(
+    path.join(consumer, 'consumer.ts'),
+    `
 import { Session, workspace } from '@husklet/client';
 import type { ExtensionCapability, PaneText as WirePaneText } from '@husklet/client/protocol';
 import { Button, type ButtonProps } from '@husklet/react';
@@ -54,11 +89,25 @@ void button;
 void capability;
 void invalidCapability;
 void projection;
-`);
-  fs.writeFileSync(path.join(consumer, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
-    strict: true, noEmit: true, target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', skipLibCheck: false,
-  }, include: ['consumer.ts'] }));
-  execFileSync(path.join(root, 'node_modules/.bin/tsc'), ['--project', 'tsconfig.json'], { cwd: consumer });
+`,
+  );
+  fs.writeFileSync(
+    path.join(consumer, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        noEmit: true,
+        target: 'ES2022',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        skipLibCheck: false,
+      },
+      include: ['consumer.ts'],
+    }),
+  );
+  execFileSync(path.join(root, 'node_modules/.bin/tsc'), ['--project', 'tsconfig.json'], {
+    cwd: consumer,
+  });
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

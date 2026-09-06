@@ -374,7 +374,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
 });
 
 test('the schema-derived public surface covers every Rust request and topic', () => {
-  const schema = JSON.parse(fs.readFileSync(new URL('../../../src/workspaces/hl-extension/protocol/v1.json', import.meta.url)));
+  const schema = JSON.parse(fs.readFileSync(new URL('../../../../src/workspaces/hl-extension/protocol/v1.json', import.meta.url)));
   const requests = schema.roots.request.variants.map(({ name }) => name);
   const topics = schema.topics.map(({ wire }) => wire);
   assert.deepEqual(Object.keys(protocolSurface.requests), requests);

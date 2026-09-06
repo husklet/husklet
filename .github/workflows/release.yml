@@ -123,13 +123,13 @@ jobs:
           set -euo pipefail
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
           npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
-          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix packages/client/examples/starter
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix extensions/base/client/examples/starter
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
-          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix packages/react/examples/starter
-          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix packages/react/examples/starter
-          sed -i "s|^ARG HUSKLET_BASE_IMAGE=.*|ARG HUSKLET_BASE_IMAGE=ghcr.io/husklet/husklet/extension-base:$RELEASE_VERSION|" packages/react/examples/starter/Dockerfile
-          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/client/examples/starter/extension.toml
-          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" packages/react/examples/starter/extension.toml
+          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix extensions/base/react/examples/starter
+          npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix extensions/base/react/examples/starter
+          sed -i "s|^ARG HUSKLET_BASE_IMAGE=.*|ARG HUSKLET_BASE_IMAGE=ghcr.io/husklet/husklet/extension-base:$RELEASE_VERSION|" extensions/base/react/examples/starter/Dockerfile
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" extensions/base/client/examples/starter/extension.toml
+          sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" extensions/base/react/examples/starter/extension.toml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
@@ -138,10 +138,10 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import client from './packages/client/package.json' with { type: 'json' };
-          import clientStarter from './packages/client/examples/starter/package.json' with { type: 'json' };
-          import react from './packages/react/package.json' with { type: 'json' };
-          import starter from './packages/react/examples/starter/package.json' with { type: 'json' };
+          import client from './extensions/base/client/package.json' with { type: 'json' };
+          import clientStarter from './extensions/base/client/examples/starter/package.json' with { type: 'json' };
+          import react from './extensions/base/react/package.json' with { type: 'json' };
+          import starter from './extensions/base/react/examples/starter/package.json' with { type: 'json' };
           const expected = process.env.RELEASE_VERSION;
           for (const [name, actual] of [
             ['@husklet/client', client.version],
