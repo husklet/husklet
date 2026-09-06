@@ -1,16 +1,39 @@
 #![cfg(target_os = "linux")]
 
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+compile_error!("checkpoint-cycle integration test supports only aarch64 and x86_64");
+
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
 fn worker() -> &'static str {
     #[cfg(target_arch = "aarch64")]
-    return env!("CARGO_BIN_EXE_hl-aarch64");
+    {
+        env!("CARGO_BIN_EXE_hl-aarch64")
+    }
     #[cfg(target_arch = "x86_64")]
-    return env!("CARGO_BIN_EXE_hl-x86_64");
-    #[allow(unreachable_code)]
-    panic!("checkpoint-cycle integration test supports only aarch64 and x86_64");
+    {
+        env!("CARGO_BIN_EXE_hl-x86_64")
+    }
+}
+
+fn guest_compiler() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "aarch64-linux-gnu-gcc"
+    } else {
+        "x86_64-linux-gnu-gcc"
+    }
+}
+
+fn compile_probe(source: &Path, probe: &Path) {
+    let status = Command::new(guest_compiler())
+        .args(["-static", "-O2", "-o"])
+        .arg(probe)
+        .arg(source)
+        .status()
+        .expect("compile checkpoint-cycle probe with the pinned guest toolchain");
+    assert!(status.success(), "checkpoint-cycle probe compilation failed: {status}");
 }
 
 fn guest_isa() -> &'static str {
@@ -50,16 +73,7 @@ fn production_worker_captures_kills_restores_and_continues() {
     std::fs::create_dir_all(&control).unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/checkpoint-translated/daily_dev.c");
     let probe = rootfs.join("bin/checkpoint-cycle-probe");
-    let compile = Command::new("cc")
-        .args(["-static", "-O2", "-o"])
-        .arg(&probe)
-        .arg(source)
-        .status()
-        .expect("compile checkpoint-cycle probe");
-    assert!(
-        compile.success(),
-        "checkpoint-cycle probe compilation failed: {compile}"
-    );
+    compile_probe(&source, &probe);
 
     let output = Command::new(worker())
         .args([
@@ -107,15 +121,7 @@ fn production_translated_worker_captures_kills_restores_and_continues() {
     std::fs::create_dir_all(&control).unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/checkpoint-translated/daily_dev.c");
     let probe = rootfs.join("bin/checkpoint-cycle-probe");
-    assert!(
-        Command::new("cc")
-            .args(["-static", "-O2", "-o"])
-            .arg(&probe)
-            .arg(source)
-            .status()
-            .unwrap()
-            .success()
-    );
+    compile_probe(&source, &probe);
     let output = Command::new(worker())
         .args([
             "--guest-isa",
@@ -164,15 +170,7 @@ fn failure_after_start_stops_and_reaps_the_probe() {
     std::fs::create_dir_all(&control).unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/checkpoint-translated/daily_dev.c");
     let probe = rootfs.join("bin/checkpoint-cycle-probe");
-    assert!(
-        Command::new("cc")
-            .args(["-static", "-O2", "-o"])
-            .arg(&probe)
-            .arg(source)
-            .status()
-            .unwrap()
-            .success()
-    );
+    compile_probe(&source, &probe);
     let output = Command::new(worker())
         .env("HL_CHECKPOINT_CYCLE_TEST_FAIL_AFTER_START", "1")
         .args([
