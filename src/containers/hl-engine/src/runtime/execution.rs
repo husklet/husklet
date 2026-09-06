@@ -117,6 +117,9 @@ impl BoxProjection {
 #[cfg(unix)]
 #[path = "execution_checkpoint.rs"]
 mod checkpoint;
+#[cfg(target_os = "linux")]
+#[path = "execution_native_snapshot.rs"]
+mod native_snapshot;
 #[cfg(all(unix, test))]
 pub(crate) use checkpoint::await_capture_completion;
 #[cfg(unix)]
