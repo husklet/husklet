@@ -505,8 +505,7 @@ fn stage_argv(options: &Options, root: &Path, mode: Mode) -> Vec<OsString> {
     ];
     if mode == Mode::Translated && options.warm_translation_cache {
         let at = argv.iter().position(|value| value == "--").unwrap();
-        argv.splice(at..at, ["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
-                            "--translation-cache-process-tree".into()]);
+        argv.splice(at..at, ["--translation-cache".into(), options.results.join("translation-cache").into_os_string()]);
     }
     argv
 }
@@ -740,8 +739,7 @@ fn measured_argv(options: &Options, root: &Path, mode: Mode, program: &str, argu
             measured.push(artifacts.engine.as_os_str().to_owned());
             measured.extend(["--loader-receipt", "--report-exit"].into_iter().map(OsString::from));
             if mode == Mode::Translated && options.warm_translation_cache {
-                measured.extend(["--translation-cache".into(), options.results.join("translation-cache").into_os_string(),
-                                 "--translation-cache-process-tree".into()]);
+                measured.extend(["--translation-cache".into(), options.results.join("translation-cache").into_os_string()]);
             } else {
                 measured.push("--diagnostics".into());
             }
@@ -1367,7 +1365,7 @@ mod tests {
         assert!(cold.iter().any(|value| value == "--diagnostics"));
         assert!(!cold.iter().any(|value| value == "--translation-cache"));
         assert!(!warm.iter().any(|value| value == "--diagnostics"));
-        assert!(warm.iter().any(|value| value == "--translation-cache-process-tree"));
+        assert!(!warm.iter().any(|value| value == "--translation-cache-process-tree"));
         assert_eq!(ORDER.len(), 6);
     }
 
