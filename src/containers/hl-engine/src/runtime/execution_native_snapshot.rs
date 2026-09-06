@@ -5,6 +5,9 @@
 #![allow(dead_code)] // Intentionally staged before the coordinator transaction is wired to it.
 
 use std::io;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 #[cfg(target_arch = "x86_64")]
 use std::time::{Duration, Instant};
 
@@ -14,6 +17,13 @@ const ELF_MACHINE_X86_64: u16 = 62;
 pub(super) const RECORD_SIZE: usize = 256;
 const REGISTER_COUNT: usize = 27;
 const REGISTER_OFFSET: usize = 32;
+const MEMORY_MAGIC: &[u8; 8] = b"HLNXMEM\0";
+const MEMORY_VERSION: u16 = 1;
+const MEMORY_HEADER_SIZE: usize = 32;
+const MEMORY_ENTRY_SIZE: usize = 64;
+const MAX_MAPPINGS: usize = 4096;
+const MAX_CAPTURE_BYTES: usize = 1 << 30;
+const MAX_PATH_BYTES: usize = 4096;
 #[cfg(target_arch = "x86_64")]
 const STOP_DEADLINE: Duration = Duration::from_secs(2);
 
@@ -23,6 +33,485 @@ const STOP_DEADLINE: Duration = Duration::from_secs(2);
 pub(super) struct X86RegisterRecord {
     pub(super) signal_mask: u64,
     pub(super) registers: [u64; REGISTER_COUNT],
+}
+
+/// One canonical Linux VMA. File mappings name immutable input below the
+/// process root; anonymous private mappings instead own `bytes` exactly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NativeMapping {
+    pub(super) start: u64,
+    pub(super) end: u64,
+    pub(super) offset: u64,
+    pub(super) protection: u8,
+    pub(super) device_major: u32,
+    pub(super) device_minor: u32,
+    pub(super) inode: u64,
+    pub(super) kernel_special: bool,
+    pub(super) root_relative: Option<Vec<u8>>,
+    pub(super) bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NativeMemoryImage {
+    pub(super) mappings: Vec<NativeMapping>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InvalidMemoryImage {
+    Size,
+    Magic,
+    Version,
+    Reserved,
+    Count,
+    Overflow,
+    Order,
+    Protection,
+    Kind,
+    Path,
+    Payload,
+}
+
+impl NativeMemoryImage {
+    pub(super) fn encode(&self) -> Result<Vec<u8>, InvalidMemoryImage> {
+        if self.mappings.len() > MAX_MAPPINGS {
+            return Err(InvalidMemoryImage::Count);
+        }
+        validate_mappings(&self.mappings)?;
+        let variable = self.mappings.iter().try_fold(0usize, |total, mapping| {
+            total
+                .checked_add(mapping.root_relative.as_ref().map_or(0, Vec::len))
+                .and_then(|n| n.checked_add(mapping.bytes.len()))
+                .ok_or(InvalidMemoryImage::Overflow)
+        })?;
+        let fixed = self
+            .mappings
+            .len()
+            .checked_mul(MEMORY_ENTRY_SIZE)
+            .and_then(|n| n.checked_add(MEMORY_HEADER_SIZE))
+            .ok_or(InvalidMemoryImage::Overflow)?;
+        let total = fixed.checked_add(variable).ok_or(InvalidMemoryImage::Overflow)?;
+        if variable > MAX_CAPTURE_BYTES || total > u32::MAX as usize {
+            return Err(InvalidMemoryImage::Overflow);
+        }
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(MEMORY_MAGIC);
+        out.extend_from_slice(&MEMORY_VERSION.to_le_bytes());
+        out.extend_from_slice(&0_u16.to_le_bytes());
+        out.extend_from_slice(&(self.mappings.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(total as u64).to_le_bytes());
+        out.extend_from_slice(&[0; 8]);
+        for mapping in &self.mappings {
+            let path_len = mapping.root_relative.as_ref().map_or(0, Vec::len);
+            out.extend_from_slice(&mapping.start.to_le_bytes());
+            out.extend_from_slice(&mapping.end.to_le_bytes());
+            out.extend_from_slice(&mapping.offset.to_le_bytes());
+            out.extend_from_slice(&mapping.inode.to_le_bytes());
+            out.extend_from_slice(&mapping.device_major.to_le_bytes());
+            out.extend_from_slice(&mapping.device_minor.to_le_bytes());
+            out.push(mapping.protection);
+            out.push(if mapping.kernel_special {
+                2
+            } else {
+                u8::from(mapping.root_relative.is_some())
+            });
+            out.extend_from_slice(&[0; 6]);
+            out.extend_from_slice(&(path_len as u32).to_le_bytes());
+            out.extend_from_slice(&(mapping.bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(&[0; 4]);
+        }
+        for mapping in &self.mappings {
+            if let Some(path) = &mapping.root_relative {
+                out.extend_from_slice(path);
+            }
+            out.extend_from_slice(&mapping.bytes);
+        }
+        Ok(out)
+    }
+
+    pub(super) fn decode(input: &[u8]) -> Result<Self, InvalidMemoryImage> {
+        if input.len() < MEMORY_HEADER_SIZE {
+            return Err(InvalidMemoryImage::Size);
+        }
+        if &input[..8] != MEMORY_MAGIC {
+            return Err(InvalidMemoryImage::Magic);
+        }
+        if le_u16(input, 8)? != MEMORY_VERSION {
+            return Err(InvalidMemoryImage::Version);
+        }
+        if le_u16(input, 10)? != 0 || input[24..32].iter().any(|byte| *byte != 0) {
+            return Err(InvalidMemoryImage::Reserved);
+        }
+        let count = usize::try_from(le_u32(input, 12)?).map_err(|_| InvalidMemoryImage::Count)?;
+        if count > MAX_MAPPINGS {
+            return Err(InvalidMemoryImage::Count);
+        }
+        let declared = usize::try_from(le_u64(input, 16)?).map_err(|_| InvalidMemoryImage::Overflow)?;
+        if declared != input.len() {
+            return Err(InvalidMemoryImage::Size);
+        }
+        let fixed = count
+            .checked_mul(MEMORY_ENTRY_SIZE)
+            .and_then(|n| n.checked_add(MEMORY_HEADER_SIZE))
+            .ok_or(InvalidMemoryImage::Overflow)?;
+        if fixed > input.len() {
+            return Err(InvalidMemoryImage::Size);
+        }
+        let mut cursor = fixed;
+        let mut mappings = Vec::with_capacity(count);
+        for index in 0..count {
+            let at = MEMORY_HEADER_SIZE + index * MEMORY_ENTRY_SIZE;
+            if input[at + 42..at + 48]
+                .iter()
+                .chain(&input[at + 60..at + 64])
+                .any(|byte| *byte != 0)
+            {
+                return Err(InvalidMemoryImage::Reserved);
+            }
+            let kind = input[at + 41];
+            if kind > 2 {
+                return Err(InvalidMemoryImage::Kind);
+            }
+            let path_len = usize::try_from(le_u32(input, at + 48)?).map_err(|_| InvalidMemoryImage::Overflow)?;
+            let byte_len = usize::try_from(le_u64(input, at + 52)?).map_err(|_| InvalidMemoryImage::Overflow)?;
+            let next = cursor
+                .checked_add(path_len)
+                .and_then(|n| n.checked_add(byte_len))
+                .ok_or(InvalidMemoryImage::Overflow)?;
+            if next > input.len() {
+                return Err(InvalidMemoryImage::Size);
+            }
+            let root_relative = (kind == 1).then(|| input[cursor..cursor + path_len].to_vec());
+            if kind != 1 && path_len != 0 {
+                return Err(InvalidMemoryImage::Kind);
+            }
+            cursor += path_len;
+            let bytes = input[cursor..cursor + byte_len].to_vec();
+            cursor += byte_len;
+            mappings.push(NativeMapping {
+                start: le_u64(input, at)?,
+                end: le_u64(input, at + 8)?,
+                offset: le_u64(input, at + 16)?,
+                inode: le_u64(input, at + 24)?,
+                device_major: le_u32(input, at + 32)?,
+                device_minor: le_u32(input, at + 36)?,
+                protection: input[at + 40],
+                kernel_special: kind == 2,
+                root_relative,
+                bytes,
+            });
+        }
+        if cursor != input.len() {
+            return Err(InvalidMemoryImage::Payload);
+        }
+        validate_mappings(&mappings)?;
+        Ok(Self { mappings })
+    }
+}
+
+fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImage> {
+    let mut previous_end = 0;
+    let mut copied = 0usize;
+    for mapping in mappings {
+        let length = mapping
+            .end
+            .checked_sub(mapping.start)
+            .ok_or(InvalidMemoryImage::Order)?;
+        if length == 0 || mapping.start < previous_end {
+            return Err(InvalidMemoryImage::Order);
+        }
+        previous_end = mapping.end;
+        if mapping.protection & !7 != 0 {
+            return Err(InvalidMemoryImage::Protection);
+        }
+        if mapping.kernel_special {
+            if mapping.root_relative.is_some()
+                || !mapping.bytes.is_empty()
+                || mapping.offset != 0
+                || mapping.inode != 0
+                || mapping.device_major != 0
+                || mapping.device_minor != 0
+            {
+                return Err(InvalidMemoryImage::Kind);
+            }
+            continue;
+        }
+        match &mapping.root_relative {
+            Some(path) => {
+                if path.is_empty()
+                    || path.len() > MAX_PATH_BYTES
+                    || path[0] == b'/'
+                    || path.contains(&0)
+                    || !mapping.bytes.is_empty()
+                {
+                    return Err(InvalidMemoryImage::Path);
+                }
+            }
+            None => {
+                if mapping.offset != 0 || mapping.inode != 0 || mapping.device_major != 0 || mapping.device_minor != 0 {
+                    return Err(InvalidMemoryImage::Kind);
+                }
+                if mapping.protection & 1 != 0 && mapping.bytes.len() as u64 != length {
+                    return Err(InvalidMemoryImage::Payload);
+                }
+                if mapping.protection & 1 == 0 && !mapping.bytes.is_empty() {
+                    return Err(InvalidMemoryImage::Payload);
+                }
+                copied = copied
+                    .checked_add(mapping.bytes.len())
+                    .ok_or(InvalidMemoryImage::Overflow)?;
+            }
+        }
+    }
+    if copied > MAX_CAPTURE_BYTES {
+        return Err(InvalidMemoryImage::Overflow);
+    }
+    Ok(())
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> Result<u16, InvalidMemoryImage> {
+    Ok(u16::from_le_bytes(
+        bytes
+            .get(at..at + 2)
+            .ok_or(InvalidMemoryImage::Size)?
+            .try_into()
+            .expect("field"),
+    ))
+}
+fn le_u32(bytes: &[u8], at: usize) -> Result<u32, InvalidMemoryImage> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(at..at + 4)
+            .ok_or(InvalidMemoryImage::Size)?
+            .try_into()
+            .expect("field"),
+    ))
+}
+fn le_u64(bytes: &[u8], at: usize) -> Result<u64, InvalidMemoryImage> {
+    Ok(u64::from_le_bytes(
+        bytes
+            .get(at..at + 8)
+            .ok_or(InvalidMemoryImage::Size)?
+            .try_into()
+            .expect("field"),
+    ))
+}
+
+/// Captures the stable VMA view of an already-admitted, already-stopped process.
+/// It neither attaches nor resumes the process, so stop and cleanup ownership stay
+/// with the coordinator that admitted it.
+#[cfg(target_os = "linux")]
+pub(super) fn capture_stopped_memory(pid: libc::pid_t, deadline: Instant) -> io::Result<NativeMemoryImage> {
+    if pid <= 1 || pid == unsafe { libc::getpid() } || !process_is_stopped(pid)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "memory capture requires another stopped process",
+        ));
+    }
+    check_deadline(deadline)?;
+    let maps_path = format!("/proc/{pid}/maps");
+    let before = std::fs::read(&maps_path)?;
+    if before.len() > MAX_MAPPINGS * MAX_PATH_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process map table exceeds bound",
+        ));
+    }
+    let root = PathBuf::from(format!("/proc/{pid}/root"));
+    let specifications = parse_maps(&before, &root)?;
+    let mut copied = 0usize;
+    let mut mappings = Vec::with_capacity(specifications.len());
+    for mut mapping in specifications {
+        check_deadline(deadline)?;
+        if !mapping.kernel_special && mapping.root_relative.is_none() && mapping.protection & 1 != 0 {
+            let length = usize::try_from(mapping.end - mapping.start)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "mapping length exceeds host"))?;
+            copied = copied
+                .checked_add(length)
+                .filter(|total| *total <= MAX_CAPTURE_BYTES)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "anonymous memory exceeds capture bound"))?;
+            mapping.bytes = read_process_exact(pid, mapping.start, length, deadline)?;
+        }
+        mappings.push(mapping);
+    }
+    check_deadline(deadline)?;
+    ensure_same_maps(&before, &std::fs::read(maps_path)?)?;
+    validate_mappings(&mappings)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid VMA table: {error:?}")))?;
+    Ok(NativeMemoryImage { mappings })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn capture_stopped_memory(
+    _pid: libc::pid_t,
+    _deadline: std::time::Instant,
+) -> io::Result<NativeMemoryImage> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "native memory capture requires Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_maps(input: &[u8], root: &Path) -> io::Result<Vec<NativeMapping>> {
+    let text =
+        std::str::from_utf8(input).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 process maps"))?;
+    let mut mappings = Vec::new();
+    for line in text.lines() {
+        if mappings.len() == MAX_MAPPINGS {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "too many process mappings"));
+        }
+        // Linux escapes whitespace in map pathnames, so tokenizing all fields is
+        // lossless and avoids `splitn` consuming its limit on alignment spaces.
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 5 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed process map"));
+        }
+        let (start, end) = fields[0]
+            .split_once('-')
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed mapping range"))?;
+        let start = u64::from_str_radix(start, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad mapping start"))?;
+        let end =
+            u64::from_str_radix(end, 16).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad mapping end"))?;
+        let perms = fields[1].as_bytes();
+        if perms.len() != 4 || !matches!(perms[3], b'p') {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "shared or malformed mapping is not capturable",
+            ));
+        }
+        let protection =
+            u8::from(perms[0] == b'r') | (u8::from(perms[1] == b'w') << 1) | (u8::from(perms[2] == b'x') << 2);
+        if !matches!(perms[0], b'r' | b'-') || !matches!(perms[1], b'w' | b'-') || !matches!(perms[2], b'x' | b'-') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed mapping permissions",
+            ));
+        }
+        let offset = u64::from_str_radix(fields[2], 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad mapping offset"))?;
+        let (major, minor) = fields[3]
+            .split_once(':')
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad mapping device"))?;
+        let device_major = u32::from_str_radix(major, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad device major"))?;
+        let device_minor = u32::from_str_radix(minor, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad device minor"))?;
+        let inode = fields[4]
+            .parse::<u64>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad mapping inode"))?;
+        if fields.len() > 6 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unescaped whitespace in mapping path",
+            ));
+        }
+        let path = fields.get(5).copied().unwrap_or("");
+        let kernel_special = matches!(path, "[vdso]" | "[vvar]" | "[vvar_vclock]" | "[vsyscall]");
+        let root_relative = if path.starts_with('/') {
+            if path.ends_with(" (deleted)") {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "deleted file mapping has no immutable identity",
+                ));
+            }
+            let relative = path.strip_prefix('/').expect("absolute path");
+            if relative.is_empty() || relative.as_bytes().len() > MAX_PATH_BYTES {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "mapping path exceeds bound"));
+            }
+            let metadata = std::fs::metadata(root.join(relative))?;
+            if metadata.ino() != inode
+                || libc::major(metadata.dev()) as u32 != device_major
+                || libc::minor(metadata.dev()) as u32 != device_minor
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "file mapping identity changed",
+                ));
+            }
+            Some(relative.as_bytes().to_vec())
+        } else {
+            if inode != 0 || device_major != 0 || device_minor != 0 || offset != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "anonymous mapping carries file identity",
+                ));
+            }
+            None
+        };
+        mappings.push(NativeMapping {
+            start,
+            end,
+            offset,
+            protection,
+            device_major,
+            device_minor,
+            inode,
+            kernel_special,
+            root_relative,
+            bytes: Vec::new(),
+        });
+    }
+    Ok(mappings)
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_exact(pid: libc::pid_t, start: u64, length: usize, deadline: Instant) -> io::Result<Vec<u8>> {
+    const CHUNK: usize = 1 << 20;
+    let mut bytes = vec![0_u8; length];
+    let mut done = 0usize;
+    while done < length {
+        check_deadline(deadline)?;
+        let count = (length - done).min(CHUNK);
+        let mut local = libc::iovec {
+            iov_base: bytes[done..done + count].as_mut_ptr().cast(),
+            iov_len: count,
+        };
+        let remote_address = start
+            .checked_add(done as u64)
+            .and_then(|address| usize::try_from(address).ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "mapping address overflow"))?;
+        let remote = libc::iovec {
+            iov_base: remote_address as *mut libc::c_void,
+            iov_len: count,
+        };
+        let read = unsafe { libc::process_vm_readv(pid, &raw mut local, 1, &raw const remote, 1, 0) };
+        if read < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if read as usize != count {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "partial process memory read",
+            ));
+        }
+        done += count;
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn check_deadline(deadline: Instant) -> io::Result<()> {
+    if Instant::now() >= deadline {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "native memory capture deadline elapsed",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_same_maps(before: &[u8], after: &[u8]) -> io::Result<()> {
+    if before == after {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process map table changed during capture",
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -348,6 +837,154 @@ mod tests {
         assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
         assert!(libc::WIFSIGNALED(status));
         assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+    }
+
+    #[test]
+    fn memory_codec_rejects_malformed_lengths_counts_and_overflow() {
+        let image = NativeMemoryImage {
+            mappings: vec![NativeMapping {
+                start: 0x1000,
+                end: 0x2000,
+                offset: 0,
+                protection: 3,
+                device_major: 0,
+                device_minor: 0,
+                inode: 0,
+                kernel_special: false,
+                root_relative: None,
+                bytes: vec![0x5a; 0x1000],
+            }],
+        };
+        let encoded = image.encode().unwrap();
+        assert_eq!(NativeMemoryImage::decode(&encoded), Ok(image));
+        for (at, value, expected) in [
+            (0, b'X', InvalidMemoryImage::Magic),
+            (8, 2, InvalidMemoryImage::Version),
+            (10, 1, InvalidMemoryImage::Reserved),
+            (24, 1, InvalidMemoryImage::Reserved),
+            (MEMORY_HEADER_SIZE + 41, 2, InvalidMemoryImage::Kind),
+        ] {
+            let mut changed = encoded.clone();
+            changed[at] = value;
+            assert_eq!(NativeMemoryImage::decode(&changed), Err(expected));
+        }
+        let mut count = encoded.clone();
+        count[12..16].copy_from_slice(&(MAX_MAPPINGS as u32 + 1).to_le_bytes());
+        assert_eq!(NativeMemoryImage::decode(&count), Err(InvalidMemoryImage::Count));
+        let mut overflow = encoded.clone();
+        overflow[MEMORY_HEADER_SIZE + 52..MEMORY_HEADER_SIZE + 60].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(NativeMemoryImage::decode(&overflow), Err(InvalidMemoryImage::Overflow));
+        assert_eq!(
+            NativeMemoryImage::decode(&encoded[..encoded.len() - 1]),
+            Err(InvalidMemoryImage::Size)
+        );
+    }
+
+    #[test]
+    fn stopped_child_heap_and_stack_are_captured_and_a_later_mutation_changes_only_the_new_image() {
+        let (pid, ready) = memory_sentinel_child();
+        let mut addresses = [0_u64; 2];
+        assert_eq!(
+            unsafe { libc::read(ready, addresses.as_mut_ptr().cast(), std::mem::size_of_val(&addresses)) },
+            std::mem::size_of_val(&addresses) as isize
+        );
+        unsafe { libc::close(ready) };
+        wait_until_stopped(pid);
+        let first = capture_stopped_memory(pid, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(image_bytes(&first, addresses[0], 16), vec![0x48; 16], "heap sentinel");
+        assert_eq!(image_bytes(&first, addresses[1], 16), vec![0x53; 16], "stack sentinel");
+
+        let replacement = [0x4d_u8; 16];
+        let local = libc::iovec {
+            iov_base: replacement.as_ptr().cast_mut().cast(),
+            iov_len: replacement.len(),
+        };
+        let remote = libc::iovec {
+            iov_base: addresses[0] as usize as *mut libc::c_void,
+            iov_len: replacement.len(),
+        };
+        assert_eq!(
+            unsafe { libc::process_vm_writev(pid, &raw const local, 1, &raw const remote, 1, 0) },
+            16
+        );
+        let second = capture_stopped_memory(pid, Instant::now() + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            image_bytes(&first, addresses[0], 16),
+            vec![0x48; 16],
+            "first image mutated by alias"
+        );
+        assert_eq!(image_bytes(&second, addresses[0], 16), vec![0x4d; 16]);
+        assert!(process_is_stopped(pid).unwrap(), "capture stole stop ownership");
+        unsafe { libc::kill(pid, libc::SIGCONT) };
+        kill_and_reap(pid);
+    }
+
+    #[test]
+    fn stopped_capture_refuses_deadlines_and_running_targets_without_changing_ownership() {
+        let (pid, ready) = sentinel_child(false);
+        wait_byte(ready);
+        let running = capture_stopped_memory(pid, Instant::now() + Duration::from_secs(1)).unwrap_err();
+        assert_eq!(running.kind(), io::ErrorKind::InvalidInput);
+        assert!(!process_is_stopped(pid).unwrap());
+        unsafe { libc::kill(pid, libc::SIGSTOP) };
+        wait_until_stopped(pid);
+        let deadline = capture_stopped_memory(pid, Instant::now()).unwrap_err();
+        assert_eq!(deadline.kind(), io::ErrorKind::TimedOut);
+        assert!(process_is_stopped(pid).unwrap());
+        unsafe { libc::kill(pid, libc::SIGCONT) };
+        kill_and_reap(pid);
+    }
+
+    #[test]
+    fn map_races_and_malformed_or_shared_tables_are_refused() {
+        assert!(ensure_same_maps(b"one", b"one").is_ok());
+        assert_eq!(
+            ensure_same_maps(b"one", b"two").unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let root = Path::new("/");
+        assert_eq!(
+            parse_maps(b"not-a-map\n", root).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let shared = b"1000-2000 rw-s 00000000 00:00 0\n";
+        assert_eq!(parse_maps(shared, root).unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    fn image_bytes(image: &NativeMemoryImage, address: u64, length: usize) -> Vec<u8> {
+        let mapping = image
+            .mappings
+            .iter()
+            .find(|mapping| mapping.start <= address && address + length as u64 <= mapping.end)
+            .expect("sentinel mapping");
+        let offset = (address - mapping.start) as usize;
+        mapping.bytes[offset..offset + length].to_vec()
+    }
+
+    fn memory_sentinel_child() -> (libc::pid_t, RawFd) {
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe {
+                libc::close(pipe[0]);
+                let heap = libc::malloc(16).cast::<u8>();
+                assert!(!heap.is_null());
+                std::ptr::write_bytes(heap, 0x48, 16);
+                let stack = [0x53_u8; 16];
+                let addresses = [heap as u64, stack.as_ptr() as u64];
+                libc::write(pipe[1], addresses.as_ptr().cast(), std::mem::size_of_val(&addresses));
+                libc::raise(libc::SIGSTOP);
+                loop {
+                    std::hint::black_box(std::ptr::read_volatile(heap));
+                    std::hint::black_box(std::ptr::read_volatile(stack.as_ptr()));
+                    libc::pause();
+                }
+            }
+        }
+        unsafe { libc::close(pipe[1]) };
+        (pid, pipe[0])
     }
 
     fn sentinel_child(stop: bool) -> (libc::pid_t, RawFd) {
