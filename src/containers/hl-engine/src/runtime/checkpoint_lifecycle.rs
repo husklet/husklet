@@ -77,26 +77,35 @@ impl Server {
         }
     }
 
-    /// Refuses recovery unless the byte store's offered generation is finalized.
+    /// Selects the reader only after the offered generation proves it is finalized.
     ///
     /// The checkpoint byte store is adversarial: it can offer a staged
     /// generation, a truncated one, or a directory an attacker assembled. Native
-    /// restore reads whatever recovery admits, so the finalized-versus-prepared
-    /// decision has to be taken here, before the recovery generation is
-    /// activated and before any object is served.
-    fn finalized_record(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+    /// restore reads whatever recovery admits, so both finalization and the
+    /// bounded `IMAGE` discriminator have to be validated here, before the
+    /// recovery generation is activated and before any payload object is served.
+    fn recovery_reader(&self, deadline: std::time::Instant) -> Result<super::image_envelope::Reader, CaptureFailure> {
         let names = self
             .source
             .list_until(deadline)
             .map_err(|_| CaptureFailure::Unfinalized)?;
-        if authority::RecordState::of_generation(&names).admits_recovery() {
-            return Ok(());
+        if !authority::RecordState::of_generation(&names).admits_recovery() {
+            hl_log::hl_error!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint recovery refused: generation is prepared, not finalized"
+            );
+            return Err(CaptureFailure::Unfinalized);
         }
-        hl_log::hl_error!(
-            hl_log::tag::CHECKPOINT,
-            "checkpoint recovery refused: generation is prepared, not finalized"
-        );
-        Err(CaptureFailure::Unfinalized)
+        if !names.iter().any(|name| name == super::image_envelope::OBJECT) {
+            // Images written before the discriminator existed are translated
+            // images whose current reader starts at MANIFEST.
+            return Ok(super::image_envelope::Reader::Translated);
+        }
+        let bytes = self
+            .source
+            .get_until(super::image_envelope::OBJECT, deadline)
+            .map_err(|_| CaptureFailure::InvalidImage)?;
+        super::image_envelope::Reader::decode(&bytes).map_err(|_| CaptureFailure::InvalidImage)
     }
 
     #[cfg(test)]
@@ -112,7 +121,10 @@ impl Server {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
-        self.finalized_record(deadline)?;
+        match self.recovery_reader(deadline)? {
+            super::image_envelope::Reader::Translated => {}
+            super::image_envelope::Reader::NativeX86V1 => return Err(CaptureFailure::UnsupportedImage),
+        }
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Idle) {
             return Err(match capture.phase {

@@ -17,6 +17,7 @@ use std::{
 
 mod authority;
 mod broker;
+mod image_envelope;
 #[path = "checkpoint_lifecycle.rs"]
 mod lifecycle;
 pub(super) mod member_stdio;
@@ -74,6 +75,10 @@ pub(crate) enum CaptureFailure {
     /// The generation the byte store offered for recovery is not finalized, so
     /// native restore must not read it.
     Unfinalized,
+    /// The generation names a reader this host recognizes but does not provide.
+    UnsupportedImage,
+    /// The generation carried an `IMAGE` object that was not canonical.
+    InvalidImage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

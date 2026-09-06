@@ -21,7 +21,10 @@ impl Server {
     }
 
     pub(super) fn included(name: &str) -> bool {
-        name != "MANIFEST" && name != "RECOVERY.jsonl" && !name.starts_with(".RECOVERY.jsonl.tmp.")
+        name != "MANIFEST"
+            && name != super::image_envelope::OBJECT
+            && name != "RECOVERY.jsonl"
+            && !name.starts_with(".RECOVERY.jsonl.tmp.")
     }
 
     pub(super) fn object_hash(name: &str, bytes: &[u8]) -> u64 {
@@ -172,20 +175,31 @@ impl Server {
         }
 
         let transaction = self.transaction_token()?;
-        let result = match self.sink.commit_until(transaction, manifest, deadline) {
-            Ok(()) => Ok(()),
-            Err(crate::composition::CompositionError::PublishedNotDurable) => {
-                hl_log::hl_error!(
-                    hl_log::tag::CHECKPOINT,
-                    "checkpoint generation published but directory durability is uncertain"
-                );
-                Ok(())
-            }
+        let envelope = super::image_envelope::Reader::Translated.encode();
+        let staged = self
+            .sink
+            .put_until(transaction, super::image_envelope::OBJECT, &envelope, deadline);
+        let result = match staged {
             Err(crate::composition::CompositionError::DeadlineExceeded) => Err(CaptureFailure::Deadline),
             Err(error) => {
-                self.record_failure(id, format!("checkpoint store rejected manifest: {error:?}"));
+                self.record_failure(id, format!("checkpoint store rejected image envelope: {error:?}"));
                 Err(CaptureFailure::Failed)
             }
+            Ok(()) => match self.sink.commit_until(transaction, manifest, deadline) {
+                Ok(()) => Ok(()),
+                Err(crate::composition::CompositionError::PublishedNotDurable) => {
+                    hl_log::hl_error!(
+                        hl_log::tag::CHECKPOINT,
+                        "checkpoint generation published but directory durability is uncertain"
+                    );
+                    Ok(())
+                }
+                Err(crate::composition::CompositionError::DeadlineExceeded) => Err(CaptureFailure::Deadline),
+                Err(error) => {
+                    self.record_failure(id, format!("checkpoint store rejected manifest: {error:?}"));
+                    Err(CaptureFailure::Failed)
+                }
+            },
         };
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Publishing { id: active } if active == id) {

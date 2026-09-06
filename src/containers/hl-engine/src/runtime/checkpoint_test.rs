@@ -193,8 +193,16 @@ impl CheckpointSink for Store {
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
         Ok(test_transaction())
     }
-    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        (name == super::image_envelope::OBJECT && bytes.len() == super::image_envelope::SIZE)
+            .then_some(())
+            .ok_or(CompositionError::RuntimeConstruction)
     }
     fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
@@ -331,6 +339,119 @@ fn recovery_refuses_an_empty_generation() {
         server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
         Err(CaptureFailure::Unfinalized)
     );
+}
+
+struct EnvelopeGeneration {
+    image: Result<Vec<u8>, CompositionError>,
+    begins: AtomicUsize,
+}
+
+impl EnvelopeGeneration {
+    fn new(image: Vec<u8>) -> Self {
+        Self {
+            image: Ok(image),
+            begins: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl CheckpointSink for EnvelopeGeneration {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        self.begins.fetch_add(1, Ordering::Relaxed);
+        Ok(test_transaction())
+    }
+
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+}
+
+impl CheckpointSource for EnvelopeGeneration {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn get_until(&self, name: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        if name != super::image_envelope::OBJECT {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        self.image.clone()
+    }
+
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(vec![String::from("MANIFEST"), super::image_envelope::OBJECT.into()])
+    }
+}
+
+#[test]
+fn translated_envelope_routes_the_current_reader() {
+    let store = Arc::new(EnvelopeGeneration::new(
+        super::image_envelope::Reader::Translated.encode().to_vec(),
+    ));
+    let server = Server::new(store.clone(), store.clone());
+
+    let recovery = server
+        .begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1))
+        .expect("translated reader admitted");
+
+    assert_eq!(store.begins.load(Ordering::Relaxed), 1);
+    server.abort_recovery(recovery).expect("discard recovery transaction");
+}
+
+#[test]
+fn native_x86_v1_is_recognized_as_unsupported_before_restore_mutates() {
+    let store = Arc::new(EnvelopeGeneration::new(
+        super::image_envelope::Reader::NativeX86V1.encode().to_vec(),
+    ));
+    let server = Server::new(store.clone(), store.clone());
+
+    assert_eq!(
+        server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::UnsupportedImage)
+    );
+    assert_eq!(
+        store.begins.load(Ordering::Relaxed),
+        0,
+        "unsupported image opened no transaction"
+    );
+}
+
+#[test]
+fn malformed_envelope_fails_closed_before_restore_mutates() {
+    let canonical = super::image_envelope::Reader::Translated.encode();
+    let mut cases = Vec::new();
+    cases.push(canonical[..63].to_vec());
+    for (at, value) in [(8, 2), (10, 3), (12, 9), (16, b'X'), (25, b'X'), (48, 1)] {
+        let mut bytes = canonical;
+        bytes[at] = value;
+        cases.push(bytes.to_vec());
+    }
+
+    for bytes in cases {
+        let store = Arc::new(EnvelopeGeneration::new(bytes));
+        let server = Server::new(store.clone(), store.clone());
+        assert_eq!(
+            server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
+            Err(CaptureFailure::InvalidImage)
+        );
+        assert_eq!(
+            store.begins.load(Ordering::Relaxed),
+            0,
+            "invalid image opened a transaction"
+        );
+    }
 }
 
 #[derive(Default)]
@@ -731,6 +852,30 @@ fn reclaimed_transaction_fences_stale_put_commit_and_abort() {
     assert_eq!(store.snapshot().1, [("current".into(), b"two".to_vec())]);
     store.commit_until(current, b"ok", deadline).unwrap();
     assert_eq!(store.snapshot().0, [("current".into(), b"two".to_vec())]);
+}
+
+#[test]
+fn image_envelope_is_staged_before_commit_and_excluded_from_the_digest() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Server::new(store.clone(), store.clone());
+    server
+        .begin_capture(1, std::time::Instant::now() + Duration::from_secs(1))
+        .expect("capture transaction");
+
+    server.publish_manifest(b"manifest").expect("commit translated image");
+
+    let (committed, staging, _) = store.snapshot();
+    assert!(staging.is_empty());
+    assert_eq!(committed.len(), 1);
+    assert_eq!(committed[0].0, super::image_envelope::OBJECT);
+    assert_eq!(
+        super::image_envelope::Reader::decode(&committed[0].1),
+        Ok(super::image_envelope::Reader::Translated)
+    );
+    assert!(
+        !Server::included(super::image_envelope::OBJECT),
+        "the routing record must not change the payload digest"
+    );
 }
 
 #[test]
@@ -1159,6 +1304,30 @@ fn manifest_store_failure_retains_the_storage_context() {
     assert_eq!(
         server.capture_failure_diagnostic(capture).as_deref(),
         Some("checkpoint store rejected manifest: RuntimeConstruction")
+    );
+}
+
+#[test]
+fn image_envelope_store_failure_never_reaches_commit() {
+    let store = Arc::new(RecordingStore::default());
+    let server = Server::new(store.clone(), store.clone());
+    let capture = server
+        .begin_capture(44, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let mut commit = commit_request();
+    commit.generation = 44;
+
+    assert_ne!(server.dispatch(1, &commit, "", b"manifest").status, protocol::STATUS_OK);
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(*store.0.lock().unwrap(), 0);
+    assert_eq!(
+        server.capture_failure_diagnostic(capture).as_deref(),
+        Some("checkpoint store rejected image envelope: RuntimeConstruction")
     );
 }
 
@@ -1802,8 +1971,16 @@ impl CheckpointSink for PublishedUncertain {
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
         Ok(test_transaction())
     }
-    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        (name == super::image_envelope::OBJECT && bytes.len() == super::image_envelope::SIZE)
+            .then_some(())
+            .ok_or(CompositionError::RuntimeConstruction)
     }
     fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
@@ -2032,8 +2209,16 @@ impl CheckpointSink for PublicationGate {
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
         Ok(test_transaction())
     }
-    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        (name == super::image_envelope::OBJECT && bytes.len() == super::image_envelope::SIZE)
+            .then_some(())
+            .ok_or(CompositionError::RuntimeConstruction)
     }
     fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
@@ -3489,7 +3674,7 @@ fn one_socket_object_aliased_by_two_members_publishes_one_generation() {
     let (committed, staging, aborts) = store.snapshot();
     assert_eq!(
         committed.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
-        ["proc.1/fds", "proc.2/fds"]
+        ["proc.1/fds", "proc.2/fds", super::image_envelope::OBJECT]
     );
     assert!(staging.is_empty());
     assert_eq!(aborts, 0);

@@ -122,6 +122,8 @@ impl CheckpointControl {
             CaptureFailure::Busy => EngineError::Busy,
             CaptureFailure::Deadline => EngineError::WaitFailed,
             CaptureFailure::Unfinalized => EngineError::CheckpointGenerationUnfinalized,
+            CaptureFailure::UnsupportedImage => EngineError::Unsupported,
+            CaptureFailure::InvalidImage => EngineError::CaptureFailed,
             CaptureFailure::Failed => EngineError::CaptureFailed,
             CaptureFailure::Refused => EngineError::CaptureRefused,
             CaptureFailure::Poisoned => EngineError::CapturePoisoned,
@@ -235,6 +237,14 @@ mod diagnostic_tests {
 #[cfg(test)]
 mod failure_precedence_tests {
     use super::*;
+
+    #[test]
+    fn recognized_native_checkpoint_image_maps_to_public_unsupported() {
+        assert_eq!(
+            CheckpointControl::capture_failure(CaptureFailure::UnsupportedImage),
+            EngineError::Unsupported
+        );
+    }
 
     #[test]
     fn checkpoint_failure_outlives_its_secondary_native_engine_error() {
