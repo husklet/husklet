@@ -3378,15 +3378,9 @@ static int translit_owner_append_jmp_mem(jit_body_owner_range ranges[TL_MAX_OWNE
 }
 
 static void translit_instruction_ranges_publish(const jit_body_owner_range *ranges, uint32_t count) {
-    uint32_t populated = 0;
     for (uint32_t i = 0; i < count; i++)
-        populated += ranges[i].lo < ranges[i].hi;
-    uint32_t reservation = jit_instruction_map_reserve(populated);
-    for (uint32_t i = 0, offset = 0; i < count; i++) {
-        if (ranges[i].lo >= ranges[i].hi) continue;
-        jit_instruction_map_put_reserved(reservation, offset++, ranges[i].lo, ranges[i].hi,
-                                         ranges[i].guest, ranges[i].preserve_registers);
-    }
+        jit_instruction_map_put_preserve(ranges[i].lo, ranges[i].hi, ranges[i].guest,
+                                         ranges[i].preserve_registers);
 }
 
 // Generated code owns no persistent XMM state.  Each selected instruction reloads its operands from
