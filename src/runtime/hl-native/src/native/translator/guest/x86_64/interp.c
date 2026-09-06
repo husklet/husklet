@@ -2597,7 +2597,7 @@ static int pcache_load(uint64_t entry_jump) {
     if (valid) {
         const x64_pc_semantic_policy policy = {
             INTERP_BLOCK_MAGIC, UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX |
-                                    JIT_BODY_OWNER_FLAGS_FROM_CPU,
+                                    JIT_BODY_OWNER_FLAGS_FROM_CPU | JIT_BODY_OWNER_FLAGS_FROM_PACKED,
             JIT_MAP_N,
             g_coldprof != 0,
         };

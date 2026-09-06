@@ -591,6 +591,9 @@ static int translit_external_absolute_kind_valid(uint32_t kind) {
 
 static void translit_emit_spill(hl_x64_asm *a);
 static void translit_emit_reload(hl_x64_asm *a);
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_pre_spill_signal_stage_test(void);
+#endif
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
 
 typedef struct translit_pcache_census_ranges {
@@ -1849,6 +1852,48 @@ static void translit_emit_spill(hl_x64_asm *a) {
     hl_x64_pop(a, HL_X64_RAX); // rax is already spilled
     hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
     hl_x64_cld(a); // a guest `std` must not leak DF into host C code
+}
+
+typedef struct {
+    uint8_t *start, *rax_canonical, *r11_canonical, *flags_packed;
+    uint8_t *flags_live, *r11_live, *rax_live;
+} translit_pre_spill_ranges;
+
+// Save the two registers available to a source-local IBTC probe and the arithmetic flags without
+// touching the guest stack. LAHF plus SETO packs SF/ZF/AF/PF/CF into AH and OF into AL; all other
+// bits are deliberately ignored. cpu->r[] holds the borrowed GPRs and TL_MM_FLAGS is scratch until
+// the matching restore. The returned boundaries let a future caller publish exact fault ownership.
+static translit_pre_spill_ranges translit_emit_pre_spill_save(hl_x64_asm *a) {
+    translit_pre_spill_ranges ranges = {.start = a->cursor};
+    hl_x64_store_gs(a, HL_X64_RAX, HL_X64_RAX * 8);
+    ranges.rax_canonical = a->cursor;
+    hl_x64_store_gs(a, HL_X64_R11, HL_X64_R11 * 8);
+    ranges.r11_canonical = a->cursor;
+    hl_x64_u8(a, 0x9f);                         // lahf
+    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0); // seto %al
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    ranges.flags_packed = a->cursor;
+    return ranges;
+}
+
+// Restore OF first (ADD 0x7f over the saved 0/1), then the LAHF subset with SAHF. MOVs do not alter
+// flags, so R11 and RAX can be restored after the architectural flags become live again.
+static void translit_emit_pre_spill_restore(hl_x64_asm *a, translit_pre_spill_ranges *ranges) {
+    hl_x64_load_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    hl_x64_u8(a, 0x04); hl_x64_u8(a, 0x7f); // add $0x7f,%al: OF = saved AL
+    hl_x64_u8(a, 0x9e);                     // sahf: SF/ZF/AF/PF/CF = saved AH
+    ranges->flags_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_R11, HL_X64_R11 * 8);
+    ranges->r11_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RAX, HL_X64_RAX * 8);
+    ranges->rax_live = a->cursor;
+}
+
+static uint64_t translit_pre_spill_unpack_flags(uint64_t packed, uint64_t host_flags) {
+    // None of the packing/restoration instructions changes DF, so it remains authoritative in the
+    // interrupted host context even while ADD/SAHF temporarily change the arithmetic subset.
+    return UINT64_C(2) | (host_flags & (UINT64_C(1) << 10)) |
+           ((packed >> 8) & UINT64_C(0xd5)) | ((packed & 1) << 11);
 }
 
 // Shared constant-JCC IBTC entry has already saved guest RAX in cpu->r[0] and
@@ -3785,6 +3830,7 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
+    if (scenario == 238) return translit_pre_spill_signal_stage_test() ? 0 : 238;
     if (scenario == 224 || scenario == 225) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -10688,6 +10734,7 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     uint32_t preserve_registers = 0;
     uint64_t guest_pc;
     int flags_from_cpu = 0;
+    int flags_from_packed = 0;
     int exact_pc = jit_instruction_guest_pc_preserve(host_pc, &guest_pc, &preserve_registers);
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *force_miss = hl_option_get("HL_TRANSLIT_PROVENANCE_FALLBACK");
@@ -10710,6 +10757,10 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
         flags_from_cpu = 1;
         preserve_registers &= ~JIT_BODY_OWNER_FLAGS_FROM_CPU;
     }
+    if (preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_PACKED) {
+        flags_from_packed = 1;
+        preserve_registers &= ~JIT_BODY_OWNER_FLAGS_FROM_PACKED;
+    }
     if (preserve_registers & JIT_BODY_OWNER_PRESERVE_RET_RAX) {
         cpu->r[HL_X64_RAX] = cpu->mmscratch[1];
         preserve_registers &= ~JIT_BODY_OWNER_PRESERVE_RET_RAX;
@@ -10718,8 +10769,12 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     for (int i = 0; i < 16; i++) {
         if ((preserve_registers & (1u << i)) == 0) cpu->r[i] = (uint64_t)gregs[g_translit_greg[i]];
     }
-    translit_flags_out(cpu, flags_from_cpu ? cpu->mmscratch[0]
-                                           : (uint64_t)gregs[HL_HOST_UC_REG_EFL]);
+    uint64_t host_flags = (uint64_t)gregs[HL_HOST_UC_REG_EFL];
+    uint64_t captured_flags = flags_from_packed
+                                  ? translit_pre_spill_unpack_flags(cpu->mmscratch[0], host_flags)
+                                  : flags_from_cpu ? cpu->mmscratch[0]
+                                                   : host_flags;
+    translit_flags_out(cpu, captured_flags);
     if (exact_pc) cpu->rip = guest_pc;
     cpu->reason = R_BRANCH;
     return 1;
@@ -11018,6 +11073,77 @@ static int translit_pcache_census_signal_stage_test(void) {
         translit_flags_out(&expected_flags_cpu, stages[stage].cpu_flags ? UINT64_C(0x853) : UINT64_C(0xad7));
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags_cpu);
     }
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
+    munmap(arena, arena_size);
+    return exact;
+}
+
+static int translit_pre_spill_signal_stage_test(void) {
+    const size_t arena_size = 4096;
+    uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED) return 0;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    uint64_t saved_generation = g_cache_gen;
+    int saved_selected = translit_selected;
+    g_cache = arena; g_cp = arena; g_cache_gen = UINT64_MAX - 238; translit_selected = 1;
+    jit_body_owner_drop_generation(g_cache_gen);
+
+    hl_x64_asm a = {arena, arena + arena_size, 0, 0};
+    translit_pre_spill_ranges site = translit_emit_pre_spill_save(&a);
+    translit_emit_pre_spill_restore(&a, &site);
+    uint8_t *end = a.cursor; hl_x64_u8(&a, 0x90);
+    translit_emit_exit_const(&a, guest + 1, R_BRANCH);
+    const uint64_t guest = UINT64_C(0x402380);
+    const uint32_t rax = 1u << HL_X64_RAX, r11 = 1u << HL_X64_R11, both = rax | r11;
+    jit_body_owner_range ranges[7]; uint32_t count = 0, token = 0;
+    int exact = jit_body_owner_reserve_n(g_cache_gen, 7, &token) &&
+        translit_owner_append(ranges, &count, site.start, site.rax_canonical, guest, 0) &&
+        translit_owner_append(ranges, &count, site.rax_canonical, site.r11_canonical, guest, rax) &&
+        translit_owner_append(ranges, &count, site.r11_canonical, site.flags_packed, guest, both) &&
+        translit_owner_append(ranges, &count, site.flags_packed, site.flags_live, guest,
+                              both | JIT_BODY_OWNER_FLAGS_FROM_PACKED) &&
+        translit_owner_append(ranges, &count, site.flags_live, site.r11_live, guest, both) &&
+        translit_owner_append(ranges, &count, site.r11_live, site.rax_live, guest, rax) &&
+        translit_owner_append(ranges, &count, site.rax_live, end + 1, guest, 0) &&
+        count == 7 && jit_body_owner_publish_n(g_cache_gen, token, ranges, count);
+    struct stage { uint8_t *pc; uint32_t mask; int packed; } stages[] = {
+        {site.start, 0, 0}, {site.rax_canonical, rax, 0},
+        {site.r11_canonical, both, 0}, {site.flags_packed, both, 1},
+        {site.flags_live, both, 0}, {site.r11_live, rax, 0}, {site.rax_live, 0, 0},
+    };
+    const uint64_t guest_flags = UINT64_C(0x8d7);
+    const uint64_t packed = ((guest_flags & UINT64_C(0xd5)) << 8) | ((guest_flags >> 11) & 1);
+    for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; stage++) {
+        struct cpu cpu = {0}, expected_flags = {0}; ucontext_t context = {0};
+        greg_t *gregs = HL_HOST_UC_GREGS(&context);
+        for (unsigned reg = 0; reg < 16; reg++) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        cpu.mmscratch[0] = packed; gregs[HL_HOST_UC_REG_EFL] = (greg_t)guest_flags;
+        HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
+        exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;
+        for (unsigned reg = 0; exact && reg < 16; reg++)
+            exact = cpu.r[reg] == ((stages[stage].mask & (1u << reg))
+                ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg);
+        translit_flags_out(&expected_flags, guest_flags);
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags) &&
+                (!stages[stage].packed || translit_pre_spill_unpack_flags(packed, guest_flags) == guest_flags);
+    }
+    // Execute the same bytes, including DF=1, to cover the emitter rather than only its owner ledger.
+    struct cpu executed = {0};
+    for (unsigned reg = 0; reg < 16; reg++) executed.r[reg] = UINT64_C(0xb000000000000000) + reg;
+    executed.r[HL_X64_RSP] = (uint64_t)(uintptr_t)(arena + arena_size - 32);
+    translit_flags_out(&executed, guest_flags);
+    uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
+    executed.mmscratch[0] = translit_flags_in(&executed);
+    hl_x86_translit_enter(&executed, arena);
+    translit_flags_out(&executed, executed.mmscratch[0]);
+    exact = exact && executed.rip == guest + 1 && executed.reason == R_BRANCH &&
+            translit_flags_in(&executed) == guest_flags;
+    for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
     munmap(arena, arena_size);
