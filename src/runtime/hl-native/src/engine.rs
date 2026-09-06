@@ -635,6 +635,17 @@ mod tests {
         assert_eq!(unsafe { hook(205) }, 0, "single-fetch scenario 205");
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn tzcnt_register_memory_flags_and_rex_forms_match_native() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: scenario 300 owns and releases bounded executable mappings.
+        assert_eq!(unsafe { hook(300) }, 0);
+    }
+
     #[test]
     fn transliteration_exported_selectors_do_not_overlap() {
         let _serial = engine_test_lock();

@@ -179,6 +179,7 @@ static uint64_t translit_build_refresh_calls;
 static uint64_t translit_build_stub_checks;
 static uint64_t translit_build_map_puts;
 #if defined(HL_NATIVE_TEST_HOOKS)
+static int translit_test_no_bmi1;
 static _Thread_local uint64_t translit_test_decode_calls;
 static _Thread_local uint64_t translit_test_decode_results;
 static _Thread_local uint64_t translit_test_decode_successor_probes;
@@ -701,6 +702,7 @@ static int translit_riprel_readonly_rejection_test(unsigned scenario);
 static int translit_riprel_readonly_off_receipt_test(unsigned scenario);
 static int translit_riprel_load_bridge_gate_test(void);
 static int translit_riprel_integer_corpus_test(void);
+static int translit_tzcnt_fixture_test(void);
 static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
@@ -1505,6 +1507,20 @@ static int translit_classify_two(const struct insn *insn) {
     uint8_t op = insn->op;
     if (op == 0x05) return TL_SYSCALL;
     if (op >= 0x80 && op <= 0x8F) return TL_JCC;
+    // F3 0F BC is TZCNT when the host advertises BMI1, and the legacy BSF
+    // encoding otherwise.  Same-ISA execution deliberately preserves that
+    // host/guest CPUID contract and, by copying the instruction, its exact
+    // result plus architectural CF/ZF. A host without BMI1 would execute the
+    // same bytes as legacy BSF, so it must retain the interpreter fallback.
+    // Operand-size 66 is left to the interpreter: this backend's admitted
+    // family is the 32/64-bit form used by x86-64 toolchains.
+    int host_bmi1 = __builtin_cpu_supports("bmi");
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (translit_test_no_bmi1) host_bmi1 = 0;
+#endif
+    if (op == 0xBC && host_bmi1 && insn->rep && !insn->p66 && !insn->repne && !insn->lock && !insn->seg &&
+        !insn->vex && !insn->evex && !insn->map3 && insn->has_modrm)
+        return TL_COPY;
     if (!insn->p66 && !insn->repne && !insn->lock && !insn->addr32 && !insn->seg && !insn->vex &&
         !insn->evex && !insn->map3 && insn->has_modrm) {
         // MOVDQU uses mandatory F3; MOVUPS/MOVAPS use no mandatory prefix. Stores remain eligible only
@@ -5137,6 +5153,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 300) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_tzcnt_fixture_test());
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 218) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -6538,6 +6563,163 @@ static uint64_t translit_riprel_native_call(void *entry, uint64_t rax, uint64_t 
                      : "cc", "memory");
     *flags = captured;
     return rax;
+}
+
+static uint64_t translit_tzcnt_native(unsigned width, uint64_t source, uint64_t input_flags,
+                                      uint64_t *flags) {
+    uint64_t result, captured;
+    if (width == 4) {
+        __asm__ volatile("push %3\n\tpopfq\n\ttzcntl %k2,%k0\n\tpushfq\n\tpop %1"
+                         : "=&r"(result), "=r"(captured)
+                         : "r"(source), "r"(input_flags)
+                         : "cc", "memory");
+        result = (uint32_t)result;
+    } else {
+        __asm__ volatile("push %3\n\tpopfq\n\ttzcntq %2,%0\n\tpushfq\n\tpop %1"
+                         : "=&r"(result), "=r"(captured)
+                         : "r"(source), "r"(input_flags)
+                         : "cc", "memory");
+    }
+    *flags = captured;
+    return result;
+}
+
+static int translit_tzcnt_fixture_test(void) {
+    static const uint64_t values[] = {0, 1, 2, UINT64_C(0x80000000), UINT64_C(0x8000000000000000),
+                                      UINT64_C(0xf000000000000100)};
+    const size_t size = 8192, source_offset = 128, data_offset = 4096;
+    uint8_t *arena = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) return 231;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    g_cache = arena; g_rw2rx = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = size;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    int result = context == NULL ? 232 : 0;
+    for (unsigned form = 0; result == 0 && form < 5; ++form) {
+        unsigned width = form == 0 || form == 3 ? 4 : 8;
+        for (unsigned value_index = 0; result == 0 && value_index < sizeof values / sizeof values[0]; ++value_index) {
+            uint64_t value = values[value_index];
+            uint8_t *code = guest + source_offset;
+            memset(code, 0x0f, 32);
+            size_t length;
+            if (form == 0) { uint8_t bytes[] = {0xf3,0x0f,0xbc,0xc0}; memcpy(code, bytes, 4); length = 4; }
+            else if (form == 1) { uint8_t bytes[] = {0xf3,0x48,0x0f,0xbc,0xc0}; memcpy(code, bytes, 5); length = 5; }
+            else if (form == 2) { uint8_t bytes[] = {0xf3,0x4d,0x0f,0xbc,0xc8}; memcpy(code, bytes, 5); length = 5; }
+            else {
+                size_t prefix = width == 8 ? 2 : 1;
+                code[0] = 0xf3;
+                if (width == 8) code[1] = 0x48;
+                code[prefix] = 0x0f; code[prefix + 1] = 0xbc; code[prefix + 2] = 0x05;
+                length = prefix + 7;
+                int32_t displacement = (int32_t)(data_offset - source_offset - length);
+                memcpy(code + prefix + 3, &displacement, 4);
+                memcpy(guest + data_offset, &value, sizeof value);
+            }
+            code[length] = 0x0f; code[length + 1] = 0x0b;
+            uint64_t native_flags = 0, initial_flags = UINT64_C(0xad7);
+            uint64_t native_result = translit_tzcnt_native(width, value, initial_flags, &native_flags);
+            struct insn decoded;
+            uint64_t source = (uint64_t)(uintptr_t)code;
+            if (hl_x86_decode_context(context, source, &decoded) <= 0 || decoded.len != length ||
+                translit_classify(&decoded) != TL_COPY) { result = 233; break; }
+            struct cpu interpreted = {0}; interpreted.rip = source;
+            interpreted.r[HL_X64_RAX] = value;
+            interpreted.r[8] = value;
+            interpreted.r[9] = UINT64_C(0xaaaaaaaaaaaaaaaa);
+            translit_flags_out(&interpreted, initial_flags);
+            (void)interp_step(&interpreted, &decoded, source, source + length);
+            memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+            g_cache_gen = UINT64_MAX - 0x700 - form * 16 - value_index; map_clear();
+            struct interp_block *block = (struct interp_block *)arena;
+            void *body = translit_build(context, block, source, NULL);
+            if (body == NULL || block->profile_insns != 1) { result = 235; break; }
+            block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+            struct cpu candidate = {0}; candidate.rip = source;
+            candidate.r[HL_X64_RAX] = value;
+            candidate.r[8] = value;
+            candidate.r[9] = UINT64_C(0xaaaaaaaaaaaaaaaa);
+            translit_flags_out(&candidate, initial_flags);
+            run_block(context, &candidate, block);
+            unsigned destination = form == 2 ? 9 : HL_X64_RAX;
+            uint64_t checked_flags = UINT64_C(0x41);
+            if (candidate.rip != source + length || candidate.r[destination] != native_result ||
+                interpreted.r[destination] != native_result ||
+                (translit_flags_in(&candidate) & checked_flags) != (native_flags & checked_flags) ||
+                (translit_flags_in(&interpreted) & 0x41) != (native_flags & 0x41)) {
+                result = 236; break;
+            }
+        }
+    }
+    if (result == 0) {
+        struct insn decoded;
+        uint64_t source = (uint64_t)(uintptr_t)(guest + source_offset);
+        memcpy(guest + source_offset, (uint8_t[]){0xf3,0x0f,0xbc,0xc0}, 4);
+        translit_test_no_bmi1 = 1;
+        int decoded_length = hl_x86_decode_context(context, source, &decoded);
+        int refused = decoded_length == 4 && translit_classify(&decoded) != TL_COPY;
+        translit_test_no_bmi1 = 0;
+        if (!refused) result = 244;
+    }
+    // The memory form must retain the generic RIP-relative load's exact fault
+    // provenance: a fault is attributed to TZCNT and exposes neither its
+    // materialised host address nor a partially written destination.
+    if (result == 0) {
+        uint8_t *code = guest + source_offset;
+        uint8_t bytes[] = {0xf3,0x48,0x0f,0xbc,0x05,0,0,0,0,0x0f,0x0b};
+        int32_t displacement = (int32_t)(data_offset - source_offset - 9);
+        memcpy(bytes + 5, &displacement, 4); memcpy(code, bytes, sizeof bytes);
+        memset(arena, 0, size); g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0x780; map_clear();
+        uint64_t source = (uint64_t)(uintptr_t)code;
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = translit_build(context, block, source, NULL);
+        block->magic = INTERP_BLOCK_MAGIC; block->gpc = source;
+        struct cpu faulted = {0}; faulted.rip = source;
+        faulted.r[HL_X64_RAX] = UINT64_C(0x1122334455667788);
+        faulted.r[HL_X64_R11] = UINT64_C(0x8877665544332211);
+        if (body == NULL || block->profile_insns != 1) result = 237;
+        else {
+            uint64_t emitted_pc = 0;
+            for (uint8_t *probe = arena + sizeof *block; probe < g_cp; ++probe) {
+                uint64_t mapped_guest = 0;
+                if (jit_instruction_map_lookup((uint64_t)(uintptr_t)probe, &mapped_guest, NULL) &&
+                    mapped_guest == source) {
+                    emitted_pc = (uint64_t)(uintptr_t)probe;
+                    break;
+                }
+            }
+            ucontext_t native = {0};
+            HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_RAX] =
+                (greg_t)UINT64_C(0x1122334455667788);
+            HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_R11] =
+                (greg_t)UINT64_C(0x8877665544332211);
+            HL_HOST_UC_PC(&native) = (greg_t)emitted_pc;
+            int saved_selected = translit_selected; translit_selected = 1;
+            int delivered = translit_test_deliver_guest_fault(
+                &faulted, &native, (uint64_t)(uintptr_t)(guest + data_offset));
+            translit_selected = saved_selected;
+            if (emitted_pc == 0 || !delivered) result = 238;
+            else if (faulted.rip != source) result = 239;
+            else if (faulted.sync_signal != SIGSEGV) result = 240;
+            else if (faulted.sync_address != (uint64_t)(uintptr_t)(guest + data_offset)) result = 241;
+            else if (faulted.r[HL_X64_RAX] != UINT64_C(0x1122334455667788)) result = 242;
+            else if (faulted.r[HL_X64_R11] != UINT64_C(0x8877665544332211)) result = 243;
+        }
+        jit_body_owner_drop_generation(g_cache_gen); map_clear();
+    }
+    translit_fall_fixture_bytes = NULL;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx; g_cache_gen = saved_generation;
+    munmap(arena, size); munmap(guest, size);
+    return result;
 }
 
 static int translit_test_condition_true(unsigned condition, uint64_t flags) {
