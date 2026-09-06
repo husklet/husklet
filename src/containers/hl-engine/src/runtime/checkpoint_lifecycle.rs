@@ -104,7 +104,10 @@ impl Server {
         let bytes = self
             .source
             .get_until(super::image_envelope::OBJECT, deadline)
-            .map_err(|_| CaptureFailure::InvalidImage)?;
+            .map_err(|error| match error {
+                crate::composition::CompositionError::DeadlineExceeded => CaptureFailure::Deadline,
+                _ => CaptureFailure::InvalidImage,
+            })?;
         super::image_envelope::Reader::decode(&bytes).map_err(|_| CaptureFailure::InvalidImage)
     }
 

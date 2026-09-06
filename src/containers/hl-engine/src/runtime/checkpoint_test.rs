@@ -454,6 +454,25 @@ fn malformed_envelope_fails_closed_before_restore_mutates() {
     }
 }
 
+#[test]
+fn image_envelope_read_deadline_remains_a_wait_failure() {
+    let store = Arc::new(EnvelopeGeneration {
+        image: Err(CompositionError::DeadlineExceeded),
+        begins: AtomicUsize::new(0),
+    });
+    let server = Server::new(store.clone(), store.clone());
+
+    let failure = server
+        .begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1))
+        .expect_err("image-envelope read exceeded its deadline");
+    assert_eq!(failure, CaptureFailure::Deadline);
+    assert_eq!(
+        store.begins.load(Ordering::Relaxed),
+        0,
+        "deadline opened no transaction"
+    );
+}
+
 #[derive(Default)]
 struct RecoveryStore(Mutex<Vec<(String, Vec<u8>)>>);
 

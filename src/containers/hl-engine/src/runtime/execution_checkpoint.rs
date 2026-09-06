@@ -239,6 +239,14 @@ mod failure_precedence_tests {
     use super::*;
 
     #[test]
+    fn checkpoint_deadline_maps_to_public_wait_failure() {
+        assert_eq!(
+            CheckpointControl::capture_failure(CaptureFailure::Deadline),
+            EngineError::WaitFailed
+        );
+    }
+
+    #[test]
     fn recognized_native_checkpoint_image_maps_to_public_unsupported() {
         assert_eq!(
             CheckpointControl::capture_failure(CaptureFailure::UnsupportedImage),
