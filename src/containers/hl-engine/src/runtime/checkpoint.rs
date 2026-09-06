@@ -17,7 +17,7 @@ use std::{
 
 mod authority;
 mod broker;
-mod image_envelope;
+pub(crate) mod image_envelope;
 #[path = "checkpoint_lifecycle.rs"]
 mod lifecycle;
 pub(super) mod member_stdio;

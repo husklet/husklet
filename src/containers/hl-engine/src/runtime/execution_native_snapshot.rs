@@ -1,9 +1,10 @@
 //! Stopped-process architectural capture for the staged native x86 checkpoint reader.
 //!
-//! This module deliberately has no publication or admission call site yet. It establishes only the
-//! ptrace lifetime and the fixed register codec needed by a later whole-process capture transaction.
-#![allow(dead_code)] // Intentionally staged before the coordinator transaction is wired to it.
+//! Publication remains behind the native checkpoint eligibility gate.  The transaction here is the
+//! complete, fail-closed publication primitive that gate will call once the lifecycle is admitted.
+#![allow(dead_code)]
 
+use crate::composition::{CheckpointSink, CompositionError};
 use sha2::{Digest as _, Sha256};
 use std::io;
 #[cfg(target_os = "linux")]
@@ -27,6 +28,126 @@ const MAX_CAPTURE_BYTES: usize = 1 << 30;
 const MAX_PATH_BYTES: usize = 4096;
 #[cfg(target_arch = "x86_64")]
 const STOP_DEADLINE: Duration = Duration::from_secs(2);
+
+pub(super) const REGISTER_OBJECT: &str = "native/registers.x86-v1";
+pub(super) const MEMORY_OBJECT: &str = "native/memory.x86-v1";
+const MANIFEST_MAGIC: &[u8; 16] = b"HLNATIVE-X86-V1\0";
+const MANIFEST_SIZE: usize = 160;
+
+fn native_manifest(registers: &[u8], memory: &[u8]) -> Vec<u8> {
+    let mut out = vec![0; MANIFEST_SIZE];
+    out[..16].copy_from_slice(MANIFEST_MAGIC);
+    out[16..48].copy_from_slice(&object_name(REGISTER_OBJECT));
+    out[48..56].copy_from_slice(&(registers.len() as u64).to_le_bytes());
+    out[56..88].copy_from_slice(&Sha256::digest(registers));
+    out[88..120].copy_from_slice(&object_name(MEMORY_OBJECT));
+    out[120..128].copy_from_slice(&(memory.len() as u64).to_le_bytes());
+    out[128..160].copy_from_slice(&Sha256::digest(memory));
+    out
+}
+
+fn object_name(name: &str) -> [u8; 32] {
+    let mut field = [0; 32];
+    field[..name.len()].copy_from_slice(name.as_bytes());
+    field
+}
+
+pub(super) fn validate_native_objects(
+    manifest: &[u8],
+    object: impl Fn(&str) -> Option<Vec<u8>>,
+) -> Result<(), InvalidNativeImage> {
+    if manifest.len() != MANIFEST_SIZE
+        || &manifest[..16] != MANIFEST_MAGIC
+        || manifest[16..48] != object_name(REGISTER_OBJECT)
+        || manifest[88..120] != object_name(MEMORY_OBJECT)
+    {
+        return Err(InvalidNativeImage::Manifest);
+    }
+    let registers = object(REGISTER_OBJECT).ok_or(InvalidNativeImage::Missing)?;
+    let memory = object(MEMORY_OBJECT).ok_or(InvalidNativeImage::Missing)?;
+    for (size_at, digest_at, bytes) in [(48, 56, registers.as_slice()), (120, 128, memory.as_slice())] {
+        let size = u64::from_le_bytes(manifest[size_at..size_at + 8].try_into().expect("manifest field"));
+        if size != bytes.len() as u64 || manifest[digest_at..digest_at + 32] != Sha256::digest(bytes)[..] {
+            return Err(InvalidNativeImage::Digest);
+        }
+    }
+    X86RegisterRecord::decode(&registers).map_err(|_| InvalidNativeImage::Registers)?;
+    NativeMemoryImage::decode(&memory).map_err(|_| InvalidNativeImage::Memory)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InvalidNativeImage {
+    Manifest,
+    Missing,
+    Digest,
+    Registers,
+    Memory,
+}
+
+/// Atomically stages a complete stopped-process image.  `commit_until` is the only publication
+/// point; every earlier failure best-effort aborts the owned transaction before returning.
+#[cfg(target_os = "linux")]
+pub(super) fn publish_stopped_native(
+    sink: &dyn CheckpointSink,
+    pid: libc::pid_t,
+    deadline: Instant,
+) -> Result<(), CompositionError> {
+    if Instant::now() >= deadline {
+        return Err(CompositionError::DeadlineExceeded);
+    }
+    let transaction = sink.begin_until(deadline)?;
+    struct Thaw(libc::pid_t);
+    impl Drop for Thaw {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.0, libc::SIGCONT);
+            }
+        }
+    }
+    let _thaw = Thaw(pid);
+    let result = (|| {
+        let registers = capture(pid)
+            .map_err(|_| CompositionError::RuntimeConstruction)?
+            .encode();
+        let memory = capture_stopped_memory(pid, deadline)
+            .and_then(|image| {
+                image
+                    .encode()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))
+            })
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::TimedOut {
+                    CompositionError::DeadlineExceeded
+                } else {
+                    CompositionError::RuntimeConstruction
+                }
+            })?;
+        if Instant::now() >= deadline {
+            return Err(CompositionError::DeadlineExceeded);
+        }
+        let manifest = native_manifest(&registers, &memory);
+        validate_native_objects(&manifest, |name| match name {
+            REGISTER_OBJECT => Some(registers.to_vec()),
+            MEMORY_OBJECT => Some(memory.clone()),
+            _ => None,
+        })
+        .map_err(|_| CompositionError::RuntimeConstruction)?;
+        sink.put_until(transaction, REGISTER_OBJECT, &registers, deadline)?;
+        sink.put_until(transaction, MEMORY_OBJECT, &memory, deadline)?;
+        sink.put_until(
+            transaction,
+            crate::runtime::checkpoint::image_envelope::OBJECT,
+            &crate::runtime::checkpoint::image_envelope::Reader::NativeX86V1.encode(),
+            deadline,
+        )?;
+        sink.commit_until(transaction, &manifest, deadline)
+    })();
+    if result.is_err() {
+        let _ = sink.abort_until(transaction, deadline);
+    }
+    result
+}
 
 /// Canonical `native-x86-v1` architectural state. Register order is Linux x86-64
 /// `user_regs_struct`: r15..gs, exactly as returned by `NT_PRSTATUS`.
@@ -859,8 +980,111 @@ impl Drop for TraceGuard {
 #[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::num::NonZeroU64;
     use std::os::fd::RawFd;
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct AtomicSink {
+        state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>, usize)>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl CheckpointSink for AtomicSink {
+        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+            unreachable!()
+        }
+        fn begin_until(&self, _: Instant) -> Result<NonZeroU64, CompositionError> {
+            Ok(NonZeroU64::new(1).unwrap())
+        }
+        fn put_until(&self, _: NonZeroU64, name: &str, bytes: &[u8], _: Instant) -> Result<(), CompositionError> {
+            if self.fail_at == Some(name) {
+                return Err(CompositionError::RuntimeConstruction);
+            }
+            self.state.lock().unwrap().1.insert(name.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+        fn abort_until(&self, _: NonZeroU64, _: Instant) -> Result<(), CompositionError> {
+            let mut state = self.state.lock().unwrap();
+            state.1.clear();
+            state.2 += 1;
+            Ok(())
+        }
+        fn commit_until(&self, _: NonZeroU64, manifest: &[u8], _: Instant) -> Result<(), CompositionError> {
+            if self.fail_at == Some("commit") {
+                return Err(CompositionError::RuntimeConstruction);
+            }
+            let mut state = self.state.lock().unwrap();
+            let staging = std::mem::take(&mut state.1);
+            state.0 = staging;
+            state.0.insert("MANIFEST".into(), manifest.to_vec());
+            Ok(())
+        }
+    }
+
+    fn stopped_child() -> libc::pid_t {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        wait_until_stopped(pid);
+        pid
+    }
+
+    #[test]
+    fn native_transaction_publishes_only_a_complete_validated_generation() {
+        let pid = stopped_child();
+        let sink = AtomicSink::default();
+        publish_stopped_native(&sink, pid, Instant::now() + Duration::from_secs(10)).unwrap();
+        let state = sink.state.lock().unwrap();
+        assert_eq!(state.0.len(), 4);
+        assert_eq!(
+            crate::runtime::checkpoint::image_envelope::Reader::decode(&state.0["IMAGE"]),
+            Ok(crate::runtime::checkpoint::image_envelope::Reader::NativeX86V1),
+        );
+        assert_eq!(
+            validate_native_objects(&state.0["MANIFEST"], |name| state.0.get(name).cloned()),
+            Ok(())
+        );
+        let mut tampered = state.0.clone();
+        tampered.get_mut(MEMORY_OBJECT).unwrap()[0] ^= 1;
+        assert_eq!(
+            validate_native_objects(&state.0["MANIFEST"], |name| tampered.get(name).cloned()),
+            Err(InvalidNativeImage::Digest)
+        );
+        assert_eq!(
+            validate_native_objects(&state.0["MANIFEST"], |name| (name != REGISTER_OBJECT)
+                .then(|| state.0[name].clone())),
+            Err(InvalidNativeImage::Missing)
+        );
+        drop(state);
+        kill_and_reap(pid);
+    }
+
+    #[test]
+    fn object_and_commit_failures_abort_without_partial_publication_and_thaw_tracee() {
+        for failure in [MEMORY_OBJECT, "commit"] {
+            let pid = stopped_child();
+            let sink = AtomicSink {
+                fail_at: Some(failure),
+                ..AtomicSink::default()
+            };
+            assert!(publish_stopped_native(&sink, pid, Instant::now() + Duration::from_secs(10)).is_err());
+            let state = sink.state.lock().unwrap();
+            assert!(state.0.is_empty());
+            assert!(state.1.is_empty());
+            assert_eq!(state.2, 1);
+            drop(state);
+            wait_until_running(pid);
+            kill_and_reap(pid);
+        }
+    }
 
     #[test]
     fn canonical_codec_is_exact_and_rejects_every_structural_mutation() {

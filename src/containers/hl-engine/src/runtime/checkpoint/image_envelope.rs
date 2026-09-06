@@ -4,7 +4,7 @@
 //! structure, so host endianness, padding and compiler layout never enter the
 //! persisted format.
 
-pub(super) const OBJECT: &str = "IMAGE";
+pub(crate) const OBJECT: &str = "IMAGE";
 pub(super) const SIZE: usize = 64;
 
 const MAGIC: &[u8; 8] = b"HLIMAGE\0";
@@ -17,7 +17,7 @@ const MANIFEST: &[u8] = b"MANIFEST";
 
 /// The reader selected by a validated `IMAGE` object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Reader {
+pub(crate) enum Reader {
     /// The existing translated-engine `MANIFEST` reader.
     Translated,
     /// The version-one native x86 image reader, recognized but not yet wired.
@@ -25,7 +25,7 @@ pub(super) enum Reader {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Invalid {
+pub(crate) enum Invalid {
     Size,
     Magic,
     EnvelopeVersion,
@@ -44,7 +44,7 @@ impl Reader {
     /// `8..10`, little-endian kind `10..12`, little-endian payload version
     /// `12..16`, NUL-terminated payload object name with a zero tail `16..48`,
     /// and zero-reserved bytes `48..64`.
-    pub(super) fn encode(self) -> [u8; SIZE] {
+    pub(crate) fn encode(self) -> [u8; SIZE] {
         let (kind, payload_version) = match self {
             Self::Translated => (TRANSLATED_KIND, TRANSLATED_MANIFEST_VERSION),
             Self::NativeX86V1 => (NATIVE_X86_V1_KIND, NATIVE_X86_V1_VERSION),
@@ -59,7 +59,7 @@ impl Reader {
     }
 
     /// Decodes only a canonical envelope for a reader this host recognizes.
-    pub(super) fn decode(bytes: &[u8]) -> Result<Self, Invalid> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, Invalid> {
         let bytes: &[u8; SIZE] = bytes.try_into().map_err(|_| Invalid::Size)?;
         if &bytes[0..8] != MAGIC {
             return Err(Invalid::Magic);
