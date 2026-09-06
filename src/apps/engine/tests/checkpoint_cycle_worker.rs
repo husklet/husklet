@@ -36,6 +36,26 @@ fn compile_probe(source: &Path, probe: &Path) {
     assert!(status.success(), "checkpoint-cycle probe compilation failed: {status}");
 }
 
+fn processes_rooted_at(rootfs: &Path) -> Vec<String> {
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        })
+        .filter_map(|entry| {
+            std::fs::read_link(entry.path().join("root"))
+                .ok()
+                .filter(|root| root == rootfs)
+                .map(|_| entry.file_name().to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
 fn guest_isa() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "aarch64"
@@ -171,14 +191,9 @@ fn failure_after_start_stops_and_reaps_the_probe() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("injected checkpoint-cycle failure after start"));
-    let transcript = std::fs::read_to_string(control.join("output")).unwrap();
-    let pid = transcript
-        .lines()
-        .find_map(|line| line.strip_prefix("READY leader="))
-        .and_then(|tail| tail.split_whitespace().next())
-        .unwrap();
     assert!(
-        !Path::new("/proc").join(pid).exists(),
-        "probe pid {pid} survived worker refusal"
+        processes_rooted_at(&rootfs).is_empty(),
+        "probe processes survived worker refusal: {:?}",
+        processes_rooted_at(&rootfs)
     );
 }
