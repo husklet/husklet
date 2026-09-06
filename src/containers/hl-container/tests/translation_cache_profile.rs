@@ -1636,11 +1636,11 @@ int main(void) {
                 require(bytes.len() == 32, "library-chain activation receipt shape changed")?;
                 let maps = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                 let deferred = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                let chains = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+                let pending = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
                 let relinked = u64::from_le_bytes(bytes[24..].try_into().unwrap());
                 require(
-                    maps > 0 && deferred == 0 && chains > 0 && relinked == chains,
-                    "authenticated DSO activation did not relink every live current-generation chain",
+                    maps > 0 && deferred == 0 && relinked == pending,
+                    "authenticated DSO activation did not relink every pending live current-generation chain",
                 )
             })
             .and_then(|()| {

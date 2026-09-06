@@ -2066,6 +2066,7 @@ static void x64_pc_exec_epoch_authorize(int identity_authorized) {
 }
 static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
+static uint64_t g_x64_pc_chain_relink_pending;
 static uint64_t g_x64_pc_observe_load_ns;
 static uint64_t g_x64_pc_observe_validation_ns;
 static uint64_t g_x64_pc_observe_read_ns;
@@ -2336,6 +2337,7 @@ static void x64_pc_thread_start_abandon(void) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
+    g_x64_pc_chain_relink_pending = 0;
     g_x64_pc_restored_maps = 0;
     g_x64_pc_restored_live = 0;
     g_x64_pc_activated_maps = 0;
@@ -2709,7 +2711,11 @@ static int pcache_load(uint64_t entry_jump) {
 #endif
         if (source_fixed && target_fixed) {
             direct_chain_count++;
+#ifdef HL_PCACHE_NONFIXED_SOURCE_FALLBACK_MUTATION
+        } else {
+#else
         } else if (source_fixed) {
+#endif
             /* A reachable fixed-image chain cannot enter code whose DSO identity is still dormant.
                A DSO-source site remains unreachable until activation publishes every authenticated
                library map, so its saved intra-arena displacement can remain direct. */
@@ -2833,6 +2839,7 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = loaded_chains; g_x64_pc_chain_count = chains;
+    g_x64_pc_chain_relink_pending = fixed_fallback_count;
     g_x64_pc_restored_maps = maps;
     g_x64_pc_restored_live = fixed_maps;
     g_x64_pc_activated_maps = 0;
@@ -3949,10 +3956,19 @@ static void x64_pc_activate_ready(uint64_t pc) {
     atomic_store_explicit(&set->count, owner_at, memory_order_release);
     uint64_t relinked_chains = 0;
 #if !defined(HL_PCACHE_CHAIN_RELINK_MUTATION)
-    if (g_x64_pc_chain_count != 0) {
+    if (g_x64_pc_chain_relink_pending != 0) {
         if (!jit_wprot(0)) goto cold;
-        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++)
-            relinked_chains += (uint64_t)x64_pc_chain_patch(&g_x64_pc_chains[i], 1);
+        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
+            translit_chain_site *chain = &g_x64_pc_chains[i];
+            int source_fixed = x64_pc_saved_gpc_fixed(chain->source, g_x64_pc_snapshot_maps,
+                                                       g_x64_pc_snapshot_gpc_index,
+                                                       g_x64_pc_snapshot_maps_count);
+            int target_fixed = x64_pc_saved_gpc_fixed(chain->target, g_x64_pc_snapshot_maps,
+                                                       g_x64_pc_snapshot_gpc_index,
+                                                       g_x64_pc_snapshot_maps_count);
+            if (source_fixed && !target_fixed)
+                relinked_chains += (uint64_t)x64_pc_chain_patch(chain, 1);
+        }
         int reprotected = jit_wprot(1);
         if (!reprotected || !jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) {
             if (!reprotected) (void)jit_fail(HL_STATUS_CORRUPT, "pcache chain reprotection failed", 32);
@@ -3975,7 +3991,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
     if (x64_pc_file(path, sizeof path)) {
         int length = snprintf(receipt, sizeof receipt, "%s.library-activated-%lld", path, (long long)getpid());
         uint64_t state[4] = {g_x64_pc_activated_maps, g_x64_pc_deferred_count,
-                             g_x64_pc_chain_count, relinked_chains};
+                             g_x64_pc_chain_relink_pending, relinked_chains};
         if (length > 0 && (size_t)length < sizeof receipt)
             (void)x64_pc_artifact_store(receipt, state, sizeof state);
     }
@@ -3991,6 +4007,7 @@ cold:
     free(g_x64_pc_chains);
     g_x64_pc_chains = NULL;
     g_x64_pc_chain_count = 0;
+    g_x64_pc_chain_relink_pending = 0;
     g_x64_pc_deferred_count = 0;
     g_x64_pc_restored_maps = 0;
     g_x64_pc_restored_live = 0;
@@ -4076,6 +4093,7 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             x64_pc_stage_receipt("manifest-activation");
             free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
             free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
+            g_x64_pc_chain_relink_pending = 0;
             g_x64_pc_lib_count = 0;
             g_pcache_loaded = 0;
             g_x64_pc_restored_maps = 0;
