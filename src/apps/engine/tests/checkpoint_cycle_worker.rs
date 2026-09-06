@@ -65,7 +65,7 @@ fn translated_backend_shape(stderr: &str) -> std::collections::BTreeMap<&str, u6
 }
 
 #[test]
-fn native_supervised_checkpoint_is_explicitly_refused() {
+fn production_worker_captures_kills_restores_and_continues() {
     let fixture = tempfile::tempdir().unwrap();
     let rootfs = fixture.path().join("rootfs");
     let control = rootfs.join("run/checkpoint");
@@ -89,10 +89,27 @@ fn native_supervised_checkpoint_is_explicitly_refused() {
         ])
         .output()
         .expect("run production checkpoint-cycle worker");
+    assert!(
+        output.status.success(),
+        "worker failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(!output.status.success(), "native checkpoint unexpectedly ran: {stderr}");
-    assert!(stderr.contains("NativeSupervisedRefused(Checkpoint)"), "{stderr}");
-    assert!(!stderr.contains("[hl-checkpoint-cycle]\t"), "{stderr}");
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("[hl-checkpoint-cycle]\t"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{stderr}");
+    assert_eq!(stderr.matches("[hl-loader]\t").count(), 1, "{stderr}");
+    let receipt: Value = serde_json::from_str(records[0]).unwrap();
+    assert_eq!(receipt["schema"], "husklet-checkpoint-cycle-v1");
+    assert_eq!(receipt["guest_isa"], guest_isa());
+    assert_eq!(receipt["backend"], "native");
+    for leg in ["captured", "original_reaped", "restored_killed", "restored_continued"] {
+        assert_eq!(receipt[leg], true, "missing lifecycle leg {leg}: {receipt}");
+    }
+    assert_eq!(receipt["final_guest_status"], 0);
+    assert!(receipt["member_count"].as_u64().is_some_and(|count| count > 0));
 }
 
 #[test]
@@ -159,8 +176,7 @@ fn failure_after_start_stops_and_reaps_the_probe() {
         .args([
             "--guest-isa",
             guest_isa(),
-            "--translit",
-            "--diagnostics",
+            "--native-supervised=on",
             "--rootfs",
             rootfs.to_str().unwrap(),
             "--checkpoint-cycle",

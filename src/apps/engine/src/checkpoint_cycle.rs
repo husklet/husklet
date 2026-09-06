@@ -205,22 +205,6 @@ fn wait_contains(path: &Path, needle: &str, deadline: Instant) -> Result<(), Fai
     Err(Failure::Request(format!("checkpoint probe did not publish {needle:?}")))
 }
 
-fn wait_counter_at_least(path: &Path, minimum: u64, deadline: Instant) -> Result<(), Failure> {
-    while Instant::now() < deadline {
-        if std::fs::read_to_string(path)
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .is_some_and(|value| value >= minimum)
-        {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    Err(Failure::Request(format!(
-        "checkpoint probe did not publish progress >= {minimum}"
-    )))
-}
-
 fn phase_plan(mut plan: RuntimePlan, restore: bool, capture: bool) -> Result<RuntimePlan, Failure> {
     for (enabled, name) in [(restore, "HL_RESTORE"), (capture, "HL_CHECKPOINT")] {
         if enabled {
@@ -348,10 +332,7 @@ pub(super) fn run(
     if std::env::var_os("HL_CHECKPOINT_CYCLE_TEST_FAIL_AFTER_START").is_some() {
         return Err(Failure::Request("injected checkpoint-cycle failure after start".into()));
     }
-    // One committed iteration is sufficient to prove that mutable guest state survives both
-    // restores. Requiring five made this lifecycle gate depend on translator throughput and
-    // timed out before capture on slower-but-correct backends.
-    wait_counter_at_least(&state, 1, deadline)?;
+    wait_contains(&state, "5", deadline)?;
     fresh.engine.capture_checkpoint_until(deadline)?;
     let captured_exit = fresh.finish()?;
     if captured_exit.guest_status != 0 {
