@@ -1087,7 +1087,11 @@ static int hl_native_checkpoint_tasks_admissible(const char *proc_root, pid_t pr
     size_t count = 0;
     struct dirent *entry;
     char sole[32] = {0};
-    while ((entry = readdir(tasks)) != NULL) {
+    int scan_error = 0;
+    for (;;) {
+        errno = 0;
+        entry = readdir(tasks);
+        if (entry == NULL) { scan_error = errno; break; }
         char *end = NULL;
         long task = strtol(entry->d_name, &end, 10);
         if (*entry->d_name == 0 || *end != 0 || task <= 0 || task > INT_MAX) continue;
@@ -1095,6 +1099,7 @@ static int hl_native_checkpoint_tasks_admissible(const char *proc_root, pid_t pr
         if (count == 1) snprintf(sole, sizeof sole, "%ld", task);
     }
     closedir(tasks);
+    if (scan_error != 0) return -1;
     if (count != 1 || strtol(sole, NULL, 10) != process) return -1;
     if (snprintf(path, sizeof path, "%s/%d/task/%s/children", proc_root, process, sole) >= (int)sizeof path)
         return -1;
@@ -1103,7 +1108,7 @@ static int hl_native_checkpoint_tasks_admissible(const char *proc_root, pid_t pr
     char children[128];
     ssize_t length = read(fd, children, sizeof children);
     close(fd);
-    if (length < 0) return -1;
+    if (length < 0 || length == (ssize_t)sizeof children) return -1;
     for (ssize_t index = 0; index < length; ++index)
         if (children[index] != ' ' && children[index] != '\t' && children[index] != '\r' &&
             children[index] != '\n')
@@ -1119,7 +1124,11 @@ static int hl_native_checkpoint_fds_admissible(const char *proc_root, pid_t proc
     if (fds == NULL) return -1;
     int admissible = 1;
     struct dirent *entry;
-    while ((entry = readdir(fds)) != NULL && admissible) {
+    int scan_error = 0;
+    while (admissible) {
+        errno = 0;
+        entry = readdir(fds);
+        if (entry == NULL) { scan_error = errno; break; }
         char *end = NULL;
         long descriptor = strtol(entry->d_name, &end, 10);
         if (*entry->d_name == 0 || *end != 0) continue;
@@ -1130,6 +1139,7 @@ static int hl_native_checkpoint_fds_admissible(const char *proc_root, pid_t proc
             if (private_fds[index] == descriptor) { recognized = 1; break; }
         if (!recognized) admissible = 0;
     }
+    if (scan_error != 0) admissible = 0;
     closedir(fds);
     return admissible ? 0 : -1;
 }
@@ -1142,7 +1152,9 @@ static int hl_native_checkpoint_maps_admissible(const char *proc_root, pid_t pro
     char *line = NULL;
     size_t capacity = 0;
     int admissible = 1;
+    size_t rows = 0;
     while (admissible && getline(&line, &capacity, maps) >= 0) {
+        ++rows;
         unsigned long long start, end, offset, inode;
         unsigned major, minor;
         char perms[5] = {0}, mapped[PATH_MAX] = {0};
@@ -1174,7 +1186,7 @@ static int hl_native_checkpoint_maps_admissible(const char *proc_root, pid_t pro
         }
     }
     free(line);
-    if (ferror(maps)) admissible = 0;
+    if (ferror(maps) || rows == 0) admissible = 0;
     fclose(maps);
     return admissible ? 0 : -1;
 }
@@ -1198,8 +1210,19 @@ static int hl_native_checkpoint_locks_admissible(const char *proc_root, pid_t pr
     return admissible ? 0 : -1;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int hl_native_checkpoint_test_scan_stopped;
+static int hl_native_checkpoint_test_observe_stop;
+static int hl_native_supervised_stopped(pid_t process);
+#endif
+
 static int hl_native_checkpoint_admissible_at(const char *proc_root, pid_t process,
                                               const int *private_fds, size_t private_count) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_native_checkpoint_test_observe_stop && strcmp(proc_root, "/proc") == 0)
+        atomic_store_explicit(&hl_native_checkpoint_test_scan_stopped,
+                              hl_native_supervised_stopped(process), memory_order_release);
+#endif
     if (process <= 0 || hl_native_checkpoint_tasks_admissible(proc_root, process) != 0) return -2;
     if (hl_native_checkpoint_fds_admissible(proc_root, process, private_fds, private_count) != 0) return -3;
     if (hl_native_checkpoint_maps_admissible(proc_root, process) != 0) return -4;
@@ -1208,9 +1231,13 @@ static int hl_native_checkpoint_admissible_at(const char *proc_root, pid_t proce
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
+static int hl_native_checkpoint_phase1_test(void);
+static int hl_native_checkpoint_empty_fds_test(void);
 HL_API int hl_native_checkpoint_admission_test(const char *proc_root, int process,
                                                const int *private_fds, size_t private_count) {
     if (proc_root == NULL || (private_count != 0 && private_fds == NULL)) return -1;
+    if (strcmp(proc_root, "phase1:test") == 0) return hl_native_checkpoint_phase1_test();
+    if (strcmp(proc_root, "empty-fds:test") == 0) return hl_native_checkpoint_empty_fds_test();
     return hl_native_checkpoint_admissible_at(proc_root, (pid_t)process, private_fds, private_count);
 }
 #endif
@@ -1288,6 +1315,48 @@ static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t gener
     }
     return registered && frozen && thawed ? 0 : -1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
+static int hl_native_checkpoint_phase1_test(void) {
+    pid_t child = fork();
+    if (child < 0) return 1;
+    if (child == 0) {
+        for (int fd = 3; fd < 4096; ++fd) close(fd);
+        for (;;) pause();
+    }
+    usleep(10000);
+    const char *names[] = {"HL_NATIVE_CKPT_TEST_SKIP_REGISTER"};
+    const char *values[] = {"1"};
+    hl_options options = {0};
+    if (hl_options_init_records(&options, 1, names, values) != 0) {
+        (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0); return 2;
+    }
+    atomic_store_explicit(&hl_native_checkpoint_test_scan_stopped, 0, memory_order_release);
+    hl_native_checkpoint_test_observe_stop = 1;
+    (void)hl_native_supervised_checkpoint_phase1(child, 1, &options);
+    hl_native_checkpoint_test_observe_stop = 0;
+    int scanned_stopped = atomic_load_explicit(&hl_native_checkpoint_test_scan_stopped, memory_order_acquire);
+    int thawed = !hl_native_supervised_stopped(child);
+    (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
+    hl_options_destroy(&options);
+    return scanned_stopped && thawed ? 0 : 3;
+}
+
+static int hl_native_checkpoint_empty_fds_test(void) {
+    pid_t child = fork();
+    if (child < 0) return 1;
+    if (child == 0) {
+        for (int fd = 3; fd < 4096; ++fd) close(fd);
+        for (;;) pause();
+    }
+    usleep(10000);
+    (void)kill(child, SIGSTOP);
+    for (int attempt = 0; attempt < 1000 && !hl_native_supervised_stopped(child); ++attempt) usleep(1000);
+    int result = hl_native_checkpoint_fds_admissible("/proc", child, NULL, 0);
+    (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
+    return result;
+}
+#endif
 
 static char **hl_native_supervised_environment(const hl_options *options) {
     const char *encoded = hl_options_get(options, "HL_GUEST_ENV");

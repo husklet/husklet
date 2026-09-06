@@ -103,6 +103,8 @@ fn synthetic_proc_fixture_is_closed_world() {
     std::fs::remove_file(process.join("fd/9")).unwrap();
 
     let safe_maps = std::fs::read(process.join("maps")).unwrap();
+    std::fs::write(process.join("maps"), b"").unwrap();
+    assert_ne!(classify(work.path(), pid, &[]), 0, "empty maps");
     for unsafe_map in [
         b"00400000-00401000 r-xp 00000000 08:01 1 /bin/app (deleted)\n".as_slice(),
         b"00400000-00401000 r-xs 00000000 08:01 1 /bin/app\n".as_slice(),
@@ -163,4 +165,14 @@ fn live_process_admits_only_before_unknown_descriptor() {
     );
     extra.kill().unwrap();
     extra.wait().unwrap();
+}
+
+#[test]
+fn production_phase1_freezes_before_scan_and_thaws_refusal() {
+    assert_eq!(classify(Path::new("phase1:test"), 0, &[]), 0);
+}
+
+#[test]
+fn production_empty_allowlist_accepts_child_with_only_stdio() {
+    assert_eq!(classify(Path::new("empty-fds:test"), 0, &[]), 0);
 }
