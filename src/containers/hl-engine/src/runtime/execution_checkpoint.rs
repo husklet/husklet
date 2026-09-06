@@ -70,23 +70,13 @@ impl CheckpointControl {
             crate::activation::GuestIsa::X86_64 => 2,
         });
         let dispatch = self.phases.begin();
-        let request_failure = if signal <= 0 {
-            Some(EngineError::StopFailed)
-        } else if interrupt_engine {
-            engine
-                .request(REQUEST_CHECKPOINT, signal)
-                .err()
-                .map(EngineError::NativeStopFailed)
-        } else {
-            None
-        };
-        if let Some(error) = request_failure {
+        if signal <= 0 || (interrupt_engine && engine.request(REQUEST_CHECKPOINT, signal).is_err()) {
             if self.server.abort_capture(capture).is_err() {
                 self.phases.terminal(capture, 1);
                 return Err(EngineError::LaunchFailed);
             }
             self.phases.terminal(capture, 1);
-            return Err(error);
+            return Err(EngineError::StopFailed);
         }
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
