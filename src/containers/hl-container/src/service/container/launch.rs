@@ -118,6 +118,7 @@ impl Service {
             .runtime
             .start(ProcessConfig {
                 benchmark_measurement: self.measurement_requests.lock().await.remove(&container.id),
+                backend_diagnostic: self.diagnostic_requests.lock().await.get(&container.id).cloned(),
                 network_namespace: container.id.namespace(),
                 rootfs,
                 overlay,

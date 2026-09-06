@@ -141,6 +141,7 @@ impl Service {
             .runtime
             .start(ProcessConfig {
                 benchmark_measurement: None,
+                backend_diagnostic: None,
                 network_namespace: container.id.namespace(),
                 rootfs,
                 overlay,

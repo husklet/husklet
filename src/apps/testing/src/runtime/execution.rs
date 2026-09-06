@@ -56,7 +56,10 @@ pub struct EngineMeasurement {
     pub raw: String,
 }
 pub async fn run_case(
-    app: Arc<App>, case_index: usize, target: Target, allow_broken: bool,
+    app: Arc<App>,
+    case_index: usize,
+    target: Target,
+    allow_broken: bool,
     engine_measurement: Option<std::path::PathBuf>,
 ) -> Result<Report, Error> {
     let case = &app.cases[case_index];
@@ -112,9 +115,17 @@ async fn run_case_inner(
         .images(fixture.images())
         .build()
         .await?;
-    let results = CaseExecution::new(&app, case, target, &containers, execution, retention.as_ref(), engine_measurement)
-        .run(&mut fixture, artifact.path())
-        .await;
+    let results = CaseExecution::new(
+        &app,
+        case,
+        target,
+        &containers,
+        execution,
+        retention.as_ref(),
+        engine_measurement,
+    )
+    .run(&mut fixture, artifact.path())
+    .await;
     fixture.release()?;
     Ok(results)
 }
@@ -429,6 +440,7 @@ impl<'a> CaseExecution<'a> {
             Err(error) => return CaseResult::Failed(self.case.id.clone(), attempt, error.to_string()),
         };
         if let Some(state) = &checkpoint_state {
+            spec = spec.backend_diagnostic(state.path().join("backend-diagnostics"));
             spec = spec.mount(Mount::read_write(state.path(), "/checkpoint-state"));
         }
         let mut status = None;
@@ -504,8 +516,10 @@ impl<'a> CaseExecution<'a> {
             (Some(expected), Some(actual)) => {
                 return Err(format!(
                     "engine measurement identity mismatched: expected={} actual={}",
-                    expected.display(), actual.path.display()
-                ).into());
+                    expected.display(),
+                    actual.path.display()
+                )
+                .into());
             }
             (None, None) => {}
         }
@@ -568,7 +582,8 @@ impl<'a> CaseExecution<'a> {
     ) -> Result<(), Error> {
         let deadline = Instant::now() + timeout;
         let output = state.join("output");
-        let mut diagnostic_offsets = (0, 0);
+        let diagnostics = state.join("backend-diagnostics");
+        let mut diagnostic_offset = 0;
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
             .into_iter()
@@ -585,9 +600,8 @@ impl<'a> CaseExecution<'a> {
                 let logs = self.containers.logs(name).await;
                 return Err(checkpoint_failure_diagnostic(&error.to_string(), logs.as_ref().ok()).into());
             }
-            let logs = self.containers.logs(name).await?;
-            let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
-            validate_checkpoint_generation(&diagnostics, generation, self.target)?;
+            let generation_diagnostics = checkpoint_generation_diagnostics(&diagnostics, &mut diagnostic_offset)?;
+            validate_checkpoint_generation(&generation_diagnostics, generation, self.target)?;
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
@@ -600,9 +614,8 @@ impl<'a> CaseExecution<'a> {
         )
         .await?;
         *observed = Some(status);
-        let logs = self.containers.logs(name).await?;
-        let diagnostics = checkpoint_generation_logs(&logs, &mut diagnostic_offsets)?;
-        validate_checkpoint_generation(&diagnostics, 2, self.target)?;
+        let generation_diagnostics = checkpoint_generation_diagnostics(&diagnostics, &mut diagnostic_offset)?;
+        validate_checkpoint_generation(&generation_diagnostics, 2, self.target)?;
         let text = std::fs::read_to_string(output)?;
         validate_daily_dev_protocol(&text)?;
         if status != ExitStatus::Code(0) {
@@ -670,21 +683,13 @@ async fn wait_for_marker(path: &Path, marker: &str, deadline: Instant) -> Result
     }
 }
 
-fn checkpoint_generation_logs(logs: &hl_container::Logs, offsets: &mut (usize, usize)) -> Result<Vec<u8>, Error> {
-    let stdout = logs
-        .stdout
-        .get(offsets.0..)
-        .ok_or("checkpoint stdout diagnostics shrank between generations")?;
-    let stderr = logs
-        .stderr
-        .get(offsets.1..)
-        .ok_or("checkpoint stderr diagnostics shrank between generations")?;
-    offsets.0 = logs.stdout.len();
-    offsets.1 = logs.stderr.len();
-    let mut generation = Vec::with_capacity(stdout.len() + stderr.len() + 1);
-    generation.extend_from_slice(stdout);
-    generation.push(b'\n');
-    generation.extend_from_slice(stderr);
+fn checkpoint_generation_diagnostics(path: &Path, offset: &mut usize) -> Result<Vec<u8>, Error> {
+    let diagnostics = std::fs::read(path)?;
+    let generation = diagnostics
+        .get(*offset..)
+        .ok_or("checkpoint backend diagnostics shrank between generations")?
+        .to_vec();
+    *offset = diagnostics.len();
     Ok(generation)
 }
 
@@ -791,7 +796,7 @@ fn validate_ret_dense_protocol(text: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod checkpoint_protocol_tests {
-    use super::{checkpoint_failure_diagnostic, checkpoint_generation_logs, validate_daily_dev_protocol};
+    use super::{checkpoint_failure_diagnostic, checkpoint_generation_diagnostics, validate_daily_dev_protocol};
 
     fn complete() -> String {
         let rows = (0..=2)
@@ -832,25 +837,23 @@ mod checkpoint_protocol_tests {
     }
 
     #[test]
-    fn checkpoint_generation_slices_both_terminal_journal_streams_once() {
-        let mut offsets = (0, 0);
-        let first = hl_container::Logs {
-            stdout: b"stdout-generation-0\n".to_vec(),
-            stderr: b"stderr-generation-0\n".to_vec(),
-        };
-        let first_slice = checkpoint_generation_logs(&first, &mut offsets).unwrap();
-        assert!(first_slice.windows(19).any(|bytes| bytes == b"stdout-generation-0"));
-        assert!(first_slice.windows(19).any(|bytes| bytes == b"stderr-generation-0"));
+    fn checkpoint_generation_slices_the_private_backend_channel_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("backend-diagnostics");
+        let mut offset = 0;
+        std::fs::write(&path, b"backend-generation-0\n").unwrap();
+        let first = checkpoint_generation_diagnostics(&path, &mut offset).unwrap();
+        assert_eq!(first, b"backend-generation-0\n");
 
-        let second = hl_container::Logs {
-            stdout: b"stdout-generation-0\nstdout-generation-1\n".to_vec(),
-            stderr: b"stderr-generation-0\nstderr-generation-1\n".to_vec(),
-        };
-        let second_slice = checkpoint_generation_logs(&second, &mut offsets).unwrap();
-        assert!(!second_slice.windows(19).any(|bytes| bytes == b"stdout-generation-0"));
-        assert!(!second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-0"));
-        assert!(second_slice.windows(19).any(|bytes| bytes == b"stdout-generation-1"));
-        assert!(second_slice.windows(19).any(|bytes| bytes == b"stderr-generation-1"));
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"backend-generation-1\n")
+            .unwrap();
+        let second = checkpoint_generation_diagnostics(&path, &mut offset).unwrap();
+        assert_eq!(second, b"backend-generation-1\n");
     }
 
     #[test]

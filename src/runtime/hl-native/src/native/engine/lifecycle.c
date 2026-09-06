@@ -49,6 +49,7 @@ typedef struct hl_production_result_state {
     hl_engine_child_result *record;
     void *backend_tree;
     size_t backend_tree_size;
+    int diagnostic_port;
 } hl_production_result_state;
 
 static hl_engine_child_result *active_result;
@@ -825,6 +826,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     result->backend_tree_size = backend_tree_size;
     result->backend_tree =
         backend_tree_size == 0 ? NULL : (void *)((uintptr_t)result->mapping.address + backend_tree_offset);
+    result->diagnostic_port = -1;
 #if defined(__APPLE__)
     /* The production backend enters the Linux personality in a fork child.  Resolve
      * macOS' lazy Foundation-backed resolver state in the parent: doing this from
@@ -868,6 +870,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return HL_STATUS_INVALID_ARGUMENT;
     }
+    result->diagnostic_port = diagnostic_port;
     if (pipe(activation_ready) < 0) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return HL_STATUS_RESOURCE_LIMIT;
@@ -970,7 +973,8 @@ static hl_status hl_production_finish_process(const hl_host_services *host, hl_h
     hl_production_result_state *state = (hl_production_result_state *)(uintptr_t)token;
     hl_engine_child_result record;
     if (state != NULL)
-        hl_target_backend_tree_reap_report(state->backend_tree, state->backend_tree_size, NULL);
+        hl_target_backend_tree_reap_report(state->backend_tree, state->backend_tree_size, NULL,
+                                           state->diagnostic_port);
     if (waited->detail == HL_HOST_PROCESS_EXIT_SIGNAL) {
         hl_production_result_release(host, token);
         result->kind = HL_ENGINE_EXIT_SIGNAL;

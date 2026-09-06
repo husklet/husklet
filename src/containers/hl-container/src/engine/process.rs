@@ -25,6 +25,8 @@ pub(super) struct Process {
     pub(super) id: u64,
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
     pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
+    /// Keeps the private host diagnostic descriptor valid until the native worker has finished.
+    pub(super) _backend_diagnostic: Option<std::fs::File>,
     pub(super) domain: hl_engine::Domain,
     /// Publishes this process's freeze channel to its domain for exactly as long as this process
     /// runs. Held, never read: the registration lives in `DomainChannelEntry`'s `Drop`, so dropping
@@ -319,6 +321,7 @@ mod tests {
             id: 1,
             child: Mutex::new(None),
             logs: Mutex::new(None),
+            _backend_diagnostic: None,
             domain: hl_engine::Domain::new().unwrap(),
             _domain_channel: None,
             benchmark_collector: Mutex::new(None),

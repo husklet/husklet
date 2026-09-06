@@ -84,6 +84,9 @@ pub struct ContainerSpec {
     /// Ephemeral host-side destination for benchmark evidence; never part of durable container state.
     #[serde(skip)]
     pub benchmark_measurement: Option<PathBuf>,
+    /// Ephemeral host-only destination for engine diagnostics across container generations.
+    #[serde(skip)]
+    pub backend_diagnostic: Option<PathBuf>,
     pub name: Option<String>,
     pub labels: BTreeMap<String, String>,
     /// OCI image name used to prepare this rootfs, independent from its snapshot path.
@@ -122,6 +125,7 @@ impl ContainerSpec {
     pub fn new(rootfs: hl_images::rootfs::Reference, process: Process) -> Self {
         Self {
             benchmark_measurement: None,
+            backend_diagnostic: None,
             name: None,
             labels: BTreeMap::new(),
             image: None,
@@ -154,6 +158,7 @@ impl ContainerSpec {
     pub fn from_directory(rootfs: impl Into<PathBuf>, process: Process) -> Self {
         Self {
             benchmark_measurement: None,
+            backend_diagnostic: None,
             name: None,
             labels: BTreeMap::new(),
             image: None,
@@ -212,6 +217,13 @@ impl ContainerSpec {
     #[must_use]
     pub fn benchmark_measurement(mut self, value: impl Into<PathBuf>) -> Self {
         self.benchmark_measurement = Some(value.into());
+        self
+    }
+
+    /// Routes host-worker engine diagnostics to one append-only file for this container's lifetime.
+    #[must_use]
+    pub fn backend_diagnostic(mut self, value: impl Into<PathBuf>) -> Self {
+        self.backend_diagnostic = Some(value.into());
         self
     }
 
@@ -339,8 +351,14 @@ impl ContainerSpec {
                 ));
             }
         }
-        if self.hostname.as_deref().is_some_and(|value| !crate::model::network::valid_endpoint_name(value)) {
-            return Err(Error::InvalidSpec("hostname must be a non-empty DNS-compatible name of at most 253 bytes".into()));
+        if self
+            .hostname
+            .as_deref()
+            .is_some_and(|value| !crate::model::network::valid_endpoint_name(value))
+        {
+            return Err(Error::InvalidSpec(
+                "hostname must be a non-empty DNS-compatible name of at most 253 bytes".into(),
+            ));
         }
         if self
             .hosts
@@ -488,7 +506,13 @@ mod tests {
     fn hostname_uses_the_endpoint_name_contract() {
         let valid = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).hostname("h".repeat(253));
         assert!(valid.validate().is_ok());
-        for hostname in ["h".repeat(254), "bad\nname".into(), "bad name".into(), "bad\0name".into(), "-leading".into()] {
+        for hostname in [
+            "h".repeat(254),
+            "bad\nname".into(),
+            "bad name".into(),
+            "bad\0name".into(),
+            "-leading".into(),
+        ] {
             let invalid = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).hostname(hostname);
             assert!(invalid.validate().is_err());
         }
@@ -566,15 +590,15 @@ mod tests {
         );
     }
 }
-    #[test]
-    fn benchmark_measurements_are_ephemeral_and_launch_local() {
-        let first = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
-            .benchmark_measurement("/results/first.json");
-        let second = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
-            .benchmark_measurement("/results/second.json");
-        assert_ne!(first.benchmark_measurement, second.benchmark_measurement);
-        let encoded = serde_json::to_string(&first).unwrap();
-        assert!(!encoded.contains("benchmark_measurement"));
-        let restored: ContainerSpec = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(restored.benchmark_measurement, None);
-    }
+#[test]
+fn benchmark_measurements_are_ephemeral_and_launch_local() {
+    let first = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+        .benchmark_measurement("/results/first.json");
+    let second = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+        .benchmark_measurement("/results/second.json");
+    assert_ne!(first.benchmark_measurement, second.benchmark_measurement);
+    let encoded = serde_json::to_string(&first).unwrap();
+    assert!(!encoded.contains("benchmark_measurement"));
+    let restored: ContainerSpec = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.benchmark_measurement, None);
+}

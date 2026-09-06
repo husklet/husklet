@@ -25,11 +25,13 @@
  * finished.  A non-NULL box is retained only for hook fixtures that deliberately capture through
  * a synthetic guest descriptor table; production passes NULL so a guest projection of fd 2 cannot
  * redirect or hide the worker's receipt. */
+static _Thread_local int hl_backend_report_descriptor = STDERR_FILENO;
+
 static int64_t hl_backend_report_write(hl_linux_abi *box, const char *record, size_t size) {
     if (box != NULL) return hl_linux_write(box, STDERR_FILENO, record, size);
     ssize_t written;
     do {
-        written = write(STDERR_FILENO, record, size);
+        written = write(hl_backend_report_descriptor, record, size);
     } while (written < 0 && errno == EINTR);
     return (int64_t)written;
 }
@@ -1783,7 +1785,8 @@ static int hl_backend_would_link_format(struct hl_backend_tree_shared *shared, c
     return formatted;
 }
 
-void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box) {
+void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_linux_abi *box, int diagnostic_port) {
+    hl_backend_report_descriptor = diagnostic_port >= 0 ? diagnostic_port : STDERR_FILENO;
     struct hl_backend_tree_shared *shared = opaque;
     if (shared == NULL || shared_size != sizeof *shared) return;
     int root_pid = atomic_load_explicit(&shared->root_pid, memory_order_acquire);
@@ -3595,7 +3598,8 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     }
 }
 
-void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box) {
+void hl_target_backend_tree_reap_report(void *shared, size_t shared_size, hl_linux_abi *box, int diagnostic_port) {
+    hl_backend_report_descriptor = diagnostic_port >= 0 ? diagnostic_port : STDERR_FILENO;
     struct hl_backend_mixed_sse_shared *census = shared;
     if (census == NULL || shared_size != sizeof *census) return;
     int root_pid = atomic_load_explicit(&census->root_pid, memory_order_acquire);

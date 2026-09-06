@@ -60,7 +60,21 @@ impl Runtime for Engine {
                 config.rootfs.display()
             )));
         }
-        let spec = Spec::try_from(&config)?;
+        let diagnostic = config
+            .backend_diagnostic
+            .as_ref()
+            .map(|path| std::fs::OpenOptions::new().create(true).append(true).open(path))
+            .transpose()
+            .map_err(|error| Error::Runtime(format!("open backend diagnostic: {error}")))?;
+        let mut spec = Spec::try_from(&config)?;
+        #[cfg(unix)]
+        if let Some(file) = &diagnostic {
+            use std::os::fd::AsRawFd as _;
+            spec.plan
+                .options
+                .set("HL_DIAGNOSTIC_PORT", &file.as_raw_fd().to_string(), true)
+                .map_err(|_| Error::Runtime("set backend diagnostic descriptor".into()))?;
+        }
         let (sender, receiver) = crate::service::log_channel();
         let streams = match config.terminal {
             Some(size) => {
@@ -144,6 +158,7 @@ impl Runtime for Engine {
             id: Process::next_id(),
             child: StdMutex::new(Some(engine)),
             logs: StdMutex::new(Some(receiver)),
+            _backend_diagnostic: diagnostic,
             domain: spec.domain,
             _domain_channel: domain_channel,
             members,
@@ -302,6 +317,7 @@ mod tests {
     fn launch() -> ProcessConfig {
         ProcessConfig {
             benchmark_measurement: None,
+            backend_diagnostic: None,
             member_terminals: Vec::new(),
             network_namespace: "container-test".to_owned(),
             rootfs: "/rootfs".into(),
@@ -443,8 +459,14 @@ mod tests {
 
         assert_eq!(spec.plan.box_policy.flags & ((1 << 2) | (1 << 5)), (1 << 2) | (1 << 5));
         assert_eq!((spec.plan.box_policy.uid, spec.plan.box_policy.gid), (1234, 2345));
-        assert_eq!(spec.plan.box_policy.working_directory.as_deref(), Some(b"/work".as_slice()));
-        assert_eq!(spec.plan.box_policy.hostname.as_deref(), Some(b"ephemeral-pane".as_slice()));
+        assert_eq!(
+            spec.plan.box_policy.working_directory.as_deref(),
+            Some(b"/work".as_slice())
+        );
+        assert_eq!(
+            spec.plan.box_policy.hostname.as_deref(),
+            Some(b"ephemeral-pane".as_slice())
+        );
         assert!(
             spec.plan
                 .box_policy

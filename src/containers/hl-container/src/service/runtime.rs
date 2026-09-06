@@ -53,6 +53,7 @@ pub(crate) struct OverlayConfig {
 pub(crate) struct ProcessConfig {
     #[allow(dead_code)] // consumed by the benchmark collector in the next, separately gated layer
     pub(crate) benchmark_measurement: Option<PathBuf>,
+    pub(crate) backend_diagnostic: Option<PathBuf>,
     /// Stable opaque identity used to join every process launched for one container.
     pub(crate) network_namespace: String,
     pub(crate) rootfs: PathBuf,

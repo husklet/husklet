@@ -3,6 +3,7 @@ use super::{Container, ContainerId, ContainerSpec, ContainerState, Error, Orderi
 impl Service {
     pub(crate) async fn create(&self, mut spec: ContainerSpec) -> Result<Container> {
         let benchmark_measurement = spec.benchmark_measurement.take();
+        let backend_diagnostic = spec.backend_diagnostic.take();
         spec.validate()?;
         self.rootfs_path(&spec.rootfs).await?;
         let _guard = self.operations.lock().await;
@@ -19,7 +20,13 @@ impl Service {
         );
         self.containers.insert(&container).await?;
         if let Some(path) = benchmark_measurement {
-            self.measurement_requests.lock().await.insert(container.id.clone(), path);
+            self.measurement_requests
+                .lock()
+                .await
+                .insert(container.id.clone(), path);
+        }
+        if let Some(path) = backend_diagnostic {
+            self.diagnostic_requests.lock().await.insert(container.id.clone(), path);
         }
         let mut exits = self.exits.lock().await;
         exits.remove(container.id.as_str());
