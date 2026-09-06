@@ -1617,30 +1617,8 @@ int main(void) {
                 let direct = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
                 let fallback = u64::from_le_bytes(bytes[16..].try_into().unwrap());
                 require(
-                    direct > 0 && direct < saved && direct + fallback <= saved,
-                    "warm HIT did not classify restored chains by initial reachability",
-                )
-            })
-            .and_then(|()| {
-                let state = entries
-                    .iter()
-                    .find(|entry| {
-                        entry
-                            .file_name()
-                            .as_encoded_bytes()
-                            .windows(19)
-                            .any(|part| part == b".library-activated-")
-                    })
-                    .ok_or("warm HIT emitted no library-chain activation receipt")?;
-                let bytes = fs::read(state.path())?;
-                require(bytes.len() == 32, "library-chain activation receipt shape changed")?;
-                let maps = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-                let deferred = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                let pending = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
-                let relinked = u64::from_le_bytes(bytes[24..].try_into().unwrap());
-                require(
-                    maps > 0 && deferred == 0 && relinked == pending,
-                    "authenticated DSO activation did not relink every pending live current-generation chain",
+                    saved > 0 && direct < saved && direct + fallback < saved,
+                    "warm HIT did not preserve authenticated dormant-source direct chains",
                 )
             })
             .and_then(|()| {

@@ -2066,7 +2066,6 @@ static void x64_pc_exec_epoch_authorize(int identity_authorized) {
 }
 static translit_chain_site *g_x64_pc_chains;
 static uint64_t g_x64_pc_chain_count;
-static uint64_t g_x64_pc_chain_relink_pending;
 static uint64_t g_x64_pc_observe_load_ns;
 static uint64_t g_x64_pc_observe_validation_ns;
 static uint64_t g_x64_pc_observe_read_ns;
@@ -2337,7 +2336,6 @@ static void x64_pc_thread_start_abandon(void) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
-    g_x64_pc_chain_relink_pending = 0;
     g_x64_pc_restored_maps = 0;
     g_x64_pc_restored_live = 0;
     g_x64_pc_activated_maps = 0;
@@ -2372,25 +2370,18 @@ static void x64_pc_stage_receipt(const char *stage) {
 #endif
 }
 
-static int x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
+static void x64_pc_chain_patch(const translit_chain_site *chain, int direct) {
     uint8_t *site = g_cache + chain->site_offset;
     uint8_t *target = g_cache + chain->fallback_offset;
     if (direct) {
-        struct interp_block *source = map_host(chain->source);
         struct interp_block *block = map_host(chain->target);
-        if (source == NULL || block == NULL || source->magic != INTERP_BLOCK_MAGIC ||
-            block->magic != INTERP_BLOCK_MAGIC || source->generation != g_cache_gen ||
-            block->generation != g_cache_gen || block->host_entry_off == 0)
-            return 0;
-        target = (uint8_t *)block + block->host_entry_off;
+        if (block != NULL) target = (uint8_t *)block + block->host_entry_off;
     }
     int64_t delta = target - (site + 5);
     if (site[0] == 0xe9 && delta >= INT32_MIN && delta <= INT32_MAX) {
         int32_t encoded = (int32_t)delta;
         memcpy(site + 1, &encoded, sizeof encoded);
-        return 1;
     }
-    return 0;
 }
 
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi) {
@@ -2398,7 +2389,7 @@ static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi) {
     if (!jit_wprot(0)) return;
     for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
         translit_chain_site *chain = &g_x64_pc_chains[i];
-        if (chain->target >= lo && chain->target < hi) (void)x64_pc_chain_patch(chain, 0);
+        if (chain->target >= lo && chain->target < hi) x64_pc_chain_patch(chain, 0);
     }
     (void)jit_wprot(1);
 }
@@ -2839,7 +2830,6 @@ static int pcache_load(uint64_t entry_jump) {
     x64_pc_restored_detach();
     free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
     free(g_x64_pc_chains); g_x64_pc_chains = loaded_chains; g_x64_pc_chain_count = chains;
-    g_x64_pc_chain_relink_pending = fixed_fallback_count;
     g_x64_pc_restored_maps = maps;
     g_x64_pc_restored_live = fixed_maps;
     g_x64_pc_activated_maps = 0;
@@ -3954,28 +3944,6 @@ static void x64_pc_activate_ready(uint64_t pc) {
         g_x64_pc_deferred_count--;
     }
     atomic_store_explicit(&set->count, owner_at, memory_order_release);
-    uint64_t relinked_chains = 0;
-#if !defined(HL_PCACHE_CHAIN_RELINK_MUTATION)
-    if (g_x64_pc_chain_relink_pending != 0) {
-        if (!jit_wprot(0)) goto cold;
-        for (uint64_t i = 0; i < g_x64_pc_chain_count; i++) {
-            translit_chain_site *chain = &g_x64_pc_chains[i];
-            int source_fixed = x64_pc_saved_gpc_fixed(chain->source, g_x64_pc_snapshot_maps,
-                                                       g_x64_pc_snapshot_gpc_index,
-                                                       g_x64_pc_snapshot_maps_count);
-            int target_fixed = x64_pc_saved_gpc_fixed(chain->target, g_x64_pc_snapshot_maps,
-                                                       g_x64_pc_snapshot_gpc_index,
-                                                       g_x64_pc_snapshot_maps_count);
-            if (source_fixed && !target_fixed)
-                relinked_chains += (uint64_t)x64_pc_chain_patch(chain, 1);
-        }
-        int reprotected = jit_wprot(1);
-        if (!reprotected || !jit_publish_code(J_RX(g_cache), (size_t)g_x64_pc_snapshot_arena_size)) {
-            if (!reprotected) (void)jit_fail(HL_STATUS_CORRUPT, "pcache chain reprotection failed", 32);
-            goto cold;
-        }
-    }
-#endif
     for (uint32_t library = 0; library < g_x64_pc_lib_count; library++)
         g_x64_pc_lib_state[library] = X64_PC_LIB_ACTIVE;
     if (g_coldprof) {
@@ -3990,8 +3958,7 @@ static void x64_pc_activate_ready(uint64_t pc) {
     char path[1024], receipt[1024];
     if (x64_pc_file(path, sizeof path)) {
         int length = snprintf(receipt, sizeof receipt, "%s.library-activated-%lld", path, (long long)getpid());
-        uint64_t state[4] = {g_x64_pc_activated_maps, g_x64_pc_deferred_count,
-                             g_x64_pc_chain_relink_pending, relinked_chains};
+        uint64_t state[2] = {g_x64_pc_activated_maps, g_x64_pc_deferred_count};
         if (length > 0 && (size_t)length < sizeof receipt)
             (void)x64_pc_artifact_store(receipt, state, sizeof state);
     }
@@ -4007,7 +3974,6 @@ cold:
     free(g_x64_pc_chains);
     g_x64_pc_chains = NULL;
     g_x64_pc_chain_count = 0;
-    g_x64_pc_chain_relink_pending = 0;
     g_x64_pc_deferred_count = 0;
     g_x64_pc_restored_maps = 0;
     g_x64_pc_restored_live = 0;
@@ -4093,7 +4059,6 @@ static void pcache_note_libmap(uint64_t base, uint64_t len, hl_host_handle handl
             x64_pc_stage_receipt("manifest-activation");
             free(g_x64_pc_deferred); g_x64_pc_deferred = NULL; g_x64_pc_deferred_count = 0;
             free(g_x64_pc_chains); g_x64_pc_chains = NULL; g_x64_pc_chain_count = 0;
-            g_x64_pc_chain_relink_pending = 0;
             g_x64_pc_lib_count = 0;
             g_pcache_loaded = 0;
             g_x64_pc_restored_maps = 0;
