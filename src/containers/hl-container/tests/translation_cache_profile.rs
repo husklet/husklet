@@ -884,10 +884,13 @@ int main(void) {
         mode,
         Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
     ) {
-        Process::new("/bin/sh").args([
-            "-c",
-            "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && /usr/bin/gcc -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain",
-        ])
+        let command = "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && /usr/bin/gcc -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain";
+        let command = if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+            format!("{command} && times")
+        } else {
+            command.to_owned()
+        };
+        Process::new("/bin/sh").args(["-c".to_owned(), command])
     } else if mode == Mode::CacheNestedToolchainUpper {
         Process::new("/bin/sh").args([
             "-c",
@@ -1121,10 +1124,22 @@ int main(void) {
         mode,
         Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
     ) {
+        let fields = String::from_utf8_lossy(&logs.stdout)
+            .split_ascii_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         require(
-            String::from_utf8_lossy(&logs.stdout).split_ascii_whitespace().count() == 2,
-            "toolchain did not emit exactly one executable digest",
+            fields.len()
+                == if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+                    6
+                } else {
+                    2
+                },
+            "toolchain did not emit exactly one executable digest and the requested CPU-time receipt",
         )?;
+        if matches!(mode, Mode::TranslatedToolchain | Mode::NativeToolchain) {
+            eprintln!("pcache-profile guest_times={}", fields[2..].join(" "));
+        }
     } else if mode == Mode::CacheNestedToolchainUpper {
         require(
             String::from_utf8_lossy(&logs.stdout).contains("gcc"),
