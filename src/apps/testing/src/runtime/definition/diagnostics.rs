@@ -120,7 +120,11 @@ fn checkpoint_generations(stderr: &[u8]) -> String {
             let prefix = format!("checkpoint-generation={generation} ");
             !line
                 .strip_prefix(&prefix)
-                .is_some_and(|receipt| receipt.starts_with("backend-tree ") || receipt.starts_with("backend-shape "))
+                .is_some_and(|receipt| {
+                    receipt.starts_with("backend-tree ")
+                        || receipt.starts_with("backend-shape ")
+                        || receipt.starts_with("backend-shape-detail ")
+                })
         })
     {
         return "checkpoint-generations=invalid".to_owned();
@@ -586,6 +590,24 @@ mod tests {
             digest.len() < super::super::super::diagnostic::DIAGNOSTIC_LIMIT,
             "{digest}"
         );
+    }
+
+    #[test]
+    fn checkpoint_digest_accepts_the_translated_shape_detail_schema() {
+        let report = (0..3)
+            .map(|generation| {
+                format!(
+                    "checkpoint-generation={generation} backend-shape-detail version=1 translated_entries={}\n",
+                    generation + 1
+                )
+            })
+            .collect::<String>();
+
+        let digest = super::digest(report.as_bytes());
+        assert_ne!(digest, "checkpoint-generations=invalid");
+        for generation in 0..3 {
+            assert!(digest.contains(&format!("checkpoint-generation={generation} backend-shape-detail ")));
+        }
     }
 
     #[test]
