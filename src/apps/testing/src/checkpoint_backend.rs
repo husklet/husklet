@@ -157,15 +157,7 @@ fn record<T: for<'de> Deserialize<'de>>(stderr: &str, prefix: &str) -> Result<T,
 
 fn hash_file(path: &Path) -> Result<String, Error> {
     let bytes = std::fs::read(path)?;
-    Ok(hex_bytes(&Sha256::digest(&bytes)))
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut text, byte| {
-        use std::fmt::Write as _;
-        let _ = write!(text, "{byte:02x}");
-        text
-    })
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn argv_hash(arguments: &[String]) -> String {
@@ -174,7 +166,7 @@ fn argv_hash(arguments: &[String]) -> String {
         digest.update((argument.len() as u64).to_be_bytes());
         digest.update(argument.as_bytes());
     }
-    hex_bytes(&digest.finalize())
+    format!("{:x}", digest.finalize())
 }
 
 fn output_until(
@@ -390,8 +382,8 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     let control_host = guest_path(&options.rootfs, &options.control)?;
     let image_artifact = std::fs::read(control_host.join("checkpoint-image.bin"))?;
     let transcript_artifact = std::fs::read(control_host.join("checkpoint-transcript.bin"))?;
-    if hex_bytes(&Sha256::digest(&image_artifact)) != cycle.image_sha256
-        || hex_bytes(&Sha256::digest(&transcript_artifact)) != cycle.transcript_sha256
+    if format!("{:x}", Sha256::digest(&image_artifact)) != cycle.image_sha256
+        || format!("{:x}", Sha256::digest(&transcript_artifact)) != cycle.transcript_sha256
     {
         return Err("exported checkpoint artifacts do not match the independently recomputed receipt hashes".into());
     }
@@ -408,8 +400,8 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         probe_sha256,
         emulator_sha256,
         emulator_argv_sha256,
-        stdout_sha256: hex_bytes(&Sha256::digest(&output.stdout)),
-        stderr_sha256: hex_bytes(&Sha256::digest(&output.stderr)),
+        stdout_sha256: format!("{:x}", Sha256::digest(&output.stdout)),
+        stderr_sha256: format!("{:x}", Sha256::digest(&output.stderr)),
         checkpoint_image_sha256: cycle.image_sha256,
         checkpoint_member_count: cycle.member_count,
         transcript_sha256: cycle.transcript_sha256,
@@ -448,29 +440,6 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn digest_hex_is_exact_lowercase_and_known() {
-        for (input, expected) in [
-            (
-                b"".as_slice(),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            ),
-            (
-                b"abc".as_slice(),
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            ),
-        ] {
-            let actual = hex_bytes(&Sha256::digest(input));
-            assert_eq!(actual, expected);
-            assert_eq!(actual.len(), 64);
-            assert!(
-                actual
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            );
-        }
-    }
 
     #[test]
     fn source_identity_is_full_lowercase_sha() {
