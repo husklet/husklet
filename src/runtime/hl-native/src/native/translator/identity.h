@@ -26,6 +26,8 @@ const char *hl_c_backend_build_fingerprint(void);
 uint64_t hl_identity_name(const char *name);
 uint64_t hl_identity_image(const void *bytes, size_t size);
 hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size);
+hl_identity_digest hl_identity_image_digest_or_pinned(const void *bytes, size_t size,
+                                                      const hl_identity_digest *pinned);
 hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
                                              uint32_t guest_isa, uint32_t host_isa, uint64_t modes,
                                              const char *build_fingerprint);

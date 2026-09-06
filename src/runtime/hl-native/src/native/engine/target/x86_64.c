@@ -1347,7 +1347,8 @@ static uint64_t eflags_to_nzcv(uint64_t eflags) {
 #include "../../linux_abi/container/vfs.c"   // SHARED: rootfs jail, overlay, /proc synth, stat
 #include "../../linux_abi/container/netns.c" // SHARED: sockets, loopback netns, termios
 #include "../../linux_abi/image.h"
-static void load_elf(const char *path, struct loaded *out, const void *placement, const hl_linux_image *pinned);
+static void load_elf(const char *path, struct loaded *out, const void *placement, const hl_linux_image *pinned,
+                     const hl_identity_digest *pinned_identity);
 static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 
@@ -1695,7 +1696,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         placement = &main_placement;
     }
     if (g_pcache) g_pcache_authorized_guest_path = g_exe_path;
-    load_elf(prog_host, lm, placement, NULL);
+    load_elf(prog_host, lm, placement, NULL, NULL);
     g_loadbase = lm->base;
     *jump = lm->entry;
     *at_base = 0;
@@ -1713,7 +1714,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
         if (g_pcache) g_pcache_authorized_guest_path = interp;
-        load_elf(interp_host, li, NULL, NULL);
+        load_elf(interp_host, li, NULL, NULL, NULL);
         g_initial_executable_image = NULL;
         g_initial_executable_size = 0;
         *jump = li->entry;

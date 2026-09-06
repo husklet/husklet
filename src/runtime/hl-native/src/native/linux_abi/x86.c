@@ -246,7 +246,7 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
 }
 
 static void load_elf(const char *path, struct loaded *out, const void *placement_argument,
-                     const hl_linux_image *pinned) {
+                     const hl_linux_image *pinned, const hl_identity_digest *pinned_identity) {
     const struct main_placement *placement = placement_argument;
     hl_linux_image image;
     int owns_image;
@@ -265,13 +265,15 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     uint64_t identity_started = g_coldprof && g_pcache ? coldprof_now_ns(effective_host_services()) : 0;
     int identity_authorized = x86_pcache_authority(image.size, &out->identity);
     int authority_required = hl_option_get("HL_PCACHE_EXEC_AUTHORITY") != NULL;
-    if (!identity_authorized && !authority_required)
+    if (pinned_identity != NULL)
+        out->identity = *pinned_identity;
+    else if (!identity_authorized && !authority_required)
         out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
     else if (!identity_authorized)
         out->identity = (hl_identity_digest){0};
     if (g_coldprof && g_pcache) {
         g_pcache_identity_ns += coldprof_now_ns(effective_host_services()) - identity_started;
-        if (!identity_authorized && !authority_required) {
+        if (pinned_identity == NULL && !identity_authorized && !authority_required) {
             g_pcache_identity_bytes += image.size;
             g_pcache_identity_files++;
         }

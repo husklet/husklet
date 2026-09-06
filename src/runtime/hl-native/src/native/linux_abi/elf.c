@@ -751,7 +751,7 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
 }
 
 static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
-                     const hl_linux_image *pinned) {
+                     const hl_linux_image *pinned, const hl_identity_digest *pinned_identity) {
     hl_linux_image image;
     int owns_image = pinned == NULL;
     if (owns_image ? aarch64_image_read(path, &image) != 0 : 0) {
@@ -774,7 +774,8 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
 #if defined(HL_PCACHE_IDENTITY_OBSERVE)
     uint64_t identity_started = g_coldprof && g_pcache ? coldprof_now_ns(effective_host_services()) : 0;
 #endif
-    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
+    out->identity =
+        g_pcache ? hl_identity_image_digest_or_pinned(image.bytes, image.size, pinned_identity) : (hl_identity_digest){0};
 #if defined(HL_PCACHE_IDENTITY_OBSERVE)
     if (g_coldprof && g_pcache) {
         g_pcache_identity_ns += coldprof_now_ns(effective_host_services()) - identity_started;

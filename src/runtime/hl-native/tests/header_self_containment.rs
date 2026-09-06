@@ -543,9 +543,13 @@ int main(void) {
     hl_identity_digest same = hl_identity_image_digest(first, sizeof first);
     hl_identity_digest changed = hl_identity_image_digest(replacement, sizeof replacement);
     hl_identity_digest abc = hl_identity_image_digest("abc", 3);
+    hl_identity_digest supplied = hl_identity_image_digest_or_pinned(replacement, sizeof replacement, &pinned);
+    hl_identity_digest fallback = hl_identity_image_digest_or_pinned(first, sizeof first, NULL);
     if (!hl_identity_digest_equal(&pinned, &same)) return 1;
     if (hl_identity_digest_equal(&pinned, &changed)) return 2;
     if (memcmp(abc.bytes, abc_sha256, sizeof abc.bytes) != 0) return 3;
+    if (!hl_identity_digest_equal(&supplied, &pinned)) return 6;
+    if (!hl_identity_digest_equal(&fallback, &pinned)) return 7;
 
     /* Regression: equality must inspect all 256 bits, not just the old 64-bit-sized prefix. */
     same.bytes[31] ^= 1;

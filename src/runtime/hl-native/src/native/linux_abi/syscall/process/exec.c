@@ -895,7 +895,7 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 #ifdef PCACHE_EXEC_HOOKS
     pcache_exec_force_main(prepared->cache_identity_authorized);
 #endif
-    load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
+    load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes, &prepared->main_image.identity);
     uint64_t jump = main_loaded.entry, at_base = 0;
     if (prepared->has_program_interpreter) {
         const char *interpreter_host = prepared->program_interpreter.path;
@@ -903,7 +903,8 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
         pcache_exec_force_interp();
 #endif
         struct loaded interpreter_loaded;
-        load_elf(interpreter_host, &interpreter_loaded, NULL, &prepared->program_interpreter.bytes);
+        load_elf(interpreter_host, &interpreter_loaded, NULL, &prepared->program_interpreter.bytes,
+                 &prepared->program_interpreter.identity);
         jump = interpreter_loaded.entry;
         at_base = interpreter_loaded.base;
     }

@@ -157,6 +157,11 @@ hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size) {
     return sha256_finish(&state);
 }
 
+hl_identity_digest hl_identity_image_digest_or_pinned(const void *bytes, size_t size,
+                                                      const hl_identity_digest *pinned) {
+    return pinned != NULL ? *pinned : hl_identity_image_digest(bytes, size);
+}
+
 hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
                                              uint32_t guest_isa, uint32_t host_isa, uint64_t modes,
                                              const char *build_fingerprint) {

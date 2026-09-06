@@ -555,7 +555,7 @@ static int aarch64_image_read(const char *path, hl_linux_image *image) {
 // ELF fwd-decls + FS-metadata cache
 struct main_placement;
 static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
-                     const hl_linux_image *pinned);
+                     const hl_linux_image *pinned, const hl_identity_digest *pinned_identity);
 static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 // The same-ISA x86-64 transliterator's one line of the [prof] exit report. It belongs to the x86-64
@@ -872,7 +872,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
-    load_elf(prog_host, lm, placement, NULL);
+    load_elf(prog_host, lm, placement, NULL, NULL);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
     *jump = lm->entry;
@@ -891,7 +891,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         g_initial_executable_image = g_initial_interpreter_image;
         g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
-        load_elf(interp_host, li, NULL, NULL);
+        load_elf(interp_host, li, NULL, NULL, NULL);
         g_initial_executable_image = NULL;
         g_initial_executable_size = 0;
         *jump = li->entry;
