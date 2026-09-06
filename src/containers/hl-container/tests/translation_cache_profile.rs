@@ -87,6 +87,7 @@ impl CompilerInput {
 
     fn read_beneath(root: &Path, relative: &Path, before_final_open: impl FnOnce()) -> Result<Vec<u8>, Error> {
         const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+        let mut before_final_open = Some(before_final_open);
         let root = root.canonicalize()?;
         let mut directory = open(
             &root,
@@ -97,7 +98,9 @@ impl CompilerInput {
         while let Some(Component::Normal(component)) = components.next() {
             let final_component = components.peek().is_none();
             if final_component {
-                before_final_open();
+                before_final_open
+                    .take()
+                    .expect("final compiler source component visited once")();
             }
             let flags = if final_component {
                 OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK
@@ -355,6 +358,9 @@ fn compiler_input_defaults_are_authenticated_and_custom_inputs_are_bounded() {
     fs::create_dir_all(&directory).expect("compiler source directory");
     fs::write(directory.join("unit_127.c"), b"default").expect("default compiler source");
     fs::write(directory.join("larger.c"), b"custom").expect("custom compiler source");
+    fs::File::create(directory.join("oversized.c"))
+        .and_then(|file| file.set_len(64 * 1024 * 1024 + 1))
+        .expect("sparse oversized compiler source");
 
     let default =
         CompilerInput::resolve(root.path(), None, None, None).expect("default compiler input");
@@ -363,6 +369,15 @@ fn compiler_input_defaults_are_authenticated_and_custom_inputs_are_bounded() {
     assert_eq!(default.expected_assembly, UNIT_127_ASSEMBLY);
 
     assert!(CompilerInput::resolve(root.path(), Some("work/src/larger.c"), None, None).is_err());
+    assert!(
+        CompilerInput::resolve(
+            root.path(),
+            Some("work/src/oversized.c"),
+            None,
+            Some(UNIT_127_ASSEMBLY),
+        )
+        .is_err()
+    );
     assert!(
         CompilerInput::resolve(
             root.path(),
@@ -394,22 +409,25 @@ fn compiler_input_defaults_are_authenticated_and_custom_inputs_are_bounded() {
 
 #[test]
 fn compiler_input_rejects_parent_and_symlink_escape() {
-    let root = tempfile::tempdir().expect("temporary compiler root");
+    let container = tempfile::tempdir().expect("temporary compiler container");
+    let root = container.path().join("root");
+    fs::create_dir(&root).expect("temporary compiler root");
     let outside = tempfile::tempdir().expect("outside directory");
+    fs::write(container.path().join("escape.c"), b"parent escape").expect("parent escape source");
     fs::write(outside.path().join("escape.c"), b"escape").expect("outside source");
     assert!(
         CompilerInput::resolve(
-            root.path(),
+            &root,
             Some("../escape.c"),
             None,
             Some(UNIT_127_ASSEMBLY),
         )
         .is_err()
     );
-    std::os::unix::fs::symlink(outside.path(), root.path().join("link")).expect("escape symlink");
+    std::os::unix::fs::symlink(outside.path(), root.join("link")).expect("escape symlink");
     assert!(
         CompilerInput::resolve(
-            root.path(),
+            &root,
             Some("link/escape.c"),
             None,
             Some(UNIT_127_ASSEMBLY),
