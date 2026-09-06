@@ -28,6 +28,8 @@ const MAX_CAPTURE_BYTES: usize = 1 << 30;
 const MAX_PATH_BYTES: usize = 4096;
 #[cfg(target_arch = "x86_64")]
 const STOP_DEADLINE: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const ABORT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) const REGISTER_OBJECT: &str = "native/registers.x86-v1";
 pub(super) const MEMORY_OBJECT: &str = "native/memory.x86-v1";
@@ -93,10 +95,6 @@ pub(super) fn publish_stopped_native(
     pid: libc::pid_t,
     deadline: Instant,
 ) -> Result<(), CompositionError> {
-    if Instant::now() >= deadline {
-        return Err(CompositionError::DeadlineExceeded);
-    }
-    let transaction = sink.begin_until(deadline)?;
     struct Thaw(libc::pid_t);
     impl Drop for Thaw {
         fn drop(&mut self) {
@@ -106,9 +104,19 @@ pub(super) fn publish_stopped_native(
         }
     }
     let _thaw = Thaw(pid);
+    if Instant::now() >= deadline {
+        return Err(CompositionError::DeadlineExceeded);
+    }
+    let transaction = sink.begin_until(deadline)?;
     let result = (|| {
-        let registers = capture(pid)
-            .map_err(|_| CompositionError::RuntimeConstruction)?
+        let registers = capture_until(pid, deadline)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::TimedOut {
+                    CompositionError::DeadlineExceeded
+                } else {
+                    CompositionError::RuntimeConstruction
+                }
+            })?
             .encode();
         let memory = capture_stopped_memory(pid, deadline)
             .and_then(|image| {
@@ -144,7 +152,10 @@ pub(super) fn publish_stopped_native(
         sink.commit_until(transaction, &manifest, deadline)
     })();
     if result.is_err() {
-        let _ = sink.abort_until(transaction, deadline);
+        // Publication's deadline may itself be the reason for failure. Cleanup owns a separate,
+        // short budget so a real transactional sink can release staging without becoming unbounded.
+        let cleanup_deadline = Instant::now() + ABORT_CLEANUP_TIMEOUT;
+        let _ = sink.abort_until(transaction, cleanup_deadline);
     }
     result
 }
@@ -812,7 +823,17 @@ impl X86RegisterRecord {
 
 #[cfg(target_arch = "x86_64")]
 pub(super) fn capture(pid: libc::pid_t) -> io::Result<X86RegisterRecord> {
-    capture_with(pid, || Ok(()))
+    capture_with_until(pid, Instant::now() + STOP_DEADLINE, || Ok(()))
+}
+
+#[cfg(target_arch = "x86_64")]
+fn capture_until(pid: libc::pid_t, deadline: Instant) -> io::Result<X86RegisterRecord> {
+    capture_with_until(pid, deadline, || Ok(()))
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn capture_until(pid: libc::pid_t, _deadline: Instant) -> io::Result<X86RegisterRecord> {
+    capture(pid)
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -825,28 +846,41 @@ pub(super) fn capture(_pid: libc::pid_t) -> io::Result<X86RegisterRecord> {
 
 #[cfg(target_arch = "x86_64")]
 fn capture_with(pid: libc::pid_t, after_stop: impl FnOnce() -> io::Result<()>) -> io::Result<X86RegisterRecord> {
+    capture_with_until(pid, Instant::now() + STOP_DEADLINE, after_stop)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn capture_with_until(
+    pid: libc::pid_t,
+    deadline: Instant,
+    after_stop: impl FnOnce() -> io::Result<()>,
+) -> io::Result<X86RegisterRecord> {
     if pid <= 1 || pid == unsafe { libc::getpid() } {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "capture target must be another live process",
         ));
     }
+    check_deadline(deadline)?;
     ptrace(libc::PTRACE_SEIZE, pid, 0, 0)?;
     let mut guard = TraceGuard {
         pid,
         was_group_stopped: false,
         ptrace_stopped: false,
     };
+    check_deadline(deadline)?;
     ptrace(libc::PTRACE_INTERRUPT, pid, 0, 0)?;
-    guard.was_group_stopped = wait_for_ptrace_stop(pid, STOP_DEADLINE)?;
+    guard.was_group_stopped = wait_for_ptrace_stop_until(pid, deadline)?;
     guard.ptrace_stopped = true;
     after_stop()?;
+    check_deadline(deadline)?;
 
     let mut raw: libc::user_regs_struct = unsafe { std::mem::zeroed() };
     let mut iov = libc::iovec {
         iov_base: (&raw mut raw).cast(),
         iov_len: std::mem::size_of_val(&raw),
     };
+    check_deadline(deadline)?;
     ptrace(
         libc::PTRACE_GETREGSET,
         pid,
@@ -860,6 +894,7 @@ fn capture_with(pid: libc::pid_t, after_stop: impl FnOnce() -> io::Result<()>) -
         ));
     }
     let mut signal_mask = 0_u64;
+    check_deadline(deadline)?;
     ptrace(
         libc::PTRACE_GETSIGMASK,
         pid,
@@ -884,8 +919,13 @@ fn process_is_stopped(pid: libc::pid_t) -> io::Result<bool> {
 
 #[cfg(target_arch = "x86_64")]
 fn wait_for_ptrace_stop(pid: libc::pid_t, timeout: Duration) -> io::Result<bool> {
-    let deadline = Instant::now() + timeout;
+    wait_for_ptrace_stop_until(pid, Instant::now() + timeout)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn wait_for_ptrace_stop_until(pid: libc::pid_t, deadline: Instant) -> io::Result<bool> {
     loop {
+        check_deadline(deadline)?;
         // Observe death without collecting it. The process owner must retain the exit status.
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         let observed = unsafe {
@@ -988,8 +1028,10 @@ mod tests {
 
     #[derive(Default)]
     struct AtomicSink {
-        state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>, usize)>,
+        state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>, usize, bool)>,
         fail_at: Option<&'static str>,
+        begin_failure: bool,
+        expire_at: Option<&'static str>,
     }
 
     impl CheckpointSink for AtomicSink {
@@ -997,19 +1039,43 @@ mod tests {
             unreachable!()
         }
         fn begin_until(&self, _: Instant) -> Result<NonZeroU64, CompositionError> {
+            if self.begin_failure {
+                return Err(CompositionError::TransactionBusy);
+            }
+            let mut state = self.state.lock().unwrap();
+            if state.3 {
+                return Err(CompositionError::TransactionBusy);
+            }
+            state.3 = true;
             Ok(NonZeroU64::new(1).unwrap())
         }
-        fn put_until(&self, _: NonZeroU64, name: &str, bytes: &[u8], _: Instant) -> Result<(), CompositionError> {
+        fn put_until(
+            &self,
+            _: NonZeroU64,
+            name: &str,
+            bytes: &[u8],
+            deadline: Instant,
+        ) -> Result<(), CompositionError> {
+            if self.expire_at == Some(name) {
+                while Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                return Err(CompositionError::DeadlineExceeded);
+            }
             if self.fail_at == Some(name) {
                 return Err(CompositionError::RuntimeConstruction);
             }
             self.state.lock().unwrap().1.insert(name.to_owned(), bytes.to_vec());
             Ok(())
         }
-        fn abort_until(&self, _: NonZeroU64, _: Instant) -> Result<(), CompositionError> {
+        fn abort_until(&self, _: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
+            if Instant::now() >= deadline {
+                return Err(CompositionError::DeadlineExceeded);
+            }
             let mut state = self.state.lock().unwrap();
             state.1.clear();
             state.2 += 1;
+            state.3 = false;
             Ok(())
         }
         fn commit_until(&self, _: NonZeroU64, manifest: &[u8], _: Instant) -> Result<(), CompositionError> {
@@ -1020,6 +1086,7 @@ mod tests {
             let staging = std::mem::take(&mut state.1);
             state.0 = staging;
             state.0.insert("MANIFEST".into(), manifest.to_vec());
+            state.3 = false;
             Ok(())
         }
     }
@@ -1084,6 +1151,53 @@ mod tests {
             wait_until_running(pid);
             kill_and_reap(pid);
         }
+    }
+
+    #[test]
+    fn begin_failure_still_thaws_the_tracee() {
+        let pid = stopped_child();
+        let sink = AtomicSink {
+            begin_failure: true,
+            ..AtomicSink::default()
+        };
+        assert_eq!(
+            publish_stopped_native(&sink, pid, Instant::now() + Duration::from_secs(1)),
+            Err(CompositionError::TransactionBusy)
+        );
+        wait_until_running(pid);
+        kill_and_reap(pid);
+    }
+
+    #[test]
+    fn expired_publication_uses_an_independent_abort_budget_and_releases_staging() {
+        let pid = stopped_child();
+        let sink = AtomicSink {
+            expire_at: Some(MEMORY_OBJECT),
+            ..AtomicSink::default()
+        };
+        assert_eq!(
+            publish_stopped_native(&sink, pid, Instant::now() + Duration::from_secs(1)),
+            Err(CompositionError::DeadlineExceeded)
+        );
+        let state = sink.state.lock().unwrap();
+        assert!(state.0.is_empty());
+        assert!(state.1.is_empty());
+        assert_eq!(state.2, 1);
+        drop(state);
+        assert!(sink.begin_until(Instant::now() + Duration::from_secs(1)).is_ok());
+        wait_until_running(pid);
+        kill_and_reap(pid);
+    }
+
+    #[test]
+    fn expired_register_deadline_does_not_attach_to_the_tracee() {
+        let pid = stopped_child();
+        let error = capture_until(pid, Instant::now() - Duration::from_millis(1)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        assert!(status.lines().any(|line| line == "TracerPid:\t0"));
+        unsafe { libc::kill(pid, libc::SIGCONT) };
+        kill_and_reap(pid);
     }
 
     #[test]
