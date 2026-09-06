@@ -5,6 +5,8 @@
 #![allow(dead_code)] // Intentionally staged before the coordinator transaction is wired to it.
 
 use std::io;
+#[cfg(target_arch = "x86_64")]
+use std::time::{Duration, Instant};
 
 const MAGIC: &[u8; 8] = b"HLNXREG\0";
 const VERSION: u16 = 1;
@@ -12,6 +14,8 @@ const ELF_MACHINE_X86_64: u16 = 62;
 pub(super) const RECORD_SIZE: usize = 256;
 const REGISTER_COUNT: usize = 27;
 const REGISTER_OFFSET: usize = 32;
+#[cfg(target_arch = "x86_64")]
+const STOP_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Canonical `native-x86-v1` architectural state. Register order is Linux x86-64
 /// `user_regs_struct`: r15..gs, exactly as returned by `NT_PRSTATUS`.
@@ -96,15 +100,14 @@ fn capture_with(pid: libc::pid_t, after_stop: impl FnOnce() -> io::Result<()>) -
             "capture target must be another live process",
         ));
     }
-    let was_stopped = process_is_stopped(pid)?;
     ptrace(libc::PTRACE_SEIZE, pid, 0, 0)?;
     let mut guard = TraceGuard {
         pid,
-        was_stopped,
+        was_group_stopped: false,
         ptrace_stopped: false,
     };
     ptrace(libc::PTRACE_INTERRUPT, pid, 0, 0)?;
-    wait_for_ptrace_stop(pid)?;
+    guard.was_group_stopped = wait_for_ptrace_stop(pid, STOP_DEADLINE)?;
     guard.ptrace_stopped = true;
     after_stop()?;
 
@@ -149,10 +152,35 @@ fn process_is_stopped(pid: libc::pid_t) -> io::Result<bool> {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn wait_for_ptrace_stop(pid: libc::pid_t) -> io::Result<()> {
+fn wait_for_ptrace_stop(pid: libc::pid_t, timeout: Duration) -> io::Result<bool> {
+    let deadline = Instant::now() + timeout;
     loop {
+        // Observe death without collecting it. The process owner must retain the exit status.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let observed = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &raw mut info,
+                libc::WEXITED | libc::WSTOPPED | libc::WNOHANG | libc::WNOWAIT | libc::__WALL,
+            )
+        };
+        if observed < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        } else if unsafe { info.si_pid() } == pid
+            && matches!(info.si_code, libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "tracee exited before register capture",
+            ));
+        }
+
         let mut status = 0;
-        let waited = unsafe { libc::waitpid(pid, &raw mut status, libc::__WALL) };
+        let waited = unsafe { libc::waitpid(pid, &raw mut status, libc::__WALL | libc::WNOHANG) };
         if waited < 0 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
@@ -161,12 +189,24 @@ fn wait_for_ptrace_stop(pid: libc::pid_t) -> io::Result<()> {
             return Err(error);
         }
         if waited == pid && libc::WIFSTOPPED(status) {
-            return Ok(());
+            let event = status >> 16;
+            if event != libc::PTRACE_EVENT_STOP {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected ptrace stop"));
+            }
+            // A seized tracee reports PTRACE_EVENT_STOP/SIGTRAP for PTRACE_INTERRUPT.
+            // A pre-existing group-stop reports the actual stopping signal instead.
+            return Ok(libc::WSTOPSIG(status) != libc::SIGTRAP);
         }
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "tracee exited before register capture",
-        ));
+        if waited == pid {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected tracee event"));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out waiting for ptrace stop",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -183,21 +223,25 @@ fn ptrace(request: libc::c_uint, pid: libc::pid_t, address: usize, data: usize) 
 #[cfg(target_arch = "x86_64")]
 struct TraceGuard {
     pid: libc::pid_t,
-    was_stopped: bool,
+    was_group_stopped: bool,
     ptrace_stopped: bool,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl Drop for TraceGuard {
     fn drop(&mut self) {
-        // DETACH requires ptrace-stop. Complete an interrupted stop transition before releasing
-        // ownership if failure arrived after SEIZE but before the first wait observed it.
-        if !self.ptrace_stopped && ptrace(libc::PTRACE_INTERRUPT, self.pid, 0, 0).is_ok() {
-            self.ptrace_stopped = wait_for_ptrace_stop(self.pid).is_ok();
-        }
-        let signal = if self.was_stopped { libc::SIGSTOP as usize } else { 0 };
+        // Cleanup must not wait: a destructor cannot safely depend on an untrusted tracee making
+        // another transition. A stopped tracee can be detached; otherwise this best-effort detach
+        // either succeeds immediately or the kernel releases the relationship when the task exits.
+        let signal = if self.was_group_stopped {
+            libc::SIGSTOP as usize
+        } else {
+            0
+        };
         if self.ptrace_stopped {
             let _ = ptrace(libc::PTRACE_DETACH, self.pid, 0, signal);
+        } else {
+            let _ = ptrace(libc::PTRACE_DETACH, self.pid, 0, 0);
         }
     }
 }
@@ -242,7 +286,7 @@ mod tests {
         let record = capture(pid).unwrap();
         assert_eq!(record.registers[0], 0x1515_1515_1515_1515, "r15 sentinel");
         assert_ne!(record.signal_mask & (1 << (libc::SIGUSR1 - 1)), 0);
-        assert!(!process_is_stopped(pid).unwrap());
+        wait_until_running(pid);
         kill_and_reap(pid);
     }
 
@@ -252,10 +296,7 @@ mod tests {
         wait_byte(ready);
         let error = capture_with(running, || Err(io::Error::other("injected after stop"))).unwrap_err();
         assert_eq!(error.to_string(), "injected after stop");
-        assert!(
-            !process_is_stopped(running).unwrap(),
-            "failure left running child stopped"
-        );
+        wait_until_running(running);
         kill_and_reap(running);
 
         let (stopped, ready) = sentinel_child(true);
@@ -265,6 +306,48 @@ mod tests {
         wait_until_stopped(stopped);
         unsafe { libc::kill(stopped, libc::SIGCONT) };
         kill_and_reap(stopped);
+    }
+
+    #[test]
+    fn exit_observation_does_not_reap_the_process_owners_child() {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe { libc::_exit(23) }
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match wait_for_ptrace_stop(pid, Duration::from_millis(10)) {
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) if error.raw_os_error() == Some(libc::ECHILD) && Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                other => panic!("unexpected exit observation: {other:?}"),
+            }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 23);
+    }
+
+    #[test]
+    fn seized_child_exit_is_observed_without_consuming_its_status() {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            loop {
+                unsafe { libc::pause() };
+            }
+        }
+        ptrace(libc::PTRACE_SEIZE, pid, 0, 0).unwrap();
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        let error = wait_for_ptrace_stop(pid, Duration::from_secs(2)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid);
+        assert!(libc::WIFSIGNALED(status));
+        assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
     }
 
     fn sentinel_child(stop: bool) -> (libc::pid_t, RawFd) {
@@ -312,6 +395,22 @@ mod tests {
             std::thread::yield_now();
         }
         panic!("child {pid} did not stop");
+    }
+
+    fn wait_until_running(pid: libc::pid_t) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if !process_is_stopped(pid).unwrap_or(true) {
+                let stable_until = Instant::now() + Duration::from_millis(50);
+                while Instant::now() < stable_until {
+                    assert!(!process_is_stopped(pid).unwrap(), "child {pid} stopped after detach");
+                    std::thread::yield_now();
+                }
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("child {pid} did not resume");
     }
 
     fn kill_and_reap(pid: libc::pid_t) {
