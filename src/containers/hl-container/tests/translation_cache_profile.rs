@@ -40,6 +40,8 @@ fn cache_census_owner_budget_contract_is_explicit() {
 enum Mode {
     Interpreter,
     Translated,
+    TranslatedToolchain,
+    NativeToolchain,
     CacheCold,
     CacheNestedLaunchOnly,
     CacheNestedToolchain,
@@ -87,6 +89,8 @@ impl Mode {
         match std::env::var("HL_PCACHE_PROFILE_MODE")?.as_str() {
             "interpreter" => Ok(Self::Interpreter),
             "translated" => Ok(Self::Translated),
+            "translated-toolchain" => Ok(Self::TranslatedToolchain),
+            "native-toolchain" => Ok(Self::NativeToolchain),
             "cache-cold" => Ok(Self::CacheCold),
             "cache-nested-launch-only" => Ok(Self::CacheNestedLaunchOnly),
             "cache-nested-toolchain" => Ok(Self::CacheNestedToolchain),
@@ -134,18 +138,25 @@ impl Mode {
     const fn cached(self) -> bool {
         !matches!(
             self,
-            Self::Interpreter | Self::Translated | Self::CwdRelative | Self::LiveNative
+            Self::Interpreter
+                | Self::Translated
+                | Self::TranslatedToolchain
+                | Self::NativeToolchain
+                | Self::CwdRelative
+                | Self::LiveNative
         )
     }
 
     const fn translated(self) -> bool {
-        !matches!(self, Self::Interpreter | Self::LiveNative)
+        !matches!(self, Self::Interpreter | Self::NativeToolchain | Self::LiveNative)
     }
 }
 
 fn container_execution(mode: Mode) -> Execution {
-    if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative) {
+    if matches!(mode, Mode::Interpreter | Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
         Execution::Interpreted
+    } else if mode == Mode::NativeToolchain {
+        Execution::native(false)
     } else {
         Execution::Auto
     }
@@ -193,6 +204,8 @@ fn require_durable_cache_receipts(mode: Mode, names: &[Vec<u8>]) -> Result<(), E
 fn product_container_modes_never_request_host_diagnostics_through_guest_logs() {
     assert_eq!(container_execution(Mode::Interpreter), Execution::Interpreted);
     assert_eq!(container_execution(Mode::Translated), Execution::Auto);
+    assert_eq!(container_execution(Mode::TranslatedToolchain), Execution::Auto);
+    assert_eq!(container_execution(Mode::NativeToolchain), Execution::Interpreted);
     assert_eq!(container_execution(Mode::CacheCold), Execution::Auto);
     assert_eq!(container_execution(Mode::CacheValid), Execution::Auto);
 }
@@ -867,7 +880,10 @@ int main(void) {
             compiler("/tmp/second.s")
         );
         Process::new("/bin/sh").args(["-c".to_owned(), command])
-    } else if mode == Mode::CacheNestedToolchain {
+    } else if matches!(
+        mode,
+        Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
+    ) {
         Process::new("/bin/sh").args([
             "-c",
             "printf 'extern int unit_127(int); int main(void){return unit_127(1)==128?0:1;}\\n' >/tmp/main.c && /usr/bin/gcc -O2 /tmp/main.c /work/src/unit_127.c -o /tmp/toolchain && /tmp/toolchain && sha256sum /tmp/toolchain",
@@ -899,7 +915,7 @@ int main(void) {
         ])
     };
     let repeat_process = process.clone();
-    let initial_process = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
+    let initial_process = if matches!(mode, Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
         Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"])
     } else {
         process.clone()
@@ -923,18 +939,18 @@ int main(void) {
     }
     let started = Instant::now();
     containers.start("pcache-profile").await?;
-    let (waited, logs) = if matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
+    let (waited, logs) = if matches!(mode, Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
         let executions = containers.executions();
         let exec = executions
             .create(
                 "pcache-profile",
                 ExecSpec::new(process)
-                    .lifetime(if mode == Mode::LiveNative {
+                    .lifetime(if matches!(mode, Mode::LiveNative | Mode::NativeToolchain) {
                         ExecLifetime::Live
                     } else {
                         ExecLifetime::Ephemeral
                     })
-                    .execution(if mode == Mode::LiveNative {
+                    .execution(if matches!(mode, Mode::LiveNative | Mode::NativeToolchain) {
                         Execution::native(false)
                     } else {
                         Execution::Auto
@@ -1078,7 +1094,7 @@ int main(void) {
         }
         eprintln!("pcache-profile authority_hit_elapsed_us={}", repeat_elapsed.as_micros());
     }
-    if !matches!(mode, Mode::CwdRelative | Mode::LiveNative) {
+    if !matches!(mode, Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
         benchmark_barrier("done", "finish")?;
     }
     if status != ExitStatus::Code(0) {
@@ -1101,7 +1117,10 @@ int main(void) {
             logs.stdout == b"thread-warm-ok\n",
             "threaded executable-map workload output changed",
         )?;
-    } else if mode == Mode::CacheNestedToolchain {
+    } else if matches!(
+        mode,
+        Mode::CacheNestedToolchain | Mode::TranslatedToolchain | Mode::NativeToolchain
+    ) {
         require(
             String::from_utf8_lossy(&logs.stdout).split_ascii_whitespace().count() == 2,
             "toolchain did not emit exactly one executable digest",
@@ -1629,7 +1648,12 @@ int main(void) {
                 }),
                 "unrecorded emitted absolute did not refuse cache publication",
             )?,
-            Mode::Interpreter | Mode::Translated | Mode::CwdRelative | Mode::LiveNative => unreachable!(),
+            Mode::Interpreter
+            | Mode::Translated
+            | Mode::TranslatedToolchain
+            | Mode::NativeToolchain
+            | Mode::CwdRelative
+            | Mode::LiveNative => unreachable!(),
         }
     }
     eprintln!(
