@@ -49,7 +49,7 @@ static uint64_t x64_pcache_codegen_modes(void);
 static void x64_pc_thread_start_abandon(void);
 static void x64_pc_restored_unlink_targets(uint64_t lo, uint64_t hi);
 static int g_x64_pc_control_loaded_empty;
-static int g_x64_pc_launch_only_reset_bus;
+static int g_x64_pc_exec_disable_reset_bus;
 static int g_x64_pc_exec_identity_authorized = 1;
 static int g_x64_pc_exec_poisoned;
 
@@ -2029,8 +2029,8 @@ static uint64_t g_x64_pc_load_generation;
 static int g_x64_pc_control_record_libraries;
 static int g_x64_pc_library_unsupported;
 
-static int x64_pc_launch_only_disables_nested(int launch_only, int identity_authorized) {
-    return launch_only && !identity_authorized;
+static int x64_pc_unauthorized_exec_disables_persistence(int identity_authorized) {
+    return !identity_authorized;
 }
 
 static int x64_pc_exec_publication_authorized(int checkpoint_restore) {
@@ -3737,11 +3737,10 @@ static void x64_pc_after_fork(void) {
     g_x64_pc_lib_next = X64_PC_LIB_BASE;
 }
 
-static void pcache_launch_only_disable(void) {
-    if (hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL) {
-        /* Disable before load_elf chooses addresses.  Waiting until pcache_exec_reload leaves the
-           nested image at persistence's fixed bases; same-ISA direct execution then declines it and
-           a compiler runs through the slow interpreter despite caching itself being disabled. */
+static void pcache_exec_disable(void) {
+    if (g_pcache) {
+        /* Disable before load_elf chooses addresses. An image without immutable cache authority must
+           neither pay persistence's fixed-placement cost nor publish bytes under an empty identity. */
         g_pcache_loaded = 0;
         x64_pc_restored_detach();
         free(g_x64_pc_deferred);
@@ -3755,14 +3754,13 @@ static void pcache_launch_only_disable(void) {
         g_x64_pc_lib_count = 0;
         g_x64_pc_library_unsupported = 0;
         g_pcache = 0;
-        g_x64_pc_launch_only_reset_bus = 1;
+        g_x64_pc_exec_disable_reset_bus = 1;
     }
 }
 
 static void pcache_exec_force_main(int identity_authorized) {
-    if (g_pcache && x64_pc_launch_only_disables_nested(hl_option_get("HL_PCACHE_LAUNCH_ONLY") != NULL,
-                                                        identity_authorized))
-        pcache_launch_only_disable();
+    if (g_pcache && x64_pc_unauthorized_exec_disables_persistence(identity_authorized))
+        pcache_exec_disable();
     if (g_pcache) g_force_base = PC_IMG_BASE;
 }
 
@@ -3782,8 +3780,8 @@ static hl_identity_digest pcache_exec_authorized_id(hl_identity_digest program, 
  * That ordering is what makes clearing the fork refusal safe: the new identity cannot describe parent code. */
 static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, int interpreter_present,
                                int identity_authorized, const char *argv0, uint64_t jump) {
-    if (g_x64_pc_launch_only_reset_bus) {
-        g_x64_pc_launch_only_reset_bus = 0;
+    if (g_x64_pc_exec_disable_reset_bus) {
+        g_x64_pc_exec_disable_reset_bus = 0;
         jit_guest_bus_reset_after_rewind(hl_linux_bus_generation(), hl_linux_bus_active());
         if (g_coldprof)
             fprintf(stderr,
@@ -3830,7 +3828,25 @@ static int x64_pc_nested_exec_policy_test(void) {
     hl_identity_digest repeated_content = hl_identity_image_digest(names[1], strlen(names[1]));
     hl_identity_digest repeated = pcache_exec_authorized_id(repeated_content, (hl_identity_digest){0}, 0, 1, "tool");
     if (!hl_identity_digest_equal(&keys[1], &repeated)) return 3;
-    if (x64_pc_launch_only_disables_nested(1, 1) || !x64_pc_launch_only_disables_nested(1, 0)) return 4;
+    if (x64_pc_unauthorized_exec_disables_persistence(1) ||
+        !x64_pc_unauthorized_exec_disables_persistence(0)) return 4;
+    int saved_pcache = g_pcache;
+    uint64_t saved_force_base = g_force_base;
+    int saved_reset_bus = g_x64_pc_exec_disable_reset_bus;
+    g_pcache = 1;
+    g_force_base = 0;
+    g_x64_pc_exec_disable_reset_bus = 0;
+    pcache_exec_force_main(0);
+    int upper_exact = !g_pcache && g_force_base == 0 && g_x64_pc_exec_disable_reset_bus;
+    g_pcache = 1;
+    g_force_base = 0;
+    g_x64_pc_exec_disable_reset_bus = 0;
+    pcache_exec_force_main(1);
+    int lower_exact = g_pcache && g_force_base == PC_IMG_BASE && !g_x64_pc_exec_disable_reset_bus;
+    g_pcache = saved_pcache;
+    g_force_base = saved_force_base;
+    g_x64_pc_exec_disable_reset_bus = saved_reset_bus;
+    if (!upper_exact || !lower_exact) return 4;
     uint32_t every_refusal = x64_pc_save_refusal_reasons(0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1);
     if (every_refusal != (1u << 12) - 1 || x64_pc_save_refusal_reasons(1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0))
         return 5;

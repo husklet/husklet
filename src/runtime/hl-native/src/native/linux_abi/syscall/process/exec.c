@@ -94,12 +94,15 @@ static int HL_VFS_CURSOR_UNUSED exec_image_has_lower_origin(const exec_image *im
     return image != NULL && hl_vfs_cursor_origin_is_lower(&image->origin, lower);
 }
 
+static int exec_image_cache_identity_source_authorized(const exec_image *image) {
+    return image != NULL && image->origin.kind == HL_VFS_CURSOR_ORIGIN_LOWER && image->origin.index >= 0;
+}
+
 static int exec_image_cache_identity_authorized(const exec_image *image) {
     /* Only a cursor-selected immutable snapshot lower can authorize persistence. A digest authenticates the
      * exact bytes this exec consumes, but cannot turn an upper, bind, name projection, or descriptor path into
      * immutable authority. Empty is the fail-closed cache sentinel in every translator. */
-    return image != NULL && image->origin.kind == HL_VFS_CURSOR_ORIGIN_LOWER && image->origin.index >= 0 &&
-           !hl_identity_digest_empty(&image->identity);
+    return exec_image_cache_identity_source_authorized(image) && !hl_identity_digest_empty(&image->identity);
 }
 
 static int exec_cache_identity_pair_authorized(const exec_image *main_image, const exec_image *interpreter,
@@ -205,7 +208,8 @@ static int exec_origin_basic_matrix_child(int scenario) {
                                                  : (hl_identity_digest){0};
         exact = error == 0 && (scenario == 0 ? image.origin.kind == HL_VFS_CURSOR_ORIGIN_UPPER
                                              : exec_image_has_lower_origin(&image, 0)) &&
-                hl_identity_digest_equal(&image.identity, &consumed) &&
+                (scenario == 0 ? hl_identity_digest_empty(&image.identity)
+                               : hl_identity_digest_equal(&image.identity, &consumed)) &&
                 exec_image_cache_identity_authorized(&image) == (scenario == 1);
     } else if (scenario == 2) {
         error = exec_image_open_guest("/hidden/tool", &image);
@@ -447,8 +451,9 @@ static int exec_image_adopt_origin(int descriptor, const char *path, hl_vfs_curs
         exec_image_release(image);
         return capability_error;
     }
-    image->identity = g_pcache ? hl_identity_image_digest(image->bytes.bytes, image->bytes.size)
-                               : (hl_identity_digest){0};
+    image->identity = g_pcache && exec_image_cache_identity_source_authorized(image)
+                          ? hl_identity_image_digest(image->bytes.bytes, image->bytes.size)
+                          : (hl_identity_digest){0};
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
