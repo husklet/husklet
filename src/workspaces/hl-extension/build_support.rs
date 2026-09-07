@@ -53,12 +53,19 @@ pub fn verify(manifest: &Path) -> Result<(), String> {
 }
 
 fn verify_client(manifest: &Path, recorded: &str) -> Result<(), String> {
-    let client = manifest.join("../../../extensions/base/client/src");
-    let marker = format!("Protocol artifact fnv1a64:{recorded}");
+    let package = manifest.join("../../../extensions/base/client");
+    // Cargo packages this Rust crate independently from the JavaScript SDK.
+    // Enforce the cross-package edge in the Husklet source tree, but do not make
+    // a registry consumer recreate the repository's unrelated extensions tree.
+    if !package.is_dir() {
+        return Ok(());
+    }
+    let client = package.join("src");
+    let marker = format!("// Protocol artifact fnv1a64:{recorded}");
     for name in ["generated-protocol.js", "generated-protocol.d.ts"] {
         let generated = std::fs::read_to_string(client.join(name))
             .map_err(|error| format!("cannot read generated TypeScript client {name}: {error}"))?;
-        if !generated.contains(&marker) {
+        if generated.lines().nth(1) != Some(marker.as_str()) {
             return Err(format!(
                 "generated TypeScript client {name} is stale relative to protocol/v1.json; run `npm run protocol:generate --prefix extensions/base/client`"
             ));
@@ -120,14 +127,32 @@ mod tests {
         let client = scratch.join("extensions/base/client/src");
         fs::create_dir_all(&manifest).unwrap();
         fs::create_dir_all(&client).unwrap();
-        let marker = "// Protocol artifact fnv1a64:0123456789abcdef\n";
-        fs::write(client.join("generated-protocol.js"), marker).unwrap();
-        fs::write(client.join("generated-protocol.d.ts"), marker).unwrap();
+        let marker = "// Protocol artifact fnv1a64:0123456789abcdef";
+        let generated = format!("// Generated protocol.\n{marker}\n");
+        fs::write(client.join("generated-protocol.js"), &generated).unwrap();
+        fs::write(client.join("generated-protocol.d.ts"), &generated).unwrap();
         verify_client(&manifest, "0123456789abcdef").expect("matching generated pair");
 
         fs::write(client.join("generated-protocol.d.ts"), "// stale\n").unwrap();
         let error = verify_client(&manifest, "0123456789abcdef").unwrap_err();
         assert!(error.contains("generated-protocol.d.ts is stale"));
+
+        fs::write(
+            client.join("generated-protocol.d.ts"),
+            format!("// stale\nconst decoy = {marker:?};\n"),
+        )
+        .unwrap();
+        let error = verify_client(&manifest, "0123456789abcdef").unwrap_err();
+        assert!(error.contains("generated-protocol.d.ts is stale"));
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
+    fn independently_packaged_rust_crate_does_not_require_the_javascript_repository() {
+        let scratch = std::env::temp_dir().join(format!("hl-extension-standalone-package-{}", std::process::id()));
+        let manifest = scratch.join("src/workspaces/hl-extension");
+        fs::create_dir_all(&manifest).unwrap();
+        verify_client(&manifest, "0123456789abcdef").expect("standalone Cargo package");
         fs::remove_dir_all(scratch).unwrap();
     }
 }
