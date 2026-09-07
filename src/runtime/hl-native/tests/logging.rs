@@ -45,15 +45,18 @@ fn restored_chains_preserve_fixed_edges_and_defer_dso_edges() {
     let restore = fs::read_to_string(native.join("translator/guest/x86_64/interp.c"))
         .expect("read x86 persistent-cache implementation");
     let classify = restore
-        .split("uint64_t fixed_chain_count = 0;")
+        .split("uint64_t direct_chain_count = 0, fixed_fallback_count = 0;")
         .nth(1)
         .and_then(|source| source.split("x64_pc_pristine_rewind();").next())
         .expect("restored-chain classification");
     assert!(classify.matches("x64_pc_saved_gpc_fixed(").count() >= 2);
-    assert!(classify.contains("fixed_chains[fixed_chain_count++] = chain;"));
+    assert!(classify.contains("direct_chain_count++;"));
+    assert!(classify.contains("fixed_fallback_count++;"));
     assert!(classify.contains("HL_PCACHE_GLOBAL_CHAIN_FALLBACK_MUTATION"));
-    assert!(classify.find("if (fixed)").unwrap() < classify.find("fallback_offset").unwrap());
-    assert!(restore.contains("uint64_t chain_state[2] = {chains, fixed_chain_count};"));
+    assert!(classify.find("if (source_fixed && target_fixed)").unwrap() < classify.find("fallback_offset").unwrap());
+    assert!(restore.contains(
+        "uint64_t chain_state[3] = {chains, direct_chain_count, fixed_fallback_count};"
+    ));
 
     let emitter =
         fs::read_to_string(native.join("translator/guest/x86_64/translit.inc")).expect("read x86 chain emitter");
