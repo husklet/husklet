@@ -443,21 +443,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
                     color="text-dim"
                   />
-                  <Button
-                    label={
-                      granted.length === acquisition.candidate.requested.length
-                        ? 'Clear access'
-                        : 'Allow requested'
-                    }
-                    variant="ghost"
-                    onInvoke={() =>
-                      setGranted(
-                        granted.length === acquisition.candidate!.requested.length
-                          ? []
-                          : acquisition.candidate!.requested,
-                      )
-                    }
-                  />
+                  {granted.length > 0 && (
+                    <Button
+                      label="Clear Husklet access"
+                      variant="ghost"
+                      onInvoke={() => setGranted([])}
+                    />
+                  )}
                 </Row>
               )}
               {acquisition.candidate.requested.map((capability) => (

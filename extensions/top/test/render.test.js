@@ -503,13 +503,20 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
   assert.ok(labelled(stage, '0/2 allowed'));
+  assert.equal(
+    labelled(stage, 'Allow requested'),
+    undefined,
+    'each capability requires its own consent gesture',
+  );
   assert.ok(
     labelled(stage, 'View containers and processes (containers:read)'),
     'exact authority remains visible beside plain language',
   );
 
-  invoke(stage, 'Allow requested');
+  toggleSwitch(stage, 0, true);
+  toggleSwitch(stage, 1, true);
   assert.ok(labelled(stage, '2/2 allowed'));
+  assert.ok(labelled(stage, 'Clear Husklet access'));
   invoke(stage, 'Install extension');
   await settled();
   await settled();
