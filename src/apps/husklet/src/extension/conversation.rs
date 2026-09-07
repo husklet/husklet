@@ -1692,6 +1692,85 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_without_extension_read_is_denied_before_the_service() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::ExtensionCatalogue);
+        let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("denial") else {
+            panic!("catalogue without read authority must be denied");
+        };
+        assert_eq!(capability, Capability::ExtensionRead.as_str());
+        assert!(ledger.reached().is_empty(), "the catalogue service was not called");
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn invalid_catalogue_is_rejected_without_ending_the_session() {
+        struct InvalidCatalogue(Arc<Ledger>);
+
+        impl hl_extension::port::ExtensionStore for InvalidCatalogue {
+            fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+                self.0.note("extensions.catalogue");
+                Ok(hl_extension::port::ExtensionCatalogue {
+                    entries: vec![hl_extension::port::ExtensionCatalogueEntry {
+                        id: String::new(),
+                        title: "Invalid".into(),
+                        description: "empty identifiers are ambiguous".into(),
+                        reference: "registry/invalid:latest".into(),
+                        publisher: "Husklet".into(),
+                        source: "test:invalid".into(),
+                    }],
+                    complete: true,
+                })
+            }
+        }
+
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host {
+                ledger: Arc::clone(&host_ledger),
+            };
+            let invalid = InvalidCatalogue(host_ledger);
+            let mut supplied = services(&host);
+            supplied.extensions = &invalid;
+            let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&supplied)
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let invalid = ask(&mut wire, &Request::ExtensionCatalogue);
+        assert!(codec::is_failure(&invalid), "invalid catalogue metadata is refused");
+        assert!(
+            matches!(codec::read_failure(&invalid), Ok(Failure::Failed { ref detail }) if detail.contains("metadata"))
+        );
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["extensions.catalogue", "containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn a_greeted_extension_has_its_call_answered() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
