@@ -613,6 +613,13 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   extension = { ...extension, enabled: true, status: 'fault: socket closed' };
   publish([extension]);
   await settled();
+  assert.ok(labelled(stage, 'faulted'));
+  assert.ok(labelled(stage, 'socket closed'));
+  assert.equal(
+    labelled(stage, 'fault: socket closed'),
+    undefined,
+    'fault details are separated from the bounded status badge',
+  );
   assert.ok(labelled(stage, 'Retry'));
   invoke(stage, 'Retry');
   await settled();

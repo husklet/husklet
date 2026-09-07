@@ -611,12 +611,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               />
               <CardContent gap={1}>
                 <Row gap={1} wrap>
-                  <Badge label={extension.enabled ? extension.status : 'disabled'} />
+                  <Badge
+                    label={extensionState(extension)}
+                    tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
+                  />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
                   />
                 </Row>
+                <ExtensionFault extension={extension} />
                 <Row gap={1} wrap>
                   {extension.status.startsWith('fault:') ? (
                     <Button
@@ -702,6 +706,18 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
       : action === 'retry'
         ? 'recovered'
         : 'removed';
+}
+
+function extensionState(extension: ExtensionSummary): string {
+  if (!extension.enabled) return 'disabled';
+  return extension.status.startsWith('fault:') ? 'faulted' : extension.status;
+}
+
+function ExtensionFault({ extension }: { extension: ExtensionSummary }) {
+  if (!extension.enabled || !extension.status.startsWith('fault:')) return null;
+  const detail =
+    extension.status.slice('fault:'.length).trim() || 'The extension stopped unexpectedly.';
+  return <InlineMessage label={detail} tone="danger" />;
 }
 
 function capitalize(value: string): string {
