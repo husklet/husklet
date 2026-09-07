@@ -29,7 +29,12 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         // CLONE_THREAD: stack arg IS the top
         if (a0 & 0x10000) {
-            int64_t result = spawn_thread(c, a0, a1, G_CLONE_TLS(a3, a4), a2, G_CLONE_CTID(a3, a4));
+            // Every frontend presents the shared service's canonical
+            // clone(flags, stack, ptid, tls, ctid) order.  In particular, the
+            // x86 legacy normalizer has already exchanged its native ctid/tls
+            // slots; exchanging them again gives the child its ctid address as
+            // the FS base and faults on its first TLS access.
+            int64_t result = spawn_thread(c, a0, a1, a3, a2, a4);
             if (result < 0) fork_diagnostic_emit(c, nr, a0, "thread-spawn", (int)-result, -1, NULL);
             G_RET(c) = (uint64_t)result;
             break;
