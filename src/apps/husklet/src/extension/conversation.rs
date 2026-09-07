@@ -2034,6 +2034,46 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_after_subscribed_disconnect_starts_without_stale_observation() {
+        let ledger = Arc::new(Ledger::default());
+        let (first, first_served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut first = Wire::new(first);
+        shake(&mut first, PROTOCOL);
+        let answer = ask(
+            &mut first,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Containers,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        assert_eq!(first.receive().expect("initial event").kind, Kind::Event);
+        drop(first);
+        assert_eq!(first_served.join().expect("first joined"), Ok(()));
+
+        let reads_after_disconnect = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+        let (second, second_served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut second = Wire::new(second);
+        shake(&mut second, PROTOCOL);
+        let answer = ask(&mut second, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
+        assert_eq!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "containers.list")
+                .count(),
+            reads_after_disconnect + 1,
+            "only the explicit call reached the container service"
+        );
+        drop(second);
+        assert_eq!(second_served.join().expect("second joined"), Ok(()));
+    }
+
+    #[test]
     fn closing_an_event_channel_stops_observation_without_closing_calls() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
