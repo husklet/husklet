@@ -43,7 +43,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
        /opt/husklet-sdk/client/husklet-client-*.tgz \
        /opt/husklet-sdk/react/husklet-react-*.tgz \
        react@18.3.1 react-reconciler@0.29.2 \
-       typescript@5.9.2 vite@7.1.4 @types/node@22.20.1 @types/react@18.3.3 \
+       typescript@5.9.2 vite@7.3.6 @types/node@22.20.1 @types/react@18.3.3 \
        eslint@10.10.0 @eslint/js@10.0.1 typescript-eslint@8.69.0 \
        eslint-plugin-react-hooks@7.1.1 eslint-config-prettier@10.1.8 prettier@3.9.6 \
     && mkdir -p node_modules/@husklet node_modules/@types \
