@@ -1105,8 +1105,31 @@ mod tests {
         pid
     }
 
+    fn isolated_live_capture(test: &str) -> bool {
+        const CHILD: &str = "HL_ENGINE_NATIVE_SNAPSHOT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .expect("spawn isolated native snapshot test");
+        assert!(
+            output.status.success(),
+            "isolated native snapshot test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
     #[test]
     fn native_transaction_publishes_only_a_complete_validated_generation() {
+        if isolated_live_capture(
+            "runtime::execution::native_snapshot::tests::native_transaction_publishes_only_a_complete_validated_generation",
+        ) {
+            return;
+        }
         let pid = stopped_child();
         let sink = AtomicSink::default();
         publish_stopped_native(&sink, pid, Instant::now() + Duration::from_secs(10)).unwrap();
@@ -1171,6 +1194,11 @@ mod tests {
 
     #[test]
     fn expired_publication_uses_an_independent_abort_budget_and_releases_staging() {
+        if isolated_live_capture(
+            "runtime::execution::native_snapshot::tests::expired_publication_uses_an_independent_abort_budget_and_releases_staging",
+        ) {
+            return;
+        }
         let pid = stopped_child();
         let sink = AtomicSink {
             expire_at: Some(MEMORY_OBJECT),
@@ -1415,6 +1443,11 @@ mod tests {
 
     #[test]
     fn stopped_child_prot_none_memory_is_captured_losslessly() {
+        if isolated_live_capture(
+            "runtime::execution::native_snapshot::tests::stopped_child_prot_none_memory_is_captured_losslessly",
+        ) {
+            return;
+        }
         let mut pipe = [0; 2];
         assert_eq!(unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
         let pid = unsafe { libc::fork() };
@@ -1457,6 +1490,11 @@ mod tests {
 
     #[test]
     fn stopped_child_heap_and_stack_are_captured_and_a_later_mutation_changes_only_the_new_image() {
+        if isolated_live_capture(
+            "runtime::execution::native_snapshot::tests::stopped_child_heap_and_stack_are_captured_and_a_later_mutation_changes_only_the_new_image",
+        ) {
+            return;
+        }
         let (pid, ready) = memory_sentinel_child();
         let mut addresses = [0_u64; 2];
         assert_eq!(
