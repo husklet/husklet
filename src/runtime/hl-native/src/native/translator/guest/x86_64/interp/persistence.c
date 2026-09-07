@@ -260,8 +260,8 @@ int x64_pc_validate_maps_owners(const x64_pc_format_layout *layout,
         uint32_t map_ordinal = x64_pc_get32(record + 24);
         valid = start < end && end <= layout->arena && reserved == 0 &&
                 (preserve & ~policy->owner_preserve_mask) == 0 &&
-                !((preserve & JIT_BODY_OWNER_FLAGS_FROM_CPU) != 0 &&
-                  (preserve & JIT_BODY_OWNER_FLAGS_FROM_PACKED) != 0) &&
+                !(((preserve & JIT_BODY_OWNER_FLAGS_FROM_CPU) != 0) &&
+                  ((preserve & JIT_BODY_OWNER_FLAGS_FROM_PACKED) != 0)) &&
                 (map_ordinal == UINT32_MAX || map_ordinal < layout->maps);
         if (valid && i != 0)
             valid = x64_pc_get32(record - X64_PC_OWNER_SIZE + 4) <= start;

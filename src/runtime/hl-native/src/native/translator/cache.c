@@ -2624,8 +2624,8 @@ static int jit_body_owner_publish_n(uint64_t generation, uint32_t token,
             (range[i].preserve_registers & ~(UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX |
                                              JIT_BODY_OWNER_FLAGS_FROM_CPU |
                                              JIT_BODY_OWNER_FLAGS_FROM_PACKED)) != 0 ||
-            (range[i].preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_CPU) != 0 &&
-                (range[i].preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_PACKED) != 0)
+            ((range[i].preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_CPU) != 0 &&
+             (range[i].preserve_registers & JIT_BODY_OWNER_FLAGS_FROM_PACKED) != 0))
             return 0;
         uint32_t start = (uint32_t)(range[i].lo - base), end = (uint32_t)(range[i].hi - base);
         if ((token != 0 || i != 0) && previous_end > start) return 0;
