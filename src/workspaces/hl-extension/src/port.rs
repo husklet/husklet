@@ -641,6 +641,7 @@ pub struct Entry {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DirectoryPage {
     pub entries: Vec<Entry>,
+    pub identity: String,
     pub next: Option<RelativePath>,
     pub more: bool,
 }
@@ -1292,18 +1293,14 @@ pub trait WorkspaceFiles {
 
     fn list_page(
         &self,
-        path: &RelativePath,
-        after: Option<&RelativePath>,
-        limit: usize,
+        _path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _observed: Option<&str>,
+        _limit: usize,
     ) -> Result<DirectoryPage, HostError> {
-        let mut entries = self.list(path)?;
-        if let Some(after) = after {
-            entries.retain(|entry| entry.path > *after);
-        }
-        let more = entries.len() > limit;
-        entries.truncate(limit);
-        let next = entries.last().map(|entry| entry.path.clone());
-        Ok(DirectoryPage { entries, next, more })
+        Err(HostError::Unsupported(
+            "stable directory pagination is unavailable".into(),
+        ))
     }
 
     /// # Errors

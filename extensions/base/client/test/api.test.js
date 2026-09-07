@@ -1904,13 +1904,32 @@ test('filesystem controls use exact confined protocol request shapes', async () 
 
 test('directory pagination carries an authoritative bounded cursor over Unix framing', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
-  const pending = workspace(stage.session).files.listPage('src', { after: 'src/a.ts', limit: 2 });
+  const pending = workspace(stage.session).files.listPage('src', { after: 'src/a.ts', observed: 'dir-v1', limit: 2 });
   assert.deepEqual((await next()).payload, {
-    call: 'filesystem_list_page', with: { path: 'src', after: 'src/a.ts', limit: 2 },
+    call: 'filesystem_list_page', with: { path: 'src', after: 'src/a.ts', observed: 'dir-v1', limit: 2 },
   });
-  const page = { entries: [{ path: 'src/b.ts', directory: false, size: 7 }], next: 'src/b.ts', more: true };
+  const page = { entries: [{ path: 'src/b.ts', directory: false, size: 7 }], identity: 'dir-v1', next: 'src/b.ts', more: true };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'directory_page', with: page } }));
   assert.deepEqual(await pending, page);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('an inconsistent directory page is rejected without poisoning the ordered session', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const files = workspace(stage.session).files;
+  await assert.rejects(files.listPage('src', { after: 'src/a.ts' }), /requires both after and observed/);
+  const malformed = files.listPage('src', { limit: 1 });
+  assert.equal((await next()).payload.call, 'filesystem_list_page');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'directory_page', with: { entries: [], identity: 'dir-v1', next: null, more: true },
+  } }));
+  await assert.rejects(malformed, /inconsistent filesystem directory page/);
+  const healthy = files.stat('src/a.ts');
+  assert.equal((await next()).payload.call, 'filesystem_stat');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'entry', with: { path: 'src/a.ts', directory: false, size: 1 },
+  } }));
+  assert.equal((await healthy).size, 1);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

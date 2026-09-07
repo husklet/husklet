@@ -1010,6 +1010,13 @@
           }
         },
         {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "next",
           "optional": true,
           "schema": {
@@ -10311,6 +10318,16 @@
                 }
               },
               {
+                "name": "observed",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
                 "name": "limit",
                 "optional": false,
                 "schema": {
@@ -11815,7 +11832,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:4937a3123291733a",
+  "source_fingerprint": "fnv1a64:5817bc5c597df42a",
   "specification_version": 1,
   "topics": [
     {

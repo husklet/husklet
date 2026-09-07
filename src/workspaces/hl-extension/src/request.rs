@@ -390,6 +390,7 @@ pub enum Request {
     FilesystemListPage {
         path: RelativePath,
         after: Option<RelativePath>,
+        observed: Option<String>,
         limit: usize,
     },
     FilesystemRead {

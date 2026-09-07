@@ -1142,10 +1142,20 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entries(port.list(path)?))
             }
-            Request::FilesystemListPage { path, after, limit } => {
-                if *limit == 0 || *limit > 256 {
+            Request::FilesystemListPage {
+                path,
+                after,
+                observed,
+                limit,
+            } => {
+                if *limit == 0 || *limit > 256 || observed.as_ref().is_some_and(|value| value.len() > 256) {
                     return Err(Failure::Failed {
-                        detail: "filesystem directory page limit must be 1..256".into(),
+                        detail: "filesystem directory page limit or observed identity exceeds bounds".into(),
+                    });
+                }
+                if after.is_some() != observed.is_some() {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory continuation requires both cursor and observed identity".into(),
                     });
                 }
                 if after.as_ref().is_some_and(|cursor| {
@@ -1163,7 +1173,12 @@ impl Session {
                     });
                 }
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
-                Ok(Reply::DirectoryPage(port.list_page(path, after.as_ref(), *limit)?))
+                Ok(Reply::DirectoryPage(port.list_page(
+                    path,
+                    after.as_ref(),
+                    observed.as_deref(),
+                    *limit,
+                )?))
             }
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;

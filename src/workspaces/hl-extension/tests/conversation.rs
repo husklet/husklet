@@ -11,7 +11,7 @@
 //! parentage against what the extension described, because a test that only
 //! checked for the absence of an error would pass on an empty tree.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerCreateSpec, ContainerInventory, ContainerSummary, ContainerVolumeMount, Division, Entry,
@@ -64,6 +64,7 @@ fn connected_pair() -> (Stream, Stream) {
 struct Host {
     tabs: RefCell<Vec<String>>,
     network_aliases: RefCell<Vec<String>>,
+    filesystem_pages: Cell<usize>,
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
@@ -78,6 +79,7 @@ impl Host {
         Self {
             tabs: RefCell::new(Vec::new()),
             network_aliases: RefCell::new(Vec::new()),
+            filesystem_pages: Cell::new(0),
         }
     }
 }
@@ -200,8 +202,10 @@ impl WorkspaceFiles for Host {
         &self,
         _path: &RelativePath,
         _after: Option<&RelativePath>,
+        _observed: Option<&str>,
         _limit: usize,
     ) -> Result<hl_extension::port::DirectoryPage, HostError> {
+        self.filesystem_pages.set(self.filesystem_pages.get() + 1);
         Ok(hl_extension::port::DirectoryPage {
             entries: vec![Entry {
                 path: RelativePath::new("src/b.ts").expect("path"),
@@ -209,6 +213,7 @@ impl WorkspaceFiles for Host {
                 size: 7,
                 identity: None,
             }],
+            identity: "directory-v1".into(),
             next: Some(RelativePath::new("src/b.ts").expect("path")),
             more: true,
         })
@@ -235,10 +240,35 @@ fn bounded_directory_cursor_crosses_the_real_socket() {
     let request = Request::FilesystemListPage {
         path: RelativePath::new("src").expect("path"),
         after: Some(RelativePath::new("src/a.ts").expect("cursor")),
+        observed: Some("directory-v1".into()),
         limit: 1,
     };
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
+    let invalid = Request::FilesystemListPage {
+        path: RelativePath::new("src").expect("path"),
+        after: Some(RelativePath::new("src/a.ts").expect("cursor")),
+        observed: None,
+        limit: 1,
+    };
+    sender
+        .send(&codec::request(&invalid).expect("invalid request"))
+        .expect("sent");
+    let frame = receiver.receive().expect("invalid frame");
+    let failure = session
+        .dispatch(
+            &codec::read_request(&frame).expect("invalid request decodes"),
+            &services(&host),
+        )
+        .expect_err("unbound continuation refused");
+    receiver
+        .send(&codec::failure(&failure).expect("failure frame"))
+        .expect("failure sent");
+    assert!(matches!(
+        codec::read_failure(&sender.receive().expect("failure reply")),
+        Ok(Failure::Failed { .. })
+    ));
+    assert_eq!(host.filesystem_pages.get(), 0, "bounds fail before filesystem access");
     sender.send(&codec::request(&request).expect("request")).expect("sent");
     let frame = receiver.receive().expect("request frame");
     let decoded = codec::read_request(&frame).expect("request decodes");
@@ -252,6 +282,7 @@ fn bounded_directory_cursor_crosses_the_real_socket() {
     };
     assert_eq!(page.next.expect("cursor").as_str(), "src/b.ts");
     assert!(page.more);
+    assert_eq!(host.filesystem_pages.get(), 1);
 }
 
 impl hl_extension::port::ExtensionStore for Host {}

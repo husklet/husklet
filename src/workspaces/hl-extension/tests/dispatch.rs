@@ -1432,6 +1432,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::FilesystemListPage {
                 path: path("logs"),
                 after: None,
+                observed: None,
                 limit: 2,
             },
             Capability::FilesystemRead,

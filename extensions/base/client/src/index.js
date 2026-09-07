@@ -744,10 +744,22 @@ export function workspace(session, { signal } = {}) {
     },
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
-      listPage: async (path, { after = null, limit = 256 } = {}) => expect(
-        await session.call('filesystem_list_page', { path, after, limit }),
-        'directory_page',
-      ),
+      listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
+        if ((after === null) !== (observed === null)) {
+          throw new TypeError('filesystem directory continuation requires both after and observed');
+        }
+        const page = expect(
+          await session.call('filesystem_list_page', { path, after, observed, limit }),
+          'directory_page',
+        );
+        if (!page.identity || new TextEncoder().encode(page.identity).byteLength > 256
+          || page.entries.length > limit
+          || (page.more && !page.next)
+          || (page.entries.length > 0 && page.next !== page.entries.at(-1).path)) {
+          throw new TypeError('host returned an inconsistent filesystem directory page');
+        }
+        return page;
+      },
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
       readRange: async (path, offset = 0, limit = 65536, observed = null) => expect(
         await session.call('filesystem_read_range', { path, offset, limit, observed }),
