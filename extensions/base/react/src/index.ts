@@ -1,7 +1,8 @@
 // The public API: connect to the host, render React into its tab.
 
 import { Session } from '@husklet/client';
-import type { ConnectOptions } from '@husklet/client';
+import type { ConnectOptions, Frame, SourceMutation, SurfaceBootstrap } from '@husklet/client';
+import type { ReactNode } from 'react';
 import { Surface, reconciler } from './reconciler.js';
 import { PROPS, TRIGGERS, sourceMutation } from './protocol.js';
 export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } from './protocol.js';
@@ -10,9 +11,8 @@ export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } fr
 // framework-neutral SDK, while this module's explicit `connect` export remains
 // the React-aware override.
 export * from '@husklet/client';
-// The renderer's Row, Column, and Entry components intentionally share names
-// with client model types; the generated public declaration disambiguates them.
-// @ts-expect-error TypeScript cannot represent overlapping star re-exports.
+// Explicit component exports resolve names also used by client model types.
+export { Row, Column, Entry } from './components.js';
 export * from './components.js';
 export * from './hooks.js';
 export * from './terminal-transcript.js';
@@ -21,7 +21,27 @@ export * from './json-tree.js';
 export * from './confirm-action.js';
 export * from './resource-state.js';
 
-const attached = new WeakMap();
+type RenderFrame = Parameters<ConstructorParameters<typeof Surface>[0]>[0];
+interface RenderOptions {
+  title?: string;
+  split?: { slot: string; division: 'beside' | 'below' } | null;
+  bootstrap?: SurfaceBootstrap | null;
+}
+interface RenderHandle {
+  surface: Surface;
+  ready: Promise<string>;
+  readonly slot: string | null;
+  update(next: ReactNode): void;
+  flush(): Promise<void>;
+  source(mutation: SourceMutation): Promise<void>;
+  close(): Promise<void>;
+}
+interface Registry {
+  handles: Set<RenderHandle>;
+  slots: Map<string, RenderHandle>;
+  routesEvents: boolean;
+}
+const attached = new WeakMap<Session, Registry>();
 const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 
@@ -62,10 +82,10 @@ export async function connect({
  * Returns a handle whose `update` re-renders and whose `close` tears down.
  */
 export function render(
-  element,
-  session,
-  { title = 'Extension', split = null, bootstrap = null } = {},
-) {
+  element: ReactNode,
+  session: Session,
+  { title = 'Extension', split = null, bootstrap = null }: RenderOptions = {},
+): RenderHandle {
   let registry = attached.get(session);
   if (!registry && bootstrap !== null) {
     registry = { handles: new Set(), slots: new Map(), routesEvents: false };
@@ -87,13 +107,13 @@ export function render(
   if (registry.handles.size >= SURFACE_LIMIT) {
     throw new RangeError(`extension surface limit of ${SURFACE_LIMIT} is exhausted`);
   }
-  const queued = [];
+  const queued: RenderFrame[] = [];
   let slot = bootstrap?.slot ?? null;
   let closed = false;
-  let failed = null;
-  let withdrawal = null;
-  const deliveries = new Set();
-  const transmit = (frame) => {
+  let failed: unknown = null;
+  let withdrawal: Promise<void> | null = null;
+  const deliveries = new Set<Promise<void>>();
+  const transmit = (frame: RenderFrame) => {
     if (closed || failed) return;
     if (slot === null) {
       if (queued.length >= FRAME_BUFFER_LIMIT) {
@@ -103,8 +123,8 @@ export function render(
       queued.push(frame);
       return;
     }
-    const delivery = (async () => {
-      const reply = await session.call('interface_render_at', { slot, frame });
+    const delivery: Promise<void> = (async () => {
+      const reply = await session.call('interface_render_at', { slot, frame: frame as Frame });
       if (reply?.reply !== 'done') {
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
       }
@@ -135,7 +155,7 @@ export function render(
           patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
         },
   );
-  const handle = { surface };
+  const handle = { surface } as RenderHandle;
   registry.handles.add(handle);
 
   const opening =
@@ -162,7 +182,7 @@ export function render(
       if (failed) throw failed;
       return slot;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       failed = error;
       registry.handles.delete(handle);
       if (slot !== null) registry.slots.delete(slot);
@@ -176,7 +196,7 @@ export function render(
   reconciler.updateContainer(element, container, null, null);
   Object.assign(handle, {
     ready,
-    update(next) {
+    update(next: ReactNode) {
       reconciler.updateContainer(next, container, null, null);
     },
     async flush() {
@@ -184,11 +204,11 @@ export function render(
       while (deliveries.size > 0) await Promise.all(deliveries);
       if (failed) throw failed;
     },
-    async source(mutation) {
+    async source(mutation: SourceMutation) {
       const owned = await ready;
       const reply = await session.call('source_resize_at', {
         slot: owned,
-        mutation: sourceMutation(mutation),
+        mutation: sourceMutation(mutation) as SourceMutation,
       });
       if (reply?.reply !== 'done')
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
@@ -222,12 +242,18 @@ export function render(
  * Returns whether it was an interface event at all, so anything else can go on
  * to the caller's own reply handler.
  */
-export function deliver(session, payload) {
+export function deliver(session: Session, payload: unknown): boolean {
   const event = interpret(payload);
   if (event === null) return false;
   const registry = attached.get(session);
   if (!registry) return false;
-  const slot = typeof payload?.slot === 'string' ? payload.slot : null;
+  const slot =
+    payload !== null &&
+    typeof payload === 'object' &&
+    'slot' in payload &&
+    typeof payload.slot === 'string'
+      ? payload.slot
+      : null;
   if (slot !== null) {
     return registry.slots.get(slot)?.surface.dispatch(event) ?? false;
   }
@@ -245,20 +271,33 @@ export function deliver(session, payload) {
  * TODO: narrow to the single spelling once the host side of `hl_gui::Event`
  * gains its wire derive; today only the identity and the trigger are certain.
  */
-function interpret(payload) {
+function interpret(
+  payload: unknown,
+): ({ id: string; [key: string]: unknown } & { value: unknown }) | null {
   if (!payload || typeof payload !== 'object') return null;
   if (
+    !('interaction' in payload) ||
     typeof payload.interaction !== 'string' ||
+    !('trigger' in payload) ||
     typeof payload.trigger !== 'string' ||
+    !('id' in payload) ||
     typeof payload.id !== 'string'
   )
     return null;
-  const wire = payload.value;
+  const wire = 'value' in payload ? payload.value : undefined;
   const value =
     wire && typeof wire === 'object'
-      ? (wire.Text ?? wire.Number ?? wire.Integer ?? wire.Flag ?? wire)
+      ? 'Text' in wire
+        ? wire.Text
+        : 'Number' in wire
+          ? wire.Number
+          : 'Integer' in wire
+            ? wire.Integer
+            : 'Flag' in wire
+              ? wire.Flag
+              : wire
       : (wire ?? null);
-  return { ...payload, value };
+  return { ...payload, id: payload.id, value };
 }
 
 /** Every prop and handler name a component accepts, for tooling and tests. */

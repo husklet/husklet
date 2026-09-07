@@ -1,4 +1,8 @@
 import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
+/** Environment variable naming the extension's authenticated Unix socket. */
+export declare const SOCKET: 'HUSKLET_EXTENSION_SOCKET';
+/** Current extension protocol version spoken by Session. */
+export declare const PROTOCOL: number;
 export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events' | 'filesystem';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo {

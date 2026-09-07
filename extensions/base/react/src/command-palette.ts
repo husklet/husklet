@@ -128,9 +128,10 @@ export function CommandPaletteView({
   };
   const groups = new Map<string, CommandPaletteItem[]>();
   for (const command of matches) {
-    const held = groups.get(command.group) ?? [];
+    const group = command.group ?? 'Commands';
+    const held = groups.get(group) ?? [];
     held.push(command);
-    groups.set(command.group, held);
+    groups.set(group, held);
   }
   return React.createElement(
     Column,

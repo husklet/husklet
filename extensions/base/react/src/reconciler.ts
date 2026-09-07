@@ -8,9 +8,9 @@ import Reconciler from 'react-reconciler';
 import { DefaultEventPriority } from 'react-reconciler/constants.js';
 import catalogue from '../catalogue.json' with { type: 'json' };
 import { ROOT, children, partition, same } from './protocol.js';
-
 type Patch = Record<string, unknown>;
 type Frame = { sequence: number; patches: Patch[] };
+
 type Handler = (...arguments_: unknown[]) => unknown;
 type SplitProps = ReturnType<typeof partition>;
 type HostProps = Record<string, unknown>;
