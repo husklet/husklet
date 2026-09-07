@@ -91,6 +91,7 @@ extern long checkpoint_link_source(long, long, long, long);
 extern long checkpoint_mixed_sse(long);
 extern long checkpoint_capacity_prefix(long);
 extern double checkpoint_far_movsd(void);
+extern long checkpoint_addr32_target(long);
 extern long checkpoint_addr32_call(long);
 extern long checkpoint_call_mem(long);
 extern uint32_t checkpoint_pand_memory(const unsigned char *, const unsigned char *);
@@ -166,6 +167,9 @@ __asm__(".text\n"
         "lea 42(%rdi),%rax\n"
         "ret\n"
         ".size checkpoint_addr32_target,.-checkpoint_addr32_target\n"
+        /* Keep caller and callee on distinct guest pages so an enabled direct-CALL
+         * cache probe is exercised across the invalidation unit on every restore. */
+        ".balign 4096\n"
         ".global checkpoint_addr32_call\n.type checkpoint_addr32_call,@function\n"
         "checkpoint_addr32_call:\n"
         ".byte 0x67,0xe8\n"
@@ -232,6 +236,7 @@ static long checkpoint_riprel_vector_store_check(int phase) {
 }
 
 static long checkpoint_addr32_call_check(int phase) {
+    if (((uintptr_t)checkpoint_addr32_target >> 12) == ((uintptr_t)checkpoint_addr32_call >> 12)) return -1;
     long value = 0;
     for (int iteration = 0; iteration < 256; ++iteration) value = checkpoint_addr32_call(phase);
     return value;

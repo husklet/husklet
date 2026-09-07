@@ -9,7 +9,7 @@ use hl_container::{
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 17] = [
+const SUPPORTED: [&str; 18] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -27,6 +27,7 @@ const SUPPORTED: [&str; 17] = [
     "HL_SECCOMP_BASELINE",
     "HL_ULIMITS",
     "HL_HOSTNAME",
+    "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
 const UNWIRED: [&str; 0] = [];
@@ -43,6 +44,7 @@ pub(crate) struct EngineOptions {
     memory_bytes: Option<u64>,
     process_count: Option<u32>,
     translation_cache: Option<PathBuf>,
+    direct_call_pre_spill: Option<bool>,
     seccomp_baseline: Option<SeccompBaseline>,
     limits: Vec<ResourceLimit>,
     hostname: Option<String>,
@@ -94,6 +96,7 @@ impl EngineOptions {
             "HL_HOSTNAME" if value.is_empty() => return Err("HL_HOSTNAME is empty".into()),
             "HL_HOSTNAME" => self.hostname = Some(value.to_owned()),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
+            "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL" => self.direct_call_pre_spill = Some(setting.flag()?),
             "HL_SECCOMP_BASELINE" => {
                 self.seccomp_baseline = Some(match value {
                     "container" => SeccompBaseline::Container,
@@ -143,6 +146,10 @@ impl EngineOptions {
 
     pub(crate) fn translation_cache(&self) -> Option<&std::path::Path> {
         self.translation_cache.as_deref()
+    }
+
+    pub(crate) const fn direct_call_pre_spill(&self) -> Option<bool> {
+        self.direct_call_pre_spill
     }
 
     pub(crate) const fn user(&self) -> Option<(i32, i32)> {
@@ -364,6 +371,17 @@ mod tests {
     #[test]
     fn a_malformed_flag_is_rejected() {
         assert!(EngineOptions::split(&entries(&[("HL_UNTRUSTED", "yes")])).is_err());
+        assert!(EngineOptions::split(&entries(&[("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "yes")])).is_err());
+    }
+
+    #[test]
+    fn direct_call_pre_spill_is_a_typed_engine_option() {
+        let (_, default) = EngineOptions::split(&entries(&[])).unwrap();
+        assert_eq!(default.direct_call_pre_spill(), None);
+        let (guest, options) =
+            EngineOptions::split(&entries(&[("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "1")])).unwrap();
+        assert!(guest.is_empty());
+        assert_eq!(options.direct_call_pre_spill(), Some(true));
     }
 
     #[test]

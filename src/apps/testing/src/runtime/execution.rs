@@ -111,6 +111,9 @@ async fn run_case_inner(
     if let Some(cache) = case.engine_options.translation_cache() {
         config = config.translation_cache(cache);
     }
+    if let Some(enabled) = case.engine_options.direct_call_pre_spill() {
+        config = config.direct_call_pre_spill(enabled);
+    }
     let containers = hl_container::Containers::builder(config)
         .images(fixture.images())
         .build()

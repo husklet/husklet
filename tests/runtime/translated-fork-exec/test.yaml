@@ -10,6 +10,7 @@ cases:
     compat: { class: compatibility }
     build: { source: vfork_exec.c, output: vfork-exec, flags: [-static-pie, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/vfork-exec }
+    environment: { HL_TRANSLIT_DIRECT_CALL_PRE_SPILL: "1" }
     run: []
     timeout: 120
     expect:
@@ -18,3 +19,4 @@ cases:
       stderr: [" r0=*", " fall_total=*"]
       diagnostics:
         - { counter: fork_authorized_hits, greater-than: 0 }
+        - { counter: direct_call_guard_candidate_enabled, equals: 1 }
