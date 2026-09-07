@@ -904,6 +904,30 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   assert.ok(labelled(stage, 'assistant recovered and verified.'));
 });
 
+test('installed extensions translate the host duty stage into a developer-facing state', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'top',
+              image_digest: 'sha256:top',
+              version: '0.4.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'enabled'));
+});
+
 test('overview never presents stale inventory counts as current during loading or failure', () => {
   const stale = [{ id: 'old', state: 'running' }];
   const stage = host();

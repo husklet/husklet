@@ -793,7 +793,8 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
 
 function extensionState(extension: ExtensionSummary): string {
   if (!extension.enabled) return 'disabled';
-  return extension.status.startsWith('fault:') ? 'faulted' : extension.status;
+  if (extension.status.startsWith('fault:')) return 'faulted';
+  return extension.status === 'duty' ? 'enabled' : extension.status;
 }
 
 function ExtensionFault({ extension }: { extension: ExtensionSummary }) {
