@@ -614,6 +614,14 @@ pub struct FileRange {
     pub truncated: bool,
 }
 
+/// A bounded, complete-or-explicitly-truncated view of every declared filesystem root.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileInventory {
+    pub entries: Vec<Entry>,
+    pub complete: bool,
+    pub coalesced: u64,
+}
+
 /// One installed extension and its durable lifecycle policy.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionSummary {
@@ -1122,6 +1130,11 @@ fn workspace_control_unavailable() -> HostError {
 
 /// Files beneath the extension's declared roots.
 pub trait WorkspaceFiles {
+    /// Recursively inventories only the roots declared by this extension.
+    fn inventory(&self, _roots: &[RelativePath]) -> Result<FileInventory, HostError> {
+        Err(HostError::Unsupported("filesystem observation is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError>;

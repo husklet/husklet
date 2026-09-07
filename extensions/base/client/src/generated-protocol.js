@@ -202,6 +202,11 @@ export const PROTOCOL_TOPICS = Object.freeze([
     "capability": "workspaces:events",
     "snapshot": "workspace_events",
     "wire": "workspace-events"
+  },
+  {
+    "capability": "filesystem:read",
+    "snapshot": "filesystem",
+    "wire": "filesystem"
   }
 ]);
 export const PROTOCOL_REPLIES = Object.freeze({
@@ -1638,6 +1643,41 @@ const definitions = {
             "kind": "ref",
             "name": "PaneProvider"
           }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileInventory": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "Entry"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "coalesced",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
         }
       }
     ],
@@ -5465,6 +5505,12 @@ const definitions = {
         "payload": {
           "kind": "unit"
         }
+      },
+      {
+        "name": "filesystem",
+        "payload": {
+          "kind": "unit"
+        }
       }
     ]
   },
@@ -9262,6 +9308,16 @@ const roots = {
           "of": {
             "kind": "ref",
             "name": "WorkspaceEventBatch"
+          }
+        }
+      },
+      {
+        "name": "filesystem",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "FileInventory"
           }
         }
       }

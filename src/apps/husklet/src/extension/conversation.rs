@@ -436,6 +436,11 @@ impl Conversation {
                 }
             }
         }
+        if self.may_observe(Topic::Filesystem) {
+            if let Ok(inventory) = services.files.inventory(self.session.authority().roots()) {
+                snapshots.push(Snapshot::Filesystem(inventory));
+            }
+        }
         for snapshot in snapshots {
             let topic = snapshot.topic();
             if topic != Topic::WorkspaceEvents
@@ -982,7 +987,7 @@ impl Conversation {
             return Ok(());
         };
         for message in self.outbox.drain(channel) {
-            let payload = if topic == Topic::PaneChanges && message.superseded > 0 {
+            let payload = if message.superseded > 0 {
                 match serde_json::from_slice::<Snapshot>(&message.payload) {
                     Ok(snapshot) => snapshot
                         .with_coalesced(message.superseded)

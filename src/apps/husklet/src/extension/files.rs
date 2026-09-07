@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use hl_extension::port::{Entry, FileRange, HostError, WorkspaceFiles};
+use hl_extension::port::{Entry, FileInventory, FileRange, HostError, WorkspaceFiles};
 use hl_extension::RelativePath;
 
 /// The workspace file port, rooted at one directory.
@@ -168,6 +168,38 @@ impl WorkspaceDirectory {
 }
 
 impl WorkspaceFiles for WorkspaceDirectory {
+    fn inventory(&self, roots: &[RelativePath]) -> Result<FileInventory, HostError> {
+        const LIMIT: usize = 256;
+        const PATH_BYTES_LIMIT: usize = 256 * 1024;
+        let mut pending = roots.to_vec();
+        pending.reverse();
+        let mut entries = std::collections::BTreeMap::new();
+        let mut path_bytes = 0usize;
+        let mut complete = true;
+        while let Some(path) = pending.pop() {
+            let entry = match self.stat(&path) {
+                Ok(entry) => entry,
+                Err(HostError::Absent(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            let directory = entry.directory;
+            let key = path.to_string();
+            if !entries.contains_key(&key) {
+                if entries.len() == LIMIT || path_bytes.saturating_add(key.len()) > PATH_BYTES_LIMIT {
+                    complete = false;
+                    break;
+                }
+                path_bytes += key.len();
+                entries.insert(key, entry);
+            }
+            if !directory { continue; }
+            let mut children = self.list(&path)?;
+            children.sort_by(|left, right| left.path.to_string().cmp(&right.path.to_string()));
+            for child in children.into_iter().rev() { pending.push(child.path); }
+        }
+        Ok(FileInventory { entries: entries.into_values().collect(), complete, coalesced: 0 })
+    }
+
     /// # Errors
     /// Returns `HostError::Absent` for a missing directory, `HostError::Conflict`
     /// for a path that resolves outside the root, and a failure otherwise.
@@ -960,6 +992,27 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".husklet-write-old-")
         }));
+    }
+
+    #[test]
+    fn inventory_recurses_only_declared_roots_and_reports_its_bound() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("source/nested")).expect("source");
+        std::fs::create_dir_all(root.join("private")).expect("private");
+        std::fs::write(root.join("source/main.ts"), b"main").expect("source file");
+        std::fs::write(root.join("source/nested/lib.ts"), b"lib").expect("nested file");
+        std::fs::write(root.join("private/key"), b"secret").expect("private file");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let inventory = files.inventory(&[path("source")]).expect("inventory");
+        assert!(inventory.complete);
+        assert_eq!(inventory.coalesced, 0);
+        assert_eq!(inventory.entries.iter().map(|entry| entry.path.to_string()).collect::<Vec<_>>(), ["source", "source/main.ts", "source/nested", "source/nested/lib.ts"]);
+        assert!(inventory.entries.iter().all(|entry| entry.identity.is_some()));
+        for index in 0..260 { std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file"); }
+        let bounded = files.inventory(&[path("source")]).expect("bounded inventory");
+        assert_eq!(bounded.entries.len(), 256);
+        assert!(!bounded.complete);
     }
 
     #[test]

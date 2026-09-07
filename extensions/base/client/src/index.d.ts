@@ -1,6 +1,6 @@
 import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
 
-export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events';
+export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events' | 'filesystem';
 export type Division = 'beside' | 'below';
 export interface WorkspaceInfo { name: string; architecture: string; image: string }
 export interface ExtensionPaneProvider { id: string; title: string; icon: string | null }
@@ -104,6 +104,7 @@ export type LayoutNode =
 export interface TabTopology { id: string; title: string; pinned: boolean; root: LayoutNode }
 export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
 export interface FileEntry { path: string; directory: boolean; size: number; identity?: string | null }
+export interface FileInventory { entries: FileEntry[]; complete: boolean; coalesced: number }
 export interface FileRange { path: string; identity: string; offset: number; total: number; contents: number[]; eof: boolean; truncated: boolean }
 export type WorkspaceEvent =
   | { event: 'key'; key: string; modifiers: string[]; pressed: boolean; slot?: string | null; generation?: number | null }
@@ -128,7 +129,8 @@ export type SnapshotEvent =
   | { snapshot: 'extensions'; of: ExtensionSummary[] }
   | { snapshot: 'extension_acquisitions'; of: ExtensionAcquisitionChange }
   | { snapshot: 'workspace_lifecycle'; of: WorkspaceLifecycleChange }
-  | { snapshot: 'workspace_events'; of: WorkspaceEventBatch };
+  | { snapshot: 'workspace_events'; of: WorkspaceEventBatch }
+  | { snapshot: 'filesystem'; of: FileInventory };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
 export function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
@@ -491,6 +493,7 @@ export interface WorkspaceApi {
   watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
   watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
+  watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
 
 export function requestCapability(call: string): string;

@@ -94,7 +94,7 @@ wrong caller.
 
 | Extension shape | Current fit | Relevant API and remaining constraint |
 | --- | --- | --- |
-| Code/embedding index | Partial | Bounded file listing, metadata, ranged reads, and exact manifest roots are sufficient for a deliberate scan. There is no filesystem-change topic yet, so an incremental indexer must rescan. |
+| Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, and rendered UI cover administration. Database credentials and SQL transport remain the extension's own concern. |
 | Container/process inspector | Strong | Container inventories, immutable IDs, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. Manifest grants are currently workspace-wide rather than restricted to one container. |

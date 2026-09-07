@@ -553,6 +553,7 @@ pub enum Topic {
     ExtensionAcquisitions,
     WorkspaceLifecycle,
     WorkspaceEvents,
+    Filesystem,
 }
 
 impl Topic {
@@ -574,6 +575,7 @@ impl Topic {
             Self::ExtensionAcquisitions => Capability::ExtensionInstall,
             Self::WorkspaceLifecycle => Capability::WorkspaceRead,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
+            Self::Filesystem => Capability::FilesystemRead,
         }
     }
 
@@ -591,6 +593,7 @@ impl Topic {
         Self::ExtensionAcquisitions,
         Self::WorkspaceLifecycle,
         Self::WorkspaceEvents,
+        Self::Filesystem,
     ];
 }
 

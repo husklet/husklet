@@ -348,7 +348,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
     'inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait',
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events', 'filesystem']);
   assert.ok(protocolCoverage.available.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
@@ -540,6 +540,24 @@ test('workspace input watcher uses its separate grant topic, returns credit, and
   assert.equal(batches[0].events[1].slot, 'pane-2');
   const stopping = stop();
   assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'workspace-events' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('filesystem watcher preserves bounded completeness and coalescing metadata', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = [];
+  const opening = api.watchFilesystem((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'filesystem' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4 };
+  stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'filesystem', of: inventory } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.deepEqual(seen, [inventory]);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'filesystem' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
