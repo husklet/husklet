@@ -731,6 +731,8 @@ static uint64_t translit_sse2_punpcklqdq_runs_admitted;
 static uint64_t translit_sse2_movd_admitted;
 static uint64_t translit_sse2_movd_runs_admitted;
 static uint64_t translit_sse2_movhlps_admitted;
+static uint64_t translit_sse2_mulss_admitted;
+static uint64_t translit_sse2_mulss_runs_admitted;
 static uint64_t translit_fs_mem_admitted;
 #if defined(HL_NATIVE_TEST_HOOKS)
 static const uint8_t *translit_fall_fixture_bytes;
@@ -747,6 +749,7 @@ static int translit_riprel_load_bridge_gate_test(void);
 static int translit_riprel_integer_corpus_test(void);
 static int translit_tzcnt_fixture_test(void);
 static int translit_simd_integer_fixture_test(void);
+static int translit_mulss_fixture_test(void);
 static int interp_step(struct cpu *, struct insn *, uint64_t, uint64_t);
 static int translit_fs_partial_spill_signal_test(void);
 static int translit_fs_load_bridge_fixture_test(unsigned scenario);
@@ -775,6 +778,9 @@ static uint64_t translit_fs_fixture_admitted;
 #define TRANSLIT_MOVD_PROFILE " sse2_movd_admitted=%llu sse2_movd_runs_admitted=%llu"
 #define TRANSLIT_MOVD_ARGUMENTS                                                                        \
     , (unsigned long long)sse2_movd_admitted, (unsigned long long)sse2_movd_runs_admitted
+#define TRANSLIT_MULSS_PROFILE " sse2_mulss_admitted=%llu sse2_mulss_runs_admitted=%llu"
+#define TRANSLIT_MULSS_ARGUMENTS                                                                       \
+    , (unsigned long long)sse2_mulss_admitted, (unsigned long long)sse2_mulss_runs_admitted
 #define TRANSLIT_FS_PROFILE " fs_mem_admitted=%llu fs_fixture_admitted=%llu"
 #define TRANSLIT_FS_ARGUMENTS                                                                         \
     , (unsigned long long)fs_mem_admitted, (unsigned long long)fs_fixture_admitted
@@ -809,6 +815,8 @@ static _Atomic uint32_t translit_unsupported_pause_stage, translit_unsupported_p
 #define TRANSLIT_PUNPCKLQDQ_ARGUMENTS
 #define TRANSLIT_MOVD_PROFILE ""
 #define TRANSLIT_MOVD_ARGUMENTS
+#define TRANSLIT_MULSS_PROFILE ""
+#define TRANSLIT_MULSS_ARGUMENTS
 #define TRANSLIT_FS_PROFILE ""
 #define TRANSLIT_FS_ARGUMENTS
 #endif
@@ -889,7 +897,8 @@ typedef struct translit_profile_execution_options {
 } translit_profile_execution_options;
 static translit_profile_execution_options translit_profile_options;
 typedef struct translit_hot_execution_options {
-    uint8_t jcc_ibtc_disabled, jcc_link_disabled, direct_jmp_ibtc_disabled, mixed_sse_disabled;
+    uint8_t jcc_ibtc_disabled, jcc_link_disabled, direct_jmp_ibtc_disabled, mixed_sse_disabled,
+        mulss_disabled;
 } translit_hot_execution_options;
 static translit_hot_execution_options translit_hot_options;
 
@@ -908,6 +917,8 @@ static void translit_profile_options_refresh(void) {
         (uint8_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0);
     translit_hot_options.mixed_sse_disabled =
         (uint8_t)hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
+    translit_hot_options.mulss_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_MULSS_DISABLE", 0);
     translit_profile_options.enabled =
         (g_prof || translit_profile_options.symbolize) && length != 0 &&
         length < sizeof translit_profile_options.directory;
@@ -1572,6 +1583,10 @@ static int translit_classify_two(const struct insn *insn) {
         // while translit_image_ok() proves no executable/shared alias observation is active.
         if (insn->rep && (op == 0x6F || (op == 0x7F && insn->is_mem))) return TL_SSE2;
         if (insn->rep && op == 0x2A) return TL_SSE2; // CVTSI2SS xmm,r/m32|64
+        // Legacy scalar MULSS changes only the low destination lane and MXCSR. Keep this first
+        // landing register-register: memory needs faultable-load retirement separate from the copied op.
+        if (insn->rep && op == 0x59 && insn->mod == 3 && !translit_hot_options.mulss_disabled)
+            return TL_SSE2;
         if (!insn->rep &&
             (op == 0x10 || op == 0x28 || ((op == 0x11 || op == 0x29) && insn->is_mem)))
             return TL_SSE2;
@@ -4117,7 +4132,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
-            {"HL_TRANSLIT_BODY_CAP_TEST", 0, 12},
+            {"HL_TRANSLIT_MULSS_DISABLE", 0, 12},
+            {"HL_TRANSLIT_BODY_CAP_TEST", 0, 13},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
             {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 10},
             {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 11},
@@ -5425,6 +5441,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 302) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_mulss_fixture_test());
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 218) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -5760,11 +5785,13 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
     uint64_t sse2_punpcklqdq_count = 0;
     uint64_t sse2_movd_count = 0;
     uint64_t sse2_movhlps_count = 0;
+    uint64_t sse2_mulss_count = 0;
     int sse2_next_family_seen = 0;
     int sse2_store_family_seen = 0;
     int sse2_pxor_seen = 0;
     int sse2_punpcklqdq_seen = 0;
     int sse2_movd_seen = 0;
+    int sse2_mulss_seen = 0;
     unsigned would_link_family = HL_BACKEND_WOULD_LINK_FAMILY_COUNT;
     uint64_t would_link_source = 0, would_link_target = 0;
     uint8_t *would_link_marker = NULL;
@@ -6089,7 +6116,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 // No XMM preload.
             } else if (sse2_store) {
                 translit_xmm_cpu(a, insn.reg, 1);
-            } else if (insn.op == 0x12 || insn.op == 0x62 || insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
+            } else if ((insn.rep && insn.op == 0x59) || insn.op == 0x12 || insn.op == 0x62 || insn.op == 0x6C || insn.op == 0xDB || insn.op == 0xDF || insn.op == 0xEB ||
                        insn.op == 0xEF) {
                 translit_xmm_cpu(a, insn.reg, 1);
                 if (!insn.is_mem && insn.rm_reg != insn.reg) translit_xmm_cpu(a, insn.rm_reg, 1);
@@ -6178,6 +6205,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             sse2_punpcklqdq_count += (uint64_t)(insn.op == 0x6C);
             sse2_movd_count += (uint64_t)(insn.op == 0x6E);
             sse2_movhlps_count += (uint64_t)(insn.op == 0x12);
+            sse2_mulss_count += (uint64_t)(insn.rep && insn.op == 0x59);
             if ((sse2_signature & UINT64_C(0xFFFFFF)) == UINT64_C(0x6F6FDF))
                 sse2_next_family_seen = 1;
             if ((sse2_signature & UINT64_C(0xFFFFFFFF)) == UINT64_C(0x6F11297F))
@@ -6185,6 +6213,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (insn.op == 0xEF) sse2_pxor_seen = 1;
             if (insn.op == 0x6C) sse2_punpcklqdq_seen = 1;
             if (insn.op == 0x6E) sse2_movd_seen = 1;
+            if (insn.rep && insn.op == 0x59) sse2_mulss_seen = 1;
 #endif
             continue;
         }
@@ -6814,6 +6843,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             (void)__atomic_fetch_add(&translit_sse2_punpcklqdq_runs_admitted, 1, __ATOMIC_RELAXED);
         (void)__atomic_fetch_add(&translit_sse2_movd_admitted, sse2_movd_count, __ATOMIC_RELAXED);
         if (sse2_movd_seen) (void)__atomic_fetch_add(&translit_sse2_movd_runs_admitted, 1, __ATOMIC_RELAXED);
+        (void)__atomic_fetch_add(&translit_sse2_mulss_admitted, sse2_mulss_count, __ATOMIC_RELAXED);
+        if (sse2_mulss_seen)
+            (void)__atomic_fetch_add(&translit_sse2_mulss_runs_admitted, 1, __ATOMIC_RELAXED);
     }
     if (fs_run) {
         (void)__atomic_fetch_add(&translit_fs_mem_admitted, 1, __ATOMIC_RELAXED);
@@ -6924,6 +6956,20 @@ static void translit_simd_native(unsigned family, unsigned width, unsigned contr
             __asm__ volatile("pshufd $0x1b,%0,%0" : "+x"(value));
     }
     memcpy(output, &value, 16);
+}
+
+static uint64_t translit_mulss_native(const uint64_t destination[2], const uint64_t source[2],
+                                      uint64_t input_flags, uint64_t output[2]) {
+    __m128 lhs, rhs;
+    uint64_t captured;
+    memcpy(&lhs, destination, sizeof lhs);
+    memcpy(&rhs, source, sizeof rhs);
+    __asm__ volatile("push %3\n\tpopfq\n\tmulss %2,%1\n\tpushfq\n\tpop %0"
+                     : "=&r"(captured), "+x"(lhs)
+                     : "x"(rhs), "r"(input_flags)
+                     : "cc", "memory");
+    memcpy(output, &lhs, sizeof lhs);
+    return captured;
 }
 
 static int translit_simd_integer_fixture_test(void) {
@@ -7077,6 +7123,226 @@ static int translit_simd_integer_fixture_test(void) {
     if (context != NULL) hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen); g_cache = saved_cache; g_cp = saved_cp;
     g_rw2rx = saved_rw2rx; g_cache_gen = saved_generation; munmap(arena, size); munmap(guest, size);
+    return result;
+}
+
+static int translit_mulss_fixture_test(void) {
+    static const struct {
+        uint32_t left, right, mxcsr;
+    } cases[] = {
+        {UINT32_C(0x3fc00000), UINT32_C(0x40100000), UINT32_C(0x1fa0)}, // 1.5 * 2.25; sticky PE retained
+        {UINT32_C(0x00000000), UINT32_C(0xff800000), UINT32_C(0x1f80)}, // +0 * -inf -> invalid qNaN
+        {UINT32_C(0x7f812345), UINT32_C(0x3f800000), UINT32_C(0x1f80)}, // signalling NaN + payload
+        {UINT32_C(0x7fc54321), UINT32_C(0xbf800000), UINT32_C(0x5f80)}, // quiet NaN, round-up mode
+        {UINT32_C(0x00000001), UINT32_C(0x40000000), UINT32_C(0x1f80)}, // denormal input, DAZ clear
+        {UINT32_C(0x00000001), UINT32_C(0x40000000), UINT32_C(0x1fc0)}, // same input, DAZ set
+        {UINT32_C(0x7f7fffff), UINT32_C(0x40000000), UINT32_C(0x3f80)}, // overflow, round-down
+        {UINT32_C(0x00800000), UINT32_C(0x3f000000), UINT32_C(0x9f80)}, // underflow with FTZ
+    };
+    static const uint8_t instruction[] = {0xf3, 0x45, 0x0f, 0x59, 0xca}; // mulss xmm9,xmm10
+    static const uint8_t refused[][8] = {
+        {0xf3,0x45,0x0f,0x59,0x08},       // memory source
+        {0x45,0x0f,0x59,0xca},            // MULPS, no mandatory F3
+        {0xf2,0x45,0x0f,0x59,0xca},       // MULSD
+        {0x66,0x45,0x0f,0x59,0xca},       // MULPD
+        {0xf0,0xf3,0x45,0x0f,0x59,0xca},  // LOCK
+        {0x67,0xf3,0x45,0x0f,0x59,0xca},  // address-size override
+        {0x64,0xf3,0x45,0x0f,0x59,0xca},  // FS override
+        {0xc4,0x41,0x32,0x59,0xca},       // VEX VMULSS
+    };
+    static const uint8_t refused_length[] = {5,4,5,5,6,6,6,5};
+    const size_t size = 8192, source_offset = 128;
+    uint8_t *arena = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guest = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (arena == MAP_FAILED || guest == MAP_FAILED) {
+        if (arena != MAP_FAILED) munmap(arena, size);
+        if (guest != MAP_FAILED) munmap(guest, size);
+        return 302;
+    }
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    ptrdiff_t saved_rw2rx = g_rw2rx;
+    uint64_t saved_generation = g_cache_gen;
+    const uint8_t *saved_fixture_bytes = translit_fall_fixture_bytes;
+    uint64_t saved_fixture_guest = translit_fall_fixture_guest;
+    size_t saved_fixture_length = translit_fall_fixture_length;
+    int saved_selected = translit_selected;
+    uint8_t saved_mulss_disabled = translit_hot_options.mulss_disabled;
+    unsigned saved_mxcsr = _mm_getcsr();
+    int result = 0;
+    g_cache = arena;
+    g_rw2rx = 0;
+    translit_fall_fixture_bytes = guest;
+    translit_fall_fixture_guest = (uint64_t)(uintptr_t)guest;
+    translit_fall_fixture_length = size;
+    translit_selected = 1;
+    hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
+    if (context == NULL) result = 303;
+    const uint64_t upper = UINT64_C(0xfedcba9876543210);
+    const uint64_t source_upper = UINT64_C(0x8899aabbccddeeff);
+    const uint64_t input_flags = UINT64_C(0x8d7);
+    const uint64_t checked_flags = UINT64_C(0x8d5);
+    for (unsigned index = 0; result == 0 && index < sizeof cases / sizeof cases[0]; ++index) {
+        uint8_t *code = guest + source_offset;
+        memcpy(code, instruction, sizeof instruction);
+        code[sizeof instruction] = 0x0f;
+        code[sizeof instruction + 1] = 0x0b;
+        uint64_t source_pc = (uint64_t)(uintptr_t)code;
+        struct insn decoded;
+        if (hl_x86_decode_context(context, source_pc, &decoded) != (int)sizeof instruction ||
+            translit_classify(&decoded) != TL_SSE2) {
+            result = 304;
+            break;
+        }
+        uint64_t destination[2] = {(uint64_t)cases[index].left | UINT64_C(0x1122334400000000), upper};
+        uint64_t rhs[2] = {(uint64_t)cases[index].right | UINT64_C(0xaabbccdd00000000), source_upper};
+        uint64_t expected[2];
+        _mm_setcsr(cases[index].mxcsr);
+        uint64_t native_flags = translit_mulss_native(destination, rhs, input_flags, expected);
+        unsigned native_mxcsr = _mm_getcsr();
+
+        struct cpu interpreted = {0};
+        interpreted.rip = source_pc;
+        memcpy(&interpreted.v[18], destination, 16);
+        memcpy(&interpreted.v[20], rhs, 16);
+        translit_flags_out(&interpreted, input_flags);
+        _mm_setcsr(cases[index].mxcsr);
+        (void)interp_step(&interpreted, &decoded, source_pc, source_pc + sizeof instruction);
+        unsigned interpreter_mxcsr = _mm_getcsr();
+
+        memset(arena, 0, size);
+        g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0xa00 - index;
+        map_clear();
+        struct interp_block *block = (struct interp_block *)arena;
+        uint64_t admitted_before = translit_sse2_mulss_admitted;
+        uint64_t runs_before = translit_sse2_mulss_runs_admitted;
+        void *body = translit_build(context, block, source_pc, NULL);
+        block->magic = INTERP_BLOCK_MAGIC;
+        block->gpc = source_pc;
+        struct cpu candidate = {0};
+        candidate.rip = source_pc;
+        memcpy(&candidate.v[18], destination, 16);
+        memcpy(&candidate.v[20], rhs, 16);
+        translit_flags_out(&candidate, input_flags);
+        _mm_setcsr(cases[index].mxcsr);
+        if (body != NULL) run_block(context, &candidate, block);
+        unsigned candidate_mxcsr = _mm_getcsr();
+        if (body == NULL || block->profile_insns != 1 ||
+            translit_sse2_mulss_admitted != admitted_before + 1 ||
+            translit_sse2_mulss_runs_admitted != runs_before + 1 ||
+            memcmp(&candidate.v[18], expected, 16) != 0 ||
+            memcmp(&interpreted.v[18], expected, 16) != 0 ||
+            memcmp(&candidate.v[20], rhs, 16) != 0 || memcmp(&interpreted.v[20], rhs, 16) != 0 ||
+            candidate_mxcsr != native_mxcsr || interpreter_mxcsr != native_mxcsr ||
+            (translit_flags_in(&candidate) & checked_flags) != (native_flags & checked_flags) ||
+            (translit_flags_in(&interpreted) & checked_flags) != (native_flags & checked_flags)) {
+            result = 310 + (int)index;
+            break;
+        }
+        for (unsigned reg = 0; result == 0 && reg < 16; ++reg)
+            if (candidate.r[reg] != interpreted.r[reg]) result = 320 + (int)index;
+
+        // A checkpoint kick is observed at the descriptor boundary. The scalar operation must either
+        // be wholly canonical before that boundary or be replayable from the source RIP; never expose
+        // a low lane without the matching MXCSR sticky flags and preserved upper lanes.
+        struct cpu kicked = {0};
+        kicked.rip = source_pc;
+        kicked.irq = 1;
+        memcpy(&kicked.v[18], destination, 16);
+        memcpy(&kicked.v[20], rhs, 16);
+        translit_flags_out(&kicked, input_flags);
+        _mm_setcsr(cases[index].mxcsr);
+        run_block(context, &kicked, block);
+        unsigned kicked_mxcsr = _mm_getcsr();
+        if (kicked.rip != source_pc + sizeof instruction || kicked.irq != 1 ||
+            memcmp(&kicked.v[18], expected, 16) != 0 || memcmp(&kicked.v[20], rhs, 16) != 0 ||
+            kicked_mxcsr != native_mxcsr)
+            result = 330 + (int)index;
+
+        // Every byte through the destination commit retains source provenance. A signal there sees the
+        // old canonical cpu->v and restarts MULSS; it cannot checkpoint a half-retired vector operation.
+        uint8_t *emitted = NULL;
+        for (uint8_t *probe = (uint8_t *)body; probe + sizeof instruction <= g_cp; ++probe)
+            if (memcmp(probe, instruction, sizeof instruction) == 0) { emitted = probe; break; }
+        for (unsigned byte = 0; result == 0 && emitted != NULL && byte < sizeof instruction; ++byte) {
+            struct cpu interrupted = {0};
+            memcpy(&interrupted.v[18], destination, 16);
+            ucontext_t native = {0};
+            HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)(emitted + byte);
+            HL_HOST_UC_GREGS(&native)[HL_HOST_UC_REG_EFL] = (greg_t)input_flags;
+            if (!translit_signal_capture(&interrupted, &native) || interrupted.rip != source_pc ||
+                memcmp(&interrupted.v[18], destination, 16) != 0)
+                result = 340 + (int)index;
+        }
+        if (emitted == NULL) result = 350 + (int)index;
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+    }
+
+    // The launch-scoped kill switch is the same-binary benchmark control. Prove it restores the
+    // interpreter boundary without incrementing either admission counter.
+    if (result == 0) {
+        uint8_t *code = guest + source_offset;
+        memcpy(code, instruction, sizeof instruction);
+        code[sizeof instruction] = 0x0f;
+        code[sizeof instruction + 1] = 0x0b;
+        struct insn decoded;
+        uint64_t admitted_before = translit_sse2_mulss_admitted;
+        uint64_t runs_before = translit_sse2_mulss_runs_admitted;
+        translit_hot_options.mulss_disabled = 1;
+        int length = hl_x86_decode_context(context, (uint64_t)(uintptr_t)code, &decoded);
+        memset(arena, 0, size);
+        g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0xb20;
+        map_clear();
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = length > 0 ? translit_build(context, block, (uint64_t)(uintptr_t)code, NULL) : NULL;
+        if (length != (int)sizeof instruction || translit_classify(&decoded) == TL_SSE2 || body != NULL ||
+            translit_sse2_mulss_admitted != admitted_before ||
+            translit_sse2_mulss_runs_admitted != runs_before)
+            result = 359;
+        translit_hot_options.mulss_disabled = saved_mulss_disabled;
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+    }
+
+    for (unsigned index = 0; result == 0 && index < sizeof refused / sizeof refused[0]; ++index) {
+        uint8_t *code = guest + source_offset;
+        memcpy(code, refused[index], refused_length[index]);
+        code[refused_length[index]] = 0x0f;
+        code[refused_length[index] + 1] = 0x0b;
+        struct insn decoded;
+        int length = hl_x86_decode_context(context, (uint64_t)(uintptr_t)code, &decoded);
+        uint64_t admitted_before = translit_sse2_mulss_admitted;
+        memset(arena, 0, size);
+        g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0xb00 - index;
+        map_clear();
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = length > 0 ? translit_build(context, block, (uint64_t)(uintptr_t)code, NULL) : NULL;
+        if (length <= 0 || translit_classify(&decoded) == TL_SSE2 || body != NULL ||
+            translit_sse2_mulss_admitted != admitted_before)
+            result = 360 + (int)index;
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+    }
+
+    _mm_setcsr(saved_mxcsr);
+    translit_hot_options.mulss_disabled = saved_mulss_disabled;
+    translit_selected = saved_selected;
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    translit_fall_fixture_bytes = saved_fixture_bytes;
+    translit_fall_fixture_guest = saved_fixture_guest;
+    translit_fall_fixture_length = saved_fixture_length;
+    jit_body_owner_drop_generation(g_cache_gen);
+    g_cache = saved_cache;
+    g_cp = saved_cp;
+    g_rw2rx = saved_rw2rx;
+    g_cache_gen = saved_generation;
+    munmap(arena, size);
+    munmap(guest, size);
     return result;
 }
 
@@ -11090,6 +11356,9 @@ static int translit_report(char *out, size_t size) {
     uint64_t sse2_movd_admitted = __atomic_load_n(&translit_sse2_movd_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movd_runs_admitted = __atomic_load_n(&translit_sse2_movd_runs_admitted, __ATOMIC_RELAXED);
     uint64_t sse2_movhlps_admitted = __atomic_load_n(&translit_sse2_movhlps_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_mulss_admitted = __atomic_load_n(&translit_sse2_mulss_admitted, __ATOMIC_RELAXED);
+    uint64_t sse2_mulss_runs_admitted =
+        __atomic_load_n(&translit_sse2_mulss_runs_admitted, __ATOMIC_RELAXED);
     uint64_t fs_mem_admitted = __atomic_load_n(&translit_fs_mem_admitted, __ATOMIC_RELAXED);
     uint64_t fs_fixture_admitted = __atomic_load_n(&translit_fs_fixture_admitted, __ATOMIC_RELAXED);
 #else
@@ -11234,6 +11503,7 @@ static int translit_report(char *out, size_t size) {
                     " sse2_pxor_admitted=%llu sse2_pxor_runs_admitted=%llu"
                     TRANSLIT_PUNPCKLQDQ_PROFILE
                     TRANSLIT_MOVD_PROFILE
+                    TRANSLIT_MULSS_PROFILE
                     TRANSLIT_FS_PROFILE
                     TRANSLIT_FS_BRIDGE_PROFILE
                     " riprel_lowered=%llu scratch_lowered=%llu lea_lowered=%llu abs32_lowered=%llu"
@@ -11267,7 +11537,8 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)sse2_store_movdqu,
                     (unsigned long long)sse2_store_family_runs,
                     (unsigned long long)sse2_pxor_admitted, (unsigned long long)sse2_pxor_runs_admitted
-                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS TRANSLIT_FS_ARGUMENTS
+                        TRANSLIT_PUNPCKLQDQ_ARGUMENTS TRANSLIT_MOVD_ARGUMENTS TRANSLIT_MULSS_ARGUMENTS
+                            TRANSLIT_FS_ARGUMENTS
                             TRANSLIT_FS_BRIDGE_ARGUMENTS,
                     (unsigned long long)displaced_riprel_lowered,
                     (unsigned long long)displaced_scratch_lowered,
