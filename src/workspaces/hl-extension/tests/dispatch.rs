@@ -285,6 +285,7 @@ impl ContainerControl for Host {
         _expected_id: &str,
         _generation: u64,
         _command: &[String],
+        _environment: &[(String, hl_extension::ExecEnvironmentValue)],
         _user: Option<&str>,
         _working_directory: Option<&str>,
     ) -> Result<String, HostError> {
@@ -1134,6 +1135,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ContainerExec {
+                environment: Vec::new(),
                 id: "c".repeat(64),
                 generation: 4,
                 command: vec!["worker".into()],
@@ -2518,6 +2520,7 @@ fn holding_read_never_permits_the_matching_write() {
     assert!(session
         .dispatch(
             &Request::ContainerExec {
+                environment: Vec::new(),
                 id: "c1".into(),
                 generation: 4,
                 command: vec!["sh".into()],
@@ -2708,6 +2711,7 @@ fn container_exec_returns_the_real_execution_identity() {
     let immutable = "c".repeat(64);
     let refused = session.dispatch(
         &Request::ContainerExec {
+            environment: Vec::new(),
             id: "worker".into(),
             generation: 4,
             command: vec!["worker".into()],
@@ -2729,6 +2733,7 @@ fn container_exec_returns_the_real_execution_identity() {
     let reply = session
         .dispatch(
             &Request::ContainerExec {
+                environment: Vec::new(),
                 id: immutable,
                 generation: 4,
                 command: vec!["worker".into()],
@@ -2740,6 +2745,84 @@ fn container_exec_returns_the_real_execution_identity() {
         .expect("exec starts");
     assert_eq!(reply, Reply::Identity("e1".into()));
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
+}
+
+#[test]
+fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &[]);
+    let id = "c".repeat(64);
+    let secret = "sentinel-password-never-observable";
+    let request = Request::ContainerExec {
+        id,
+        generation: 4,
+        command: vec!["psql".into()],
+        environment: vec![
+            ("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new(secret)),
+            (
+                "PGPASSWORD".into(),
+                hl_extension::ExecEnvironmentValue::new("duplicate"),
+            ),
+        ],
+        user: None,
+        working_directory: None,
+    };
+    assert!(!format!("{request:?}").contains(secret));
+    let failure = session
+        .dispatch(&request, &services(&host))
+        .expect_err("duplicate refused");
+    assert!(matches!(failure, Failure::Conflict { .. }));
+    assert!(!format!("{failure:?}").contains(secret));
+    assert!(
+        host.ledger.reached().is_empty(),
+        "invalid environment reached container inventory or control"
+    );
+
+    for environment in [
+        vec![("BAD=NAME".into(), hl_extension::ExecEnvironmentValue::new("x"))],
+        vec![(
+            "PGPASSWORD".into(),
+            hl_extension::ExecEnvironmentValue::new("x".repeat(8193)),
+        )],
+        (0..9)
+            .map(|index| {
+                (
+                    format!("V{index}"),
+                    hl_extension::ExecEnvironmentValue::new("x".repeat(8192)),
+                )
+            })
+            .collect(),
+    ] {
+        let request = Request::ContainerExec {
+            id: "c".repeat(64),
+            generation: 4,
+            command: vec!["psql".into()],
+            environment,
+            user: None,
+            working_directory: None,
+        };
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+
+    let reply = session
+        .dispatch(
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["psql".into()],
+                environment: vec![("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new(secret))],
+                user: None,
+                working_directory: None,
+            },
+            &services(&host),
+        )
+        .expect("valid environment reaches exec");
+    assert_eq!(reply, Reply::Identity("e1".into()));
+    assert!(!format!("{reply:?}").contains(secret));
 }
 
 #[test]

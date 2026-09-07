@@ -201,6 +201,30 @@ function exactCommand(command) {
   return command;
 }
 
+function exactExecEnvironment(environment = []) {
+  if (!Array.isArray(environment) || environment.length > 256) {
+    throw new TypeError('environment must contain at most 256 [name, value] pairs');
+  }
+  const encoder = new TextEncoder();
+  let aggregate = 0;
+  const names = new Set();
+  for (const pair of environment) {
+    if (!Array.isArray(pair) || pair.length !== 2 || pair.some((value) => typeof value !== 'string')) {
+      throw new TypeError('environment entries must be [name, value] string pairs');
+    }
+    const [name, value] = pair;
+    const nameBytes = encoder.encode(name).byteLength;
+    const valueBytes = encoder.encode(value).byteLength;
+    aggregate += nameBytes + valueBytes;
+    if (!name || nameBytes > 256 || name.includes('=') || name.includes('\0') || valueBytes > 8192 || value.includes('\0') || names.has(name)) {
+      throw new TypeError('environment names must be unique, nonempty, NUL-free, exclude =, and fit 256 bytes; values must be NUL-free and fit 8192 bytes');
+    }
+    names.add(name);
+  }
+  if (aggregate > 65536) throw new RangeError('environment exceeds 65536 UTF-8 bytes');
+  return environment;
+}
+
 function containerMutation(reference, generation) {
   if (typeof reference !== 'string' || reference.length === 0 || reference.length > 128 || reference.includes('\0')) {
     throw new TypeError('container mutation requires a nonempty NUL-free reference of at most 128 characters');
@@ -451,17 +475,18 @@ export function workspace(session, { signal } = {}) {
         ...containerMutation(id, generation), name: exactContainerName(name),
       }),
       kill: (id, generation, signal) => done('container_kill', { ...containerMutation(id, generation), signal }),
-      exec: async (id, generation, { command, user, workingDirectory } = {}) => expect(
+      exec: async (id, generation, { command, environment = [], user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
           ...containerMutation(id, generation), command,
+          environment: exactExecEnvironment(environment),
           user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
-      execAndWait: async (id, generation, { command, user, workingDirectory, ...waitOptions } = {}) => {
+      execAndWait: async (id, generation, { command, environment = [], user, workingDirectory, ...waitOptions } = {}) => {
         const containerId = immutableIdentity(id, [32, 64], 'container');
         const argv = exactCommand(command);
         const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
-        const executionId = await api.containers.exec(containerId, generation, { command: argv, user, workingDirectory });
+        const executionId = await api.containers.exec(containerId, generation, { command: argv, environment, user, workingDirectory });
         let phase = 'wait';
         let execution;
         try {

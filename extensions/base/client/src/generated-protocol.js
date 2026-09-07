@@ -1360,6 +1360,15 @@ const definitions = {
     },
     "serde": {}
   },
+  "ExecEnvironmentValue": {
+    "kind": "newtype",
+    "of": {
+      "kind": "string"
+    },
+    "serde": {
+      "transparent": true
+    }
+  },
   "ExecutionList": {
     "fields": [
       {
@@ -7909,6 +7918,25 @@ const roots = {
                 "kind": "array",
                 "of": {
                   "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "environment",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "items": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "ExecEnvironmentValue"
+                    }
+                  ],
+                  "kind": "tuple"
                 }
               }
             },

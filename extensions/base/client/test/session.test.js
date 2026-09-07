@@ -2913,6 +2913,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
             id: containerId,
             generation: 4,
             command: ['printf', 'ok'],
+            environment: [],
             user: 'root',
             working_directory: '/tmp',
           });

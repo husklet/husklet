@@ -1070,6 +1070,15 @@
       },
       "serde": {}
     },
+    "ExecEnvironmentValue": {
+      "kind": "newtype",
+      "of": {
+        "kind": "string"
+      },
+      "serde": {
+        "transparent": true
+      }
+    },
     "ExecutionList": {
       "fields": [
         {
@@ -8535,6 +8544,25 @@
                 }
               },
               {
+                "name": "environment",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "items": [
+                      {
+                        "kind": "string"
+                      },
+                      {
+                        "kind": "ref",
+                        "name": "ExecEnvironmentValue"
+                      }
+                    ],
+                    "kind": "tuple"
+                  }
+                }
+              },
+              {
                 "name": "user",
                 "optional": true,
                 "schema": {
@@ -11080,7 +11108,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:805f214b5013ac95",
+  "source_fingerprint": "fnv1a64:bbc0df4fc9c05829",
   "specification_version": 1,
   "topics": [
     {
