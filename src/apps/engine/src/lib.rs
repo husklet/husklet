@@ -194,7 +194,11 @@ fn parse_native_test_option(value: &str) -> Result<NativeTestOption, String> {
             value: "1",
         }),
         _ if !value.contains('=') => Err("native test options use KEY=VALUE syntax".to_owned()),
-        _ => Err("unsupported native test option; expected HL_TRANSLIT_FS_AUTHORITY_TEST=1".to_owned()),
+        _ => Err(
+            "unsupported native test option; expected one of HL_TRANSLIT_FS_AUTHORITY_TEST=1, \
+             HL_TRANSLIT_SYMBOL_RECEIPT=1, or HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=1"
+                .to_owned(),
+        ),
     }
 }
 
@@ -1560,6 +1564,25 @@ mod tests {
         .unwrap();
         assert_eq!(plan.options.get("HL_TRANSLIT_FS_AUTHORITY_TEST"), Some("1"));
 
+        let guard_off = rootfs_plan(
+            std::path::Path::new(root),
+            &launch(&["--rootfs", root, "bin/program"]),
+        )
+        .unwrap();
+        assert_eq!(guard_off.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST"), None);
+        let guard_on = rootfs_plan(
+            std::path::Path::new(root),
+            &launch(&[
+                "--native-test-option",
+                "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=1",
+                "--rootfs",
+                root,
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(guard_on.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST"), Some("1"));
+
         let duplicate = rootfs_plan(
             std::path::Path::new(root),
             &launch(&[
@@ -1577,6 +1600,31 @@ mod tests {
             reason(&duplicate),
             "native test option HL_TRANSLIT_FS_AUTHORITY_TEST may be specified only once"
         );
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn native_test_option_parser_admits_only_exact_allowlisted_values() {
+        assert_eq!(
+            parse_native_test_option("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=1"),
+            Ok(NativeTestOption {
+                name: "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST",
+                value: "1",
+            })
+        );
+        assert_eq!(
+            parse_native_test_option("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST").unwrap_err(),
+            "native test options use KEY=VALUE syntax"
+        );
+        let expected = "unsupported native test option; expected one of HL_TRANSLIT_FS_AUTHORITY_TEST=1, \
+                        HL_TRANSLIT_SYMBOL_RECEIPT=1, or HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=1";
+        for refused in [
+            "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=0",
+            "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=2",
+            "HL_TRANSLIT_DIRECT_CALL_PRE_SPIL_TEST=1",
+        ] {
+            assert_eq!(parse_native_test_option(refused).unwrap_err(), expected);
+        }
     }
 
     #[cfg(all(unix, feature = "native-test-hooks"))]
