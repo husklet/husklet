@@ -62,3 +62,10 @@ cases:
       diagnostics:
         - { record: "[diag] backend-tree", count: 1, fields: { crossings: "125002", translated_steps: "4000011", interpreted_steps: "0", translated_entries: "125002", translations: "4" } }
         - { record: "[diag] backend-shape-detail", count: 1, fields: { translated_entries: "125002", t_cond_taken: "124999", t_cond_not_taken: "2", t_syscall: "1", stitch_jmp: "0", stitch_cond_fall: "0", e_jmp_chained: "0", e_jt_chained: "0" } }
+  - id: runtime/aarch64-dbt/smc-targeted
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/smc_targeted.c, output: smc-targeted, flags: [-static, -no-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/smc-targeted }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_targeted.out }
