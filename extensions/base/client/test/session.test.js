@@ -872,6 +872,41 @@ test('real Unix control frames ping both directions and close every pending oper
   }
 });
 
+test('a matching pong outside the control channel cannot complete a heartbeat', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pong-channel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let connected;
+  const server = net.createServer((socket) => {
+    connected = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.ping) {
+          socket.write(encode({ channel: 17, kind: KIND.pong, payload: frame.payload }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'pong_channel', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath, timeout: 200 });
+    await assert.rejects(session.ping(), /pong arrived outside the control channel/);
+    await assert.rejects(session.ping(), /session is closed/);
+    await session.close();
+  } finally {
+    connected?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix partial EOF and illegal headers fail closed without sending credit', async () => {
   for (const malformed of ['partial', 'flags']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-malformed-'));
