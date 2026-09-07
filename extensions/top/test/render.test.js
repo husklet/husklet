@@ -840,6 +840,11 @@ test('terminal management exposes exact pin state and acts through immutable tab
       resource,
     }),
   );
+  assert.equal(placeholderProperty(stage, 'New tab title', 'Grow')?.Number, 0);
+  assert.ok(
+    placeholderProperty(stage, 'New tab title', 'Width'),
+    'tab creation stays compact instead of consuming the page height',
+  );
   assert.ok(labelled(stage, 'Unpinned'));
   assert.ok(labelled(stage, 's4 · terminal'));
   invoke(stage, 'Pin Build');

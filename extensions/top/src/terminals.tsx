@@ -424,7 +424,8 @@ export function Terminals({
         <Entry
           value={newTabTitle}
           placeholder="New tab title"
-          grow
+          grow={false}
+          width={{ minimum: { chars: 24 }, maximum: { chars: 48 } }}
           enabled={busy === ''}
           onChange={(event) => setNewTabTitle(String(event.value ?? ''))}
           onSubmit={() => {
