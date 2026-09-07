@@ -295,12 +295,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           </CardContent>
           {acquisition?.candidate && (
             <CardContent gap={1}>
+              <Heading label="Review permissions" scale="caption" />
               <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
               <Text
                 label={compactDigest(acquisition.candidate.image_digest)}
                 tooltip={acquisition.candidate.image_digest}
               />
-              <Text label="Capability access" color="text-dim" />
+              <InlineMessage
+                label="All access is off by default. Enable only what this extension needs."
+                tone="warning"
+              />
+              <Text label="Husklet access" color="text-dim" />
               {acquisition.candidate.requested.length > 0 && (
                 <Row gap={1} align="center">
                   <Text
@@ -325,7 +330,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 </Row>
               )}
               {acquisition.candidate.requested.map((capability) => (
-                <Row key={capability} gap={2} align="center">
+                <FormControlLabel
+                  key={capability}
+                  label={`${capabilityLabel(capability)} (${capability})`}
+                  gap={2}
+                >
                   <Switch
                     checked={granted.includes(capability)}
                     onToggle={(event: Change) =>
@@ -336,11 +345,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       )
                     }
                   />
-                  <Column gap={0}>
-                    <Text label={capabilityLabel(capability)} />
-                    <Text label={capability} color="text-dim" />
-                  </Column>
-                </Row>
+                </FormControlLabel>
               ))}
               {acquisition.candidate.requested.length === 0 && (
                 <Text label="This extension requests no capabilities." />
@@ -411,7 +416,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           )}
           {acquisition && acquisition.state !== 'ready' && (
             <CardContent gap={1}>
-              <Row gap={2}>
+              <Row gap={1} align="center" wrap>
                 {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
                 <Text label={acquisitionLabel(acquisition)} wrap />
                 {!['failed', 'cancelled'].includes(acquisition.state) ? (
@@ -420,6 +425,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     enabled={busy !== 'cancel'}
                     onInvoke={cancel}
                   />
+                ) : acquisition.state === 'failed' ? (
+                  <>
+                    <Button label="Retry inspection" enabled={!busy} onInvoke={() => inspect()} />
+                    <Button
+                      label="Dismiss"
+                      variant="ghost"
+                      enabled={!busy}
+                      onInvoke={() => setAcquisition(null)}
+                    />
+                  </>
                 ) : (
                   <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />
                 )}
@@ -457,7 +472,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               />
               <CardContent>
                 <Row gap={1} align="center" wrap>
-                  <Badge label={extension.status} />
+                  <Badge label={extension.enabled ? extension.status : 'disabled'} />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
@@ -517,13 +532,24 @@ function selectorLabel(selector: ContainerSelector): string {
 
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const progress = acquisition.progress;
-  if (!progress) return acquisition.state;
+  if (!progress) {
+    return acquisition.state === 'failed'
+      ? 'Inspection failed.'
+      : acquisition.state === 'cancelled'
+        ? 'Inspection cancelled.'
+        : acquisition.state === 'queued'
+          ? 'Waiting to inspect image…'
+          : 'Inspecting image…';
+  }
   const amount =
     progress.current === null
       ? ''
       : progress.total === null
         ? ` · ${progress.current} bytes`
-        : ` · ${progress.current}/${progress.total} bytes`;
+        : ` · ${progress.current}/${progress.total} bytes (${Math.min(
+            100,
+            Math.round((progress.current / Math.max(1, progress.total)) * 100),
+          )}%)`;
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
 
