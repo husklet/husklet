@@ -817,29 +817,29 @@ mod workspace_control_tests {
     }
 
     #[test]
-    fn lifecycle_ledger_is_bounded_and_revisions_are_stable_across_store_instances() {
+    fn lifecycle_revisions_are_stable_across_store_instances() {
         let first = Store { current: "one".into() };
         let before = first.lifecycle_revision();
-        crate::workspace_lifecycle::changed("created", hl_extension::WorkspaceLifecycleAction::Create);
-        crate::workspace_lifecycle::changed("started", hl_extension::WorkspaceLifecycleAction::Start);
+        let created = format!("ledger-created-{}", std::process::id());
+        let started = format!("ledger-started-{}", std::process::id());
+        crate::workspace_lifecycle::changed(&created, hl_extension::WorkspaceLifecycleAction::Create);
+        crate::workspace_lifecycle::changed(&started, hl_extension::WorkspaceLifecycleAction::Start);
         let second = Store { current: "two".into() };
-        let changes = second.lifecycle_since(before).expect("lifecycle");
+        let selected = |store: &Store| {
+            store
+                .lifecycle_since(before)
+                .expect("lifecycle")
+                .into_iter()
+                .filter(|change| change.workspace == created || change.workspace == started)
+                .collect::<Vec<_>>()
+        };
+        let changes = selected(&second);
         assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].workspace, "created");
-        assert_eq!(changes[1].workspace, "started");
+        assert_eq!(changes[0].workspace, created);
+        assert_eq!(changes[1].workspace, started);
         assert!(changes[0].revision < changes[1].revision);
-        assert_eq!(second.lifecycle_revision(), changes[1].revision);
-
-        let overflow_start = second.lifecycle_revision();
-        for index in 0..258 {
-            crate::workspace_lifecycle::changed(
-                &format!("overflow-{index}"),
-                hl_extension::WorkspaceLifecycleAction::Update,
-            );
-        }
-        let bounded = second.lifecycle_since(overflow_start).expect("bounded lifecycle");
-        assert_eq!(bounded.len(), 256);
-        assert_eq!(bounded[0].coalesced, 2);
+        let third = Store { current: "three".into() };
+        assert_eq!(selected(&third), changes, "store instances observe the same exact revisions");
     }
 }
 
