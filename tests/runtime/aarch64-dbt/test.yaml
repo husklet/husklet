@@ -16,9 +16,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { counter: translated_steps, equals: 66 }
-        - { counter: interpreted_steps, equals: 0 }
-        - { counter: translated_entries, equals: 25 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "66", interpreted_steps: "0", translated_entries: "25" } }
   - id: runtime/aarch64-dbt/alu-bench
     status: active
     compat: { class: smoke }
@@ -29,6 +27,4 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { counter: translated_steps, equals: 51000010 }
-        - { counter: interpreted_steps, equals: 0 }
-        - { counter: translated_entries, equals: 125001 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "51000010", interpreted_steps: "0", translated_entries: "125001" } }

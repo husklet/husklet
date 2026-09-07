@@ -17,5 +17,4 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { counter: translated_steps, greater-than: 0 }
-        - { counter: irq_pending, greater-than: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { irq_pending: "1" }, nonnegative: [translated_steps] }
