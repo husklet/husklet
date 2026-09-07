@@ -272,7 +272,7 @@ fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
 }
 
 #[test]
-fn direct_call_guard_v2_report_reconciles_and_fits_shared_record() {
+fn v2_report_aggregates_memory_indirect_exits_and_direct_call_guard() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {
         hl_native::backend_tree_census_test(isa, 22)

@@ -1581,8 +1581,10 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_JUMP],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_DIRECT_CALL],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_RETURN],
-        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH],
-        (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL],
+        (unsigned long long)(summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH] +
+                             summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY]),
+        (unsigned long long)(summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL] +
+                             summary.translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY]),
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_SYSCALL],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_IRQ],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FAULT],
@@ -1860,6 +1862,11 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
     if (scenario == 22) {
+        atomic_store_explicit(&g_backend_tree_self->translated_entries, 2, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree_self->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_BRANCH_MEMORY], 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree_self->translated_exit[HL_BACKEND_SHAPE_T_INDIRECT_CALL_MEMORY], 1,
+                              memory_order_relaxed);
         atomic_store_explicit(&g_backend_tree->direct_call_guard_candidate_enabled, 1, memory_order_relaxed);
         atomic_store_explicit(&g_backend_tree->direct_call_guard_attempts, 4, memory_order_relaxed);
         atomic_store_explicit(&g_backend_tree->direct_call_guard_fast_hits, 1, memory_order_relaxed);
@@ -1871,6 +1878,7 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
         int formatted = hl_backend_shape_format(g_backend_tree, record, sizeof record);
         return formatted > 0 && (size_t)formatted < sizeof record &&
                        strstr(record, "backend-shape-detail version=2 ") != NULL &&
+                       strstr(record, "t_indirect_branch=1 t_indirect_call=1 ") != NULL &&
                        strstr(record, "direct_call_guard_candidate_enabled=1 ") != NULL &&
                        strstr(record, "direct_call_guard_attempts=4 ") != NULL &&
                        strstr(record, "direct_call_guard_fast_hits=1 ") != NULL &&
