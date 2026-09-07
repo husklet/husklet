@@ -357,7 +357,6 @@ export function workspace(session, { signal } = {}) {
         list: async () => expect(await session.call('workspace_list'), 'workspaces'),
         inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
         create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
-        adopt: async (configuration) => expect(await session.call('workspace_adopt', { configuration }), 'workspace_configuration'),
         update: async (name, generation, configurationRevision, configuration) => expect(await session.call('workspace_update', {
             name,
             generation: immutableIdentity(generation, [32], 'workspace generation'),

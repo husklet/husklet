@@ -538,13 +538,18 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   const operations = [
     api.inspect('other'),
     api.create(configuration),
-    api.adopt({ ...configuration, generation: '' }),
     api.update('other', '0123456789abcdef0123456789abcdef', configuration.configuration_revision, configuration),
     api.delete('other', '0123456789abcdef0123456789abcdef'),
     api.start('other'),
     api.stop('other'),
     api.restart('other'),
   ];
+  assert.equal('adopt' in api, false, 'the removed adoption facade is not advertised');
+  assert.equal(
+    'workspace_adopt' in protocolSurface.requests,
+    false,
+    'the generated protocol surface does not advertise the removed call',
+  );
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(
@@ -552,7 +557,6 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     [
       'workspace_inspect',
       'workspace_create',
-      'workspace_adopt',
       'workspace_update',
       'workspace_delete',
       'workspace_start',
@@ -562,7 +566,7 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   );
   for (let index = 0; index < operations.length; index += 1) {
     const payload =
-      index < 4 ? { reply: 'workspace_configuration', with: configuration } : { reply: 'done' };
+      index < 3 ? { reply: 'workspace_configuration', with: configuration } : { reply: 'done' };
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);

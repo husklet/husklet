@@ -595,8 +595,6 @@ export interface WorkspaceApi {
     list(): Promise<WorkspaceState[]>;
     inspect(name: string): Promise<WorkspaceConfiguration>;
     create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-    /** Assign identity to an imported generation-less workspace record. */
-    adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
     update(name: string, generation: string, configurationRevision: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
     patchEnvironment(name: string, generation: string, configurationRevision: string, patch: {
         set: [string, string][];

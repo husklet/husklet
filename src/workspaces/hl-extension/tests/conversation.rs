@@ -19,8 +19,8 @@ use hl_extension::port::{
     WorkspaceState,
 };
 use hl_extension::{
-    Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, PROTOCOL, RelativePath, Reply, Request,
-    Services, Session, Transit, Welcome, WorkspaceInfo, codec,
+    codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
+    Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
 };
 use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
@@ -53,6 +53,32 @@ fn connected_pair() -> (Stream, Stream) {
         let (theirs, _) = listener.accept().expect("accepted");
         (ours, theirs)
     }
+}
+
+#[test]
+fn removed_workspace_adopt_call_is_rejected_and_the_socket_remains_decodable() {
+    let (host_end, extension_end) = connected_pair();
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    sender
+        .send(&hl_rpc::Frame::new(
+            codec::CALLS,
+            hl_rpc::Kind::Request,
+            br#"{"call":"workspace_adopt","with":{"configuration":{}}}"#.to_vec(),
+        ))
+        .expect("obsolete call sent");
+    assert!(
+        codec::read_request(&receiver.receive().expect("obsolete frame")).is_err(),
+        "the removed call must not decode into host authority"
+    );
+
+    sender
+        .send(&codec::request(&Request::WorkspaceInfo).expect("current request"))
+        .expect("current request sent");
+    assert!(matches!(
+        codec::read_request(&receiver.receive().expect("current frame")),
+        Ok(Request::WorkspaceInfo)
+    ));
 }
 
 // ---------------------------------------------------------------------------

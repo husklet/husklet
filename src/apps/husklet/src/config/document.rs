@@ -209,12 +209,11 @@ impl WsBuilder {
         let name = self.name.ok_or_else(|| Self::missing("name"))?;
         let image = self.image.ok_or_else(|| Self::missing("image"))?;
         let arch = self.arch.ok_or_else(|| Self::missing("arch"))?;
-        let generation = self.generation.unwrap_or_default();
-        if !generation.is_empty()
-            && (generation.len() != 32
-                || !generation
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+        let generation = self.generation.ok_or_else(|| Self::missing("generation"))?;
+        if generation.len() != 32
+            || !generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
             return Err(Value::new("generation", &generation).invalid());
         }

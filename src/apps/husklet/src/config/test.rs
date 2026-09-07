@@ -92,16 +92,13 @@ fn workspace_generation_survives_updates_and_changes_after_recreation() {
 }
 
 #[test]
-fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
+fn workspace_configuration_requires_an_explicit_generation() {
     let path = tmp_path("legacy-generation");
     std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
-    let mut store = WorkspaceStore::load(&path).unwrap();
-    assert_eq!(store.get("legacy").unwrap().generation, "");
     assert_eq!(
-        store.remove_if_generation("legacy", "").unwrap_err().kind(),
-        io::ErrorKind::AlreadyExists
+        WorkspaceStore::load(&path).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
     );
-    assert!(WorkspaceStore::load(&path).unwrap().get("legacy").is_some());
 
     std::fs::write(
         &path,
@@ -110,37 +107,6 @@ fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
     .unwrap();
     assert!(WorkspaceStore::load(&path).is_err());
     let _ = std::fs::remove_file(path);
-}
-
-#[cfg(feature = "runtime")]
-#[test]
-fn legacy_adoption_is_single_winner_and_exact_snapshot_bound() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("workspaces.conf");
-    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
-    let expected = WorkspaceStore::load(&path).unwrap().get("legacy").unwrap().clone();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-    let mut threads = Vec::new();
-    for _ in 0..2 {
-        let path = path.clone();
-        let expected = expected.clone();
-        let barrier = barrier.clone();
-        threads.push(std::thread::spawn(move || {
-            let mut store = WorkspaceStore::load(path).unwrap();
-            barrier.wait();
-            store.adopt_generation(&expected)
-        }));
-    }
-    barrier.wait();
-    let results: Vec<_> = threads.into_iter().map(|thread| thread.join().unwrap()).collect();
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-    let persisted = WorkspaceStore::load(&path).unwrap().get("legacy").unwrap().clone();
-    assert_eq!(persisted.generation.len(), 32);
-
-    let mut stale = WorkspaceStore::load(&path).unwrap();
-    let error = stale.adopt_generation(&expected).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(WorkspaceStore::load(path).unwrap().get("legacy").unwrap(), &persisted);
 }
 
 #[cfg(feature = "runtime")]
@@ -231,7 +197,7 @@ fn rich_config_roundtrips() {
 #[test]
 fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
     let path = tmp_path("legacy-scrollback-default");
-    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
 
     let loaded = WorkspaceStore::load(&path).unwrap();
     assert_eq!(loaded.get("legacy").unwrap().scrollback, Some(DEFAULT_SCROLLBACK_LINES));
@@ -241,7 +207,7 @@ fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
 #[test]
 fn execution_lifetime_is_backward_compatible_and_nondefault_modes_round_trip_explicitly() {
     let path = tmp_path("execution-lifetime");
-    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = amd64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = amd64\n").unwrap();
     assert_eq!(
         WorkspaceStore::load(&path)
             .unwrap()
@@ -331,7 +297,7 @@ fn legacy_mount_records_remain_readable() {
     std::fs::write(
         &path,
         concat!(
-            "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n",
+            "[workspace]\nname = legacy\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n",
             "mount = /host/path:/guest/path:ro\n",
             "mount = v2:/guest:rw\n",
         ),

@@ -6837,10 +6837,6 @@
     },
     {
       "capability": "workspaces:control",
-      "request": "workspace_adopt"
-    },
-    {
-      "capability": "workspaces:control",
       "request": "workspace_update"
     },
     {
@@ -7280,10 +7276,6 @@
     {
       "reply": "workspace_configuration",
       "request": "workspace_create"
-    },
-    {
-      "reply": "workspace_configuration",
-      "request": "workspace_adopt"
     },
     {
       "reply": "workspace_configuration",
@@ -8246,22 +8238,6 @@
         },
         {
           "name": "workspace_create",
-          "payload": {
-            "fields": [
-              {
-                "name": "configuration",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "WorkspaceConfiguration"
-                }
-              }
-            ],
-            "kind": "struct"
-          }
-        },
-        {
-          "name": "workspace_adopt",
           "payload": {
             "fields": [
               {
@@ -11832,7 +11808,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:5817bc5c597df42a",
+  "source_fingerprint": "fnv1a64:d7c696fb92989470",
   "specification_version": 1,
   "topics": [
     {

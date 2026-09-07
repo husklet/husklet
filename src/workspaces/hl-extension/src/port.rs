@@ -1241,9 +1241,6 @@ pub trait WorkspaceControl {
     fn create(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }
-    fn adopt(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
-        Err(workspace_control_unavailable())
-    }
     fn update(
         &self,
         _name: &str,

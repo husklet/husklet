@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:fa7ffd4552533097
+// Protocol artifact fnv1a64:b73004972878b010
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -230,7 +230,6 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "workspace_list": "workspaces",
   "workspace_inspect": "workspace_configuration",
   "workspace_create": "workspace_configuration",
-  "workspace_adopt": "workspace_configuration",
   "workspace_update": "workspace_configuration",
   "workspace_environment_patch": "workspace_environment_patch",
   "workspace_delete": "done",
@@ -343,7 +342,6 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "workspace_list": "workspaces:read",
   "workspace_inspect": "workspaces:read",
   "workspace_create": "workspaces:control",
-  "workspace_adopt": "workspaces:control",
   "workspace_update": "workspaces:control",
   "workspace_environment_patch": "workspace-environment:write",
   "workspace_delete": "workspaces:control",
@@ -7595,22 +7593,6 @@ const roots = {
       },
       {
         "name": "workspace_create",
-        "payload": {
-          "fields": [
-            {
-              "name": "configuration",
-              "optional": false,
-              "schema": {
-                "kind": "ref",
-                "name": "WorkspaceConfiguration"
-              }
-            }
-          ],
-          "kind": "struct"
-        }
-      },
-      {
-        "name": "workspace_adopt",
         "payload": {
           "fields": [
             {

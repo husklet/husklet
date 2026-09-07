@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceConfiguration,
-    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles,
+    WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -345,7 +345,6 @@ impl Session {
             Request::WorkspaceList => self.workspaces(services),
             Request::WorkspaceInspect { .. }
             | Request::WorkspaceCreate { .. }
-            | Request::WorkspaceAdopt { .. }
             | Request::WorkspaceUpdate { .. }
             | Request::WorkspaceEnvironmentPatch { .. }
             | Request::WorkspaceDelete { .. }
@@ -822,9 +821,6 @@ impl Session {
             )),
             Request::WorkspaceCreate { configuration } => Ok(Reply::WorkspaceConfiguration(
                 self.visible_workspace(port.create(configuration)?),
-            )),
-            Request::WorkspaceAdopt { configuration } => Ok(Reply::WorkspaceConfiguration(
-                self.visible_workspace(port.adopt(configuration)?),
             )),
             Request::WorkspaceUpdate {
                 name,

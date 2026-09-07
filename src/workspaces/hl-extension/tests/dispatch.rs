@@ -659,12 +659,6 @@ impl hl_extension::port::WorkspaceControl for Host {
         self.ledger.note("workspace.create");
         Ok(configuration.clone())
     }
-    fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
-        self.ledger.note("workspace.adopt");
-        let mut adopted = configuration.clone();
-        adopted.generation = "0123456789abcdef0123456789abcdef".into();
-        Ok(adopted)
-    }
     fn update(
         &self,
         _name: &str,
@@ -1033,15 +1027,6 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::WorkspaceCreate {
                 configuration: workspace_configuration(),
-            },
-            Capability::WorkspaceControl,
-        ),
-        (
-            Request::WorkspaceAdopt {
-                configuration: WorkspaceConfiguration {
-                    generation: String::new(),
-                    ..workspace_configuration()
-                },
             },
             Capability::WorkspaceControl,
         ),

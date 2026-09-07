@@ -48,7 +48,6 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("workspace_list", "workspaces"),
     ("workspace_inspect", "workspace_configuration"),
     ("workspace_create", "workspace_configuration"),
-    ("workspace_adopt", "workspace_configuration"),
     ("workspace_update", "workspace_configuration"),
     ("workspace_environment_patch", "workspace_environment_patch"),
     ("workspace_delete", "done"),
@@ -162,8 +161,8 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
 fn request_capability(request: &str) -> Capability {
     match request {
         "workspace_info" | "workspace_list" | "workspace_inspect" => Capability::WorkspaceRead,
-        "workspace_create" | "workspace_adopt" | "workspace_update" | "workspace_delete" | "workspace_start"
-        | "workspace_stop" | "workspace_restart" => Capability::WorkspaceControl,
+        "workspace_create" | "workspace_update" | "workspace_delete" | "workspace_start" | "workspace_stop"
+        | "workspace_restart" => Capability::WorkspaceControl,
         "workspace_environment_patch" => Capability::WorkspaceEnvironmentWrite,
         "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
         "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {

@@ -459,8 +459,6 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
     create: async (configuration) =>
       expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
-    adopt: async (configuration) =>
-      expect(await session.call('workspace_adopt', { configuration }), 'workspace_configuration'),
     update: async (name, generation, configurationRevision, configuration) =>
       expect(
         await session.call('workspace_update', {
