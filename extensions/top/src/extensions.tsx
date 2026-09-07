@@ -29,6 +29,8 @@ import {
 } from '@husklet/react';
 
 type Change = { value?: unknown };
+type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
+type LifecycleState = { action: LifecycleAction; name: string };
 
 const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
 const FILESYSTEM_VERBS = [
@@ -131,11 +133,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     React.useState<WorkspaceEnvironmentGrant>({ read: [], write: [] });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
+  const [pendingLifecycle, setPendingLifecycle] = React.useState<LifecycleState | null>(null);
+  const [lifecycleFailure, setLifecycleFailure] = React.useState<
+    (LifecycleState & { detail: string }) | null
+  >(null);
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
   const inventoryEpoch = React.useRef(0);
+  const lifecycleInFlight = React.useRef(false);
 
   const reload = React.useCallback(async () => {
     const epoch = ++inventoryEpoch.current;
@@ -319,11 +326,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       setBusy('');
     }
   };
-  const lifecycle = async (
-    extension: ExtensionSummary,
-    action: 'enable' | 'disable' | 'retry' | 'remove',
-  ) => {
+  const lifecycle = async (extension: ExtensionSummary, action: LifecycleAction) => {
+    if (lifecycleInFlight.current) return;
+    lifecycleInFlight.current = true;
+    const operation = { action, name: extension.name };
     setBusy(`${action}:${extension.name}`);
+    setPendingLifecycle(operation);
+    setLifecycleFailure(null);
     setError('');
     setNotice(null);
     try {
@@ -344,8 +353,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             },
       );
     } catch (cause) {
-      setError(message(cause));
+      setLifecycleFailure({ ...operation, detail: message(cause) });
     } finally {
+      lifecycleInFlight.current = false;
+      setPendingLifecycle(null);
       setBusy('');
     }
   };
@@ -704,6 +715,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   />
                 </Row>
                 <ExtensionFault extension={extension} />
+                <LifecycleFeedback
+                  extensionName={extension.name}
+                  pending={pendingLifecycle}
+                  failure={lifecycleFailure}
+                />
                 <Row gap={1} wrap>
                   {extension.status.startsWith('fault:') ? (
                     <Button
@@ -781,7 +797,7 @@ function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
 
-function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): string {
+function lifecycleResult(action: LifecycleAction): string {
   return action === 'enable'
     ? 'enabled'
     : action === 'disable'
@@ -789,6 +805,16 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
       : action === 'retry'
         ? 'recovered'
         : 'removed';
+}
+
+function lifecyclePending(action: LifecycleAction): string {
+  return action === 'enable'
+    ? 'Enabling'
+    : action === 'disable'
+      ? 'Disabling'
+      : action === 'retry'
+        ? 'Retrying'
+        : 'Removing';
 }
 
 function extensionState(extension: ExtensionSummary): string {
@@ -802,6 +828,32 @@ function ExtensionFault({ extension }: { extension: ExtensionSummary }) {
   const detail =
     extension.status.slice('fault:'.length).trim() || 'The extension stopped unexpectedly.';
   return <InlineMessage label={detail} tone="danger" />;
+}
+
+function LifecycleFeedback({
+  extensionName,
+  pending,
+  failure,
+}: {
+  extensionName: string;
+  pending: LifecycleState | null;
+  failure: (LifecycleState & { detail: string }) | null;
+}) {
+  if (pending?.name === extensionName)
+    return (
+      <InlineMessage
+        label={`${lifecyclePending(pending.action)} ${extensionName}…`}
+        tone="neutral"
+      />
+    );
+  if (failure?.name === extensionName)
+    return (
+      <InlineMessage
+        label={`${capitalize(failure.action)} failed: ${failure.detail}`}
+        tone="danger"
+      />
+    );
+  return null;
 }
 
 function capitalize(value: string): string {

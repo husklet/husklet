@@ -800,6 +800,7 @@ test('a ready extension review can be abandoned without granting authority', asy
 test('installed extension removal requires final consent and a failure remains retryable', async () => {
   const calls = [];
   let removes = 0;
+  let rejectRemoval;
   const extension = {
     name: 'assistant',
     image_digest: `sha256:${'b'.repeat(64)}`,
@@ -816,7 +817,10 @@ test('installed extension removal requires final consent and a failure remains r
           removeAndWait: async (name, digest) => {
             calls.push([name, digest]);
             removes += 1;
-            if (removes === 1) throw new Error('extension is still stopping');
+            if (removes === 1)
+              return new Promise((_, reject) => {
+                rejectRemoval = () => reject(new Error('extension is still stopping'));
+              });
             return { changed: true, extension };
           },
         },
@@ -829,9 +833,14 @@ test('installed extension removal requires final consent and a failure remains r
   assert.deepEqual(calls, [], 'opening consent carries no removal authority');
   assert.ok(labelled(stage, 'Remove assistant from this workspace?'));
   invoke(stage, 'Remove assistant');
+  invoke(stage, 'Remove assistant');
+  assert.equal(calls.length, 1, 'a repeated confirmation cannot duplicate removal authority');
+  await settled();
+  assert.ok(labelled(stage, 'Removing assistant…'));
+  rejectRemoval();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove failed: extension is still stopping'));
   assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
   invoke(stage, 'Remove');
   invoke(stage, 'Remove assistant');
@@ -844,6 +853,7 @@ test('installed extension removal requires final consent and a failure remains r
 test('installed extensions expose truthful enabled, disabled, fault and retry states', async () => {
   const calls = [];
   let publish;
+  let release;
   let extension = {
     name: 'assistant',
     image_digest: `sha256:${'d'.repeat(64)}`,
@@ -851,13 +861,18 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     enabled: true,
     status: 'running',
   };
-  const result = async (action) => {
+  const result = (action) => {
     calls.push(action);
-    extension =
+    const resulting =
       action === 'disable'
         ? { ...extension, enabled: false, status: 'stopped' }
         : { ...extension, enabled: true, status: 'running' };
-    return { changed: true, extension };
+    return new Promise((resolve) => {
+      release = () => {
+        extension = resulting;
+        resolve({ changed: true, extension });
+      };
+    });
   };
   const stage = host();
   stage.render(
@@ -878,10 +893,18 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   );
   await settled();
   invoke(stage, 'Disable');
+  invoke(stage, 'Disable');
+  await settled();
+  assert.deepEqual(calls, ['disable'], 'pending disable admits one authority call');
+  assert.ok(labelled(stage, 'Disabling assistant…'));
+  release();
   await settled();
   await settled();
   assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
   invoke(stage, 'Enable');
+  await settled();
+  assert.ok(labelled(stage, 'Enabling assistant…'));
+  release();
   await settled();
   await settled();
   assert.ok(labelled(stage, 'running'));
@@ -898,6 +921,9 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   );
   assert.ok(labelled(stage, 'Retry'));
   invoke(stage, 'Retry');
+  await settled();
+  assert.ok(labelled(stage, 'Retrying assistant…'));
+  release();
   await settled();
   await settled();
   assert.deepEqual(calls, ['disable', 'enable', 'retry']);
