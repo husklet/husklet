@@ -46,7 +46,9 @@ function camel(name) {
  * `"Accent"` as the wire carries it.
  */
 function typed(entry, enums) {
-  const written = entry.values.map((shape) => (shape in SHAPES ? SHAPES[shape] : union(enums[shape])));
+  const written = entry.values.map((shape) =>
+    shape in SHAPES ? SHAPES[shape] : union(enums[shape]),
+  );
   // A growth factor is written as a weight by some and as a switch by others,
   // and the host compares either against zero.
   if (entry.name === 'Grow') written.push('boolean');
@@ -215,7 +217,9 @@ function component(tag, props, enums) {
     lines.push(`  ${camel(name)}?: ${typed(entry, enums)};`);
   }
   for (const trigger of tag.triggers) {
-    lines.push(`  on${trigger}?: (report: ${trigger === 'Select' ? 'SelectionReport' : trigger === 'Edit' ? 'EditReport' : trigger === 'Sort' ? 'SortReport' : 'Report'}) => void;`);
+    lines.push(
+      `  on${trigger}?: (report: ${trigger === 'Select' ? 'SelectionReport' : trigger === 'Edit' ? 'EditReport' : trigger === 'Sort' ? 'SortReport' : 'Report'}) => void;`,
+    );
   }
   lines.push('}');
   return lines.join('\n');
@@ -223,7 +227,9 @@ function component(tag, props, enums) {
 
 /** The rest of the public API, which the catalogue says nothing about. */
 function api(tags) {
-  const components = tags.map((tag) => `export const ${tag.name}: ComponentType<${tag.name}Props>;`);
+  const components = tags.map(
+    (tag) => `export const ${tag.name}: ComponentType<${tag.name}Props>;`,
+  );
   return `
 ${components.join('\n')}
 
@@ -266,7 +272,7 @@ export function acceptsChildren(tag: string): boolean;
 /** Every prop and handler name a component accepts. */
 export const vocabulary: { props: string[]; handlers: string[] };
 
-import type { ConnectOptions, HostEvent, PaneSelection, Session } from '@husklet/client';
+import type { ConnectOptions, DataRow, HostEvent, PaneSelection, RowRequest, Session } from '@husklet/client';
 export * from '@husklet/client';
 
 export const LOG_VIEW_CHARACTER_LIMIT: 4096;
@@ -287,7 +293,7 @@ export interface RenderHandle {
   /** Waits until every reconciliation frame queued so far is acknowledged by the host. */
   flush(): Promise<void>;
   source(mutation: InterfaceSourceMutation): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export function render(
@@ -297,6 +303,8 @@ export function render(
     title?: string;
     split?: { slot: string; division: 'beside' | 'below' };
     bootstrap?: SurfaceBootstrap;
+    /** Supplies bounded rows on demand as the host scrolls this surface. */
+    rows?: (request: RowRequest) => readonly DataRow[] | Promise<readonly DataRow[]>;
   },
 ): RenderHandle;
 

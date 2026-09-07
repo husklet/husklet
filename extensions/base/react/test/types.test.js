@@ -7,10 +7,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
 const declarations = fs.readFileSync(path.resolve(here, '../dist/index.d.ts'), 'utf8');
-const clientDeclarations = fs.readFileSync(
-  path.resolve(here, '../../client/src/api.ts'),
-  'utf8',
-);
+const clientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/api.ts'), 'utf8');
 const generatedClientDeclarations = fs.readFileSync(
   path.resolve(here, '../../client/src/generated-protocol.d.ts'),
   'utf8',
@@ -71,7 +68,11 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
   assert.match(handle, /readonly ready: Promise<string>;/);
   assert.match(handle, /readonly slot: string \| null;/);
   assert.match(handle, /source\(mutation: InterfaceSourceMutation\): Promise<void>;/);
-  assert.match(handle, /close\(\): void;/);
+  assert.match(handle, /close\(\): Promise<void>;/);
+  assert.match(
+    declarations,
+    /rows\?: \(request: RowRequest\) => readonly DataRow\[\] \| Promise<readonly DataRow\[\]>;/,
+  );
   assert.match(
     declarations,
     /split\?: \{ slot: string; division: 'beside' \| 'below' \}/,
@@ -107,6 +108,8 @@ test('host events type the pane chooser identity as well as subscribed snapshots
   );
   assert.doesNotMatch(clientDeclarations, /LegacyInterfaceEvent/);
   assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
+  assert.match(clientDeclarations, /onRows\?: \(request: RowRequest, channel: number\) => void;/);
+  assert.doesNotMatch(clientDeclarations, /onRows\?: \(request: unknown/);
   assert.doesNotMatch(
     clientDeclarations,
     /onEvent\?: \(event: SnapshotEvent/,

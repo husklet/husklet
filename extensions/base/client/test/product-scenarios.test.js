@@ -230,13 +230,18 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
   const id = 'c'.repeat(64);
   const password = 'sentinel-password-never-in-replies';
   const executionId = 'e'.repeat(32);
+  let outputCalls = 0;
   const run = await scenario('postgres-inspector.ts', {
-    containerId: id,
+    container: id,
     credentialPath: 'secrets/postgres.password',
     query: 'select id,name from widgets',
   }, (socket, frame) => {
     const { call } = frame.payload;
-    if (call === 'container_inspect')
+    if (call === 'container_list')
+      respond(socket, frame, { reply: 'containers', with: [{
+        id, name: 'postgres', image: 'postgres:18', state: 'running', created: 1, generation: 2,
+      }] });
+    else if (call === 'container_inspect')
       respond(socket, frame, {
         reply: 'container',
         with: {
@@ -288,20 +293,19 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
       respond(socket, frame, { reply: 'contents', with: [...Buffer.from(`${password}\n`)] });
     else if (call === 'container_exec')
       respond(socket, frame, { reply: 'identity', with: executionId });
-    else if (call === 'execution_wait')
+    else if (call === 'execution_output') {
+      outputCalls += 1;
+      const bytes = outputCalls === 1 ? Buffer.from('rows\n2\n') : Buffer.from('id,name\n1,alpha\n2,beta\n');
+      respond(socket, frame, { reply: 'execution_output', with: {
+        entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [...bytes] }],
+        next: 1, more: false, eof: true, gap: false,
+      } });
+    } else if (call === 'execution_inspect')
       respond(socket, frame, {
         reply: 'execution',
         with: {
           id: executionId, container_id: id, running: false, exit_code: 0, pid: 42,
           command: ['psql', '--csv'], user: 'postgres',
-        },
-      });
-    else if (call === 'execution_logs')
-      respond(socket, frame, {
-        reply: 'logs',
-        with: {
-          stdout: [...Buffer.from('id,name\n1,alpha\n2,beta\n')], stderr: [], truncated: false,
-          stdout_truncated: false, stderr_truncated: false, eof: true,
         },
       });
     else if (call === 'interface_open_tab')
@@ -312,7 +316,6 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
     container: id,
     processes: 2,
     queryRows: 2,
-    logsComplete: true,
     networks: 1,
     slot: 'postgres-pane',
   });
@@ -321,15 +324,13 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
   const mutations = run.calls
     .filter(({ call }) => call === 'source_resize_at')
     .map(({ with: value }) => value.mutation);
-  assert.equal(mutations.length, 3);
-  assert.equal(mutations[2].Window.rows.length, 2);
-  assert.equal(mutations[2].Window.range.count, 2);
-  const exec = run.calls.find(({ call }) => call === 'container_exec');
-  assert.deepEqual(exec.with, {
-    id, generation: 2,
-    command: ['psql', '--csv', '--no-psqlrc', '-c', 'select id,name from widgets'],
-    environment: [['PGPASSWORD', password]], user: null, working_directory: null,
-  });
+  assert.equal(mutations.length, 2);
+  assert.equal(mutations[1].Length.rows, 2);
+  const execs = run.calls.filter(({ call }) => call === 'container_exec');
+  assert.equal(execs.length, 2);
+  assert.deepEqual(execs[1].with.command.slice(0, 4), ['psql', '--csv', '--no-psqlrc', '--command']);
+  assert.match(execs[1].with.command[4], /LIMIT 128 OFFSET 0$/);
+  assert.deepEqual(execs[1].with.environment, [['PGPASSWORD', password]]);
   for (const call of run.calls.filter(({ call }) => call !== 'container_exec'))
     assert(!JSON.stringify(call).includes(password), `credential leaked through ${call.call}`);
 });

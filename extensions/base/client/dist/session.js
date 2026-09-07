@@ -144,6 +144,42 @@ function abortError(reason) {
     error.name = 'AbortError';
     return error;
 }
+function safeUnsigned(value, label) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+        throw new TypeError(`${label} must be a nonnegative safe integer`);
+    }
+    return value;
+}
+/** Validate the host-pushed request before extension code uses it for database paging. */
+export function validateRowRequest(value) {
+    const request = requiredObject(value, 'row request');
+    const range = requiredObject(request.range, 'row request range');
+    safeUnsigned(request.id, 'row request id');
+    safeUnsigned(request.source, 'row request source');
+    safeUnsigned(request.version, 'row request version');
+    safeUnsigned(range.start, 'row request range start');
+    if (!Number.isSafeInteger(range.count) || range.count < 1 || range.count > 128) {
+        throw new RangeError('row request range count must be between 1 and 128');
+    }
+    if (request.slot !== undefined &&
+        (typeof request.slot !== 'string' || request.slot.length === 0)) {
+        throw new TypeError('row request slot must be a nonempty string');
+    }
+    if (request.filter !== null &&
+        request.filter !== undefined &&
+        typeof request.filter !== 'string') {
+        throw new TypeError('row request filter must be a string or null');
+    }
+    if (request.sort !== null && request.sort !== undefined) {
+        const sort = requiredObject(request.sort, 'row request sort');
+        if (typeof sort.column !== 'string' ||
+            sort.column.length === 0 ||
+            typeof sort.descending !== 'boolean') {
+            throw new TypeError('row request sort must name a column and boolean direction');
+        }
+    }
+    return request;
+}
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export function validateUiEvent(value) {
     const event = requiredObject(value, 'UI event');
@@ -506,7 +542,7 @@ export class Session {
             return this.#greet(frame);
         // A row request is the one thing the host pushes rather than answers.
         if (frame.kind === KIND.event && frame.payload && frame.payload.range !== undefined) {
-            return this.#onRows(frame.payload, frame.channel);
+            return this.#onRows(validateRowRequest(frame.payload), frame.channel);
         }
         if (frame.kind === KIND.response && frame.channel === CALLS) {
             const pending = this.#pending[0];

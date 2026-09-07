@@ -1,11 +1,14 @@
 import type {
   FilesystemSelector,
+  Row as WireRow,
   WireCall,
   WireReplyFor,
   WireRequestFor,
   WireUiEvent,
 } from './generated-protocol.js';
 export type { FilesystemSelector } from './generated-protocol.js';
+/** One row delivered to a virtualized interface data source. */
+export type DataRow = WireRow;
 
 /** Environment variable naming the extension's authenticated Unix socket. */
 export declare const SOCKET: 'HUSKLET_EXTENSION_SOCKET';
@@ -512,6 +515,18 @@ export type SnapshotEvent =
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch }
   | { snapshot: 'filesystem'; of: FileInventory };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
+/** A bounded, versioned table window requested by one owned UI surface. */
+export interface RowRequest {
+  id: number;
+  source: number;
+  version: number;
+  range: { start: number; count: number };
+  sort: { column: string; descending: boolean } | null;
+  filter: string | null;
+  /** Present for extension-owned tabs and splits; identifies the surface that asked. */
+  slot?: string;
+}
+export declare function validateRowRequest(value: unknown): RowRequest;
 export declare function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
 export declare class ExtensionError extends Error {
@@ -538,7 +553,7 @@ export interface ConnectOptions {
   pendingLimit?: number;
   timeout?: number;
   connectTimeout?: number;
-  onRows?: (request: unknown, channel: number) => void;
+  onRows?: (request: RowRequest, channel: number) => void;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: HostEvent, channel: number) => void;
   onEventError?: (error: unknown) => void;

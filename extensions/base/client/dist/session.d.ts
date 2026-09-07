@@ -1,8 +1,10 @@
-import type { CallOptions, ConnectOptions, HostEvent } from './api.js';
+import type { CallOptions, ConnectOptions, HostEvent, RowRequest } from './api.js';
 /** The protocol this package speaks. The host refuses anything else. */
 export declare const PROTOCOL: 1;
 /** Where the host mounts the socket inside an extension's container. */
 export declare const SOCKET = "HUSKLET_EXTENSION_SOCKET";
+/** Validate the host-pushed request before extension code uses it for database paging. */
+export declare function validateRowRequest(value: any): RowRequest;
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export declare function validateUiEvent(value: any): any;
 /** Refusal returned by the host, with its stable machine-readable category. */
