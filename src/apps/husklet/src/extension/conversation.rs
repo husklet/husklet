@@ -1466,6 +1466,24 @@ mod tests {
                 pane_providers: Vec::new(),
             }])
         }
+
+        fn acquisition_status(&self, job: &str) -> Result<hl_extension::port::ExtensionAcquisitionStatus, HostError> {
+            self.ledger.note("extensions.acquisition_status");
+            Ok(hl_extension::port::ExtensionAcquisitionStatus {
+                job: job.into(),
+                reference: "registry/example:1".into(),
+                revision: 7,
+                state: "pulling".into(),
+                progress: None,
+                candidate: None,
+                error: None,
+            })
+        }
+
+        fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
+            self.ledger.note("extensions.acquisition_cancel");
+            Ok(())
+        }
     }
 
     fn services(host: &Host) -> Services<'_> {
@@ -1708,6 +1726,46 @@ mod tests {
                     && catalogue.entries[0].reference == "registry/storybook:latest"
         ));
         assert_eq!(ledger.reached(), vec!["extensions.catalogue"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn invalid_acquisition_cancel_reaches_no_service_and_the_session_continues() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ExtensionInstall]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let invalid = ask(
+            &mut wire,
+            &Request::ExtensionAcquisitionCancel {
+                job: String::new(),
+                revision: 7,
+            },
+        );
+        assert!(codec::is_failure(&invalid), "an invalid job identifier is refused");
+        assert!(ledger.reached().is_empty(), "invalid cancellation reached the service");
+
+        let valid = ask(&mut wire, &Request::ExtensionAcquisitionStatus { job: "job-1".into() });
+        assert!(matches!(
+            codec::read_reply(&valid),
+            Ok(Reply::ExtensionAcquisition(status))
+                if status.job == "job-1" && status.revision == 7 && status.state == "pulling"
+        ));
+        assert_eq!(ledger.reached(), vec!["extensions.acquisition_status"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
