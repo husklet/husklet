@@ -1667,6 +1667,14 @@ const definitions = {
         }
       },
       {
+        "name": "requested_filesystem",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "FilesystemGrant"
+        }
+      },
+      {
         "name": "installed_image_digest",
         "optional": true,
         "schema": {
@@ -1841,6 +1849,36 @@ const definitions = {
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "FilesystemGrant": {
+    "fields": [
+      {
+        "name": "read",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "write",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
   },
   "Frame": {
     "fields": [
@@ -7363,6 +7401,14 @@ const roots = {
                 "kind": "ref",
                 "name": "ContainerGrant"
               }
+            },
+            {
+              "name": "filesystem",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "FilesystemGrant"
+              }
             }
           ],
           "kind": "struct"
@@ -7404,6 +7450,14 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "ContainerGrant"
+              }
+            },
+            {
+              "name": "filesystem",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "FilesystemGrant"
               }
             }
           ],

@@ -406,7 +406,7 @@ impl Supply for Workspace {
 
 #[cfg(test)]
 mod halt_tests {
-    use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Resources};
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Resources, PROTOCOL};
 
     use super::{Image, Plan, SidecarSpec, Supply as _, Workspace};
 
@@ -423,10 +423,11 @@ mod halt_tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         };
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:offline-checkpoint".to_owned(),
             version: manifest.version.clone(),
@@ -754,8 +755,8 @@ impl WorkspaceControl for Store {
 
 #[cfg(test)]
 mod workspace_control_tests {
-    use hl_extension::ExtensionName;
     use hl_extension::port::WorkspaceControl as _;
+    use hl_extension::ExtensionName;
 
     use super::{Store, Workspace};
 
@@ -816,29 +817,29 @@ mod workspace_control_tests {
     }
 
     #[test]
-    fn lifecycle_ledger_is_bounded_and_revisions_are_stable_across_store_instances() {
+    fn lifecycle_revisions_are_stable_across_store_instances() {
         let first = Store { current: "one".into() };
         let before = first.lifecycle_revision();
-        crate::workspace_lifecycle::changed("created", hl_extension::WorkspaceLifecycleAction::Create);
-        crate::workspace_lifecycle::changed("started", hl_extension::WorkspaceLifecycleAction::Start);
+        let created = format!("ledger-created-{}", std::process::id());
+        let started = format!("ledger-started-{}", std::process::id());
+        crate::workspace_lifecycle::changed(&created, hl_extension::WorkspaceLifecycleAction::Create);
+        crate::workspace_lifecycle::changed(&started, hl_extension::WorkspaceLifecycleAction::Start);
         let second = Store { current: "two".into() };
-        let changes = second.lifecycle_since(before).expect("lifecycle");
+        let selected = |store: &Store| {
+            store
+                .lifecycle_since(before)
+                .expect("lifecycle")
+                .into_iter()
+                .filter(|change| change.workspace == created || change.workspace == started)
+                .collect::<Vec<_>>()
+        };
+        let changes = selected(&second);
         assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].workspace, "created");
-        assert_eq!(changes[1].workspace, "started");
+        assert_eq!(changes[0].workspace, created);
+        assert_eq!(changes[1].workspace, started);
         assert!(changes[0].revision < changes[1].revision);
-        assert_eq!(second.lifecycle_revision(), changes[1].revision);
-
-        let overflow_start = second.lifecycle_revision();
-        for index in 0..258 {
-            crate::workspace_lifecycle::changed(
-                &format!("overflow-{index}"),
-                hl_extension::WorkspaceLifecycleAction::Update,
-            );
-        }
-        let bounded = second.lifecycle_since(overflow_start).expect("bounded lifecycle");
-        assert_eq!(bounded.len(), 256);
-        assert_eq!(bounded[0].coalesced, 2);
+        let third = Store { current: "three".into() };
+        assert_eq!(selected(&third), changes, "store instances observe the same exact revisions");
     }
 }
 

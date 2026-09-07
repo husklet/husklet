@@ -144,6 +144,7 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
       revision: 1,
       granted: ['containers:read'],
       containers: { selectors: [{ name: 'database' }], create: false },
+      filesystem: { read: [], write: [] },
     },
   };
   assert.deepEqual(validateRequest(base), base);

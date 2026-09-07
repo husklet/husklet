@@ -4,6 +4,50 @@ use hl_rpc::{Rejection, RelativePath};
 
 use crate::capability::{Capability, Grant};
 
+/// Exact workspace paths an extension may read or change.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesystemGrant {
+    #[serde(default)]
+    pub read: Vec<RelativePath>,
+    #[serde(default)]
+    pub write: Vec<RelativePath>,
+}
+
+impl FilesystemGrant {
+    pub const ROOT_LIMIT: usize = 128;
+
+    #[must_use]
+    pub fn intersect(&self, consented: &Self) -> Self {
+        Self {
+            read: self
+                .read
+                .iter()
+                .filter(|root| consented.read.contains(root))
+                .cloned()
+                .collect(),
+            write: self
+                .write
+                .iter()
+                .filter(|root| consented.write.contains(root))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), Invalid> {
+        if self.read.len() + self.write.len() > Self::ROOT_LIMIT {
+            return Err(Invalid::FilesystemRoots);
+        }
+        if self.read.iter().collect::<std::collections::BTreeSet<_>>().len() != self.read.len()
+            || self.write.iter().collect::<std::collections::BTreeSet<_>>().len() != self.write.len()
+        {
+            return Err(Invalid::FilesystemRoots);
+        }
+        Ok(())
+    }
+}
+
 /// One exact container an extension asks to see, or an explicit workspace-wide selector.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 #[serde(untagged)]
@@ -236,8 +280,9 @@ pub struct Manifest {
     pub pane_providers: Vec<PaneProvider>,
     #[serde(default)]
     pub resources: Resources,
+    /// Path authority is separate by verb; writable paths are not implicitly readable.
     #[serde(default)]
-    pub filesystem_roots: Vec<RelativePath>,
+    pub filesystem: FilesystemGrant,
 }
 
 impl Manifest {
@@ -286,12 +331,13 @@ impl Manifest {
         {
             return Err(Invalid::PaneProviders);
         }
-        if !manifest.filesystem_roots.is_empty()
-            && !manifest.capabilities.holds(Capability::FilesystemRead)
-            && !manifest.capabilities.holds(Capability::FilesystemWrite)
-        {
+        if !manifest.filesystem.read.is_empty() && !manifest.capabilities.holds(Capability::FilesystemRead) {
             return Err(Invalid::Undeclared(Capability::FilesystemRead));
         }
+        if !manifest.filesystem.write.is_empty() && !manifest.capabilities.holds(Capability::FilesystemWrite) {
+            return Err(Invalid::Undeclared(Capability::FilesystemWrite));
+        }
+        manifest.filesystem.validate()?;
         manifest.containers.validate()?;
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)
@@ -328,6 +374,7 @@ pub enum Invalid {
     Undeclared(Capability),
     PaneProviders,
     ContainerSelectors,
+    FilesystemRoots,
 }
 
 impl std::fmt::Display for Invalid {
@@ -357,6 +404,7 @@ impl std::fmt::Display for Invalid {
             }
             Self::PaneProviders => formatter.write_str("pane provider ids must be unique and titles must not be empty"),
             Self::ContainerSelectors => formatter.write_str("container selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
+            Self::FilesystemRoots => formatter.write_str("filesystem scopes must contain at most 128 unique read or write roots"),
         }
     }
 }
@@ -365,8 +413,8 @@ impl std::error::Error for Invalid {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerGrant, ContainerSelector, Manifest};
-    use crate::PROTOCOL;
+    use super::{ContainerGrant, ContainerSelector, FilesystemGrant, Manifest};
+    use crate::{RelativePath, PROTOCOL};
 
     fn document(extra: &str) -> String {
         format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}")
@@ -403,5 +451,30 @@ mod tests {
         ] {
             assert!(Manifest::parse(&document(scope), PROTOCOL).is_err(), "accepted {scope}");
         }
+    }
+
+    #[test]
+    fn filesystem_consent_intersects_read_and_write_roots_independently() {
+        let requested = FilesystemGrant {
+            read: vec![
+                RelativePath::new("src").unwrap(),
+                RelativePath::new("README.md").unwrap(),
+            ],
+            write: vec![RelativePath::new("workspace.toml").unwrap()],
+        };
+        let consented = FilesystemGrant {
+            read: vec![RelativePath::new("src").unwrap()],
+            write: vec![
+                RelativePath::new("README.md").unwrap(),
+                RelativePath::new("workspace.toml").unwrap(),
+            ],
+        };
+        assert_eq!(
+            requested.intersect(&consented),
+            FilesystemGrant {
+                read: vec![RelativePath::new("src").unwrap()],
+                write: vec![RelativePath::new("workspace.toml").unwrap()],
+            }
+        );
     }
 }

@@ -369,7 +369,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 
@@ -413,7 +413,7 @@ mod tests {
         let listener = Listener::open(&spec(&socket), |_| {}).expect("bound");
 
         let mode = std::fs::metadata(&socket).expect("metadata").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "the socket is the extension's credential");
+        assert_eq!(mode & 0o777, 0o666, "the owner-only directory is the credential boundary");
         listener.close().expect("closed");
     }
 

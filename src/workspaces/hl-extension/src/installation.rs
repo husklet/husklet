@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use crate::capability::{Capability, Grant};
-use crate::manifest::{ContainerGrant, ExtensionName, Manifest};
+use crate::manifest::{ContainerGrant, ExtensionName, FilesystemGrant, Manifest};
 
 /// What a host persists per workspace for one extension.
 ///
@@ -36,6 +36,9 @@ pub struct Record {
     /// Exact resource consent paired with `granted` and the image digest.
     #[serde(default)]
     pub containers: ContainerGrant,
+    /// Exact per-verb workspace path consent paired with this image digest.
+    #[serde(default)]
+    pub filesystem: FilesystemGrant,
     /// Whether the sidecar should be running.
     pub enabled: bool,
     /// When the record was first written, in milliseconds since the epoch,
@@ -273,6 +276,25 @@ impl Installation {
         consented_containers: &ContainerGrant,
         at: i64,
     ) -> Result<&Record, Objection> {
+        self.install_resource_scoped(
+            manifest,
+            digest,
+            consented,
+            consented_containers,
+            &FilesystemGrant::default(),
+            at,
+        )
+    }
+
+    pub fn install_resource_scoped(
+        &mut self,
+        manifest: &Manifest,
+        digest: &str,
+        consented: &Grant,
+        consented_containers: &ContainerGrant,
+        consented_filesystem: &FilesystemGrant,
+        at: i64,
+    ) -> Result<&Record, Objection> {
         if digest.is_empty() {
             return Err(Objection::Digest);
         }
@@ -281,6 +303,7 @@ impl Installation {
         }
         let granted = manifest.capabilities.intersect(consented);
         let containers = manifest.containers.intersect(consented_containers);
+        let filesystem = manifest.filesystem.intersect(consented_filesystem);
         // The name is vacant, checked above, so this always inserts.
         let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| Entry {
             record: Record {
@@ -289,6 +312,7 @@ impl Installation {
                 version: manifest.version.clone(),
                 granted,
                 containers,
+                filesystem,
                 enabled: false,
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
@@ -359,6 +383,25 @@ impl Installation {
         at: i64,
         replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
     ) -> Result<&Record, UpdateFailure<E>> {
+        self.commit_update_resource_scoped(
+            update,
+            consented,
+            consented_containers,
+            &FilesystemGrant::default(),
+            at,
+            replace,
+        )
+    }
+
+    pub fn commit_update_resource_scoped<E>(
+        &mut self,
+        update: Update,
+        consented: &Grant,
+        consented_containers: &ContainerGrant,
+        consented_filesystem: &FilesystemGrant,
+        at: i64,
+        replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
+    ) -> Result<&Record, UpdateFailure<E>> {
         let entry = self
             .entries
             .get_mut(&update.name)
@@ -382,6 +425,7 @@ impl Installation {
             version: update.candidate_version,
             granted,
             containers: update.manifest.containers.intersect(consented_containers),
+            filesystem: update.manifest.filesystem.intersect(consented_filesystem),
             enabled: entry.record.enabled,
             installed_at: at,
             pane_providers: update.manifest.pane_providers.clone(),
@@ -598,7 +642,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: crate::manifest::Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: crate::FilesystemGrant::default(),
         }
     }
 

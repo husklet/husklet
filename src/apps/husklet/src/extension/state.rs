@@ -201,7 +201,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 
@@ -215,6 +215,7 @@ mod tests {
         let records = records(temporary.path());
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             image_digest: "sha256:aaaa".to_owned(),
             version: "1.0.0".to_owned(),
@@ -238,6 +239,7 @@ mod tests {
         records
             .save(&Record {
                 containers: hl_extension::ContainerGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
                 name: name.clone(),
                 image_digest: "sha256:aaaa".to_owned(),
                 version: "1.0.0".to_owned(),

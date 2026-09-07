@@ -220,7 +220,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
         }
     }
