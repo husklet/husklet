@@ -1632,6 +1632,12 @@ static int ckpt_path_is_ctty(const char *path) {
 
 static unsigned char g_ckpt_halfclose_test_bytes[CKPT_HALFCLOSE_TEST_CAPACITY];
 static size_t g_ckpt_halfclose_test_length;
+static unsigned int g_ckpt_halfclose_test_irreversible;
+
+static int ckpt_halfclose_test_mark_irreversible(void) {
+    ++g_ckpt_halfclose_test_irreversible;
+    return 0;
+}
 
 static int ckpt_halfclose_test_begin(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,
                                      struct ckpt_sink_stream **out) {
@@ -1726,6 +1732,8 @@ HL_API int HL_TARGET_LOCAL(checkpoint_socket_halfclose_test)(uint32_t scenario) 
     if (scenario > 3) return 99;
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return 10;
     ckpt_halfclose_test_identify(pair[0], pair[1], UINT64_C(0x00c10cd000000001));
+    g_ckpt_halfclose_test_irreversible = 0;
+    g_ckpt_stream_mark_irreversible_test = ckpt_halfclose_test_mark_irreversible;
     ckpt_sink_install(&g_ckpt_halfclose_test_ops);
 
     if (scenario == 0) {
@@ -1797,10 +1805,14 @@ HL_API int HL_TARGET_LOCAL(checkpoint_socket_halfclose_test)(uint32_t scenario) 
             verdict = 49;
     }
 
+    unsigned int expected_irreversible = scenario == 1 ? 1u : 0u;
+    if (verdict == 0 && g_ckpt_halfclose_test_irreversible != expected_irreversible) verdict = 98;
+
     ckpt_halfclose_test_forget(pair[0], pair[1]);
     close(pair[0]);
     close(pair[1]);
     ckpt_sink_install(saved_sink ? saved_sink->ops : NULL);
+    g_ckpt_stream_mark_irreversible_test = NULL;
     g_ckpt_capture_destructive = saved_destructive;
     return verdict;
 }
