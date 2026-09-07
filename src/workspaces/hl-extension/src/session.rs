@@ -116,11 +116,22 @@ impl Session {
         &self.filesystem.read
     }
 
-    fn permit_filesystem_path(&self, capability: Capability, path: &hl_rpc::RelativePath) -> Result<(), Failure> {
+    fn permit_filesystem_path(
+        &self,
+        capability: Capability,
+        access: FilesystemAccess,
+        path: &hl_rpc::RelativePath,
+    ) -> Result<(), Failure> {
         self.peer.authority().permit(capability)?;
-        let roots = match capability {
+        let roots: &[hl_rpc::RelativePath] = match capability {
             Capability::FilesystemRead => &self.filesystem.read,
-            Capability::FilesystemWrite => &self.filesystem.write,
+            Capability::FilesystemWrite => match access {
+                FilesystemAccess::Write => &self.filesystem.write,
+                FilesystemAccess::Create => &self.filesystem.create,
+                FilesystemAccess::Delete => &self.filesystem.delete,
+                FilesystemAccess::Rename => &self.filesystem.rename,
+                FilesystemAccess::Read => &[],
+            },
             _ => {
                 return Err(Failure::Denied {
                     capability: capability.as_str().into(),
@@ -259,11 +270,11 @@ impl Session {
         let capability = request.capability();
         match request {
             Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
-                self.permit_filesystem_path(capability, from)?;
-                self.permit_filesystem_path(capability, to)?;
+                self.permit_filesystem_path(capability, FilesystemAccess::Rename, from)?;
+                self.permit_filesystem_path(capability, FilesystemAccess::Rename, to)?;
             }
             _ => match request.path() {
-                Some(path) => self.permit_filesystem_path(capability, path)?,
+                Some(path) => self.permit_filesystem_path(capability, filesystem_access(request), path)?,
                 None => self.peer.authority().permit(capability)?,
             },
         }
@@ -773,9 +784,14 @@ impl Session {
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
-                Ok(Reply::Extension(
-                    port.install(job, *revision, image_digest, granted, containers, filesystem)?,
-                ))
+                Ok(Reply::Extension(port.install(
+                    job,
+                    *revision,
+                    image_digest,
+                    granted,
+                    containers,
+                    filesystem,
+                )?))
             }
             Request::ExtensionUpdate {
                 job,
@@ -787,9 +803,14 @@ impl Session {
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
-                Ok(Reply::Extension(
-                    port.update(job, *revision, image_digest, granted, containers, filesystem)?,
-                ))
+                Ok(Reply::Extension(port.update(
+                    job,
+                    *revision,
+                    image_digest,
+                    granted,
+                    containers,
+                    filesystem,
+                )?))
             }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),
@@ -1166,6 +1187,25 @@ impl Session {
         self.pending.retain(|frame| frame.slot != slot);
         self.mutations.retain(|mutation| mutation.slot != slot);
         Ok(Reply::Done)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FilesystemAccess {
+    Read,
+    Write,
+    Create,
+    Delete,
+    Rename,
+}
+
+fn filesystem_access(request: &Request) -> FilesystemAccess {
+    match request {
+        Request::FilesystemWrite { .. } | Request::FilesystemWriteObserved { .. } => FilesystemAccess::Write,
+        Request::FilesystemCreateObserved { .. } | Request::FilesystemMkdir { .. } => FilesystemAccess::Create,
+        Request::FilesystemRemove { .. } | Request::FilesystemRemoveObserved { .. } => FilesystemAccess::Delete,
+        Request::FilesystemRename { .. } | Request::FilesystemRenameObserved { .. } => FilesystemAccess::Rename,
+        _ => FilesystemAccess::Read,
     }
 }
 

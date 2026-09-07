@@ -197,12 +197,20 @@ impl WorkspaceFiles for WorkspaceDirectory {
                 }
                 directory
             };
-            if !directory { continue; }
+            if !directory {
+                continue;
+            }
             let mut children = self.list(&path)?;
             children.sort_by(|left, right| left.path.to_string().cmp(&right.path.to_string()));
-            for child in children.into_iter().rev() { pending.push(child.path); }
+            for child in children.into_iter().rev() {
+                pending.push(child.path);
+            }
         }
-        Ok(FileInventory { entries: entries.into_values().collect(), complete, coalesced: 0 })
+        Ok(FileInventory {
+            entries: entries.into_values().collect(),
+            complete,
+            coalesced: 0,
+        })
     }
 
     /// # Errors
@@ -303,8 +311,14 @@ impl WorkspaceFiles for WorkspaceDirectory {
     /// `HostError::Conflict` for a path that resolves outside the root, and a
     /// failure otherwise.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError> {
-        let target = self.publication(path)?;
-        atomic_write(&target, contents).map_err(|error| absence(path, &error))
+        let entry = self.stat(path)?;
+        if entry.directory {
+            return Err(HostError::Conflict(format!("{path} is a directory")));
+        }
+        let observed = entry
+            .identity
+            .ok_or_else(|| HostError::Conflict(format!("{path} has no stable identity")))?;
+        self.write_observed(path, &observed, contents).map(|_| ())
     }
 
     fn write_observed(&self, path: &RelativePath, observed: &str, contents: &[u8]) -> Result<String, HostError> {
@@ -602,10 +616,6 @@ impl Drop for Temporary {
     }
 }
 
-fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
-    atomic_write_with(target, contents, || Ok(()), |_, _, _| Ok(false))
-}
-
 fn atomic_create(target: &Path, contents: &[u8]) -> io::Result<String> {
     let mut identity = None;
     atomic_write_with(
@@ -859,7 +869,9 @@ mod tests {
         assert!(!listed[0].directory);
         assert_eq!(files.stat(&path("logs/app.log")).expect("metadata"), listed[0]);
 
-        files.write(&path("logs/written.txt"), b"new").expect("write");
+        files
+            .create_observed(&path("logs/written.txt"), b"new")
+            .expect("create");
         assert_eq!(std::fs::read(root.join("logs/written.txt")).expect("file"), b"new");
         files.mkdir(&path("logs/nested")).expect("mkdir");
         files
@@ -914,15 +926,18 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let root = temporary.path().join("workspace");
         let files = std::sync::Arc::new(WorkspaceDirectory::new(&root).expect("root"));
+        std::fs::write(root.join("state.bin"), b"").expect("initial file");
         let first = vec![b'a'; 64 * 1024];
         let second = vec![b'b'; 64 * 1024];
         let threads = [first.clone(), second.clone()].map(|contents| {
             let files = std::sync::Arc::clone(&files);
-            std::thread::spawn(move || files.write(&path("state.bin"), &contents).expect("atomic write"))
+            std::thread::spawn(move || files.write(&path("state.bin"), &contents))
         });
+        let mut published_writes = 0;
         for thread in threads {
-            thread.join().expect("writer");
+            published_writes += usize::from(thread.join().expect("writer").is_ok());
         }
+        assert!(published_writes >= 1, "at least one raced write publishes");
         let published = std::fs::read(root.join("state.bin")).expect("published");
         assert!(
             published == first || published == second,
@@ -1012,13 +1027,25 @@ mod tests {
         let inventory = files.inventory(&[path("source")]).expect("inventory");
         assert!(inventory.complete);
         assert_eq!(inventory.coalesced, 0);
-        assert_eq!(inventory.entries.iter().map(|entry| entry.path.to_string()).collect::<Vec<_>>(), ["source", "source/main.ts", "source/nested", "source/nested/lib.ts"]);
+        assert_eq!(
+            inventory
+                .entries
+                .iter()
+                .map(|entry| entry.path.to_string())
+                .collect::<Vec<_>>(),
+            ["source", "source/main.ts", "source/nested", "source/nested/lib.ts"]
+        );
         assert!(inventory.entries.iter().all(|entry| entry.identity.is_some()));
         let whole = files
             .inventory(&[path("source"), path("private")])
             .expect("declared-root inventory");
-        assert!(whole.entries.iter().any(|entry| entry.path.to_string() == "private/key"));
-        for index in 0..260 { std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file"); }
+        assert!(whole
+            .entries
+            .iter()
+            .any(|entry| entry.path.to_string() == "private/key"));
+        for index in 0..260 {
+            std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file");
+        }
         let bounded = files.inventory(&[path("source")]).expect("bounded inventory");
         assert_eq!(bounded.entries.len(), 256);
         assert!(!bounded.complete);
@@ -1192,6 +1219,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("root");
         let torn = root.join(".husklet-write-old.tmp");
         std::fs::write(&torn, b"torn").expect("torn temporary");
+        std::fs::write(root.join("state"), b"old").expect("initial state");
         let files = WorkspaceDirectory::new(&root).expect("root");
         files.write(&path("state"), b"new").expect("write");
         assert_eq!(std::fs::read(root.join("state")).expect("state"), b"new");

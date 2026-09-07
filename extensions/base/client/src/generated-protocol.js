@@ -1882,6 +1882,39 @@ const definitions = {
             "name": "RelativePath"
           }
         }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "delete",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "rename",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
       }
     ],
     "kind": "struct",

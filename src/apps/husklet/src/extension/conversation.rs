@@ -231,7 +231,10 @@ impl Conversation {
             },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
-                write: roots,
+                write: roots.clone(),
+                create: roots.clone(),
+                delete: roots.clone(),
+                rename: roots,
             },
         )
     }
@@ -1498,6 +1501,7 @@ mod tests {
                 hl_extension::FilesystemGrant {
                     read: vec![RelativePath::new("src").unwrap()],
                     write: vec![RelativePath::new("workspace.toml").unwrap()],
+                    ..hl_extension::FilesystemGrant::default()
                 },
             )?;
             conversation.greet()?;
@@ -1695,6 +1699,14 @@ mod tests {
         let answer = ask(
             &mut wire,
             &Request::FilesystemRead {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemRemove {
                 path: RelativePath::new("workspace.toml").unwrap(),
             },
         );

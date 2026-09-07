@@ -155,7 +155,7 @@ wrong caller.
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
-| Single-file workspace editor | Strong | \`[filesystem]\` grants read and write roots independently, so an extension may scan a tree while modifying one exact file. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
+| Single-file workspace editor | Strong | \`[filesystem]\` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
 | Extension catalogue/manager | Partial | Discovery can be rendered from a catalogue owned by the manager extension; acquisition/install/update/enable/disable/remove are complete. The host does not define or trust a global catalogue service. |
@@ -180,7 +180,7 @@ Omitting \`[containers]\` means no container authority, even with a container ve
 capability. Workspace-wide authority is explicit: \`selectors = [{ all = true }]\`.
 
 Filesystem grants implement the same two-dimensional model: \`filesystem:read\` and
-\`filesystem:write\` decide the verb, while independently consented exact roots decide
+\`filesystem:write\` permits the mutation domain, while independently consented write, create, delete, and rename roots decide
 the resource. Writable roots are not implicitly readable. Container enforcement follows that
 order; the JavaScript client's checks are never treated as a security boundary.
 

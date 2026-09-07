@@ -80,6 +80,9 @@ export interface ContainerGrant {
 export interface FilesystemGrant {
   read: string[];
   write: string[];
+  create: string[];
+  delete: string[];
+  rename: string[];
 }
 export interface ExtensionCandidate {
   name: string;

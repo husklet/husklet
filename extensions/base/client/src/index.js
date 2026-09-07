@@ -413,10 +413,10 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
+      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
         await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
       ),
-      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
+      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
         await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
       ),
     },
@@ -1940,7 +1940,7 @@ export function workspace(session, { signal } = {}) {
     revision,
     granted,
     containers = { selectors: [], create: false },
-    filesystem = { read: [], write: [] },
+    filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
     { timeoutMs = 30_000 } = {},
   ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {

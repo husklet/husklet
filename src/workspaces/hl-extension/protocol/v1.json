@@ -1592,6 +1592,39 @@
               "name": "RelativePath"
             }
           }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "delete",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "rename",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
         }
       ],
       "kind": "struct",
@@ -11122,7 +11155,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:3431973cc7bbb57f",
+  "source_fingerprint": "fnv1a64:7b59e523886d43fe",
   "specification_version": 1,
   "topics": [
     {

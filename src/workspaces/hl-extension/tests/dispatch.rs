@@ -861,7 +861,10 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
     })
     .with_filesystem(hl_extension::FilesystemGrant {
         read: roots.clone(),
-        write: roots,
+        write: roots.clone(),
+        create: roots.clone(),
+        delete: roots.clone(),
+        rename: roots,
     })
 }
 
@@ -2563,6 +2566,7 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     .with_filesystem(hl_extension::FilesystemGrant {
         read: vec![path("src")],
         write: vec![path("workspace.toml")],
+        ..hl_extension::FilesystemGrant::default()
     });
 
     assert!(session
@@ -2605,6 +2609,53 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     assert!(
         host.ledger.reached().is_empty(),
         "wrong-verb roots must fail before the filesystem port"
+    );
+}
+
+#[test]
+fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
+    let host = Host::new();
+    let file = path("settings.json");
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::FilesystemWrite]),
+        vec![file.clone()],
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        write: vec![file.clone()],
+        ..hl_extension::FilesystemGrant::default()
+    });
+
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: file.clone(),
+                contents: b"{}".to_vec(),
+            },
+            &services(&host),
+        )
+        .is_ok());
+    host.ledger.clear();
+
+    for request in [
+        Request::FilesystemCreateObserved {
+            path: file.clone(),
+            contents: b"{}".to_vec(),
+        },
+        Request::FilesystemRemove { path: file.clone() },
+        Request::FilesystemRename {
+            from: file.clone(),
+            to: path("settings.old.json"),
+        },
+    ] {
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Denied { .. })
+        ));
+    }
+    assert!(
+        host.ledger.reached().is_empty(),
+        "unconsented mutation verbs must fail before the filesystem port"
     );
 }
 
