@@ -26,6 +26,9 @@
 #include <unistd.h>
 
 static uint64_t g_ckpt_stream_next_id = 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int (*g_ckpt_stream_mark_irreversible_test)(void);
+#endif
 
 // One round trip with no payload in either direction. Returns the reply status, or -1 on transport failure.
 static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint64_t offset, uint32_t flags,
@@ -71,6 +74,9 @@ static int ckpt_stream_settle_refusal(void) {
 }
 
 static int ckpt_stream_mark_irreversible(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_ckpt_stream_mark_irreversible_test != NULL) return g_ckpt_stream_mark_irreversible_test();
+#endif
     if (hl_option_get("HL_CKPT_TEST_BREAK_IRREVERSIBLE_TRANSPORT") != NULL) {
         int descriptor = hl_ckpt_channel_acquire();
         if (descriptor >= 0) (void)close(descriptor);

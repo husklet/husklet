@@ -20,10 +20,16 @@ struct ckpt_pipe_test_shared {
     _Atomic int pause_write;
     _Atomic int write_entered;
     _Atomic int release_write;
+    _Atomic int irreversible;
     unsigned char bytes[CKPT_PIPE_TEST_PAYLOAD];
 };
 
 static struct ckpt_pipe_test_shared *g_ckpt_pipe_test_shared;
+
+static int ckpt_pipe_test_mark_irreversible(void) {
+    atomic_fetch_add(&g_ckpt_pipe_test_shared->irreversible, 1);
+    return 0;
+}
 
 static int ckpt_pipe_test_begin(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,
                                 struct ckpt_sink_stream **out) {
@@ -88,6 +94,11 @@ static const ckpt_sink_vtable g_ckpt_pipe_test_ops = {
     .claim = ckpt_pipe_test_claim,
     .unclaim = ckpt_pipe_test_unclaim,
 };
+
+static void ckpt_pipe_test_install(void) {
+    g_ckpt_stream_mark_irreversible_test = ckpt_pipe_test_mark_irreversible;
+    ckpt_sink_install(&g_ckpt_pipe_test_ops);
+}
 
 // The same shared page read back as an image source, so the restore refill consumes exactly the object the
 // capture drain published rather than a hand-built copy of it.
@@ -190,7 +201,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         }
         verdict = 0;
         if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 12;
-        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        ckpt_pipe_test_install();
         pid_t children[2] = {-1, -1};
         for (int index = 0; verdict == 0 && index < 2; ++index) {
             children[index] = hl_host_process_clone_current();
@@ -228,7 +239,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         }
         verdict = 0;
         if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 32;
-        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        ckpt_pipe_test_install();
         // Three descriptors on ONE open file description, exactly what fork hands each holder.
         int holders[3] = {pair[0], -1, -1};
         for (int index = 1; verdict == 0 && index < 3; ++index) {
@@ -280,7 +291,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         }
         verdict = 0;
         if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 72;
-        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        ckpt_pipe_test_install();
         g_ckpt_capture_destructive = 0;
         if (verdict == 0 && ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL) != 0) verdict = 73;
         if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != 0) verdict = 74;
@@ -329,7 +340,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         // Ascending order is the whole point: the pipe must be admitted before the socket is reached.
         if (verdict == 0 && !(pair[0] < refused_socket)) verdict = 83;
         if (ckpt_pipe_test_open_shared() != 0) verdict = 84;
-        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        ckpt_pipe_test_install();
         g_ckpt_capture_destructive = 0;
         if (verdict == 0 && ckpt_pipe_test_refused_scan(pair[0], (uint64_t)0x11, refused_socket) == 0)
             verdict = 85; // the scan must refuse; a fixture whose refusal stopped firing proves nothing
@@ -350,7 +361,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         verdict = 0;
         if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 92;
         atomic_store(&g_ckpt_pipe_test_shared->pause_write, 1);
-        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        ckpt_pipe_test_install();
         pid_t child = verdict == 0 ? hl_host_process_clone_current() : -1;
         if (child == 0) _exit(ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL) == 0 ? 0 : 1);
         if (child < 0) verdict = 93;
@@ -374,9 +385,15 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         return 99;
     }
 
+    if (verdict == 0 && g_ckpt_pipe_test_shared != NULL) {
+        int expected_irreversible = scenario == 0 || scenario == 1 ? 3 : scenario == 4 || scenario == 6 ? 1 : 0;
+        if (atomic_load(&g_ckpt_pipe_test_shared->irreversible) != expected_irreversible) verdict = 98;
+    }
+
     if (pair[0] >= 0) close(pair[0]);
     if (pair[1] >= 0) close(pair[1]);
     ckpt_sink_install(saved_sink ? saved_sink->ops : NULL);
+    g_ckpt_stream_mark_irreversible_test = NULL;
     g_ckpt_capture_destructive = saved_destructive;
     ckpt_pipe_test_close_shared();
     return verdict;
