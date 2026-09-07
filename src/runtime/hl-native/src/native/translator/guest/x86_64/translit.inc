@@ -11544,7 +11544,7 @@ static int translit_direct_call_signal_stage_test(void) {
           translit_test_call_site.flags_live < translit_test_call_site.restore_end &&
           translit_test_call_site.save_end < translit_test_call_site.end &&
           translit_test_call_site.end <= translit_test_call_instruction_end))
-        goto control_mem_done;
+        return 0;
     // Frozen independently from the marker fields: direct CALL begins with two imm32 stores and the
     // architectural RSP commit. Any moved marker, changed displacement or reordered operation fails here.
     uint8_t *start = translit_test_call_instruction_start;
@@ -11574,7 +11574,7 @@ static int translit_direct_call_signal_stage_test(void) {
     uint8_t *const committed_at = start + 24;
     int saved_selected = translit_selected;
     translit_selected = 1;
-    exact = 1;
+    int exact = 1;
     for (uint8_t *pc = translit_test_call_instruction_start;
          exact && pc < translit_test_call_instruction_end; ++pc) {
         int committed = pc >= committed_at;
