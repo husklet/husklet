@@ -446,9 +446,27 @@ impl<'a> CaseExecution<'a> {
             spec = spec.backend_diagnostic(state.path().join("backend-diagnostics"));
             spec = spec.mount(Mount::read_write(state.path(), "/checkpoint-state"));
         }
+        let backend_diagnostic = if checkpoint_state.is_none() && self.execution.diagnostics() {
+            match tempfile::Builder::new().prefix("backend-diagnostic-").tempfile() {
+                Ok(file) => Some(file),
+                Err(error) => return CaseResult::Failed(self.case.id.clone(), attempt, error.to_string()),
+            }
+        } else {
+            None
+        };
+        if let Some(file) = &backend_diagnostic {
+            spec = spec.backend_diagnostic(file.path());
+        }
         let mut status = None;
         let outcome = self
-            .execute(spec, &name, timeout, &mut status, checkpoint_state.as_ref())
+            .execute(
+                spec,
+                &name,
+                timeout,
+                &mut status,
+                checkpoint_state.as_ref(),
+                backend_diagnostic.as_ref().map(tempfile::NamedTempFile::path),
+            )
             .await
             .map_err(|error| error.to_string());
         let retained = if outcome.is_err() {
@@ -488,6 +506,7 @@ impl<'a> CaseExecution<'a> {
         timeout: Duration,
         observed: &mut Option<ExitStatus>,
         checkpoint_state: Option<&tempfile::TempDir>,
+        backend_diagnostic: Option<&Path>,
     ) -> Result<(), Error> {
         self.containers.create(spec).await?;
         if let Some((network, endpoint)) = self.case.engine_options.bridge()? {
@@ -527,6 +546,9 @@ impl<'a> CaseExecution<'a> {
             (None, None) => {}
         }
         let mut logs = self.containers.logs(name).await?;
+        if let Some(path) = backend_diagnostic {
+            append_backend_diagnostic(&mut logs.stderr, path)?;
+        }
         logs.bounded()?;
         let mut profile_validation = output::validate_backend_tree(&logs.stderr, self.execution.diagnostics());
         let aarch64_interpreter_product = self.execution.diagnostics()
@@ -630,6 +652,34 @@ impl<'a> CaseExecution<'a> {
             return Err(format!("container checkpoint fixture exited as {status:?}").into());
         }
         Ok(())
+    }
+}
+
+fn append_backend_diagnostic(stderr: &mut Vec<u8>, path: &Path) -> Result<(), Error> {
+    let diagnostic = fs::read(path)?;
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") && !diagnostic.is_empty() {
+        stderr.push(b'\n');
+    }
+    stderr.extend_from_slice(&diagnostic);
+    Ok(())
+}
+
+#[cfg(test)]
+mod backend_diagnostic_tests {
+    use super::append_backend_diagnostic;
+
+    #[test]
+    fn private_backend_receipt_is_joined_before_case_validation() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"[diag] backend-tree version=1 claimed=2 completed=2\n").unwrap();
+        let mut stderr = b"guest warning\n".to_vec();
+
+        append_backend_diagnostic(&mut stderr, file.path()).unwrap();
+
+        assert_eq!(
+            stderr,
+            b"guest warning\n[diag] backend-tree version=1 claimed=2 completed=2\n"
+        );
     }
 }
 

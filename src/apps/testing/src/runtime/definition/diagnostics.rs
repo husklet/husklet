@@ -9,8 +9,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The records that carry named counters; other `hl-native-*` lines are per-site histograms.
-const RECORDS: [&str; 7] = [
+const RECORDS: [&str; 8] = [
     "[prof]",
+    "[diag] backend-shape-detail",
     "hl-c:",
     "hl-native:",
     "hl-native-detail:",
@@ -118,13 +119,11 @@ fn checkpoint_generations(stderr: &[u8]) -> String {
     if receipts.len() != 3
         || receipts.iter().enumerate().any(|(generation, line)| {
             let prefix = format!("checkpoint-generation={generation} ");
-            !line
-                .strip_prefix(&prefix)
-                .is_some_and(|receipt| {
-                    receipt.starts_with("backend-tree ")
-                        || receipt.starts_with("backend-shape ")
-                        || receipt.starts_with("backend-shape-detail ")
-                })
+            !line.strip_prefix(&prefix).is_some_and(|receipt| {
+                receipt.starts_with("backend-tree ")
+                    || receipt.starts_with("backend-shape ")
+                    || receipt.starts_with("backend-shape-detail ")
+            })
         })
     {
         return "checkpoint-generations=invalid".to_owned();
@@ -467,6 +466,19 @@ mod tests {
         assert!(violation(&assertions("- { counter: crossings, greater-than: 0 }"), report).is_none());
         assert_eq!(Counters::parse(report).get("crossings"), Some(1));
         assert_eq!(super::digest(report), "c crossings=1 translations=9");
+    }
+
+    #[test]
+    fn backend_shape_detail_contributes_candidate_counters() {
+        let report = b"[diag] backend-shape-detail version=2 direct_call_guard_candidate_enabled=1 \
+                       direct_call_guard_attempts=324 direct_call_guard_fast_hits=182\n";
+        let assertions = assertions(
+            "- { counter: direct_call_guard_candidate_enabled, equals: 1 }\n\
+             - { counter: direct_call_guard_attempts, greater-than: 0 }\n\
+             - { counter: direct_call_guard_fast_hits, greater-than: 0 }",
+        );
+
+        assert!(violation(&assertions, report).is_none());
     }
 
     #[test]
