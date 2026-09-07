@@ -25,6 +25,8 @@ import {
 
 type Change = { value?: unknown };
 
+const STORYBOOK_IMAGE = 'ghcr.io/husklet/husklet/extension-storybook:latest';
+
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [inventoryState, setInventoryState] = React.useState<
@@ -85,9 +87,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     };
   }, [api]);
 
-  const inspect = async () => {
-    const wanted = reference.trim();
+  const inspect = async (suggested?: string) => {
+    const wanted = (suggested ?? reference).trim();
     if (!wanted || busy) return;
+    setReference(wanted);
     setBusy('inspect');
     setError('');
     setNotice(null);
@@ -219,15 +222,35 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={3}>
+      <Column pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
           color="text-dim"
           wrap
         />
+        <Heading label="Discover" scale="caption" />
+        {!installed.some((extension) => extension.name === 'storybook') && (
+          <Card variant="outline">
+            <CardHeader label="Component playground" detail="First-party · Storybook" />
+            <CardContent gap={1}>
+              <Text
+                label="Explore every extension UI component, including large tables, terminals, diffs, metrics, and confirmation flows."
+                color="text-dim"
+                wrap
+              />
+            </CardContent>
+            <CardActions>
+              <Button
+                label="Review access"
+                enabled={!busy}
+                onInvoke={() => inspect(STORYBOOK_IMAGE)}
+              />
+            </CardActions>
+          </Card>
+        )}
         <Card variant="outline">
-          <CardHeader label="Install an extension" detail="OCI image reference" />
+          <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
             <Row gap={1}>
               <Entry
@@ -238,7 +261,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Button
                 label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
                 enabled={Boolean(reference.trim()) && !busy}
-                onInvoke={inspect}
+                onInvoke={() => inspect()}
               />
             </Row>
           </CardContent>

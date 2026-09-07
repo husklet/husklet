@@ -4,6 +4,7 @@ import { createElement as h } from 'react';
 import {
   Containers,
   Executions,
+  Extensions,
   Images,
   Networks,
   Overview,
@@ -138,8 +139,46 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Install an extension'));
+  assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Component playground'));
+  assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
+});
+
+test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
+  const references = [];
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            return { job: 'storybook-review' };
+          },
+          acquisition: async () => ({
+            job: 'storybook-review',
+            revision: 1,
+            state: 'failed',
+            progress: null,
+            candidate: null,
+            error: 'offline fixture',
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Review access');
+  await settled();
+  await settled();
+  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.equal(
+    fieldValue(stage, 'registry.example/extension:version'),
+    'ghcr.io/husklet/husklet/extension-storybook:latest',
+  );
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
