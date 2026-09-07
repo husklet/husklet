@@ -397,7 +397,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 label="All access is off by default. Enable only what this extension needs."
                 tone="warning"
               />
-              <Text label="Husklet access" color="text-dim" />
+              {acquisition.candidate.requested.length > 0 && (
+                <Text label="Husklet access" color="text-dim" />
+              )}
               {acquisition.candidate.requested.length > 0 && (
                 <Row gap={1} align="center">
                   <Text
@@ -439,16 +441,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   />
                 </FormControlLabel>
               ))}
-              {acquisition.candidate.requested.length === 0 && (
-                <Text label="This extension requests no capabilities." />
-              )}
-              <Text label="Container access" color="text-dim" />
               {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
-                <Text
-                  label="Container access starts off. Select only what this extension needs."
-                  color="text-dim"
-                  wrap
-                />
+                <>
+                  <Text label="Container access" color="text-dim" />
+                  <Text
+                    label="Container access starts off. Select only what this extension needs."
+                    color="text-dim"
+                    wrap
+                  />
+                </>
               )}
               {requestedContainers.selectors.map((selector) => {
                 const key = selectorKey(selector);
@@ -487,9 +488,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     }
                   />
                 </FormControlLabel>
-              )}
-              {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
-                <Text label="No container resources requested." color="text-dim" />
               )}
               <Text label="Workspace files" color="text-dim" />
               <FilesystemConsent
