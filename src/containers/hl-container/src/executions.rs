@@ -55,6 +55,22 @@ impl Executions {
         self.service.exec_logs(id).await
     }
 
+    /// Reads at most `limit` durably ordered output records after `sequence`.
+    pub async fn output_after(&self, id: &ExecId, sequence: u64, limit: usize) -> Result<Vec<crate::Entry>> {
+        self.service.inspect_exec(id).await?;
+        self.service
+            .history(&crate::model::JournalId::exec(id.clone()), sequence, limit)
+            .await
+    }
+
+    /// Returns the last durable output sequence for one execution.
+    pub async fn output_cursor(&self, id: &ExecId) -> Result<u64> {
+        self.service.inspect_exec(id).await?;
+        self.service
+            .history_cursor(&crate::model::JournalId::exec(id.clone()))
+            .await
+    }
+
     /// Starts a created execution exactly once and returns its interactive session.
     ///
     /// Detached callers may drop the returned session after a successful start.

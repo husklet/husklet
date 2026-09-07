@@ -854,6 +854,8 @@ static void fdvis_sweep_stale_locked(void) {
 
 struct fdvis_reservation {
     unsigned slot;
+    /* The sentinel identifies a reservation; this identifies which reservation owns the slot. */
+    uint64_t generation;
     int active;
     int new_slot;
 };
@@ -873,7 +875,9 @@ static int proc_fdvis_reserve(struct fdvis_reservation *reservation) {
             /* Name the holder so an abandoned reservation is reclaimable; see fdvis_sweep_stale_locked. */
             g_fdvis[index].reserver_pid = pid;
             g_fdvis[index].owner_start_ns = owner_start;
+            g_fdvis[index].generation = ++g_fdvis_control->generation;
             reservation->slot = index;
+            reservation->generation = g_fdvis[index].generation;
             reservation->active = 1;
             reservation->new_slot = 1;
             fdvis_unlock();
@@ -896,6 +900,7 @@ static int proc_fdvis_reserve_at(int guest_fd, struct fdvis_reservation *reserva
     struct fdvis_slot *present = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
     if (present) {
         reservation->slot = (unsigned)(present - g_fdvis);
+        reservation->generation = present->generation;
         reservation->active = 1;
         fdvis_unlock();
         return 0;
@@ -907,7 +912,9 @@ static int proc_fdvis_reserve_at(int guest_fd, struct fdvis_reservation *reserva
             /* Name the holder so an abandoned reservation is reclaimable; see fdvis_sweep_stale_locked. */
             g_fdvis[index].reserver_pid = pid;
             g_fdvis[index].owner_start_ns = owner_start;
+            g_fdvis[index].generation = ++g_fdvis_control->generation;
             reservation->slot = index;
+            reservation->generation = g_fdvis[index].generation;
             reservation->active = 1;
             reservation->new_slot = 1;
             fdvis_unlock();
@@ -923,7 +930,8 @@ static void proc_fdvis_reservation_cancel(struct fdvis_reservation *reservation)
     if (!reservation || !reservation->active) return;
     fdvis_lock();
     struct fdvis_slot *slot = &g_fdvis[reservation->slot];
-    if (reservation->new_slot && slot->key == UINT64_MAX) memset(slot, 0, sizeof *slot);
+    if (reservation->new_slot && slot->key == UINT64_MAX && slot->generation == reservation->generation)
+        memset(slot, 0, sizeof *slot);
     fdvis_unlock();
     reservation->active = 0;
 }
@@ -934,11 +942,20 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     uint64_t owner_start = 0;
     (void)fdvis_self(&pid, &owner_start);
     fdvis_lock();
-    struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
+    uint64_t key = fdvis_key(pid, guest_fd);
+    struct fdvis_slot *slot = fdvis_find(key, owner_start, 0);
     struct fdvis_slot *reserved = &g_fdvis[reservation->slot];
+    int owns_reservation = reserved->generation == reservation->generation &&
+                           (reservation->new_slot ? reserved->key == UINT64_MAX
+                                                  : reserved->key == key && reserved->owner_start_ns == owner_start);
     if (slot) {
-        if (reserved != slot && reserved->key == UINT64_MAX) memset(reserved, 0, sizeof *reserved);
+        if (reserved != slot && owns_reservation) memset(reserved, 0, sizeof *reserved);
     } else {
+        if (!owns_reservation) {
+            fdvis_unlock();
+            reservation->active = 0;
+            return;
+        }
         slot = reserved;
     }
     fdvis_index_begin_locked();
@@ -1628,6 +1645,7 @@ static int fdvis_after_fork_rollback_test(void) {
     int changed_batch_rebuilt_index = 0;
     int upgrade_rebuilt_index = 0;
     int rollback_rebuilt_index = 0;
+    int stale_existing_reservation_preserved = 0;
     if (fork_index) {
         memset(identities, 0, sizeof *identities * FDVIS_N);
         memset(paths, 0, sizeof *paths * FDPATH_N);
@@ -1696,6 +1714,16 @@ static int fdvis_after_fork_rollback_test(void) {
         rollback_rebuilt_index = indexed_rollback_status == -EAGAIN && !fdvis_index_has_tombstone_test(fork_index) &&
                                  identities[0].key == 0 && identities[1].key == UINT64_C(0x9876) &&
                                  fdvis_find(first_key, child_start, 0) == NULL;
+
+        /* An existing-row reservation stores a physical slot. Another process can remove and reuse that
+         * slot before publication, so the saved generation must agree before writing through the pointer. */
+        memset(identities, 0, sizeof *identities * FDVIS_N);
+        identities[0].key = UINT64_MAX;
+        identities[0].generation = 42;
+        struct fdvis_reservation stale = {.slot = 0, .generation = 41, .active = 1, .new_slot = 0};
+        proc_fdvis_reservation_publish(&stale, HL_NFD - 3, 7, 8, 9);
+        stale_existing_reservation_preserved =
+            identities[0].key == UINT64_MAX && identities[0].generation == 42;
     }
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
@@ -1707,7 +1735,7 @@ static int fdvis_after_fork_rollback_test(void) {
     free(control);
     return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly &&
            commit_survived_timeout && read_only_preserved_index && changed_batch_rebuilt_index &&
-           upgrade_rebuilt_index && rollback_rebuilt_index;
+           upgrade_rebuilt_index && rollback_rebuilt_index && stale_existing_reservation_preserved;
 }
 
 #if !defined(_WIN32)

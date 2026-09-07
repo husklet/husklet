@@ -403,8 +403,22 @@ export function workspace(session, { signal } = {}) {
     start: (name) => done('workspace_start', { name }),
     stop: (name) => done('workspace_stop', { name }),
     restart: (name) => done('workspace_restart', { name }),
+    notifications: {
+      publish: (notification) => {
+        if (!notification || typeof notification !== 'object') throw new TypeError('notification must be an object');
+        for (const [field, limit] of [['id', 128], ['title', 256], ['body', 4096]]) {
+          const value = notification[field];
+          if (typeof value !== 'string' || value.length === 0
+            || new TextEncoder().encode(value).byteLength > limit || /[\u0000-\u001f\u007f]/u.test(value)) {
+            throw new TypeError(`notification ${field} must contain 1..${limit} UTF-8 bytes without control characters`);
+          }
+        }
+        return done('notification_publish', { notification });
+      },
+    },
     extensions: {
       list: async () => expect(await session.call('extension_list'), 'extensions'),
+      catalogue: async () => expect(await session.call('extension_catalogue'), 'extension_catalogue'),
       inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
       enable: (name, imageDigest) => done('extension_enable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       disable: (name, imageDigest) => done('extension_disable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
@@ -413,11 +427,11 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
-        await session.call('extension_install', { job, revision, granted, containers, filesystem }), 'extension',
+      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
+        await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
       ),
-      update: async (job, revision, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
-        await session.call('extension_update', { job, revision, granted, containers, filesystem }), 'extension',
+      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
+        await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
       ),
     },
     containers: {
@@ -432,6 +446,13 @@ export function workspace(session, { signal } = {}) {
       executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
         await session.call('execution_logs', { id: immutableIdentity(id, [32], 'execution'), stdout, stderr }), 'logs',
       ),
+      executionOutput: async (id, { after = 0, limit = 16 } = {}) => {
+        if (!Number.isSafeInteger(after) || after < 0) throw new RangeError('execution output cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) throw new RangeError('execution output limit must be between 1 and 16');
+        return expect(await session.call('execution_output', {
+          id: immutableIdentity(id, [32], 'execution'), after, limit,
+        }), 'execution_output');
+      },
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
         await session.call('execution_wait', { id: immutableIdentity(id, [32], 'execution'), timeout_ms: timeoutMs }), 'execution',
       ),
@@ -1940,7 +1961,7 @@ export function workspace(session, { signal } = {}) {
     revision,
     granted,
     containers = { selectors: [], create: false },
-    filesystem = { read: [], write: [] },
+    filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
     { timeoutMs = 30_000 } = {},
   ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
@@ -1985,7 +2006,7 @@ export function workspace(session, { signal } = {}) {
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](job, revision, granted, containers, filesystem);
+      const committed = await api.extensions[operation](job, revision, digest, granted, containers, filesystem);
       if (committed.name !== candidate.name || committed.image_digest !== digest) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }
@@ -2037,26 +2058,40 @@ export function workspace(session, { signal } = {}) {
         clearTimeout(timer);
         Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
+      const refresh = async () => {
+        if (settled || reading) return;
+        reading = true;
+        try {
+          do {
+            const expectedRevision = latest?.revision;
+            latest = undefined;
+            const status = await api.extensions.acquisition(job);
+            if (status.job !== job) {
+              throw new Error('extension acquisition status returned a different job identity');
+            }
+            const requiredRevision = Math.max(expectedRevision ?? 0, latest?.revision ?? 0);
+            if (status.revision < requiredRevision) {
+              latest = { revision: requiredRevision };
+            } else if (status.revision > afterRevision) {
+              latest = undefined;
+              finish({ changed: true, status });
+            }
+          } while (latest && !settled);
+        } catch (error) {
+          finish(undefined, error);
+        } finally {
+          reading = false;
+        }
+      };
       const observe = (change) => {
         if (settled || change.job !== job || change.revision <= afterRevision) return;
         latest = change;
-        if (reading) return;
-        reading = true;
-        void (async () => {
-          try {
-            while (latest && !settled) {
-              const expected = latest; latest = undefined;
-              const status = await api.extensions.acquisition(job);
-              if (status.job !== job || status.revision < expected.revision || status.revision <= afterRevision) continue;
-              finish({ changed: true, status });
-            }
-          } catch (error) { finish(undefined, error); }
-          finally { reading = false; }
-        })();
+        void refresh();
       };
       api.watchExtensionAcquisitions(observe).then((stop) => {
         dispose = stop;
         if (settled) void stop();
+        else void refresh();
       }, (error) => finish(undefined, error));
       timer = setTimeout(() => finish({ changed: false, job, revision: afterRevision }), timeoutMs);
     });
@@ -2084,6 +2119,7 @@ const facadeOverrides = Object.freeze({
   execution_inspect: 'containers.execution',
   execution_list: 'containers.executions',
   execution_logs: 'containers.executionLogs',
+  execution_output: 'containers.executionOutput',
   execution_wait: 'containers.waitExecution',
   execution_kill: 'containers.signalExecution',
   execution_remove: 'containers.removeExecution',
@@ -2117,7 +2153,7 @@ function facadePath(call) {
   for (const [prefix, group] of [
     ['workspace_', ''], ['extension_', 'extensions.'], ['container_', 'containers.'],
     ['image_', 'images.'], ['volume_', 'volumes.'], ['network_', 'networks.'],
-    ['terminal_', 'terminal.'], ['filesystem_', 'files.'],
+    ['terminal_', 'terminal.'], ['filesystem_', 'files.'], ['notification_', 'notifications.'],
   ]) if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
   return null;
 }
@@ -2138,13 +2174,14 @@ export const protocolSurface = Object.freeze({
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'executionOutput', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
     images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait'],
     volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],
     networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'writeObserved', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
+    notifications: ['publish'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,

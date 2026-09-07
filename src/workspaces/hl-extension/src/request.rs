@@ -78,6 +78,7 @@ pub enum Request {
         name: String,
     },
     ExtensionList,
+    ExtensionCatalogue,
     ExtensionInspect {
         name: String,
     },
@@ -107,9 +108,13 @@ pub enum Request {
         job: String,
         revision: u64,
     },
+    NotificationPublish {
+        notification: crate::port::Notification,
+    },
     ExtensionInstall {
         job: String,
         revision: u64,
+        image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,
@@ -117,6 +122,7 @@ pub enum Request {
     ExtensionUpdate {
         job: String,
         revision: u64,
+        image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,
@@ -141,6 +147,11 @@ pub enum Request {
         id: String,
         stdout: bool,
         stderr: bool,
+    },
+    ExecutionOutput {
+        id: String,
+        after: u64,
+        limit: u16,
     },
     ExecutionWait {
         id: String,
@@ -458,7 +469,7 @@ impl Request {
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
-            Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
+            Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
             Self::ExtensionEnable { .. }
             | Self::ExtensionDisable { .. }
             | Self::ExtensionRetry { .. }
@@ -475,6 +486,7 @@ impl Request {
             | Self::ExecutionInspect { .. }
             | Self::ExecutionList
             | Self::ExecutionLogs { .. }
+            | Self::ExecutionOutput { .. }
             | Self::ExecutionWait { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
@@ -549,6 +561,7 @@ impl Request {
             | Self::InterfaceRenderAt { .. }
             | Self::SourceResize { .. }
             | Self::SourceResizeAt { .. } => Capability::Interface,
+            Self::NotificationPublish { .. } => Capability::NotificationPublish,
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }
@@ -660,6 +673,7 @@ pub enum Reply {
     WorkspaceConfiguration(WorkspaceConfiguration),
     Workspaces(Vec<WorkspaceState>),
     Extensions(Vec<crate::port::ExtensionSummary>),
+    ExtensionCatalogue(crate::port::ExtensionCatalogue),
     Extension(crate::port::ExtensionSummary),
     ExtensionAcquisitionJob(crate::port::ExtensionAcquisitionJob),
     ExtensionAcquisition(crate::port::ExtensionAcquisitionStatus),
@@ -667,6 +681,7 @@ pub enum Reply {
     Container(ContainerSummary),
     Processes(ProcessList),
     Logs(ContainerOutput),
+    ExecutionOutput(crate::port::ExecutionOutputPage),
     Execution(ExecutionSummary),
     Executions(ExecutionList),
     Images(crate::port::ImageInventory),

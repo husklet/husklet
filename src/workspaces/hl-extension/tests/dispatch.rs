@@ -43,6 +43,14 @@ impl Ledger {
 struct Host {
     ledger: Ledger,
     cancelled_revision: Cell<Option<u64>>,
+    fail_notification: Cell<bool>,
+}
+
+impl hl_extension::NotificationSink for Host {
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+        self.ledger.note("notifications.publish");
+        if self.fail_notification.get() { Err(HostError::Failed("desktop unavailable".into())) } else { Ok(()) }
+    }
 }
 impl hl_extension::port::VolumeStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
@@ -120,6 +128,7 @@ impl Host {
         Self {
             ledger: Ledger::default(),
             cancelled_revision: Cell::new(None),
+            fail_notification: Cell::new(false),
         }
     }
 
@@ -202,6 +211,26 @@ impl ContainerInventory for Host {
             stdout_truncated: false,
             stderr_truncated: false,
             eof: true,
+        })
+    }
+    fn execution_output(
+        &self,
+        _id: &str,
+        after: u64,
+        _limit: u16,
+    ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+        self.ledger.note("executions.output");
+        Ok(hl_extension::port::ExecutionOutputPage {
+            entries: vec![hl_extension::port::ExecutionOutputEntry {
+                sequence: after + 1,
+                timestamp_ms: 7,
+                stream: "stdout".into(),
+                bytes: b"row\n".to_vec(),
+            }],
+            next: after + 1,
+            more: false,
+            eof: false,
+            gap: false,
         })
     }
 
@@ -740,6 +769,14 @@ impl WorkspaceFiles for Host {
 }
 
 impl ExtensionStore for Host {
+    fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+        self.ledger.note("extensions.catalogue");
+        Ok(hl_extension::port::ExtensionCatalogue {
+            entries: Vec::new(),
+            complete: true,
+        })
+    }
+
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
         self.ledger.note("extensions.list");
         Ok(vec![ExtensionSummary {
@@ -803,6 +840,7 @@ impl ExtensionStore for Host {
         &self,
         job: &str,
         _revision: u64,
+        _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -814,6 +852,7 @@ impl ExtensionStore for Host {
         &self,
         job: &str,
         _revision: u64,
+        _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -840,6 +879,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        notifications: host,
     }
 }
 
@@ -859,7 +899,10 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
     })
     .with_filesystem(hl_extension::FilesystemGrant {
         read: roots.clone(),
-        write: roots,
+        write: roots.clone(),
+        create: roots.clone(),
+        delete: roots.clone(),
+        rename: roots,
     })
 }
 
@@ -939,6 +982,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::WorkspaceControl,
         ),
         (Request::ExtensionList, Capability::ExtensionRead),
+        (Request::ExtensionCatalogue, Capability::ExtensionRead),
         (
             Request::ExtensionInspect { name: "sample".into() },
             Capability::ExtensionRead,
@@ -989,7 +1033,18 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ExtensionInstall,
         ),
         (
+            Request::NotificationPublish {
+                notification: hl_extension::Notification {
+                    id: "build".into(),
+                    title: "Complete".into(),
+                    body: "done".into(),
+                },
+            },
+            Capability::NotificationPublish,
+        ),
+        (
             Request::ExtensionInstall {
+                image_digest: format!("sha256:{}", "a".repeat(64)),
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
@@ -1000,6 +1055,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ExtensionUpdate {
+                image_digest: format!("sha256:{}", "a".repeat(64)),
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
@@ -1032,6 +1088,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 id: "e".repeat(32),
                 stdout: true,
                 stderr: true,
+            },
+            Capability::ContainerRead,
+        ),
+        (
+            Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 0,
+                limit: 16,
             },
             Capability::ContainerRead,
         ),
@@ -1667,6 +1731,20 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
             &services(&host)
         )
         .is_err());
+    assert!(matches!(
+        session.dispatch(
+            &Request::ExtensionInstall {
+                job: "job-1".into(),
+                revision: 7,
+                image_digest: "sha256:stale-catalogue-label".into(),
+                granted: Grant::default(),
+                containers: hl_extension::ContainerGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
+            },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -2545,6 +2623,7 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     .with_filesystem(hl_extension::FilesystemGrant {
         read: vec![path("src")],
         write: vec![path("workspace.toml")],
+        ..hl_extension::FilesystemGrant::default()
     });
 
     assert!(session
@@ -2587,6 +2666,53 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     assert!(
         host.ledger.reached().is_empty(),
         "wrong-verb roots must fail before the filesystem port"
+    );
+}
+
+#[test]
+fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
+    let host = Host::new();
+    let file = path("settings.json");
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::FilesystemWrite]),
+        vec![file.clone()],
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        write: vec![file.clone()],
+        ..hl_extension::FilesystemGrant::default()
+    });
+
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: file.clone(),
+                contents: b"{}".to_vec(),
+            },
+            &services(&host),
+        )
+        .is_ok());
+    host.ledger.clear();
+
+    for request in [
+        Request::FilesystemCreateObserved {
+            path: file.clone(),
+            contents: b"{}".to_vec(),
+        },
+        Request::FilesystemRemove { path: file.clone() },
+        Request::FilesystemRename {
+            from: file.clone(),
+            to: path("settings.old.json"),
+        },
+    ] {
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Denied { .. })
+        ));
+    }
+    assert!(
+        host.ledger.reached().is_empty(),
+        "unconsented mutation verbs must fail before the filesystem port"
     );
 }
 
@@ -2634,6 +2760,19 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         )
         .expect("execution output");
     assert!(matches!(output, Reply::Logs(output) if output.eof && !output.truncated));
+
+    let page = session
+        .dispatch(
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 41,
+                limit: 16,
+            },
+            &services(&host),
+        )
+        .expect("paged execution output");
+    assert!(matches!(page, Reply::ExecutionOutput(page)
+        if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row\n"));
 
     let waited = session
         .dispatch(
@@ -2702,6 +2841,79 @@ fn execution_logs_require_a_stream_before_calling_host() {
         )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
+}
+
+#[test]
+fn notifications_are_bounded_and_denied_before_host_delivery() {
+    let host = Host::new();
+    let request = Request::NotificationPublish {
+        notification: hl_extension::Notification {
+            id: "build".into(),
+            title: "Index ready".into(),
+            body: "Background indexing completed".into(),
+        },
+    };
+    assert!(session(&[], &[]).dispatch(&request, &services(&host)).is_err());
+    assert!(host.ledger.reached().is_empty());
+    let mut allowed = session(&[Capability::NotificationPublish], &[]);
+    assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
+    let invalid = Request::NotificationPublish {
+        notification: hl_extension::Notification {
+            id: "bad\nidentity".into(),
+            title: "Index ready".into(),
+            body: "done".into(),
+        },
+    };
+    assert!(allowed.dispatch(&invalid, &services(&host)).is_err());
+    assert_eq!(host.ledger.reached(), vec!["notifications.publish"]);
+}
+
+#[test]
+fn notification_failure_is_structured_and_the_session_remains_usable() {
+    let host = Host::new();
+    host.fail_notification.set(true);
+    let mut allowed = session(&[Capability::NotificationPublish, Capability::WorkspaceRead], &[]);
+    let request = Request::NotificationPublish {
+        notification: hl_extension::Notification { id: "monitor".into(), title: "Database".into(), body: "offline".into() },
+    };
+    assert!(matches!(allowed.dispatch(&request, &services(&host)), Err(Failure::Failed { .. })));
+    assert!(matches!(allowed.dispatch(&Request::WorkspaceInfo, &services(&host)), Ok(Reply::Workspace(_))));
+}
+
+#[test]
+fn one_session_cannot_multiply_unbounded_notification_identities() {
+    let host = Host::new();
+    let mut allowed = session(&[Capability::NotificationPublish], &[]);
+    for index in 0..32 {
+        let request = Request::NotificationPublish {
+            notification: hl_extension::Notification { id: format!("job-{index}"), title: "Job".into(), body: "done".into() },
+        };
+        assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
+    }
+    let overflow = Request::NotificationPublish {
+        notification: hl_extension::Notification { id: "job-32".into(), title: "Job".into(), body: "done".into() },
+    };
+    assert!(matches!(allowed.dispatch(&overflow, &services(&host)), Err(Failure::Conflict { .. })));
+}
+
+#[test]
+fn execution_output_window_is_bounded_before_inventory_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    for limit in [0, 17] {
+        assert!(matches!(
+            session.dispatch(
+                &Request::ExecutionOutput {
+                    id: "e".repeat(32),
+                    after: 0,
+                    limit,
+                },
+                &services(&host),
+            ),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

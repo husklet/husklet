@@ -172,6 +172,10 @@ impl Service {
         self.logs.after(id, cursor, limit).await
     }
 
+    pub(crate) async fn history_cursor(&self, id: &JournalId) -> Result<u64> {
+        self.logs.cursor(id).await
+    }
+
     /// Waits for one journal's output owner to close its generation, no later than `deadline`.
     ///
     /// The bound is an absolute instant rather than a per-journal budget on purpose. A capture

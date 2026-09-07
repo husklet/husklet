@@ -133,6 +133,11 @@
       "executes": false,
       "mutates": false,
       "wire": "interface:render"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "notifications:publish"
     }
   ],
   "definitions": {
@@ -338,6 +343,12 @@
         },
         {
           "name": "interface:render",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "notifications:publish",
           "payload": {
             "kind": "unit"
           }
@@ -1103,6 +1114,104 @@
       "kind": "struct",
       "serde": {}
     },
+    "ExecutionOutputEntry": {
+      "fields": [
+        {
+          "name": "sequence",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "timestamp_ms",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "stream",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "bytes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
+              "signed": false
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExecutionOutputPage": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionOutputEntry"
+            }
+          }
+        },
+        {
+          "name": "next",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "eof",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "gap",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ExecutionSummary": {
       "fields": [
         {
@@ -1407,6 +1516,78 @@
       "kind": "struct",
       "serde": {}
     },
+    "ExtensionCatalogue": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCatalogueEntry"
+            }
+          }
+        },
+        {
+          "name": "complete",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionCatalogueEntry": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "description",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reference",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "publisher",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "source",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ExtensionName": {
       "kind": "ref",
       "name": "PeerName"
@@ -1584,6 +1765,39 @@
         },
         {
           "name": "write",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "delete",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "rename",
           "optional": true,
           "schema": {
             "kind": "array",
@@ -2308,6 +2522,33 @@
         "minimum": 0,
         "signed": false
       },
+      "serde": {}
+    },
+    "Notification": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "body",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
       "serde": {}
     },
     "Occupant": {
@@ -6402,6 +6643,10 @@
     },
     {
       "capability": "extensions:read",
+      "request": "extension_catalogue"
+    },
+    {
+      "capability": "extensions:read",
       "request": "extension_inspect"
     },
     {
@@ -6431,6 +6676,10 @@
     {
       "capability": "extensions:install",
       "request": "extension_acquisition_cancel"
+    },
+    {
+      "capability": "notifications:publish",
+      "request": "notification_publish"
     },
     {
       "capability": "extensions:install",
@@ -6467,6 +6716,10 @@
     {
       "capability": "containers:read",
       "request": "execution_logs"
+    },
+    {
+      "capability": "containers:read",
+      "request": "execution_output"
     },
     {
       "capability": "containers:read",
@@ -6827,6 +7080,10 @@
       "request": "extension_list"
     },
     {
+      "reply": "extension_catalogue",
+      "request": "extension_catalogue"
+    },
+    {
       "reply": "extension",
       "request": "extension_inspect"
     },
@@ -6857,6 +7114,10 @@
     {
       "reply": "done",
       "request": "extension_acquisition_cancel"
+    },
+    {
+      "reply": "done",
+      "request": "notification_publish"
     },
     {
       "reply": "extension",
@@ -6893,6 +7154,10 @@
     {
       "reply": "logs",
       "request": "execution_logs"
+    },
+    {
+      "reply": "execution_output",
+      "request": "execution_output"
     },
     {
       "reply": "execution",
@@ -7354,6 +7619,16 @@
           }
         },
         {
+          "name": "extension_catalogue",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCatalogue"
+            }
+          }
+        },
+        {
           "name": "extension",
           "payload": {
             "kind": "newtype",
@@ -7423,6 +7698,16 @@
             "of": {
               "kind": "ref",
               "name": "ContainerOutput"
+            }
+          }
+        },
+        {
+          "name": "execution_output",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionOutputPage"
             }
           }
         },
@@ -7837,6 +8122,12 @@
           }
         },
         {
+          "name": "extension_catalogue",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "extension_inspect",
           "payload": {
             "fields": [
@@ -7996,6 +8287,22 @@
           }
         },
         {
+          "name": "notification_publish",
+          "payload": {
+            "fields": [
+              {
+                "name": "notification",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Notification"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "extension_install",
           "payload": {
             "fields": [
@@ -8015,6 +8322,13 @@
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "signed": false
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
                 }
               },
               {
@@ -8065,6 +8379,13 @@
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "signed": false
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
                 }
               },
               {
@@ -8204,6 +8525,43 @@
                 "optional": false,
                 "schema": {
                   "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_output",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -11108,7 +11466,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:bbc0df4fc9c05829",
+  "source_fingerprint": "fnv1a64:4743cd6f407e0187",
   "specification_version": 1,
   "topics": [
     {

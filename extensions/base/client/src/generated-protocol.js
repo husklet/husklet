@@ -135,6 +135,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": false,
     "wire": "interface:render"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "notifications:publish"
   }
 ]);
 export const PROTOCOL_TOPICS = Object.freeze([
@@ -221,6 +226,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "workspace_stop": "done",
   "workspace_restart": "done",
   "extension_list": "extensions",
+  "extension_catalogue": "extension_catalogue",
   "extension_inspect": "extension",
   "extension_enable": "done",
   "extension_disable": "done",
@@ -229,6 +235,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "extension_acquisition_start": "extension_acquisition_job",
   "extension_acquisition_status": "extension_acquisition",
   "extension_acquisition_cancel": "done",
+  "notification_publish": "done",
   "extension_install": "extension",
   "extension_update": "extension",
   "container_list": "containers",
@@ -238,6 +245,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "execution_inspect": "execution",
   "execution_list": "executions",
   "execution_logs": "logs",
+  "execution_output": "execution_output",
   "execution_wait": "execution",
   "execution_kill": "done",
   "execution_remove": "done",
@@ -329,6 +337,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "workspace_stop": "workspaces:control",
   "workspace_restart": "workspaces:control",
   "extension_list": "extensions:read",
+  "extension_catalogue": "extensions:read",
   "extension_inspect": "extensions:read",
   "extension_enable": "extensions:control",
   "extension_disable": "extensions:control",
@@ -337,6 +346,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_acquisition_start": "extensions:install",
   "extension_acquisition_status": "extensions:install",
   "extension_acquisition_cancel": "extensions:install",
+  "notification_publish": "notifications:publish",
   "extension_install": "extensions:install",
   "extension_update": "extensions:install",
   "container_list": "containers:read",
@@ -346,6 +356,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "execution_inspect": "containers:read",
   "execution_list": "containers:read",
   "execution_logs": "containers:read",
+  "execution_output": "containers:read",
   "execution_wait": "containers:read",
   "execution_kill": "containers:control",
   "execution_remove": "containers:control",
@@ -628,6 +639,12 @@ const definitions = {
       },
       {
         "name": "interface:render",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "notifications:publish",
         "payload": {
           "kind": "unit"
         }
@@ -1393,6 +1410,104 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ExecutionOutputEntry": {
+    "fields": [
+      {
+        "name": "sequence",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "timestamp_ms",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "stream",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "bytes",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "bits": 8,
+            "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExecutionOutputPage": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ExecutionOutputEntry"
+          }
+        }
+      },
+      {
+        "name": "next",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "more",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "eof",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "gap",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "ExecutionSummary": {
     "fields": [
       {
@@ -1697,6 +1812,78 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ExtensionCatalogue": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionCatalogueEntry"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExtensionCatalogueEntry": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "title",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "description",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "reference",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "publisher",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "source",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "ExtensionName": {
     "kind": "ref",
     "name": "PeerName"
@@ -1874,6 +2061,39 @@ const definitions = {
       },
       {
         "name": "write",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "delete",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "rename",
         "optional": true,
         "schema": {
           "kind": "array",
@@ -2598,6 +2818,33 @@ const definitions = {
       "minimum": 0,
       "signed": false
     },
+    "serde": {}
+  },
+  "Notification": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "title",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "body",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      }
+    ],
+    "kind": "struct",
     "serde": {}
   },
   "Occupant": {
@@ -6732,6 +6979,16 @@ const roots = {
         }
       },
       {
+        "name": "extension_catalogue",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionCatalogue"
+          }
+        }
+      },
+      {
         "name": "extension",
         "payload": {
           "kind": "newtype",
@@ -6801,6 +7058,16 @@ const roots = {
           "of": {
             "kind": "ref",
             "name": "ContainerOutput"
+          }
+        }
+      },
+      {
+        "name": "execution_output",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExecutionOutputPage"
           }
         }
       },
@@ -7215,6 +7482,12 @@ const roots = {
         }
       },
       {
+        "name": "extension_catalogue",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "extension_inspect",
         "payload": {
           "fields": [
@@ -7374,6 +7647,22 @@ const roots = {
         }
       },
       {
+        "name": "notification_publish",
+        "payload": {
+          "fields": [
+            {
+              "name": "notification",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "Notification"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
         "name": "extension_install",
         "payload": {
           "fields": [
@@ -7393,6 +7682,13 @@ const roots = {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "signed": false
+              }
+            },
+            {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             },
             {
@@ -7443,6 +7739,13 @@ const roots = {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "signed": false
+              }
+            },
+            {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             },
             {
@@ -7582,6 +7885,43 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "execution_output",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "after",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 16,
+                "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],

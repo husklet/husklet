@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -31,13 +31,14 @@ pub struct Interface {
     pub frames: Vec<SurfaceFrame>,
     /// Changes to the windowed sources the extension's tables draw from.
     pub mutations: Vec<SurfaceMutation>,
+    pub notifications: Vec<hl_extension::Notification>,
 }
 
 impl Interface {
     /// Whether there is anything for the GUI to apply.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.frames.is_empty() && self.mutations.is_empty()
+        self.frames.is_empty() && self.mutations.is_empty() && self.notifications.is_empty()
     }
 }
 
@@ -72,6 +73,7 @@ impl Queue {
         Interface {
             frames: std::mem::take(&mut held.frames),
             mutations: std::mem::take(&mut held.mutations),
+            notifications: std::mem::take(&mut held.notifications),
         }
     }
 
@@ -128,6 +130,21 @@ impl Queue {
 
     fn hold(&self) -> std::sync::MutexGuard<'_, Interface> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl hl_extension::NotificationSink for Queue {
+    fn publish(&self, notification: &hl_extension::Notification) -> Result<(), hl_extension::HostError> {
+        let mut held = self.hold();
+        if let Some(current) = held.notifications.iter_mut().find(|current| current.id == notification.id) {
+            current.clone_from(notification);
+            return Ok(());
+        }
+        if held.notifications.len() >= 32 {
+            return Err(hl_extension::HostError::Failed("notification queue is full".into()));
+        }
+        held.notifications.push(notification.clone());
+        Ok(())
     }
 }
 
@@ -231,7 +248,10 @@ impl Conversation {
             },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
-                write: roots,
+                write: roots.clone(),
+                create: roots.clone(),
+                delete: roots.clone(),
+                rename: roots,
             },
         )
     }
@@ -277,6 +297,10 @@ impl Conversation {
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    pub(crate) fn notifications(&self) -> Queue {
+        self.queue.clone()
     }
 
     pub(crate) fn with_voice(&mut self, voice: super::host::Voice) {
@@ -1061,8 +1085,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1135,6 +1159,13 @@ mod tests {
     struct Host {
         ledger: Arc<Ledger>,
     }
+
+    impl hl_extension::NotificationSink for Host {
+        fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+            self.ledger.note("notifications.publish");
+            Ok(())
+        }
+    }
     impl hl_extension::port::VolumeStore for Host {
         fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
             self.ledger.note("volumes.list");
@@ -1179,6 +1210,27 @@ mod tests {
                     user: "root".into(),
                 }],
                 truncated: false,
+            })
+        }
+
+        fn execution_output(
+            &self,
+            _id: &str,
+            after: u64,
+            _limit: u16,
+        ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+            self.ledger.note("executions.output");
+            Ok(hl_extension::port::ExecutionOutputPage {
+                entries: vec![hl_extension::port::ExecutionOutputEntry {
+                    sequence: after + 1,
+                    timestamp_ms: 9,
+                    stream: "stdout".into(),
+                    bytes: b"row-42\n".to_vec(),
+                }],
+                next: after + 1,
+                more: false,
+                eof: false,
+                gap: false,
             })
         }
     }
@@ -1416,6 +1468,21 @@ mod tests {
     }
 
     impl hl_extension::port::ExtensionStore for Host {
+        fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+            self.ledger.note("extensions.catalogue");
+            Ok(hl_extension::port::ExtensionCatalogue {
+                entries: vec![hl_extension::port::ExtensionCatalogueEntry {
+                    id: "storybook".into(),
+                    title: "Component playground".into(),
+                    description: "First-party components".into(),
+                    reference: "registry/storybook:latest".into(),
+                    publisher: "Husklet".into(),
+                    source: "husklet:first-party/storybook".into(),
+                }],
+                complete: true,
+            })
+        }
+
         fn list(&self) -> Result<Vec<hl_extension::port::ExtensionSummary>, HostError> {
             self.ledger.note("extensions.list");
             Ok(vec![hl_extension::port::ExtensionSummary {
@@ -1426,6 +1493,24 @@ mod tests {
                 enabled: true,
                 pane_providers: Vec::new(),
             }])
+        }
+
+        fn acquisition_status(&self, job: &str) -> Result<hl_extension::port::ExtensionAcquisitionStatus, HostError> {
+            self.ledger.note("extensions.acquisition_status");
+            Ok(hl_extension::port::ExtensionAcquisitionStatus {
+                job: job.into(),
+                reference: "registry/example:1".into(),
+                revision: 7,
+                state: "pulling".into(),
+                progress: None,
+                candidate: None,
+                error: None,
+            })
+        }
+
+        fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
+            self.ledger.note("extensions.acquisition_cancel");
+            Ok(())
         }
     }
 
@@ -1446,6 +1531,7 @@ mod tests {
             networks: host,
             terminal: host,
             files: host,
+            notifications: host,
         }
     }
 
@@ -1458,6 +1544,7 @@ mod tests {
                 Capability::ExtensionRead,
                 Capability::ExtensionInstall,
                 Capability::Interface,
+                Capability::NotificationPublish,
             ]),
             Vec::new(),
         )
@@ -1498,6 +1585,7 @@ mod tests {
                 hl_extension::FilesystemGrant {
                     read: vec![RelativePath::new("src").unwrap()],
                     write: vec![RelativePath::new("workspace.toml").unwrap()],
+                    ..hl_extension::FilesystemGrant::default()
                 },
             )?;
             conversation.greet()?;
@@ -1652,6 +1740,187 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_metadata_crosses_the_real_socket_without_becoming_install_authority() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::ExtensionCatalogue);
+        assert!(matches!(
+            codec::read_reply(&answer),
+            Ok(Reply::ExtensionCatalogue(catalogue))
+                if catalogue.complete
+                    && catalogue.entries.len() == 1
+                    && catalogue.entries[0].source == "husklet:first-party/storybook"
+                    && catalogue.entries[0].reference == "registry/storybook:latest"
+        ));
+        assert_eq!(ledger.reached(), vec!["extensions.catalogue"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn invalid_acquisition_cancel_reaches_no_service_and_the_session_continues() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ExtensionInstall]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let invalid = ask(
+            &mut wire,
+            &Request::ExtensionAcquisitionCancel {
+                job: String::new(),
+                revision: 7,
+            },
+        );
+        assert!(codec::is_failure(&invalid), "an invalid job identifier is refused");
+        assert!(ledger.reached().is_empty(), "invalid cancellation reached the service");
+
+        let valid = ask(&mut wire, &Request::ExtensionAcquisitionStatus { job: "job-1".into() });
+        assert!(matches!(
+            codec::read_reply(&valid),
+            Ok(Reply::ExtensionAcquisition(status))
+                if status.job == "job-1" && status.revision == 7 && status.state == "pulling"
+        ));
+        assert_eq!(ledger.reached(), vec!["extensions.acquisition_status"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn catalogue_without_extension_read_is_denied_before_the_service() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::ExtensionCatalogue);
+        let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("denial") else {
+            panic!("catalogue without read authority must be denied");
+        };
+        assert_eq!(capability, Capability::ExtensionRead.as_str());
+        assert!(ledger.reached().is_empty(), "the catalogue service was not called");
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn invalid_catalogue_is_rejected_without_ending_the_session() {
+        struct InvalidCatalogue(Arc<Ledger>);
+
+        impl hl_extension::port::ExtensionStore for InvalidCatalogue {
+            fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+                self.0.note("extensions.catalogue");
+                Ok(hl_extension::port::ExtensionCatalogue {
+                    entries: vec![hl_extension::port::ExtensionCatalogueEntry {
+                        id: String::new(),
+                        title: "Invalid".into(),
+                        description: "empty identifiers are ambiguous".into(),
+                        reference: "registry/invalid:latest".into(),
+                        publisher: "Husklet".into(),
+                        source: "test:invalid".into(),
+                    }],
+                    complete: true,
+                })
+            }
+        }
+
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host {
+                ledger: Arc::clone(&host_ledger),
+            };
+            let invalid = InvalidCatalogue(host_ledger);
+            let mut supplied = services(&host);
+            supplied.extensions = &invalid;
+            let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&supplied)
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let invalid = ask(&mut wire, &Request::ExtensionCatalogue);
+        assert!(codec::is_failure(&invalid), "invalid catalogue metadata is refused");
+        assert!(
+            matches!(codec::read_failure(&invalid), Ok(Failure::Failed { ref detail }) if detail.contains("metadata"))
+        );
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["extensions.catalogue", "containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn paged_execution_output_crosses_the_real_unix_socket_with_its_cursor() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 41,
+                limit: 16,
+            },
+        );
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::ExecutionOutput(page))
+            if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row-42\n"));
+        assert_eq!(ledger.reached(), vec!["executions.output"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn bounded_notification_crosses_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(&mut wire, &Request::NotificationPublish {
+            notification: hl_extension::Notification {
+                id: "index".into(),
+                title: "Index ready".into(),
+                body: "One million rows indexed".into(),
+            },
+        });
+        assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
+        assert_eq!(ledger.reached(), vec!["notifications.publish"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn a_greeted_extension_has_its_call_answered() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
@@ -1695,6 +1964,14 @@ mod tests {
         let answer = ask(
             &mut wire,
             &Request::FilesystemRead {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemRemove {
                 path: RelativePath::new("workspace.toml").unwrap(),
             },
         );
@@ -1803,6 +2080,46 @@ mod tests {
         );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn reconnect_after_subscribed_disconnect_starts_without_stale_observation() {
+        let ledger = Arc::new(Ledger::default());
+        let (first, first_served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut first = Wire::new(first);
+        shake(&mut first, PROTOCOL);
+        let answer = ask(
+            &mut first,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Containers,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer).expect("subscription reply"), Reply::Done);
+        assert_eq!(first.receive().expect("initial event").kind, Kind::Event);
+        drop(first);
+        assert_eq!(first_served.join().expect("first joined"), Ok(()));
+
+        let reads_after_disconnect = ledger
+            .reached()
+            .iter()
+            .filter(|call| **call == "containers.list")
+            .count();
+        let (second, second_served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut second = Wire::new(second);
+        shake(&mut second, PROTOCOL);
+        let answer = ask(&mut second, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::Containers(_))));
+        assert_eq!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "containers.list")
+                .count(),
+            reads_after_disconnect + 1,
+            "only the explicit call reached the container service"
+        );
+        drop(second);
+        assert_eq!(second_served.join().expect("second joined"), Ok(()));
     }
 
     #[test]

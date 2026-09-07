@@ -71,7 +71,8 @@ export type ExtensionCapability =
   | 'extensions:install'
   | 'filesystem:read'
   | 'filesystem:write'
-  | 'interface:render';
+  | 'interface:render'
+  | 'notifications:publish';
 export type ContainerSelector = { id: string } | { name: string } | { all: true };
 export interface ContainerGrant {
   selectors: ContainerSelector[];
@@ -80,6 +81,9 @@ export interface ContainerGrant {
 export interface FilesystemGrant {
   read: string[];
   write: string[];
+  create: string[];
+  delete: string[];
+  rename: string[];
 }
 export interface ExtensionCandidate {
   name: string;
@@ -89,6 +93,18 @@ export interface ExtensionCandidate {
   requested_containers: ContainerGrant;
   requested_filesystem: FilesystemGrant;
   installed_image_digest: string | null;
+}
+export interface ExtensionCatalogueEntry {
+  id: string;
+  title: string;
+  description: string;
+  reference: string;
+  publisher: string;
+  source: string;
+}
+export interface ExtensionCatalogue {
+  entries: ExtensionCatalogueEntry[];
+  complete: boolean;
 }
 export interface ExtensionAcquisitionJob {
   job: string;
@@ -200,6 +216,19 @@ export interface ContainerOutput {
   stdout_truncated: boolean;
   stderr_truncated: boolean;
   eof: boolean;
+}
+export interface ExecutionOutputEntry {
+  sequence: number;
+  timestamp_ms: number;
+  stream: 'stdout' | 'stderr';
+  bytes: number[];
+}
+export interface ExecutionOutputPage {
+  entries: ExecutionOutputEntry[];
+  next: number;
+  more: boolean;
+  eof: boolean;
+  gap: boolean;
 }
 export interface ExecutionSummary {
   id: string;
@@ -549,8 +578,13 @@ export interface WorkspaceApi {
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
+  notifications: {
+    publish(notification: { id: string; title: string; body: string }): Promise<void>;
+  };
   extensions: {
     list(): Promise<ExtensionSummary[]>;
+    /** Host-curated offline discovery metadata; acquisition still supplies install authority. */
+    catalogue(): Promise<ExtensionCatalogue>;
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */
@@ -584,13 +618,13 @@ export interface WorkspaceApi {
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
     installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
     updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
@@ -615,6 +649,7 @@ export interface WorkspaceApi {
     execution(id: string): Promise<ExecutionSummary>;
     executions(): Promise<ExecutionList>;
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
+    executionOutput(id: string, options?: { after?: number; limit?: number }): Promise<ExecutionOutputPage>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
     execAndWait(id: string, generation: number, options: {

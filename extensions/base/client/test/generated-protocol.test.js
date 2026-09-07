@@ -142,12 +142,20 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
     with: {
       job: 'job-1',
       revision: 1,
+      image_digest: `sha256:${'a'.repeat(64)}`,
       granted: ['containers:read'],
       containers: { selectors: [{ name: 'database' }], create: false },
-      filesystem: { read: [], write: [] },
+      filesystem: {
+        read: [],
+        write: ['settings.json'],
+        create: [],
+        delete: [],
+        rename: [],
+      },
     },
   };
   assert.deepEqual(validateRequest(base), base);
+  assert.equal(validateRequest(base).with.filesystem.write[0], 'settings.json');
   for (const selector of [
     { id: 'a'.repeat(32), name: 'database' },
     { name: 'database', invented: true },

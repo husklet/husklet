@@ -90,6 +90,7 @@ pub(crate) fn router(
         .route("/containers/:id/exec", post(exec::create))
         .route("/exec/json", get(exec::list))
         .route("/exec/:id/logs", get(exec::logs))
+        .route("/exec/:id/output", get(exec::output))
         .route("/exec/:id/start", post(exec::start))
         .route("/exec/:id/attach", post(exec::attach))
         .route("/exec/:id/resize", post(exec::resize))

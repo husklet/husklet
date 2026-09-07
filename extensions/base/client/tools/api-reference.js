@@ -15,6 +15,7 @@ const execution = new Set([
   'execution',
   'executions',
   'executionLogs',
+  'executionOutput',
   'waitExecution',
   'signalExecution',
   'removeExecution',
@@ -30,6 +31,7 @@ const groups = new Map([
   ['Networks', []],
   ['Volumes', []],
   ['Extensions', []],
+  ['Notifications', []],
   ['Semantics', []],
 ]);
 
@@ -52,11 +54,14 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             networks: 'Networks',
             volumes: 'Volumes',
             extensions: 'Extensions',
+            notifications: 'Notifications',
           }[namespace];
   assert(group, `no documentation group for ${wire}`);
   groups
     .get(group)
-    .push(`- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
+    .push(wire === 'notification_publish'
+      ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
+      : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
 }
 groups
   .get('Terminal and panes')
@@ -88,7 +93,7 @@ groups
     '- `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.',
-    '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.',
+    '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, send its reviewed immutable digest as commit CAS authority, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.',
     '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.',
     '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.',
     '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.',
@@ -155,7 +160,7 @@ wrong caller.
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
-| Single-file workspace editor | Strong | \`[filesystem]\` grants read and write roots independently, so an extension may scan a tree while modifying one exact file. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
+| Single-file workspace editor | Strong | \`[filesystem]\` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
 | Extension catalogue/manager | Partial | Discovery can be rendered from a catalogue owned by the manager extension; acquisition/install/update/enable/disable/remove are complete. The host does not define or trust a global catalogue service. |
@@ -180,7 +185,7 @@ Omitting \`[containers]\` means no container authority, even with a container ve
 capability. Workspace-wide authority is explicit: \`selectors = [{ all = true }]\`.
 
 Filesystem grants implement the same two-dimensional model: \`filesystem:read\` and
-\`filesystem:write\` decide the verb, while independently consented exact roots decide
+\`filesystem:write\` permits the mutation domain, while independently consented write, create, delete, and rename roots decide
 the resource. Writable roots are not implicitly readable. Container enforcement follows that
 order; the JavaScript client's checks are never treated as a security boundary.
 

@@ -195,6 +195,15 @@ fn a_manifest_cannot_use_a_capability_it_did_not_declare() {
         Manifest::parse(&roots, PROTOCOL),
         Err(Invalid::Undeclared(Capability::FilesystemRead))
     );
+
+    for verb in ["write", "create", "delete", "rename"] {
+        let roots = manifest_document(&format!("[filesystem]\n{verb} = [\"logs\"]\n"));
+        assert_eq!(
+            Manifest::parse(&roots, PROTOCOL),
+            Err(Invalid::Undeclared(Capability::FilesystemWrite)),
+            "filesystem {verb} roots require mutation authority"
+        );
+    }
 }
 
 #[test]

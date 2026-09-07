@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
+    NotificationSink, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles,
+    WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -33,6 +33,7 @@ pub struct Services<'a> {
     pub networks: &'a dyn NetworkStore,
     pub terminal: &'a dyn TerminalSurface,
     pub files: &'a dyn WorkspaceFiles,
+    pub notifications: &'a dyn NotificationSink,
 }
 
 /// One connected extension.
@@ -43,6 +44,7 @@ pub struct Session {
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
     filesystem: FilesystemGrant,
+    notification_ids: std::collections::BTreeSet<String>,
 }
 
 /// One reconciliation frame and the surface that owns its sequence.
@@ -95,6 +97,7 @@ impl Session {
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
             filesystem: FilesystemGrant::default(),
+            notification_ids: std::collections::BTreeSet::new(),
         }
     }
 
@@ -116,16 +119,27 @@ impl Session {
         &self.filesystem.read
     }
 
-    fn permit_filesystem_path(&self, capability: Capability, path: &hl_rpc::RelativePath) -> Result<(), Failure> {
+    fn permit_filesystem_path(
+        &self,
+        capability: Capability,
+        access: FilesystemAccess,
+        path: &hl_rpc::RelativePath,
+    ) -> Result<(), Failure> {
         self.peer.authority().permit(capability)?;
-        let roots = match capability {
+        let roots: &[hl_rpc::RelativePath] = match capability {
             Capability::FilesystemRead => &self.filesystem.read,
-            Capability::FilesystemWrite => &self.filesystem.write,
+            Capability::FilesystemWrite => match access {
+                FilesystemAccess::Write => &self.filesystem.write,
+                FilesystemAccess::Create => &self.filesystem.create,
+                FilesystemAccess::Delete => &self.filesystem.delete,
+                FilesystemAccess::Rename => &self.filesystem.rename,
+                FilesystemAccess::Read => &[],
+            },
             _ => {
                 return Err(Failure::Denied {
                     capability: capability.as_str().into(),
                     detail: "non-filesystem capability used for path authority".into(),
-                })
+                });
             }
         };
         if roots.iter().any(|root| path.within(root)) {
@@ -259,11 +273,11 @@ impl Session {
         let capability = request.capability();
         match request {
             Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
-                self.permit_filesystem_path(capability, from)?;
-                self.permit_filesystem_path(capability, to)?;
+                self.permit_filesystem_path(capability, FilesystemAccess::Rename, from)?;
+                self.permit_filesystem_path(capability, FilesystemAccess::Rename, to)?;
             }
             _ => match request.path() {
-                Some(path) => self.permit_filesystem_path(capability, path)?,
+                Some(path) => self.permit_filesystem_path(capability, filesystem_access(request), path)?,
                 None => self.peer.authority().permit(capability)?,
             },
         }
@@ -283,6 +297,7 @@ impl Session {
             | Request::WorkspaceStop { .. }
             | Request::WorkspaceRestart { .. } => self.workspace_control(request, services),
             Request::ExtensionList
+            | Request::ExtensionCatalogue
             | Request::ExtensionInspect { .. }
             | Request::ExtensionEnable { .. }
             | Request::ExtensionDisable { .. }
@@ -293,6 +308,17 @@ impl Session {
             | Request::ExtensionAcquisitionCancel { .. }
             | Request::ExtensionInstall { .. }
             | Request::ExtensionUpdate { .. } => self.extensions(request, services),
+            Request::NotificationPublish { notification } => {
+                validate_notification(notification)?;
+                if !self.notification_ids.contains(&notification.id) && self.notification_ids.len() >= 32 {
+                    return Err(Failure::Conflict {
+                        detail: "one extension session may publish at most 32 notification identities".into(),
+                    });
+                }
+                services.notifications.publish(notification)?;
+                self.notification_ids.insert(notification.id.clone());
+                Ok(Reply::Done)
+            }
             Request::ContainerList
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
@@ -300,6 +326,7 @@ impl Session {
             | Request::ExecutionInspect { .. }
             | Request::ExecutionList
             | Request::ExecutionLogs { .. }
+            | Request::ExecutionOutput { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerAttachTerminal { id, command } => {
                 immutable_identity(id, &[32, 64], "container")?;
@@ -470,6 +497,51 @@ impl Session {
                     });
                 }
                 Ok(Reply::Logs(port.execution_logs(id, *stdout, *stderr)?))
+            }
+            Request::ExecutionOutput { id, after, limit } => {
+                immutable_identity(id, &[32], "execution")?;
+                if *limit == 0 || *limit > 16 {
+                    return Err(Failure::Conflict {
+                        detail: "execution output limit must be between 1 and 16".into(),
+                    });
+                }
+                let page = port.execution_output(id, *after, *limit)?;
+                let ordered = page
+                    .entries
+                    .iter()
+                    .try_fold(*after, |previous, entry| {
+                        (entry.sequence > previous).then_some(entry.sequence)
+                    })
+                    .is_some();
+                let contiguous = page
+                    .entries
+                    .windows(2)
+                    .all(|pair| pair[1].sequence == pair[0].sequence.saturating_add(1));
+                let gap = page
+                    .entries
+                    .first()
+                    .is_some_and(|entry| entry.sequence != after.saturating_add(1));
+                let bytes = page
+                    .entries
+                    .iter()
+                    .fold(0usize, |total, entry| total.saturating_add(entry.bytes.len()));
+                if page.entries.len() > usize::from(*limit)
+                    || (page.eof && page.more)
+                    || bytes > 256 * 1024
+                    || !ordered
+                    || !contiguous
+                    || page.gap != gap
+                    || page.next != page.entries.last().map_or(*after, |entry| entry.sequence)
+                    || page
+                        .entries
+                        .iter()
+                        .any(|entry| !matches!(entry.stream.as_str(), "stdout" | "stderr"))
+                {
+                    return Err(Failure::Failed {
+                        detail: "host returned invalid or oversized execution output page".into(),
+                    });
+                }
+                Ok(Reply::ExecutionOutput(page))
             }
             Request::ExecutionWait { id, timeout_ms } => {
                 immutable_identity(id, &[32], "execution")?;
@@ -724,6 +796,11 @@ impl Session {
         let port = self.peer.authority().port(request.capability(), services.extensions)?;
         match request {
             Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
+            Request::ExtensionCatalogue => {
+                let catalogue = port.catalogue()?;
+                catalogue.validate()?;
+                Ok(Reply::ExtensionCatalogue(catalogue))
+            }
             Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
             Request::ExtensionEnable { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;
@@ -766,26 +843,40 @@ impl Session {
             Request::ExtensionInstall {
                 job,
                 revision,
+                image_digest,
                 granted,
                 containers,
                 filesystem,
             } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(
-                    port.install(job, *revision, granted, containers, filesystem)?,
-                ))
+                immutable_digest(image_digest, "extension candidate image")?;
+                Ok(Reply::Extension(port.install(
+                    job,
+                    *revision,
+                    image_digest,
+                    granted,
+                    containers,
+                    filesystem,
+                )?))
             }
             Request::ExtensionUpdate {
                 job,
                 revision,
+                image_digest,
                 granted,
                 containers,
                 filesystem,
             } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(
-                    port.update(job, *revision, granted, containers, filesystem)?,
-                ))
+                immutable_digest(image_digest, "extension candidate image")?;
+                Ok(Reply::Extension(port.update(
+                    job,
+                    *revision,
+                    image_digest,
+                    granted,
+                    containers,
+                    filesystem,
+                )?))
             }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),
@@ -1162,6 +1253,37 @@ impl Session {
         self.pending.retain(|frame| frame.slot != slot);
         self.mutations.retain(|mutation| mutation.slot != slot);
         Ok(Reply::Done)
+    }
+}
+
+fn validate_notification(notification: &crate::port::Notification) -> Result<(), Failure> {
+    let valid = |value: &str, max: usize| {
+        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+    };
+    if !valid(&notification.id, 128) || !valid(&notification.title, 256) || !valid(&notification.body, 4096) {
+        return Err(Failure::Conflict {
+            detail: "notification id, title, or body is empty, oversized, or contains control characters".into(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FilesystemAccess {
+    Read,
+    Write,
+    Create,
+    Delete,
+    Rename,
+}
+
+fn filesystem_access(request: &Request) -> FilesystemAccess {
+    match request {
+        Request::FilesystemWrite { .. } | Request::FilesystemWriteObserved { .. } => FilesystemAccess::Write,
+        Request::FilesystemCreateObserved { .. } | Request::FilesystemMkdir { .. } => FilesystemAccess::Create,
+        Request::FilesystemRemove { .. } | Request::FilesystemRemoveObserved { .. } => FilesystemAccess::Delete,
+        Request::FilesystemRename { .. } | Request::FilesystemRenameObserved { .. } => FilesystemAccess::Rename,
+        _ => FilesystemAccess::Read,
     }
 }
 

@@ -134,6 +134,9 @@ impl WorkspaceFiles for Host {
 }
 
 impl hl_extension::port::ExtensionStore for Host {}
+impl hl_extension::NotificationSink for Host {
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+}
 
 fn services(host: &Host) -> Services<'_> {
     Services {
@@ -152,6 +155,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        notifications: host,
     }
 }
 

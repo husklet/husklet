@@ -72,6 +72,9 @@ pub enum Capability {
     FilesystemWrite,
     #[serde(rename = "interface:render")]
     Interface,
+    /// Publishes bounded user-visible notifications outside an extension surface.
+    #[serde(rename = "notifications:publish")]
+    NotificationPublish,
 }
 
 impl Capability {
@@ -103,6 +106,7 @@ impl Capability {
             Self::FilesystemRead => "filesystem:read",
             Self::FilesystemWrite => "filesystem:write",
             Self::Interface => "interface:render",
+            Self::NotificationPublish => "notifications:publish",
         }
     }
 
@@ -123,6 +127,7 @@ impl Capability {
                 | Self::ExtensionControl
                 | Self::ExtensionInstall
                 | Self::FilesystemWrite
+                | Self::NotificationPublish
         )
     }
 
@@ -162,6 +167,7 @@ impl Capability {
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::Interface,
+        Self::NotificationPublish,
     ];
 }
 

@@ -55,6 +55,20 @@ const api = {
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
 };
 
+const firstPartyCatalogue = async () => ({
+  entries: [
+    {
+      id: 'storybook',
+      title: 'Component playground',
+      description: 'Explore extension components, large tables, terminals, diffs, and metrics.',
+      reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+      publisher: 'Husklet',
+      source: 'husklet:first-party/storybook',
+    },
+  ],
+  complete: true,
+});
+
 test('Top presents workspace, extensions, and every resource navigation choice', () => {
   const frame = host().render(
     h(Top, {
@@ -127,7 +141,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
         cursor_blink: false,
       },
     }),
-    extensions: { list: async () => [] },
+    extensions: { list: async () => [], catalogue: firstPartyCatalogue },
     watchExtensions: async () => () => {},
   };
   const stage = host();
@@ -151,6 +165,15 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
+  assert.ok(
+    ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
+    'the settings editor retains a readable width instead of stretching with the window',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Storage directory', 'Card', 'Justify')?.Align,
+    'Start',
+    'cross-axis alignment lets the settings width govern native layout',
+  );
   invoke(stage, 'Extensions');
   await settled();
   await settled();
@@ -164,11 +187,26 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Column',
     'Column',
   ]);
-  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
   ]);
+  assert.ok(
+    ancestorProperty(stage, 'Workspace control', 'Card', 'Width'),
+    'discovery cards retain a readable bound instead of stretching with the window',
+  );
+  assert.equal(ancestorProperty(stage, 'Workspace control', 'Card', 'Grow')?.Number, 0);
+  assert.equal(
+    ancestorProperty(stage, 'Workspace control', 'Card', 'Justify')?.Align,
+    'Start',
+    'cross-axis alignment lets the declared maximum width govern the GTK card',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Install from image', 'Card', 'Width') !== undefined,
+    true,
+    'the acquisition card uses the same compact geometry',
+  );
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -179,12 +217,14 @@ test('extension discovery reviews the first-party Storybook without requiring a 
       api: {
         extensions: {
           list: async () => [],
+          catalogue: firstPartyCatalogue,
           startAcquisition: async (reference) => {
             references.push(reference);
             return { job: 'storybook-review' };
           },
           acquisition: async () => ({
             job: 'storybook-review',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
             revision: 1,
             state: 'failed',
             progress: null,
@@ -197,7 +237,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review access');
+  invoke(stage, 'Review Component playground');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -226,6 +266,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
             attempt === 1
               ? {
                   job,
+                  reference: 'registry.example/reviewed:1',
                   revision: 1,
                   state: 'failed',
                   progress: null,
@@ -234,6 +275,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
                 }
               : {
                   job,
+                  reference: 'registry.example/reviewed:1',
                   revision: 2,
                   state: 'ready',
                   progress: null,
@@ -275,7 +317,11 @@ test('extension inspection keeps invalid and failed references recoverable with 
     'registry.example/reviewed:1',
     'registry.example/reviewed:1',
   ]);
+  assert.ok(labelled(stage, 'Review install'));
+  assert.ok(labelled(stage, 'Manifest reviewed 1.0.0'));
   assert.ok(labelled(stage, 'Review permissions'));
+  assert.ok(labelled(stage, `Reviewed image sha256:${'c'.repeat(12)}…${'c'.repeat(8)}`));
+  assert.ok(labelled(stage, 'Source registry.example/reviewed:1'));
   assert.ok(
     labelled(stage, 'All access is off by default. Enable only what this extension needs.'),
   );
@@ -284,7 +330,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
 });
 
 for (const updating of [false, true]) {
-  test(`extension ${updating ? 'update' : 'install'} independently narrows requested container authority`, async () => {
+  test(`extension ${updating ? 'update' : 'install'} independently narrows container and filesystem authority`, async () => {
     const calls = [];
     const candidate = {
       name: 'scoped',
@@ -294,6 +340,13 @@ for (const updating of [false, true]) {
       requested_containers: {
         selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
         create: true,
+      },
+      requested_filesystem: {
+        read: ['src', 'docs'],
+        write: ['src/config.json'],
+        create: ['generated'],
+        delete: ['cache'],
+        rename: ['migrations'],
       },
       installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
     };
@@ -306,6 +359,7 @@ for (const updating of [false, true]) {
             startAcquisition: async () => ({ job: 'scoped-review' }),
             acquisition: async () => ({
               job: 'scoped-review',
+              reference: 'local/scoped:2',
               revision: 4,
               state: 'ready',
               progress: null,
@@ -327,6 +381,18 @@ for (const updating of [false, true]) {
     await settled();
     await settled();
 
+    assert.ok(labelled(stage, updating ? 'Review update' : 'Review install'));
+    assert.ok(labelled(stage, 'Manifest scoped 2.0.0'));
+    assert.ok(labelled(stage, 'Source local/scoped:2'));
+    assert.ok(labelled(stage, `Reviewed image ${compactDigest(candidate.image_digest)}`));
+    if (updating) {
+      assert.ok(
+        labelled(
+          stage,
+          `Replaces installed image ${compactDigest(candidate.installed_image_digest)}. Access below was reset and must be approved again.`,
+        ),
+      );
+    }
     assert.ok(
       labelled(stage, 'Container access starts off. Select only what this extension needs.'),
     );
@@ -337,12 +403,32 @@ for (const updating of [false, true]) {
       'Create new containers',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false]);
+    assert.ok(
+      labelled(
+        stage,
+        'Each switch grants only the named action and root. Modify cannot create, delete, or rename.',
+      ),
+    );
+    for (const label of [
+      'View contents · src (read)',
+      'View contents · docs (read)',
+      'Modify existing contents · src/config.json (write)',
+      'Create new entries · generated (create)',
+      'Delete entries · cache (delete)',
+      'Rename or move entries · migrations (rename)',
+    ])
+      assert.ok(labelled(stage, label), label);
+    assert.ok(labelled(stage, '0/6 workspace paths allowed'));
+    assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
 
     toggleSwitch(stage, 0, true);
     toggleSwitch(stage, 2, true);
     toggleSwitch(stage, 3, true);
     toggleSwitch(stage, 2, false);
+    toggleSwitch(stage, 5, true);
+    toggleSwitch(stage, 7, true);
+    toggleSwitch(stage, 9, true);
+    assert.ok(labelled(stage, '3/6 workspace paths allowed'));
     invoke(stage, updating ? 'Update extension' : 'Install extension');
     await settled();
     await settled();
@@ -352,6 +438,13 @@ for (const updating of [false, true]) {
     assert.deepEqual(calls[0][3], {
       selectors: [{ name: 'database' }],
       create: true,
+    });
+    assert.deepEqual(calls[0][4], {
+      read: ['docs'],
+      write: [],
+      create: ['generated'],
+      delete: [],
+      rename: ['migrations'],
     });
   });
 }
@@ -371,6 +464,7 @@ test('extension image entry submits from the keyboard and consent explains reque
           },
           acquisition: async () => ({
             job: 'candidate',
+            reference: 'registry.example/assistant:1.2.0',
             revision: 7,
             state: 'ready',
             progress: null,
@@ -519,6 +613,13 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   extension = { ...extension, enabled: true, status: 'fault: socket closed' };
   publish([extension]);
   await settled();
+  assert.ok(labelled(stage, 'faulted'));
+  assert.ok(labelled(stage, 'socket closed'));
+  assert.equal(
+    labelled(stage, 'fault: socket closed'),
+    undefined,
+    'fault details are separated from the bounded status badge',
+  );
   assert.ok(labelled(stage, 'Retry'));
   invoke(stage, 'Retry');
   await settled();
@@ -669,6 +770,7 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    if (section === 'Containers') assert.ok(labelled(stage, 'Create first container'));
   }
 });
 
@@ -1991,6 +2093,10 @@ test('volume and network panels render bounded real inventories and controls', (
     assert.ok(labels(volumeFrame).includes(label), label);
   for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  const networkStage = stageFromFrame(networkFrame);
+  assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>
@@ -4170,6 +4276,33 @@ function ancestorTags(stage, label) {
     ancestors.push(tags.get(node));
   }
   return ancestors;
+}
+
+function ancestorProperty(stage, label, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = labelled(stage, label)?.SetProp.id;
+  while (parents.has(node)) {
+    node = parents.get(node);
+    if (tags.get(node) === tag) {
+      const value = patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
+        .at(-1)?.SetProp.value;
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+function compactDigest(digest) {
+  return digest.length > 32 ? `${digest.slice(0, 19)}…${digest.slice(-8)}` : digest;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

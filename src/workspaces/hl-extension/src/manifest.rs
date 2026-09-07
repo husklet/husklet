@@ -12,6 +12,12 @@ pub struct FilesystemGrant {
     pub read: Vec<RelativePath>,
     #[serde(default)]
     pub write: Vec<RelativePath>,
+    #[serde(default)]
+    pub create: Vec<RelativePath>,
+    #[serde(default)]
+    pub delete: Vec<RelativePath>,
+    #[serde(default)]
+    pub rename: Vec<RelativePath>,
 }
 
 impl FilesystemGrant {
@@ -32,20 +38,34 @@ impl FilesystemGrant {
                 .filter(|root| consented.write.contains(root))
                 .cloned()
                 .collect(),
+            create: intersection(&self.create, &consented.create),
+            delete: intersection(&self.delete, &consented.delete),
+            rename: intersection(&self.rename, &consented.rename),
         }
     }
 
     fn validate(&self) -> Result<(), Invalid> {
-        if self.read.len() + self.write.len() > Self::ROOT_LIMIT {
+        if self.read.len() + self.write.len() + self.create.len() + self.delete.len() + self.rename.len()
+            > Self::ROOT_LIMIT
+        {
             return Err(Invalid::FilesystemRoots);
         }
-        if self.read.iter().collect::<std::collections::BTreeSet<_>>().len() != self.read.len()
-            || self.write.iter().collect::<std::collections::BTreeSet<_>>().len() != self.write.len()
+        if [&self.read, &self.write, &self.create, &self.delete, &self.rename]
+            .iter()
+            .any(|roots| roots.iter().collect::<std::collections::BTreeSet<_>>().len() != roots.len())
         {
             return Err(Invalid::FilesystemRoots);
         }
         Ok(())
     }
+}
+
+fn intersection(requested: &[RelativePath], consented: &[RelativePath]) -> Vec<RelativePath> {
+    requested
+        .iter()
+        .filter(|root| consented.contains(root))
+        .cloned()
+        .collect()
 }
 
 /// One exact container an extension asks to see, or an explicit workspace-wide selector.
@@ -334,7 +354,16 @@ impl Manifest {
         if !manifest.filesystem.read.is_empty() && !manifest.capabilities.holds(Capability::FilesystemRead) {
             return Err(Invalid::Undeclared(Capability::FilesystemRead));
         }
-        if !manifest.filesystem.write.is_empty() && !manifest.capabilities.holds(Capability::FilesystemWrite) {
+        if [
+            &manifest.filesystem.write,
+            &manifest.filesystem.create,
+            &manifest.filesystem.delete,
+            &manifest.filesystem.rename,
+        ]
+        .iter()
+        .any(|roots| !roots.is_empty())
+            && !manifest.capabilities.holds(Capability::FilesystemWrite)
+        {
             return Err(Invalid::Undeclared(Capability::FilesystemWrite));
         }
         manifest.filesystem.validate()?;
@@ -461,6 +490,7 @@ mod tests {
                 RelativePath::new("README.md").unwrap(),
             ],
             write: vec![RelativePath::new("workspace.toml").unwrap()],
+            ..FilesystemGrant::default()
         };
         let consented = FilesystemGrant {
             read: vec![RelativePath::new("src").unwrap()],
@@ -468,12 +498,14 @@ mod tests {
                 RelativePath::new("README.md").unwrap(),
                 RelativePath::new("workspace.toml").unwrap(),
             ],
+            ..FilesystemGrant::default()
         };
         assert_eq!(
             requested.intersect(&consented),
             FilesystemGrant {
                 read: vec![RelativePath::new("src").unwrap()],
                 write: vec![RelativePath::new("workspace.toml").unwrap()],
+                ..FilesystemGrant::default()
             }
         );
     }

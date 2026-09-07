@@ -50,6 +50,7 @@ type Operation = {
   error: unknown;
 };
 const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', count: 0, detail: null, error: null };
+const NETWORK_CARD_WIDTH = { minimum: { chars: 42 }, maximum: { chars: 68 } } as const;
 
 export function Networks({
   api,
@@ -274,7 +275,13 @@ export function Networks({
         {view.records.map((network) => {
           const id = resourceReference(network);
           return (
-            <Card key={id} variant={inspection.id === id ? 'filled' : 'outline'}>
+            <Card
+              key={id}
+              grow={false}
+              justify="start"
+              width={NETWORK_CARD_WIDTH}
+              variant={inspection.id === id ? 'filled' : 'outline'}
+            >
               <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />
               <CardActions gap={1}>
                 <Button

@@ -80,6 +80,7 @@ pub enum Report {
     Frame(hl_extension::SurfaceFrame),
     /// A change to a windowed source the extension's tables draw from.
     Source(hl_extension::SurfaceMutation),
+    Notification(hl_extension::Notification),
     /// The extension is not speaking any more, and why.
     Loss(String),
     /// The restart policy has latched a crash loop. Structured rather than
@@ -904,6 +905,9 @@ fn collect(hall: &Hall, queue: &Queue) -> bool {
     for mutation in interface.mutations {
         hall.deliver(Report::Source(mutation));
     }
+    for notification in interface.notifications {
+        hall.deliver(Report::Notification(notification));
+    }
     rendered
 }
 
@@ -1030,6 +1034,9 @@ tab_title = "Sample"
     struct Ports;
     impl hl_extension::port::VolumeStore for Ports {}
     impl hl_extension::port::NetworkStore for Ports {}
+    impl hl_extension::NotificationSink for Ports {
+        fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+    }
 
     impl ContainerInventory for Ports {
         fn list(&self) -> Result<Vec<ContainerSummary>, HostError> {
@@ -1292,6 +1299,7 @@ tab_title = "Sample"
                 networks: &ports,
                 terminal: &ports,
                 files: &ports,
+                notifications: &ports,
             };
             conversation.serve(&services).map_err(|fault| fault.to_string())
         }
@@ -1434,6 +1442,7 @@ tab_title = "Sample"
                 networks: &ports,
                 terminal: &ports,
                 files: &ports,
+                notifications: &ports,
             };
             conversation.serve(&services).map_err(|fault| fault.to_string())
         }

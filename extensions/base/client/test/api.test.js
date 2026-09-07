@@ -171,6 +171,17 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   stage.server.close();
 });
 
+test('background notification validates before framing and uses its exact Unix call', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  assert.throws(() => api.notifications.publish({ id: 'bad\n', title: 'Build', body: 'done' }), /control characters/);
+  const notification = { id: 'index-build', title: 'Index ready', body: '1,000,000 rows indexed' };
+  const publishing = api.notifications.publish(notification);
+  assert.deepEqual((await next()).payload, { call: 'notification_publish', with: { notification } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal(await publishing, undefined);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('the complete typed facade binds cancellation without changing method arguments', async () => {
   const stage = await pair();
   const next = frames(stage.host);
@@ -969,17 +980,18 @@ test('image pull jobs and progress watcher preserve exact typed wire shapes', as
 test('extension acquisition preserves job revision and explicit grant identity', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
+  const digest = `sha256:${'a'.repeat(64)}`;
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }),
-    api.extensions.update('job-2', 8, ['containers:read'], { selectors: [{ all: true }], create: true })];
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }),
+    api.extensions.update('job-2', 8, digest, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [] } } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [] } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));
@@ -997,6 +1009,10 @@ test('extension acquisition wait ignores unchanged and other jobs, then reads au
   const pending = api.extensions.waitForAcquisition('job-1', 7, { timeoutMs: 1_000 });
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extension-acquisitions' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'extension_acquisition_status', with: { job: 'job-1' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 7, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
   for (const change of [
     { job: 'job-1', revision: 7, state: 'pulling', coalesced: 0 },
     { job: 'job-2', revision: 8, state: 'ready', coalesced: 0 },
@@ -1024,12 +1040,38 @@ test('extension acquisition wait times out with its exact cursor and disposes', 
   const pending = api.extensions.waitForAcquisition('job-1', 7, { timeoutMs: 5 });
   assert.equal((await next()).payload.call, 'event_subscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 7, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await pending, { changed: false, job: 'job-1', revision: 7 });
   stage.session.close();
   stage.host.destroy();
   stage.server.close();
+});
+
+test('extension acquisition wait refuses a status overtaken by an in-flight invalidation', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const pending = api.extensions.waitForAcquisition('job-1', 4, { timeoutMs: 1_000 });
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  stage.host.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'extension_acquisitions', of: {
+    job: 'job-1', revision: 6, state: 'ready', coalesced: 0,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 5, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  const status = { job: 'job-1', reference: 'registry/demo:1', revision: 6, state: 'ready', progress: null, candidate: null, error: null };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: status } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await pending, { changed: true, status });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('extension facade preserves exact read and control request shapes', async () => {
@@ -1039,6 +1081,7 @@ test('extension facade preserves exact read and control request shapes', async (
   const api = workspace(stage.session);
   const operations = [
     api.extensions.list(),
+    api.extensions.catalogue(),
     api.extensions.inspect('top'),
     api.extensions.enable('top', `sha256:${'a'.repeat(64)}`),
     api.extensions.disable('top', `sha256:${'a'.repeat(64)}`),
@@ -1049,6 +1092,7 @@ test('extension facade preserves exact read and control request shapes', async (
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_list' },
+    { call: 'extension_catalogue' },
     { call: 'extension_inspect', with: { name: 'top' } },
     { call: 'extension_enable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
     { call: 'extension_disable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
@@ -1059,6 +1103,10 @@ test('extension facade preserves exact read and control request shapes', async (
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }),
   );
+  const catalogue = { entries: [], complete: true };
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_catalogue', with: catalogue } }),
+  );
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }),
   );
@@ -1066,6 +1114,7 @@ test('extension facade preserves exact read and control request shapes', async (
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await Promise.all(operations), [
     [summary],
+    catalogue,
     summary,
     undefined,
     undefined,
@@ -1390,6 +1439,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const api = workspace(stage.session);
   const containerId = 'a'.repeat(64);
   const executionId = 'b'.repeat(32);
+  await assert.rejects(
+    api.containers.executionOutput(executionId, { after: 0, limit: 17 }),
+    /between 1 and 16/,
+  );
   assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
   assert.throws(() => api.containers.removeExecution('execution-name'), /complete immutable ID/);
   await assert.rejects(api.containers.execution('execution-name'), /complete immutable ID/);
@@ -1410,6 +1463,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     api.containers.execution(executionId),
     api.containers.executions(),
     api.containers.executionLogs(executionId, { stdout: true, stderr: false }),
+    api.containers.executionOutput(executionId, { after: 41, limit: 16 }),
     api.containers.waitExecution(executionId, { timeoutMs: 250 }),
     api.containers.start(containerId, 7),
     api.containers.pause(containerId, 7),
@@ -1437,6 +1491,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'execution_inspect', with: { id: executionId } },
     { call: 'execution_list' },
     { call: 'execution_logs', with: { id: executionId, stdout: true, stderr: false } },
+    { call: 'execution_output', with: { id: executionId, after: 41, limit: 16 } },
     { call: 'execution_wait', with: { id: executionId, timeout_ms: 250 } },
     { call: 'container_start', with: { id: containerId, generation: 7 } },
     { call: 'container_pause', with: { id: containerId, generation: 7 } },
@@ -1459,6 +1514,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'execution', with: { id: 'e1', container_id: containerId, running: true, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     { reply: 'executions', with: { executions: [], truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
+    { reply: 'execution_output', with: { entries: [{ sequence: 42, timestamp_ms: 9, stream: 'stdout', bytes: [114, 111, 119, 10] }], next: 42, more: false, eof: false, gap: false } },
     { reply: 'execution', with: { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     ...Array(10).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
@@ -1477,8 +1533,65 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { eof: results[4].eof, stdout: results[4].stdout_truncated, stderr: results[4].stderr_truncated },
     { eof: true, stdout: false, stderr: false },
   );
-  assert.equal(results[16], 'e2');
+  assert.equal(results[5].next, 42);
+  assert.equal(results[17], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('execution output cursor distinguishes live emptiness, later append, and final EOF', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const id = 'b'.repeat(32);
+
+  const live = api.containers.executionOutput(id, { after: 0, limit: 16 });
+  assert.deepEqual((await next()).payload, {
+    call: 'execution_output',
+    with: { id, after: 0, limit: 16 },
+  });
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: { reply: 'execution_output', with: { entries: [], next: 0, more: false, eof: false, gap: false } },
+  }));
+  assert.equal((await live).eof, false);
+
+  const appended = api.containers.executionOutput(id, { after: 0, limit: 16 });
+  await next();
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: {
+      reply: 'execution_output',
+      with: {
+        entries: [{ sequence: 9, timestamp_ms: 1, stream: 'stdout', bytes: [49, 10] }],
+        next: 9,
+        more: false,
+        eof: false,
+        gap: true,
+      },
+    },
+  }));
+  assert.deepEqual(await appended, {
+    entries: [{ sequence: 9, timestamp_ms: 1, stream: 'stdout', bytes: [49, 10] }],
+    next: 9,
+    more: false,
+    eof: false,
+    gap: true,
+  });
+
+  const final = api.containers.executionOutput(id, { after: 9, limit: 16 });
+  await next();
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: { reply: 'execution_output', with: { entries: [], next: 9, more: false, eof: true, gap: false } },
+  }));
+  assert.equal((await final).eof, true);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('configured container creation preserves its bounded typed specification', async () => {

@@ -229,7 +229,7 @@ test('real Unix semantic action wait arms before authority and disposes after ch
   }
 });
 
-test('real Unix acquisition wait filters its cursor and disposes after authoritative status', async () => {
+test('real Unix acquisition wait reconnects from authoritative status without a new event', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-wait-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -244,36 +244,6 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
         calls.push(frame.payload.call);
         if (frame.payload.call === 'event_subscribe') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-          socket.write(
-            encode({
-              channel: 12,
-              kind: KIND.event,
-              payload: {
-                snapshot: 'extension_acquisitions',
-                of: {
-                  job: 'job-7',
-                  revision: 4,
-                  state: 'pulling',
-                  coalesced: 0,
-                },
-              },
-            }),
-          );
-          socket.write(
-            encode({
-              channel: 12,
-              kind: KIND.event,
-              payload: {
-                snapshot: 'extension_acquisitions',
-                of: {
-                  job: 'job-7',
-                  revision: 5,
-                  state: 'ready',
-                  coalesced: 1,
-                },
-              },
-            }),
-          );
         } else if (frame.payload.call === 'extension_acquisition_status') {
           socket.write(
             encode({
@@ -313,7 +283,7 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4);
+    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4, { timeoutMs: 100 });
     assert.equal(result.changed, true);
     assert.equal(result.status.revision, 5);
     assert.deepEqual(calls, [
@@ -872,6 +842,41 @@ test('real Unix control frames ping both directions and close every pending oper
   }
 });
 
+test('a matching pong outside the control channel cannot complete a heartbeat', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pong-channel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let connected;
+  const server = net.createServer((socket) => {
+    connected = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.ping) {
+          socket.write(encode({ channel: 17, kind: KIND.pong, payload: frame.payload }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'pong_channel', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath, timeout: 200 });
+    await assert.rejects(session.ping(), /pong arrived outside the control channel/);
+    await assert.rejects(session.ping(), /session is closed/);
+    await session.close();
+  } finally {
+    connected?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix partial EOF and illegal headers fail closed without sending credit', async () => {
   for (const malformed of ['partial', 'flags']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-malformed-'));
@@ -1250,6 +1255,7 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
             }),
           );
         else if (frame.payload.call === 'extension_install') {
+          assert.equal(frame.payload.with.image_digest, candidate.image_digest);
           socket.write(
             encode({
               channel: 21,
@@ -1520,7 +1526,10 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    assert.deepEqual(await workspace(session).containers.removeAndWait(id, 4), { changed: true, id });
+    assert.deepEqual(await workspace(session).containers.removeAndWait(id, 4), {
+      changed: true,
+      id,
+    });
     assert.equal(completeAbsenceSent, true, 'incomplete absence cannot settle removal');
     assert.deepEqual(calls, ['event_subscribe', 'container_remove', 'event_unsubscribe']);
     await session.close();

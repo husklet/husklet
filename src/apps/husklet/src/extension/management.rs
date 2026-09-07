@@ -2,16 +2,16 @@
 
 use hl_extension::port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
-    ExtensionStore, ExtensionSummary, HostError,
+    ExtensionCatalogue, ExtensionCatalogueEntry, ExtensionStore, ExtensionSummary, HostError,
 };
 use hl_extension::{ExtensionName, Grant, Stage};
 use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
+use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
-use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -56,6 +56,20 @@ impl ExtensionManagement {
 }
 
 impl ExtensionStore for ExtensionManagement {
+    fn catalogue(&self) -> Result<ExtensionCatalogue, HostError> {
+        Ok(ExtensionCatalogue {
+            entries: vec![ExtensionCatalogueEntry {
+                id: "storybook".into(),
+                title: "Component playground".into(),
+                description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+                reference: "ghcr.io/husklet/husklet/extension-storybook:latest".into(),
+                publisher: "Husklet".into(),
+                source: "husklet:first-party/storybook".into(),
+            }],
+            complete: true,
+        })
+    }
+
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
         Ok(self.roster()?.entries().into_iter().map(summary).collect())
     }
@@ -122,12 +136,13 @@ impl ExtensionStore for ExtensionManagement {
         &self,
         job: &str,
         revision: u64,
+        image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
-        let name = ready_name(&self.acquisitions, job, revision)?;
+        let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
             .install_resource_scoped(job, revision, granted, containers, filesystem)?;
         super::revision::publish_inventory_change(&self.workspace);
@@ -142,12 +157,13 @@ impl ExtensionStore for ExtensionManagement {
         &self,
         job: &str,
         revision: u64,
+        image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
-        let name = ready_name(&self.acquisitions, job, revision)?;
+        let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
             .update_resource_scoped(job, revision, granted, containers, filesystem)?;
         super::revision::publish_inventory_change(&self.workspace);
@@ -159,13 +175,25 @@ impl ExtensionStore for ExtensionManagement {
     }
 }
 
-fn ready_name(service: &ExtensionAcquisitions, job: AcquisitionJob, revision: u64) -> Result<String, HostError> {
+fn ready_name(
+    service: &ExtensionAcquisitions,
+    job: AcquisitionJob,
+    revision: u64,
+    image_digest: &str,
+) -> Result<String, HostError> {
     let snapshot = service.status(job)?;
+    reviewed_name(snapshot, revision, image_digest)
+}
+
+fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &str) -> Result<String, HostError> {
     if snapshot.revision != revision {
         return Err(HostError::Conflict("the acquisition revision has changed".into()));
     }
     match snapshot.state {
-        AcquisitionState::Ready(candidate) => Ok(candidate.name),
+        AcquisitionState::Ready(candidate) if candidate.digest == image_digest => Ok(candidate.name),
+        AcquisitionState::Ready(_) => Err(HostError::Conflict(
+            "the acquisition candidate digest differs from the reviewed image digest".into(),
+        )),
         _ => Err(HostError::Conflict("the acquisition is not awaiting consent".into())),
     }
 }
@@ -303,15 +331,41 @@ mod tests {
     }
 
     #[test]
+    fn consent_commit_requires_the_exact_reviewed_candidate_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let snapshot = AcquisitionSnapshot {
+            reference: "registry.example/team/tool:latest".into(),
+            revision: 7,
+            state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                requested_containers: hl_extension::ContainerGrant::default(),
+                requested_filesystem: hl_extension::FilesystemGrant::default(),
+                reference: "registry.example/team/tool:latest".into(),
+                digest: digest.clone(),
+                name: "sample".into(),
+                version: "2".into(),
+                requested: Grant::default(),
+                installed_digest: None,
+            }),
+        };
+        assert_eq!(reviewed_name(snapshot.clone(), 7, &digest), Ok("sample".into()));
+        assert!(matches!(
+            reviewed_name(snapshot, 7, &format!("sha256:{}", "b".repeat(64))),
+            Err(HostError::Conflict(reason)) if reason.contains("reviewed image digest")
+        ));
+    }
+
+    #[test]
     fn management_composes_initial_and_mutated_inventory_events() {
         let root = tempfile::tempdir().unwrap();
         let management = ExtensionManagement::new(&workspace(root.path()));
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management
-            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert!(events.drain().is_none());
     }
 

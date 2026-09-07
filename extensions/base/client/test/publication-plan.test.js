@@ -6,16 +6,22 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { determinePublication } from '../../../../tools/npm/publication-plan.js';
+import { determinePublication } from '../../tools/npm/publication-plan.js';
 
 const local = { client: 'sha512-client', react: 'sha512-react' };
 
 test('a new version publishes the dependency before React', () => {
-  assert.deepEqual(determinePublication(local, { client: null, react: null }), { client: true, react: true });
+  assert.deepEqual(determinePublication(local, { client: null, react: null }), {
+    client: true,
+    react: true,
+  });
 });
 
 test('a retry resumes after the exact client tarball was already published', () => {
-  assert.deepEqual(determinePublication(local, { client: local.client, react: null }), { client: false, react: true });
+  assert.deepEqual(determinePublication(local, { client: local.client, react: null }), {
+    client: false,
+    react: true,
+  });
   assert.deepEqual(determinePublication(local, local), { client: false, react: false });
 });
 
@@ -35,7 +41,9 @@ test('the release command emits a resumable GitHub Actions publication plan', ()
   try {
     const npm = path.join(scratch, 'npm');
     const output = path.join(scratch, 'output');
-    fs.writeFileSync(npm, `#!/usr/bin/env node
+    fs.writeFileSync(
+      npm,
+      `#!/usr/bin/env node
       const args = process.argv.slice(2);
       if (args[0] === 'pack') {
         const name = args.at(-1).split('/').at(-1);
@@ -46,10 +54,12 @@ test('the release command emits a resumable GitHub Actions publication plan', ()
         process.stderr.write('npm error code E404\\n404 Not Found');
         process.exit(1);
       }
-    `, { mode: 0o755 });
+    `,
+      { mode: 0o755 },
+    );
     const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
-    execFileSync(process.execPath, ['tools/npm/publication-plan.js'], {
-      cwd: repository,
+    execFileSync(process.execPath, ['base/tools/npm/publication-plan.js'], {
+      cwd: path.join(repository, 'extensions'),
       env: {
         ...process.env,
         PATH: `${scratch}:${process.env.PATH}`,

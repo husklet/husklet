@@ -5,7 +5,7 @@ pub use hl_daemon::api::{
     Container, ContainerConfig, ContainerCreation, ContainerDetails, ContainerLogs, ContainerPrune, ContainerState,
     Cpu, CpuUsage, CreateContainer, CreateExecution, Credentials, DiskUsage, Distribution, DockerMount, DriverConfig,
     EndpointConfig, EndpointIpam, EndpointsConfig, Event, EventFilter, EventQuery, ExecAttach, ExecCatalogue,
-    ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecOutput, ExecProcess, ExecStart,
+    ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecOutput, ExecOutputPage, ExecProcess, ExecStart,
     ExposedPorts, HealthLog, HealthState, Healthcheck, HostConfig, ImageCommit, ImageConfig, ImageDelete, ImageHistory,
     ImageLoad, ImagePrune, ImageSummary, InspectContainer, InspectImage, Ipam, IpamConfig, List, LogOptions,
     LogStreams, Memory, MountPoint, Network, NetworkConnect, NetworkContainer, NetworkCreate, NetworkCreated,

@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
+use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -55,6 +55,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("workspace_stop", "done"),
     ("workspace_restart", "done"),
     ("extension_list", "extensions"),
+    ("extension_catalogue", "extension_catalogue"),
     ("extension_inspect", "extension"),
     ("extension_enable", "done"),
     ("extension_disable", "done"),
@@ -63,6 +64,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("extension_acquisition_start", "extension_acquisition_job"),
     ("extension_acquisition_status", "extension_acquisition"),
     ("extension_acquisition_cancel", "done"),
+    ("notification_publish", "done"),
     ("extension_install", "extension"),
     ("extension_update", "extension"),
     ("container_list", "containers"),
@@ -72,6 +74,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("execution_inspect", "execution"),
     ("execution_list", "executions"),
     ("execution_logs", "logs"),
+    ("execution_output", "execution_output"),
     ("execution_wait", "execution"),
     ("execution_kill", "done"),
     ("execution_remove", "done"),
@@ -159,7 +162,7 @@ fn request_capability(request: &str) -> Capability {
         "workspace_info" | "workspace_list" | "workspace_inspect" => Capability::WorkspaceRead,
         "workspace_create" | "workspace_adopt" | "workspace_update" | "workspace_delete" | "workspace_start"
         | "workspace_stop" | "workspace_restart" => Capability::WorkspaceControl,
-        "extension_list" | "extension_inspect" => Capability::ExtensionRead,
+        "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
         "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {
             Capability::ExtensionControl
         }
@@ -175,6 +178,7 @@ fn request_capability(request: &str) -> Capability {
         | "execution_inspect"
         | "execution_list"
         | "execution_logs"
+        | "execution_output"
         | "execution_wait" => Capability::ContainerRead,
         "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause"
         | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec"
@@ -229,6 +233,7 @@ fn request_capability(request: &str) -> Capability {
         | "interface_render_at"
         | "source_resize"
         | "source_resize_at" => Capability::Interface,
+        "notification_publish" => Capability::NotificationPublish,
         "event_subscribe" | "event_unsubscribe" => panic!("event capability is selected by topic"),
         _ => panic!("unclassified Request wire tag {request}"),
     }
