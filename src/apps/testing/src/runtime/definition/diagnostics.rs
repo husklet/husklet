@@ -597,7 +597,7 @@ mod tests {
         let report = (0..3)
             .map(|generation| {
                 format!(
-                    "checkpoint-generation={generation} backend-shape-detail version=1 translated_entries={}\n",
+                    "checkpoint-generation={generation} backend-shape-detail version=2 translated_entries={}\n",
                     generation + 1
                 )
             })

@@ -718,6 +718,13 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t direct_call_ibtc_fills;
     _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     _Atomic uint64_t direct_call_ibtc_fast_redispatch;
+    _Atomic uint64_t direct_call_guard_enabled;
+    _Atomic uint64_t direct_call_guard_attempts;
+    _Atomic uint64_t direct_call_guard_hits;
+    _Atomic uint64_t direct_call_guard_key_misses;
+    _Atomic uint64_t direct_call_guard_null_misses;
+    _Atomic uint64_t direct_call_guard_irq;
+    _Atomic uint64_t direct_call_guard_slow;
     _Atomic uint64_t sse_riprel_form_keyed;
     _Atomic uint64_t sse_riprel_form_overflow;
     _Atomic uint64_t sse_riprel_form_unique;
@@ -956,6 +963,11 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     g_backend_tree = shared_size == sizeof(struct hl_backend_tree_shared) ? shared : NULL;
     g_backend_tree_self = NULL;
     if (g_backend_tree == NULL) return;
+    /* The process option store is bound before this lifecycle entry. Snapshot
+       the immutable hook authority; all outcome observation remains ungated. */
+    atomic_store_explicit(&g_backend_tree->direct_call_guard_enabled,
+                          (uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0),
+                          memory_order_relaxed);
     int self = (int)getpid();
     atomic_store_explicit(&g_backend_tree->root_pid, self, memory_order_release);
     g_backend_tree_self = hl_backend_tree_claim_pid(self);
@@ -1515,7 +1527,7 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         fall_stop_total += summary.translated_fall_stop[reason];
     return snprintf(
         record, capacity,
-        "[diag] backend-shape-detail version=1 translated_entries=%llu translated_transfers=%llu "
+        "[diag] backend-shape-detail version=2 translated_entries=%llu translated_transfers=%llu "
         "t_fallthrough=%llu t_cond_taken=%llu t_cond_not_taken=%llu t_direct_jump=%llu "
         "t_direct_call=%llu t_return=%llu t_indirect_branch=%llu t_indirect_call=%llu t_syscall=%llu "
         "t_irq=%llu t_fault=%llu t_other=%llu fall_total=%llu fall_cap=%llu fall_decode=%llu "
@@ -1558,7 +1570,9 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu "
         "direct_call_ibtc_emitted=%llu direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
         "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu "
-        "direct_call_ibtc_fast_redispatch=%llu\n",
+        "direct_call_ibtc_fast_redispatch=%llu direct_call_guard_enabled=%llu "
+        "direct_call_guard_attempts=%llu direct_call_guard_hits=%llu direct_call_guard_key_misses=%llu "
+        "direct_call_guard_null_misses=%llu direct_call_guard_irq=%llu direct_call_guard_slow=%llu\n",
         (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
@@ -1706,7 +1720,14 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_invalid_refusals,
                                                 memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fast_redispatch,
-                                                memory_order_relaxed));
+                                                memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_enabled, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_attempts, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_hits, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_key_misses, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_null_misses, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_irq, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_slow, memory_order_relaxed));
 }
 
 static int hl_backend_exit_family_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
@@ -2320,6 +2341,13 @@ enum hl_backend_direct_call_ibtc_counter {
     HL_BACKEND_DIRECT_CALL_IBTC_FILL,
     HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL,
     HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH,
+    HL_BACKEND_DIRECT_CALL_GUARD_ENABLED,
+    HL_BACKEND_DIRECT_CALL_GUARD_ATTEMPT,
+    HL_BACKEND_DIRECT_CALL_GUARD_HIT,
+    HL_BACKEND_DIRECT_CALL_GUARD_KEY_MISS,
+    HL_BACKEND_DIRECT_CALL_GUARD_NULL_MISS,
+    HL_BACKEND_DIRECT_CALL_GUARD_IRQ,
+    HL_BACKEND_DIRECT_CALL_GUARD_SLOW,
 };
 static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     enum hl_backend_direct_call_ibtc_counter kind) {
@@ -2333,6 +2361,13 @@ static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &tree->direct_call_ibtc_fills;
     case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &tree->direct_call_ibtc_invalid_refusals;
     case HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH: return &tree->direct_call_ibtc_fast_redispatch;
+    case HL_BACKEND_DIRECT_CALL_GUARD_ENABLED: return &tree->direct_call_guard_enabled;
+    case HL_BACKEND_DIRECT_CALL_GUARD_ATTEMPT: return &tree->direct_call_guard_attempts;
+    case HL_BACKEND_DIRECT_CALL_GUARD_HIT: return &tree->direct_call_guard_hits;
+    case HL_BACKEND_DIRECT_CALL_GUARD_KEY_MISS: return &tree->direct_call_guard_key_misses;
+    case HL_BACKEND_DIRECT_CALL_GUARD_NULL_MISS: return &tree->direct_call_guard_null_misses;
+    case HL_BACKEND_DIRECT_CALL_GUARD_IRQ: return &tree->direct_call_guard_irq;
+    case HL_BACKEND_DIRECT_CALL_GUARD_SLOW: return &tree->direct_call_guard_slow;
     }
     return NULL;
 }

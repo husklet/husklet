@@ -216,6 +216,7 @@ static _Atomic uint64_t translit_direct_call_ibtc_fill_count;
 static _Atomic uint64_t translit_direct_call_ibtc_invalid_refusal;
 static _Atomic uint64_t translit_direct_call_ibtc_fast_redispatch;
 static _Atomic uint64_t translit_direct_call_ibtc_collision;
+static _Atomic uint64_t translit_direct_call_guard[7];
 static _Atomic uint64_t translit_ret_ibtc_counters[9];
 static _Atomic uint64_t translit_ret_fast_ibtc_counters[5];
 #endif
@@ -396,6 +397,13 @@ enum translit_direct_call_ibtc_counter {
     TL_DIRECT_CALL_IBTC_COUNT_FILL,
     TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL,
     TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH,
+    TL_DIRECT_CALL_GUARD_ENABLED,
+    TL_DIRECT_CALL_GUARD_ATTEMPT,
+    TL_DIRECT_CALL_GUARD_HIT,
+    TL_DIRECT_CALL_GUARD_KEY_MISS,
+    TL_DIRECT_CALL_GUARD_NULL_MISS,
+    TL_DIRECT_CALL_GUARD_IRQ,
+    TL_DIRECT_CALL_GUARD_SLOW,
 };
 static uintptr_t translit_direct_call_ibtc_dynamic_counter(enum translit_direct_call_ibtc_counter kind) {
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -403,6 +411,12 @@ static uintptr_t translit_direct_call_ibtc_dynamic_counter(enum translit_direct_
     case TL_DIRECT_CALL_IBTC_COUNT_HIT: return (uintptr_t)&translit_direct_call_ibtc_hit;
     case TL_DIRECT_CALL_IBTC_COUNT_MISS: return (uintptr_t)&translit_direct_call_ibtc_miss;
     case TL_DIRECT_CALL_IBTC_COUNT_IRQ: return (uintptr_t)&translit_direct_call_ibtc_irq;
+    case TL_DIRECT_CALL_GUARD_ATTEMPT: return (uintptr_t)&translit_direct_call_guard[1];
+    case TL_DIRECT_CALL_GUARD_HIT: return (uintptr_t)&translit_direct_call_guard[2];
+    case TL_DIRECT_CALL_GUARD_KEY_MISS: return (uintptr_t)&translit_direct_call_guard[3];
+    case TL_DIRECT_CALL_GUARD_NULL_MISS: return (uintptr_t)&translit_direct_call_guard[4];
+    case TL_DIRECT_CALL_GUARD_IRQ: return (uintptr_t)&translit_direct_call_guard[5];
+    case TL_DIRECT_CALL_GUARD_SLOW: return (uintptr_t)&translit_direct_call_guard[6];
     default: return 0;
     }
 #else
@@ -421,11 +435,29 @@ static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_count
     case TL_DIRECT_CALL_IBTC_COUNT_FILL: counter = &translit_direct_call_ibtc_fill_count; break;
     case TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL: counter = &translit_direct_call_ibtc_invalid_refusal; break;
     case TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH: counter = &translit_direct_call_ibtc_fast_redispatch; break;
+    case TL_DIRECT_CALL_GUARD_ENABLED: counter = &translit_direct_call_guard[0]; break;
+    case TL_DIRECT_CALL_GUARD_ATTEMPT: counter = &translit_direct_call_guard[1]; break;
+    case TL_DIRECT_CALL_GUARD_HIT: counter = &translit_direct_call_guard[2]; break;
+    case TL_DIRECT_CALL_GUARD_KEY_MISS: counter = &translit_direct_call_guard[3]; break;
+    case TL_DIRECT_CALL_GUARD_NULL_MISS: counter = &translit_direct_call_guard[4]; break;
+    case TL_DIRECT_CALL_GUARD_IRQ: counter = &translit_direct_call_guard[5]; break;
+    case TL_DIRECT_CALL_GUARD_SLOW: counter = &translit_direct_call_guard[6]; break;
     }
     if (counter != NULL && count != 0) atomic_fetch_add_explicit(counter, count, memory_order_relaxed);
     hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
 #else
     hl_backend_tree_direct_call_ibtc_add((enum hl_backend_direct_call_ibtc_counter)kind, count);
+#endif
+}
+
+static void translit_emit_direct_call_guard_count(hl_x64_asm *a,
+                                                   enum translit_direct_call_ibtc_counter kind) {
+    uintptr_t local = translit_direct_call_ibtc_dynamic_counter(kind);
+    if (local != 0) hl_x64_atomic_inc_abs(a, local);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    uintptr_t shared = hl_backend_tree_direct_call_ibtc_dynamic_counter_address(
+        (enum hl_backend_direct_call_ibtc_counter)kind);
+    if (shared != 0 && shared != local) hl_x64_atomic_inc_abs(a, shared);
 #endif
 }
 
@@ -2876,6 +2908,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
         ranges.flags_packed = a->cursor;
     }
 
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_ATTEMPT);
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5);
     hl_x64_load_gs(a, HL_X64_RAX, OFF_IBTC);
@@ -2890,15 +2923,24 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     hl_x64_test_reg(a, HL_X64_RAX);
     uint8_t *miss_body = hl_x64_jcc_rel32(a, 4);
     hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_HIT);
     uintptr_t hit_counter =
         translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_HIT);
     if (hit_counter != 0) hl_x64_atomic_inc_abs(a, hit_counter);
     hl_x64_store_gs_imm32(a, 0, OFF_JCC_IBTC_MISS);
     uint8_t *restore_hit = translit_emit_jmp_patch(a);
 
-    hl_x64_patch_rel32(a, irq, a->cursor);
     hl_x64_patch_rel32(a, miss_key, a->cursor);
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_KEY_MISS);
+    uint8_t *key_to_slow = translit_emit_jmp_patch(a);
     hl_x64_patch_rel32(a, miss_body, a->cursor);
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_NULL_MISS);
+    uint8_t *null_to_slow = translit_emit_jmp_patch(a);
+    hl_x64_patch_rel32(a, irq, a->cursor);
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_IRQ);
+    hl_x64_patch_rel32(a, key_to_slow, a->cursor);
+    hl_x64_patch_rel32(a, null_to_slow, a->cursor);
+    translit_emit_direct_call_guard_count(a, TL_DIRECT_CALL_GUARD_SLOW);
     hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
     translit_helper_lea(a, HL_X64_RAX, translit_jcc_ibtc_stub_entry, 0);
     hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
@@ -5465,6 +5507,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(123));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
+    if (scenario == 235) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(124));
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 99;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -10261,6 +10312,8 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     translit_test_call_site = (translit_jcc_ibtc_site_ranges){0};
     translit_test_direct_call_pre_spill = scenario == 112 || scenario == 113 || scenario == 114 ||
                                              scenario == 121 || scenario == 123;
+    atomic_store_explicit(&translit_direct_call_guard[0],
+                          (uint64_t)translit_direct_call_pre_spill_test_enabled(), memory_order_relaxed);
     hl_backend_x86_jcc_route_test_enabled = scenario == 123;
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
@@ -10307,6 +10360,9 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     uint64_t fast_before = __atomic_load_n(&translit_direct_call_ibtc_fast_redispatch, __ATOMIC_RELAXED);
     uint64_t jcc_emitted_before = __atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED);
     uint64_t jcc_collision_before = __atomic_load_n(&translit_jcc_ibtc_collision, __ATOMIC_RELAXED);
+    uint64_t guard_before[7];
+    for (unsigned counter = 0; counter < 7; ++counter)
+        guard_before[counter] = atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed);
     uintptr_t route_attempt_address = hl_backend_tree_x86_jcc_route_counter_address(
         HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS);
     if (scenario == 123 && route_attempt_address == 0) return 158;
@@ -10421,6 +10477,15 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     if (__atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1) {
         result = 196; goto done_call_ibtc;
     }
+    if (scenario == 124) {
+        int guard_unchanged = atomic_load_explicit(&translit_direct_call_guard[0], memory_order_relaxed) == 0;
+        for (unsigned counter = 1; counter < 7; ++counter)
+            guard_unchanged = guard_unchanged &&
+                              atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed) ==
+                                  guard_before[counter];
+        result = guard_unchanged ? 0 : 204;
+        goto done_call_ibtc;
+    }
     if (scenario == 121) {
         result = translit_direct_call_signal_stage_test() && cpu.r[4] == stack - 8 && return_word == source + 5
                      ? 0
@@ -10436,6 +10501,11 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             __atomic_load_n(&translit_direct_call_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1 ||
             __atomic_load_n(&translit_direct_call_ibtc_fast_redispatch, __ATOMIC_RELAXED) != fast_before + 1)
             goto done_call_ibtc;
+        for (unsigned counter = 0; counter < 7; ++counter)
+            guard_before[counter] = atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed);
+        route_attempt_before = route_attempt_address == 0
+                                   ? 0
+                                   : __atomic_load_n((uint64_t *)route_attempt_address, __ATOMIC_RELAXED);
         /* One fixture accounts for every probe outcome. Matching-key/NULL and wrong-key pairs must
            take the typed slow route without recording a hit; IRQ must do likewise before the load. */
         ibtc_publish(&g_ibtc[ibtc_index(target)], target, NULL);
@@ -10480,7 +10550,20 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
                          return_word == call_return && cpu.jcc_ibtc_miss == 0 &&
                          cpu.v[0] == UINT64_C(0x13579bdf2468ace0) &&
                          cpu.v[1] == 0 &&
-                         (route_attempt_address == 0 || route_after == route_attempt_before + 4) &&
+                         atomic_load_explicit(&translit_direct_call_guard[0], memory_order_relaxed) == 1 &&
+                         atomic_load_explicit(&translit_direct_call_guard[1], memory_order_relaxed) ==
+                             guard_before[1] + 4 &&
+                         atomic_load_explicit(&translit_direct_call_guard[2], memory_order_relaxed) ==
+                             guard_before[2] + 1 &&
+                         atomic_load_explicit(&translit_direct_call_guard[3], memory_order_relaxed) ==
+                             guard_before[3] + 1 &&
+                         atomic_load_explicit(&translit_direct_call_guard[4], memory_order_relaxed) ==
+                             guard_before[4] + 1 &&
+                         atomic_load_explicit(&translit_direct_call_guard[5], memory_order_relaxed) ==
+                             guard_before[5] + 1 &&
+                         atomic_load_explicit(&translit_direct_call_guard[6], memory_order_relaxed) ==
+                             guard_before[6] + 3 &&
+                         (route_attempt_address == 0 || route_after == route_attempt_before + 3) &&
                          __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) == miss_before + 3 &&
                          __atomic_load_n(&translit_direct_call_ibtc_irq, __ATOMIC_RELAXED) == irq_before + 1 &&
                          __atomic_load_n(&translit_direct_call_ibtc_hit, __ATOMIC_RELAXED) == hit_before + 1
@@ -10635,6 +10718,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
 
 done_call_ibtc:
+    atomic_store_explicit(&translit_direct_call_guard[0], 0, memory_order_relaxed);
     translit_test_jcc_ibtc_stub_fail = 0;
     translit_test_direct_call_pre_spill = 0;
     hl_backend_x86_jcc_route_test_enabled = 0;
