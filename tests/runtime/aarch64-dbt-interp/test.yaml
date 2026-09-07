@@ -24,3 +24,12 @@ cases:
     expect:
       exit: 42
       stdout_empty: true
+  - id: runtime/aarch64-dbt-interp/three-source-multiply
+    status: active
+    compat: { class: smoke }
+    build: { source: source/multiply.c, output: three-source-multiply, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/three-source-multiply }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
