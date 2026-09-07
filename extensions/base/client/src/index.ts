@@ -100,6 +100,16 @@ function immutableIdentity(id, widths, noun) {
   );
 }
 
+function exactFileRange(offset: number, limit: number): [number, number] {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new RangeError('filesystem range offset must be a nonnegative safe integer');
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 65_536) {
+    throw new RangeError('filesystem range limit must be an integer between 1 and 65536');
+  }
+  return [offset, limit];
+}
+
 function exactContainerName(name) {
   if (typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)) return name;
   throw new TypeError(
@@ -1078,11 +1088,18 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         return page;
       },
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
-      readRange: async (path, offset = 0, limit = 65536, observed = null) =>
-        expect(
-          await session.call('filesystem_read_range', { path, offset, limit, observed }),
+      readRange: async (path, offset = 0, limit = 65536, observed = null) => {
+        const [boundedOffset, boundedLimit] = exactFileRange(offset, limit);
+        return expect(
+          await session.call('filesystem_read_range', {
+            path,
+            offset: boundedOffset,
+            limit: boundedLimit,
+            observed,
+          }),
           'file_range',
-        ),
+        );
+      },
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
       writeObserved: async (path, observed, contents) =>

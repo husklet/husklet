@@ -19,8 +19,8 @@ use hl_extension::port::{
     WorkspaceState,
 };
 use hl_extension::{
-    codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
-    Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
+    Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, PROTOCOL, RelativePath, Reply, Request,
+    Services, Session, Transit, Welcome, WorkspaceInfo, codec,
 };
 use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
@@ -65,6 +65,7 @@ struct Host {
     tabs: RefCell<Vec<String>>,
     network_aliases: RefCell<Vec<String>>,
     filesystem_pages: Cell<usize>,
+    filesystem_ranges: Cell<usize>,
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
@@ -80,6 +81,7 @@ impl Host {
             tabs: RefCell::new(Vec::new()),
             network_aliases: RefCell::new(Vec::new()),
             filesystem_pages: Cell::new(0),
+            filesystem_ranges: Cell::new(0),
         }
     }
 }
@@ -198,6 +200,25 @@ impl WorkspaceFiles for Host {
         Ok(Vec::new())
     }
 
+    fn read_range(
+        &self,
+        path: &RelativePath,
+        offset: u64,
+        limit: usize,
+        _observed: Option<&str>,
+    ) -> Result<hl_extension::port::FileRange, HostError> {
+        self.filesystem_ranges.set(self.filesystem_ranges.get() + 1);
+        Ok(hl_extension::port::FileRange {
+            path: path.clone(),
+            identity: "large-v1".into(),
+            offset,
+            total: offset + limit as u64,
+            contents: vec![b'x'; limit],
+            eof: true,
+            truncated: false,
+        })
+    }
+
     fn list_page(
         &self,
         _path: &RelativePath,
@@ -283,6 +304,48 @@ fn bounded_directory_cursor_crosses_the_real_socket() {
     assert_eq!(page.next.expect("cursor").as_str(), "src/b.ts");
     assert!(page.more);
     assert_eq!(host.filesystem_pages.get(), 1);
+}
+
+#[test]
+fn large_file_range_beyond_the_old_ceiling_crosses_the_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").expect("name"),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![RelativePath::new("data/embeddings.bin").expect("root")],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemReadRange {
+        path: RelativePath::new("data/embeddings.bin").expect("path"),
+        offset: 8 * 1024 * 1024,
+        limit: 3,
+        observed: Some("large-v1".into()),
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    sender.send(&codec::request(&request).expect("request")).expect("sent");
+    let decoded = codec::read_request(&receiver.receive().expect("request frame")).expect("decoded");
+    let reply = session
+        .dispatch(&decoded, &services(&host))
+        .expect("large offset allowed");
+    receiver
+        .send(&codec::reply(&reply).expect("reply"))
+        .expect("reply sent");
+    let Reply::FileRange(range) = codec::read_reply(&sender.receive().expect("reply frame")).expect("reply decodes")
+    else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(range.offset, 8 * 1024 * 1024);
+    assert_eq!(range.contents, b"xxx");
+    assert_eq!(
+        host.filesystem_ranges.get(),
+        1,
+        "the request reached the filesystem exactly once"
+    );
 }
 
 impl hl_extension::port::ExtensionStore for Host {}
