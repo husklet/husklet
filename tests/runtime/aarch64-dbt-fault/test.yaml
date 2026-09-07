@@ -1,0 +1,15 @@
+targets: [arm64]
+image: alpine:3.20
+execution: { translated: true, translated_diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static, -no-pie, -O2, -std=gnu11]
+cases:
+  - id: runtime/aarch64-dbt-fault/scalar-memory
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fault.c, output: scalar-memory-fault, flags: [-static, -no-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/scalar-memory-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/fault.out }
