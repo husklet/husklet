@@ -601,6 +601,8 @@ try {
   assert.match(dockerfile, /^ARG NODE_VERSION=22\.23\.2$/m);
   assert.match(dockerfile, /^ARG NPM_VERSION=10\.9\.8$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
+  assert.match(dockerfile, /npm run build --prefix client/);
+  assert.match(dockerfile, /npm run build --prefix react/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
   assert.match(
     dockerfile,
@@ -648,6 +650,9 @@ try {
   fs.mkdirSync(baseSource);
   fs.mkdirSync(baseOutput);
   packageStageFiles(dockerfile, baseSource);
+  fs.rmSync(path.join(baseSource, 'client/dist'), { recursive: true, force: true });
+  fs.rmSync(path.join(baseSource, 'react/dist'), { recursive: true, force: true });
+  fs.symlinkSync(path.resolve(root, '../../node_modules'), path.join(baseSource, 'node_modules'));
   execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], {
     cwd: path.join(baseSource, 'client'),
     stdio: 'pipe',
@@ -666,6 +671,14 @@ try {
     fs.readFileSync(baseStarterManifest, 'utf8').replace(/^version = .*$/m, 'version = "9.8.7"'),
   );
   assert.match(fs.readFileSync(baseStarterManifest, 'utf8'), /^version = "9\.8\.7"$/m);
+  execFileSync('npm', ['run', 'build', '--prefix', 'client'], {
+    cwd: baseSource,
+    stdio: 'pipe',
+  });
+  execFileSync('npm', ['run', 'build', '--prefix', 'react'], {
+    cwd: baseSource,
+    stdio: 'pipe',
+  });
   const basePack = JSON.parse(
     execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput], {
       cwd: path.join(baseSource, 'react'),
