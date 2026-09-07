@@ -633,9 +633,9 @@ static void *translate_block(uint64_t guest_pc) {
     /* A generated prefix is published only when a supported terminal is present.
      * Otherwise rewind the arena and let the interpreter translate the
      * ORIGINAL PC; no emitted prefix has executed or retired. */
-    /* Translation stops at the first terminal, so a published body has at
-     * most one direct backedge even when its target lies inside a nested guest
-     * loop. Forward edges remain ordinary dispatcher exits. */
+    /* Translation follows an unseen one-way forward B, then stops at the first
+     * remaining terminal. A published body therefore has at most one direct
+     * backedge even when its target lies inside a nested guest loop. */
     for (unsigned count = 0; count < HL_A64_X86_MAX_BLOCK_INSNS; ++count, cursor += 4) {
         host_for_instruction[count] = assembler.cursor;
         guest_for_instruction[count] = cursor;
