@@ -819,7 +819,13 @@ fn attendant<S: Supply>(
 
 /// Serves one connection and reports how it ended.
 fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voice, stream: UnixStream) -> String {
-    let opened = Conversation::new(stream, plan.authority(), plan.workspace.clone(), queue.clone());
+    let opened = Conversation::new_scoped(
+        stream,
+        plan.authority(),
+        plan.workspace.clone(),
+        queue.clone(),
+        plan.record.containers.clone(),
+    );
     let Ok(mut conversation) = opened else {
         return "the extension's socket could not be duplicated".to_owned();
     };
@@ -1132,6 +1138,7 @@ tab_title = "Sample"
 
     fn manifest() -> Manifest {
         Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -1149,6 +1156,7 @@ tab_title = "Sample"
     fn plan(socket: &Path) -> Plan {
         let manifest = manifest();
         let record = Record {
+            containers: hl_extension::ContainerGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
             version: "1.0.0".to_owned(),

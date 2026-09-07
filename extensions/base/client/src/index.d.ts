@@ -1,27 +1,123 @@
 import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
 
-export type Topic = 'containers' | 'container-inventory' | 'images' | 'volumes' | 'networks' | 'terminal' | 'pane-changes' | 'executions' | 'image-pulls' | 'extensions' | 'extension-acquisitions' | 'workspace-lifecycle' | 'workspace-events' | 'filesystem';
+export type Topic =
+  | 'containers'
+  | 'container-inventory'
+  | 'images'
+  | 'volumes'
+  | 'networks'
+  | 'terminal'
+  | 'pane-changes'
+  | 'executions'
+  | 'image-pulls'
+  | 'extensions'
+  | 'extension-acquisitions'
+  | 'workspace-lifecycle'
+  | 'workspace-events'
+  | 'filesystem';
 export type Division = 'beside' | 'below';
-export interface WorkspaceInfo { name: string; architecture: string; image: string }
-export interface ExtensionPaneProvider { id: string; title: string; icon: string | null }
-export interface ExtensionSummary { name: string; image_digest: string; status: string; version?: string; enabled?: boolean; pane_providers?: ExtensionPaneProvider[] }
-export interface ExtensionProviderDeclaration { extension: string; image_digest: string; version: string; status: string; id: string; title: string; icon: string | null }
-export interface ExtensionProviderCatalogue { providers: ExtensionProviderDeclaration[]; truncated: boolean }
+export interface WorkspaceInfo {
+  name: string;
+  architecture: string;
+  image: string;
+}
+export interface ExtensionPaneProvider {
+  id: string;
+  title: string;
+  icon: string | null;
+}
+export interface ExtensionSummary {
+  name: string;
+  image_digest: string;
+  status: string;
+  version?: string;
+  enabled?: boolean;
+  pane_providers?: ExtensionPaneProvider[];
+}
+export interface ExtensionProviderDeclaration {
+  extension: string;
+  image_digest: string;
+  version: string;
+  status: string;
+  id: string;
+  title: string;
+  icon: string | null;
+}
+export interface ExtensionProviderCatalogue {
+  providers: ExtensionProviderDeclaration[];
+  truncated: boolean;
+}
 export type ExtensionCapability =
-  | 'workspaces:read' | 'workspaces:control' | 'workspaces:events'
-  | 'containers:read' | 'containers:control' | 'containers:attach' | 'images:read' | 'images:write'
-  | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write'
-  | 'terminals:read' | 'terminals:control' | 'terminals:output' | 'panes:observe'
-  | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read'
-  | 'extensions:control' | 'extensions:install' | 'filesystem:read'
-  | 'filesystem:write' | 'interface:render';
-export interface ExtensionCandidate { name: string; version: string; image_digest: string; requested: ExtensionCapability[]; installed_image_digest: string | null }
-export interface ExtensionAcquisitionJob { job: string }
-export interface ExtensionAcquisitionProgress { status: string; id: string | null; current: number | null; total: number | null }
-export interface ExtensionAcquisitionStatus { job: string; reference: string; revision: number; state: string; progress: ExtensionAcquisitionProgress | null; candidate: ExtensionCandidate | null; error: string | null }
-export interface ExtensionAcquisitionChange { job: string; revision: number; state: string; coalesced: number }
-export interface WorkspaceState extends WorkspaceInfo { running: boolean; current: boolean }
-export interface WorkspaceMount { host: string; container: string; read_only: boolean }
+  | 'workspaces:read'
+  | 'workspaces:control'
+  | 'workspaces:events'
+  | 'containers:read'
+  | 'containers:control'
+  | 'containers:attach'
+  | 'images:read'
+  | 'images:write'
+  | 'volumes:read'
+  | 'volumes:write'
+  | 'networks:read'
+  | 'networks:write'
+  | 'terminals:read'
+  | 'terminals:control'
+  | 'terminals:output'
+  | 'panes:observe'
+  | 'panes:semantic-read'
+  | 'panes:semantic-control'
+  | 'extensions:read'
+  | 'extensions:control'
+  | 'extensions:install'
+  | 'filesystem:read'
+  | 'filesystem:write'
+  | 'interface:render';
+export type ContainerSelector = { id: string } | { name: string } | { all: true };
+export interface ContainerGrant {
+  selectors: ContainerSelector[];
+  create: boolean;
+}
+export interface ExtensionCandidate {
+  name: string;
+  version: string;
+  image_digest: string;
+  requested: ExtensionCapability[];
+  requested_containers: ContainerGrant;
+  installed_image_digest: string | null;
+}
+export interface ExtensionAcquisitionJob {
+  job: string;
+}
+export interface ExtensionAcquisitionProgress {
+  status: string;
+  id: string | null;
+  current: number | null;
+  total: number | null;
+}
+export interface ExtensionAcquisitionStatus {
+  job: string;
+  reference: string;
+  revision: number;
+  state: string;
+  progress: ExtensionAcquisitionProgress | null;
+  candidate: ExtensionCandidate | null;
+  error: string | null;
+}
+export interface ExtensionAcquisitionChange {
+  job: string;
+  revision: number;
+  state: string;
+  coalesced: number;
+}
+export interface WorkspaceState extends WorkspaceInfo {
+  running: boolean;
+  current: boolean;
+}
+export interface WorkspaceMount {
+  host: string;
+  container: string;
+  read_only: boolean;
+}
 export interface WorkspaceTerminal {
   font_family: string | null;
   font_size: number | null;
@@ -44,40 +140,141 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   execution_lifetime: 'persisted' | 'live' | 'ephemeral';
   terminal: WorkspaceTerminal;
 }
-export interface ContainerSummary { id: string; name: string; image: string; state: string; created: number; generation?: number }
-export interface ContainerInventory { containers: ContainerSummary[]; complete: boolean }
-export interface ContainerVolumeMount { volume: string; target: string; read_only?: boolean }
-export interface ContainerPort { container: number; host?: number | null; protocol: 'tcp' | 'udp' }
+export interface ContainerSummary {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  created: number;
+  generation?: number;
+}
+export interface ContainerInventory {
+  containers: ContainerSummary[];
+  complete: boolean;
+}
+export interface ContainerVolumeMount {
+  volume: string;
+  target: string;
+  read_only?: boolean;
+}
+export interface ContainerPort {
+  container: number;
+  host?: number | null;
+  protocol: 'tcp' | 'udp';
+}
 export interface ContainerCreateSpec {
-  image: string; name: string; hostname?: string | null; entrypoint?: string[] | null; command?: string[];
-  environment?: [string, string][]; working_directory?: string | null; user?: string | null;
-  labels?: [string, string][]; mounts?: ContainerVolumeMount[]; network?: string | null;
-  ports?: ContainerPort[]; memory_mb?: number | null; cpus?: number | null; pids_limit?: number | null;
+  image: string;
+  name: string;
+  hostname?: string | null;
+  entrypoint?: string[] | null;
+  command?: string[];
+  environment?: [string, string][];
+  working_directory?: string | null;
+  user?: string | null;
+  labels?: [string, string][];
+  mounts?: ContainerVolumeMount[];
+  network?: string | null;
+  ports?: ContainerPort[];
+  memory_mb?: number | null;
+  cpus?: number | null;
+  pids_limit?: number | null;
 }
 export interface ProcessList {
-  container_id: string; titles: string[]; processes: string[][]; observed_at_ms: number;
-  scope: 'initial' | 'namespace'; pid_identity: 'snapshot'; truncated: boolean;
+  container_id: string;
+  titles: string[];
+  processes: string[][];
+  observed_at_ms: number;
+  scope: 'initial' | 'namespace';
+  pid_identity: 'snapshot';
+  truncated: boolean;
 }
 export interface ContainerOutput {
-  stdout: number[]; stderr: number[]; truncated: boolean;
-  stdout_truncated: boolean; stderr_truncated: boolean; eof: boolean;
+  stdout: number[];
+  stderr: number[];
+  truncated: boolean;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+  eof: boolean;
 }
 export interface ExecutionSummary {
-  id: string; container_id: string; running: boolean; exit_code: number; pid: number;
-  command: string[]; user: string;
+  id: string;
+  container_id: string;
+  running: boolean;
+  exit_code: number;
+  pid: number;
+  command: string[];
+  user: string;
 }
-export interface ExecutionList { executions: ExecutionSummary[]; truncated: boolean }
-export interface ImageSummary { id: string; reference: string; size: number; created: number }
-export interface ImageInventory { images: ImageSummary[]; truncated: boolean }
-export interface ImageDetails { id: string; references: string[]; created: string; size: number; os: string; architecture: string; entrypoint: string[]; command: string[]; working_directory: string; user: string }
-export interface ImagePruneResult { deleted: number; space_reclaimed: number }
-export interface ImagePullJob { job: string }
-export interface ImagePullStatus { job: string; reference: string; revision: number; state: string; status: string | null; layer: string | null; current: number | null; total: number | null; image: ImageSummary | null; error: string | null }
-export interface ImagePullChange { job: string; revision: number; state: string; coalesced: number }
-export interface VolumeSummary { name: string; driver: string; generation: string }
-export interface VolumeInventory { volumes: VolumeSummary[]; truncated: boolean }
-export interface NetworkSummary { id: string; name: string; driver: string; scope: string }
-export interface NetworkInventory { networks: NetworkSummary[]; truncated: boolean }
+export interface ExecutionList {
+  executions: ExecutionSummary[];
+  truncated: boolean;
+}
+export interface ImageSummary {
+  id: string;
+  reference: string;
+  size: number;
+  created: number;
+}
+export interface ImageInventory {
+  images: ImageSummary[];
+  truncated: boolean;
+}
+export interface ImageDetails {
+  id: string;
+  references: string[];
+  created: string;
+  size: number;
+  os: string;
+  architecture: string;
+  entrypoint: string[];
+  command: string[];
+  working_directory: string;
+  user: string;
+}
+export interface ImagePruneResult {
+  deleted: number;
+  space_reclaimed: number;
+}
+export interface ImagePullJob {
+  job: string;
+}
+export interface ImagePullStatus {
+  job: string;
+  reference: string;
+  revision: number;
+  state: string;
+  status: string | null;
+  layer: string | null;
+  current: number | null;
+  total: number | null;
+  image: ImageSummary | null;
+  error: string | null;
+}
+export interface ImagePullChange {
+  job: string;
+  revision: number;
+  state: string;
+  coalesced: number;
+}
+export interface VolumeSummary {
+  name: string;
+  driver: string;
+  generation: string;
+}
+export interface VolumeInventory {
+  volumes: VolumeSummary[];
+  truncated: boolean;
+}
+export interface NetworkSummary {
+  id: string;
+  name: string;
+  driver: string;
+  scope: string;
+}
+export interface NetworkInventory {
+  networks: NetworkSummary[];
+  truncated: boolean;
+}
 export interface PaneSummary {
   slot: string;
   working_directory: string | null;
@@ -85,36 +282,157 @@ export interface PaneSummary {
   occupant: 'terminal' | 'surface';
   provider: { extension: string; provider: string } | null;
 }
-export interface TabSummary { id: string; title: string; pinned: boolean; panes: PaneSummary[] }
-export interface PaneText { slot: string; generation?: number; revision?: number; columns?: number; rows?: number; lines: string[]; cursor_column?: number; cursor_row?: number; truncated: boolean }
-export interface PaneChange { slot: string; kind: 'terminal' | 'surface' | 'native'; revision: number; generation: number; coalesced: number }
-export interface InspectablePane { slot: string; generation: number; revision: number; kind: 'terminal' | 'surface' | 'native'; provider: { extension: string; provider: string } | null; tab: string | null; title: string | null; focused: boolean }
-export interface PaneInventory { panes: InspectablePane[]; truncated: boolean }
+export interface TabSummary {
+  id: string;
+  title: string;
+  pinned: boolean;
+  panes: PaneSummary[];
+}
+export interface PaneText {
+  slot: string;
+  generation?: number;
+  revision?: number;
+  columns?: number;
+  rows?: number;
+  lines: string[];
+  cursor_column?: number;
+  cursor_row?: number;
+  truncated: boolean;
+}
+export interface PaneChange {
+  slot: string;
+  kind: 'terminal' | 'surface' | 'native';
+  revision: number;
+  generation: number;
+  coalesced: number;
+}
+export interface InspectablePane {
+  slot: string;
+  generation: number;
+  revision: number;
+  kind: 'terminal' | 'surface' | 'native';
+  provider: { extension: string; provider: string } | null;
+  tab: string | null;
+  title: string | null;
+  focused: boolean;
+}
+export interface PaneInventory {
+  panes: InspectablePane[];
+  truncated: boolean;
+}
 export type SemanticActionKind = 'invoke' | 'change' | 'submit' | 'toggle' | 'expand' | 'focus';
-export interface SemanticNode { id: number; role: string; label: string | null; value: string | null; disabled: boolean; destructive: boolean; actions: SemanticActionKind[]; children: SemanticNode[] }
-export interface PaneSemanticTree { slot: string; generation: number; revision: number; root: SemanticNode; truncated: boolean }
+export interface SemanticNode {
+  id: number;
+  role: string;
+  label: string | null;
+  value: string | null;
+  disabled: boolean;
+  destructive: boolean;
+  actions: SemanticActionKind[];
+  children: SemanticNode[];
+}
+export interface PaneSemanticTree {
+  slot: string;
+  generation: number;
+  revision: number;
+  root: SemanticNode;
+  truncated: boolean;
+}
 export type ReadablePane =
   | { kind: 'terminal'; text: string; snapshot: PaneText }
   | { kind: 'ui'; text: string; snapshot: PaneSemanticTree };
-export interface PaneSemanticAction { generation: number; revision: number; node: number; action: SemanticActionKind; value?: string | null }
-export interface GridSize { columns: number; rows: number }
+export interface PaneSemanticAction {
+  generation: number;
+  revision: number;
+  node: number;
+  action: SemanticActionKind;
+  value?: string | null;
+}
+export interface GridSize {
+  columns: number;
+  rows: number;
+}
 export type LayoutNode =
   | { kind: 'pane'; pane: PaneSummary; grid: GridSize | null; focused: boolean }
-  | { kind: 'split'; division: Division; ratio_per_mille: number; first: LayoutNode; second: LayoutNode };
-export interface TabTopology { id: string; title: string; pinned: boolean; root: LayoutNode }
-export interface TerminalTopology { active_tab: string | null; tabs: TabTopology[] }
-export interface FileEntry { path: string; directory: boolean; size: number; identity?: string | null }
-export interface FileInventory { entries: FileEntry[]; complete: boolean; coalesced: number }
-export interface FileRange { path: string; identity: string; offset: number; total: number; contents: number[]; eof: boolean; truncated: boolean }
+  | {
+      kind: 'split';
+      division: Division;
+      ratio_per_mille: number;
+      first: LayoutNode;
+      second: LayoutNode;
+    };
+export interface TabTopology {
+  id: string;
+  title: string;
+  pinned: boolean;
+  root: LayoutNode;
+}
+export interface TerminalTopology {
+  active_tab: string | null;
+  tabs: TabTopology[];
+}
+export interface FileEntry {
+  path: string;
+  directory: boolean;
+  size: number;
+  identity?: string | null;
+}
+export interface FileInventory {
+  entries: FileEntry[];
+  complete: boolean;
+  coalesced: number;
+}
+export interface FileRange {
+  path: string;
+  identity: string;
+  offset: number;
+  total: number;
+  contents: number[];
+  eof: boolean;
+  truncated: boolean;
+}
 export type WorkspaceEvent =
-  | { event: 'key'; key: string; modifiers: string[]; pressed: boolean; slot?: string | null; generation?: number | null }
+  | {
+      event: 'key';
+      key: string;
+      modifiers: string[];
+      pressed: boolean;
+      slot?: string | null;
+      generation?: number | null;
+    }
   | { event: 'focus'; active: boolean; slot?: string | null; generation?: number | null }
-  | { event: 'pointer'; phase: 'move' | 'enter' | 'leave' | 'press' | 'release' | 'click' | 'context' | 'scroll'; slot: string; generation: number; x: number; y: number; button: number | null; modifiers: string[]; delta_x: number | null; delta_y: number | null };
-export interface WorkspaceEventBatch { events: WorkspaceEvent[]; dropped: number }
-export interface WorkspaceLifecycleChange { workspace: string; action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart'; revision: number; coalesced: number }
-export interface PaneSelection { pane_provider: string; slot: string }
+  | {
+      event: 'pointer';
+      phase: 'move' | 'enter' | 'leave' | 'press' | 'release' | 'click' | 'context' | 'scroll';
+      slot: string;
+      generation: number;
+      x: number;
+      y: number;
+      button: number | null;
+      modifiers: string[];
+      delta_x: number | null;
+      delta_y: number | null;
+    };
+export interface WorkspaceEventBatch {
+  events: WorkspaceEvent[];
+  dropped: number;
+}
+export interface WorkspaceLifecycleChange {
+  workspace: string;
+  action: 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart';
+  revision: number;
+  coalesced: number;
+}
+export interface PaneSelection {
+  pane_provider: string;
+  slot: string;
+}
 export interface InterfaceEventBase<I extends string, T extends string> {
-  interaction: I; trigger: T; node: number; id: string; slot?: string;
+  interaction: I;
+  trigger: T;
+  node: number;
+  id: string;
+  slot?: string;
 }
 export type InterfaceEvent = WireUiEvent;
 export type SnapshotEvent =
@@ -178,7 +496,8 @@ export class Session {
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
-  call<C extends WireCall>(method: C,
+  call<C extends WireCall>(
+    method: C,
     ...args: WireRequestFor<C> extends { with: infer P }
       ? [params: P, options?: CallOptions]
       : [params?: undefined, options?: CallOptions]
@@ -216,7 +535,11 @@ export interface WorkspaceApi {
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   /** Assign identity to an imported generation-less workspace record. */
   adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  update(name: string, generation: string, configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  update(
+    name: string,
+    generation: string,
+    configuration: WorkspaceConfiguration,
+  ): Promise<WorkspaceConfiguration>;
   delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
@@ -256,15 +579,15 @@ export interface WorkspaceApi {
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-    installAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, granted: ExtensionCapability[]): Promise<ExtensionSummary>;
+    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], options?: { timeoutMs?: number }): Promise<
+    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
@@ -351,8 +674,15 @@ export interface WorkspaceApi {
     inspect(reference: string): Promise<NetworkSummary>;
     create(name: string): Promise<string>;
     remove(reference: string): Promise<void>;
-    removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
-    connect(reference: string, container: string, options?: { aliases?: readonly string[] }): Promise<void>;
+    removeAndWait(
+      reference: string,
+      options?: { timeoutMs?: number },
+    ): Promise<{ changed: boolean; id: string }>;
+    connect(
+      reference: string,
+      container: string,
+      options?: { aliases?: readonly string[] },
+    ): Promise<void>;
     disconnect(reference: string, container: string): Promise<void>;
   };
   terminal: {
@@ -479,20 +809,32 @@ export interface WorkspaceApi {
   unsubscribe(topic: Topic): Promise<void>;
   watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
   watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
-  watchContainerInventory(listener: (inventory: ContainerInventory) => void): Promise<() => Promise<void>>;
+  watchContainerInventory(
+    listener: (inventory: ContainerInventory) => void,
+  ): Promise<() => Promise<void>>;
   watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;
   watchImageInventory(listener: (inventory: ImageInventory) => void): Promise<() => Promise<void>>;
   watchVolumes(listener: (volumes: VolumeSummary[]) => void): Promise<() => Promise<void>>;
-  watchVolumeInventory(listener: (inventory: VolumeInventory) => void): Promise<() => Promise<void>>;
+  watchVolumeInventory(
+    listener: (inventory: VolumeInventory) => void,
+  ): Promise<() => Promise<void>>;
   watchNetworks(listener: (networks: NetworkSummary[]) => void): Promise<() => Promise<void>>;
-  watchNetworkInventory(listener: (inventory: NetworkInventory) => void): Promise<() => Promise<void>>;
+  watchNetworkInventory(
+    listener: (inventory: NetworkInventory) => void,
+  ): Promise<() => Promise<void>>;
   watchTerminal(listener: (tabs: TabSummary[]) => void): Promise<() => Promise<void>>;
   watchExecutions(listener: (executions: ExecutionList) => void): Promise<() => Promise<void>>;
   watchImagePulls(listener: (change: ImagePullChange) => void): Promise<() => Promise<void>>;
   watchExtensions(listener: (extensions: ExtensionSummary[]) => void): Promise<() => Promise<void>>;
-  watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
-  watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
-  watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
+  watchExtensionAcquisitions(
+    listener: (change: ExtensionAcquisitionChange) => void,
+  ): Promise<() => Promise<void>>;
+  watchWorkspaceLifecycle(
+    listener: (change: WorkspaceLifecycleChange) => void,
+  ): Promise<() => Promise<void>>;
+  watchWorkspaceEvents(
+    listener: (batch: WorkspaceEventBatch) => void,
+  ): Promise<() => Promise<void>>;
   watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
 

@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, CreateExecution, DockerMount, HostConfig
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{Bridge, failure};
+use super::{failure, Bridge};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -527,13 +527,14 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        GENERATION_LABEL, Image, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, Sidecar, SidecarSpec,
-        ensure_transaction, removal_target, replacement_target, stop_target,
+        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec,
+        GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
         Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -1009,7 +1010,10 @@ mod tests {
         assert_eq!(host.mounts[0].target, SOCKET_TARGET);
         assert!(host.binds.is_empty());
         assert_eq!(host.network_mode, "none");
-        assert!(!host.readonly_rootfs, "the native socket projection needs a writable image root");
+        assert!(
+            !host.readonly_rootfs,
+            "the native socket projection needs a writable image root"
+        );
         assert!(host.tmpfs.is_empty(), "no unbounded writable filesystem is granted");
     }
 

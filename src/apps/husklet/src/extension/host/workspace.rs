@@ -412,6 +412,7 @@ mod halt_tests {
 
     fn plan(socket: std::path::PathBuf) -> Plan {
         let manifest = Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("checkpoint-sidecar").expect("name"),
             display_name: "Checkpoint sidecar".to_owned(),
             version: "1.0.0".to_owned(),
@@ -425,6 +426,7 @@ mod halt_tests {
             filesystem_roots: Vec::new(),
         };
         let record = Record {
+            containers: hl_extension::ContainerGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:offline-checkpoint".to_owned(),
             version: manifest.version.clone(),

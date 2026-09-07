@@ -1,18 +1,34 @@
 export { ExtensionError, Session, SOCKET, PROTOCOL, validateUiEvent } from './session.js';
 export {
-  PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS,
-  PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest,
-  validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot,
+  PROTOCOL_SPECIFICATION_VERSION,
+  PROTOCOL_VERSION,
+  PROTOCOL_BOUNDS,
+  PROTOCOL_CAPABILITIES,
+  PROTOCOL_TOPICS,
+  PROTOCOL_REPLIES,
+  PROTOCOL_REQUEST_CAPABILITIES,
+  encodeRequest,
+  validateRequest,
+  validateReply,
+  validateReplyFor,
+  validateFailure,
+  validateSnapshot,
 } from './generated-protocol.js';
 import { semanticXml } from './semantic.js';
 export { semanticXml };
 import { Session } from './session.js';
-import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS } from './generated-protocol.js';
+import {
+  PROTOCOL_REPLIES,
+  PROTOCOL_REQUEST_CAPABILITIES,
+  PROTOCOL_TOPICS,
+} from './generated-protocol.js';
 
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
   constructor(executionId, phase, cause, execution = undefined) {
-    super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    super(
+      `execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
     this.name = 'ExecutionOperationError';
     this.executionId = executionId;
     this.phase = phase;
@@ -24,7 +40,9 @@ export class ExecutionOperationError extends Error {
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export class TerminalOperationError extends Error {
   constructor(operation, result, cause) {
-    super(`terminal ${operation} observation failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    super(
+      `terminal ${operation} observation failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
     this.name = 'TerminalOperationError';
     this.operation = operation;
     this.result = Object.freeze({ ...result });
@@ -34,40 +52,80 @@ export class TerminalOperationError extends Error {
 
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
-const SNAPSHOT_TOPICS = Object.freeze(['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events', 'filesystem']);
+const SNAPSHOT_TOPICS = Object.freeze([
+  'containers',
+  'container-inventory',
+  'executions',
+  'images',
+  'image-pulls',
+  'volumes',
+  'networks',
+  'terminal',
+  'pane-changes',
+  'extensions',
+  'extension-acquisitions',
+  'workspace-lifecycle',
+  'workspace-events',
+  'filesystem',
+]);
 
 function immutableIdentity(id, widths, noun) {
   if (typeof id === 'string' && widths.includes(id.length) && /^[0-9a-f]+$/.test(id)) return id;
-  throw new TypeError(`${noun} operation requires the complete immutable ID returned by inspection`);
+  throw new TypeError(
+    `${noun} operation requires the complete immutable ID returned by inspection`,
+  );
 }
 
 function exactContainerName(name) {
   if (typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)) return name;
-  throw new TypeError('container name must contain 1..128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit');
+  throw new TypeError(
+    'container name must contain 1..128 ASCII letters, digits, underscores, periods, or hyphens and start with a letter or digit',
+  );
 }
 
 function endpointAliases(options) {
   if (options === undefined) return [];
-  if (options === null || typeof options !== 'object' || Array.isArray(options)
-      || Object.keys(options).some((key) => key !== 'aliases')) {
+  if (
+    options === null ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    Object.keys(options).some((key) => key !== 'aliases')
+  ) {
     throw new TypeError('network connect options may contain only aliases');
   }
   if (options.aliases !== undefined && !Array.isArray(options.aliases)) {
     throw new TypeError('network endpoint aliases must be an array');
   }
   const aliases = options.aliases === undefined ? [] : [...options.aliases];
-  if (aliases.length > 64 || new Set(aliases).size !== aliases.length
-      || aliases.some((alias) => typeof alias !== 'string' || alias.length < 1 || alias.length > 253
-        || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(alias))) {
-    throw new TypeError('network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names');
+  if (
+    aliases.length > 64 ||
+    new Set(aliases).size !== aliases.length ||
+    aliases.some(
+      (alias) =>
+        typeof alias !== 'string' ||
+        alias.length < 1 ||
+        alias.length > 253 ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(alias),
+    )
+  ) {
+    throw new TypeError(
+      'network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names',
+    );
   }
   return aliases;
 }
 
 function exactPaneTitle(title) {
-  if (typeof title === 'string' && title.trim().length > 0
-    && new TextEncoder().encode(title).byteLength <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(title)) return title;
-  throw new TypeError('pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters');
+  if (
+    typeof title === 'string' &&
+    title.trim().length > 0 &&
+    new TextEncoder().encode(title).byteLength <= 256 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(title)
+  )
+    return title;
+  throw new TypeError(
+    'pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters',
+  );
 }
 
 function exactPaneRatio(ratio) {
@@ -79,24 +137,41 @@ function exactPaneRatio(ratio) {
 
 function paneRatio(node, slot) {
   if (!node || node.kind !== 'split') return null;
-  if (node.first?.kind === 'pane' && node.first.pane?.slot === slot) return node.ratio_per_mille / 1000;
-  if (node.second?.kind === 'pane' && node.second.pane?.slot === slot) return 1 - node.ratio_per_mille / 1000;
+  if (node.first?.kind === 'pane' && node.first.pane?.slot === slot)
+    return node.ratio_per_mille / 1000;
+  if (node.second?.kind === 'pane' && node.second.pane?.slot === slot)
+    return 1 - node.ratio_per_mille / 1000;
   return paneRatio(node.first, slot) ?? paneRatio(node.second, slot);
 }
 
 function exactOccupantTarget(target) {
   const terminal = target?.kind === 'terminal' && Object.keys(target).length === 1;
-  const name = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
-  const surface = target?.kind === 'surface' && name(target.extension) && name(target.provider) && Object.keys(target).length === 3;
-  if (!terminal && !surface) throw new TypeError('pane occupant target must be terminal or an exact extension/provider surface');
+  const name = (value) =>
+    typeof value === 'string' && value.length <= 64 && /^[a-z0-9][a-z0-9._-]*$/.test(value);
+  const surface =
+    target?.kind === 'surface' &&
+    name(target.extension) &&
+    name(target.provider) &&
+    Object.keys(target).length === 3;
+  if (!terminal && !surface)
+    throw new TypeError(
+      'pane occupant target must be terminal or an exact extension/provider surface',
+    );
   return { ...target };
 }
 
 function exactSemanticAction(action) {
-  if (!Number.isSafeInteger(action?.generation) || action.generation < 0
-    || !Number.isSafeInteger(action?.revision) || action.revision < 0
-    || !Number.isSafeInteger(action?.node) || action.node < 0) {
-    throw new TypeError('pane semantic action requires nonnegative safe integer generation, revision, and node');
+  if (
+    !Number.isSafeInteger(action?.generation) ||
+    action.generation < 0 ||
+    !Number.isSafeInteger(action?.revision) ||
+    action.revision < 0 ||
+    !Number.isSafeInteger(action?.node) ||
+    action.node < 0
+  ) {
+    throw new TypeError(
+      'pane semantic action requires nonnegative safe integer generation, revision, and node',
+    );
   }
   if (action?.value != null && new TextEncoder().encode(action.value).byteLength > 4096) {
     throw new RangeError('pane semantic action value exceeds 4096 bytes');
@@ -105,11 +180,23 @@ function exactSemanticAction(action) {
 }
 
 function exactCommand(command) {
-  if (!Array.isArray(command) || command.length < 1 || command.length > 64
-    || command[0] === '' || command.some((argument) => typeof argument !== 'string'
-      || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
-    || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32768) {
-    throw new TypeError('command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+  if (
+    !Array.isArray(command) ||
+    command.length < 1 ||
+    command.length > 64 ||
+    command[0] === '' ||
+    command.some(
+      (argument) =>
+        typeof argument !== 'string' ||
+        new TextEncoder().encode(argument).byteLength > 4096 ||
+        argument.includes('\0'),
+    ) ||
+    command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) >
+      32768
+  ) {
+    throw new TypeError(
+      'command must contain 1..64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate',
+    );
   }
   return command;
 }
@@ -117,11 +204,13 @@ function exactCommand(command) {
 function exactPaneInput(input) {
   if (typeof input === 'string') {
     const bytes = new TextEncoder().encode(input);
-    if (bytes.byteLength > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+    if (bytes.byteLength > 64 * 1024)
+      throw new RangeError('terminal input exceeds the 65536 byte limit');
     return bytes;
   }
   const values = Array.from(input ?? []);
-  if (values.length > 64 * 1024) throw new RangeError('terminal input exceeds the 65536 byte limit');
+  if (values.length > 64 * 1024)
+    throw new RangeError('terminal input exceeds the 65536 byte limit');
   if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
     throw new TypeError('terminal input bytes must be integers from 0 through 255');
   }
@@ -130,7 +219,9 @@ function exactPaneInput(input) {
 
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
-    throw new RangeError('execution wait timeout must be an integer from 1 through 30000 milliseconds');
+    throw new RangeError(
+      'execution wait timeout must be an integer from 1 through 30000 milliseconds',
+    );
   }
   if (typeof stdout !== 'boolean' || typeof stderr !== 'boolean' || (!stdout && !stderr)) {
     throw new TypeError('execution output requires at least one boolean stdout or stderr stream');
@@ -139,7 +230,10 @@ function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr =
 }
 
 function immutableDigest(value, noun) {
-  if (!/^sha256:[0-9a-f]{64}$/.test(value)) throw new TypeError(`${noun} removal requires the complete immutable sha256 digest returned by inventory`);
+  if (!/^sha256:[0-9a-f]{64}$/.test(value))
+    throw new TypeError(
+      `${noun} removal requires the complete immutable sha256 digest returned by inventory`,
+    );
   return value;
 }
 
@@ -154,8 +248,12 @@ export async function connect(options = {}) {
  * cold-start feedback independent of framework initialization. Pass the
  * returned token to the renderer so it continues the same frame sequence.
  */
-export async function bootstrapSurface(session, { title = 'Extension', label = 'Loading…', primary = false } = {}) {
-  if (typeof title !== 'string' || title.trim().length === 0) throw new TypeError('surface title must be nonblank');
+export async function bootstrapSurface(
+  session,
+  { title = 'Extension', label = 'Loading…', primary = false } = {},
+) {
+  if (typeof title !== 'string' || title.trim().length === 0)
+    throw new TypeError('surface title must be nonblank');
   if (typeof label !== 'string' || new TextEncoder().encode(label).byteLength > 4096) {
     throw new TypeError('surface label must be a string of at most 4096 UTF-8 bytes');
   }
@@ -163,7 +261,11 @@ export async function bootstrapSurface(session, { title = 'Extension', label = '
   let slot = '';
   if (!primary) {
     const opened = await session.call('interface_open_tab', { title });
-    if (opened?.reply !== 'identity' || typeof opened.with !== 'string' || opened.with.length === 0) {
+    if (
+      opened?.reply !== 'identity' ||
+      typeof opened.with !== 'string' ||
+      opened.with.length === 0
+    ) {
       throw new Error(`host replied ${opened?.reply ?? 'without a tag'}, expected identity`);
     }
     slot = opened.with;
@@ -181,7 +283,8 @@ export async function bootstrapSurface(session, { title = 'Extension', label = '
     const rendered = primary
       ? await session.call('interface_render', { frame })
       : await session.call('interface_render_at', { slot, frame });
-    if (rendered?.reply !== 'done') throw new Error(`host replied ${rendered?.reply ?? 'without a tag'}, expected done`);
+    if (rendered?.reply !== 'done')
+      throw new Error(`host replied ${rendered?.reply ?? 'without a tag'}, expected done`);
   } catch (error) {
     if (!primary) void session.call('interface_withdraw', { slot }).catch(() => {});
     throw error;
@@ -201,18 +304,21 @@ export function workspace(session, { signal } = {}) {
     });
   }
   const expect = (reply, kind) => {
-    if (reply?.reply !== kind) throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected ${kind}`);
+    if (reply?.reply !== kind)
+      throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected ${kind}`);
     return reply.with;
   };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
   const subscription = (call, topic) => {
-    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    if (!SNAPSHOT_TOPICS.includes(topic))
+      throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     return done(call, { topic });
   };
   const states = subscriptions.get(hostSession) ?? new Map();
   subscriptions.set(hostSession, states);
   const subscribe = async (topic) => {
-    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    if (!SNAPSHOT_TOPICS.includes(topic))
+      throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     let state = states.get(topic);
     if (!state) {
       state = { references: 0, active: false, operation: Promise.resolve() };
@@ -235,7 +341,8 @@ export function workspace(session, { signal } = {}) {
     }
   };
   const unsubscribe = async (topic) => {
-    if (!SNAPSHOT_TOPICS.includes(topic)) throw new RangeError(`host does not publish the ${topic} snapshot topic`);
+    if (!SNAPSHOT_TOPICS.includes(topic))
+      throw new RangeError(`host does not publish the ${topic} snapshot topic`);
     const state = states.get(topic);
     if (!state || state.references === 0) return;
     state.references -= 1;
@@ -272,8 +379,12 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, granted) => expect(await session.call('extension_install', { job, revision, granted }), 'extension'),
-      update: async (job, revision, granted) => expect(await session.call('extension_update', { job, revision, granted }), 'extension'),
+      install: async (job, revision, granted, containers = { selectors: [], create: false }) => expect(
+        await session.call('extension_install', { job, revision, granted, containers }), 'extension',
+      ),
+      update: async (job, revision, granted, containers = { selectors: [], create: false }) => expect(
+        await session.call('extension_update', { job, revision, granted, containers }), 'extension',
+      ),
     },
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
@@ -299,9 +410,20 @@ export function workspace(session, { signal } = {}) {
           throw new TypeError('container creation requires a configuration object');
         }
         const spec = {
-          hostname: null, entrypoint: null, command: [], environment: [], working_directory: null, user: null,
-          labels: [], mounts: [], network: null, ports: [], memory_mb: null, cpus: null,
-          pids_limit: null, ...configuration,
+          hostname: null,
+          entrypoint: null,
+          command: [],
+          environment: [],
+          working_directory: null,
+          user: null,
+          labels: [],
+          mounts: [],
+          network: null,
+          ports: [],
+          memory_mb: null,
+          cpus: null,
+          pids_limit: null,
+          ...configuration,
         };
         const normalized = {
           ...spec,
@@ -341,19 +463,27 @@ export function workspace(session, { signal } = {}) {
           throw new ExecutionOperationError(executionId, phase, cause, execution);
         }
       },
-      attachTerminal: (id, command) => session.call('container_attach_terminal', {
-        id: immutableIdentity(id, [32, 64], 'container'), command: exactCommand(command),
-      }).then((reply) => expect(reply, 'identity')),
+      attachTerminal: (id, command) =>
+        session
+          .call('container_attach_terminal', {
+            id: immutableIdentity(id, [32, 64], 'container'),
+            command: exactCommand(command),
+          })
+          .then((reply) => expect(reply, 'identity')),
     },
     images: {
       inventory: async () => expect(await session.call('image_list'), 'images'),
       list: async () => (await api.images.inventory()).images,
-      inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
+      inspect: async (reference) =>
+        expect(await session.call('image_inspect', { reference }), 'image_details'),
       pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
-      startPull: async (reference) => expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
-      pullStatus: async (job) => expect(await session.call('image_pull_status', { job }), 'image_pull'),
+      startPull: async (reference) =>
+        expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
+      pullStatus: async (job) =>
+        expect(await session.call('image_pull_status', { job }), 'image_pull'),
       cancelPull: (job) => done('image_pull_cancel', { job }),
-      remove: (reference) => done('image_remove', { reference: immutableDigest(reference, 'image') }),
+      remove: (reference) =>
+        done('image_remove', { reference: immutableDigest(reference, 'image') }),
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
@@ -361,60 +491,125 @@ export function workspace(session, { signal } = {}) {
       list: async () => (await api.volumes.inventory()).volumes,
       inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
       create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
-      remove: (name, generation) => done('volume_remove', { name, generation: immutableIdentity(generation, [32], 'volume generation') }),
+      remove: (name, generation) =>
+        done('volume_remove', {
+          name,
+          generation: immutableIdentity(generation, [32], 'volume generation'),
+        }),
     },
     networks: {
       inventory: async () => expect(await session.call('network_list'), 'networks'),
       list: async () => (await api.networks.inventory()).networks,
-      inspect: async (reference) => expect(await session.call('network_inspect', { reference }), 'network'),
+      inspect: async (reference) =>
+        expect(await session.call('network_inspect', { reference }), 'network'),
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
-      remove: (reference) => done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
+      remove: (reference) =>
+        done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
       connect: (reference, container, options) => {
         const aliases = endpointAliases(options);
-        const withValue = { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') };
+        const withValue = {
+          reference: immutableIdentity(reference, [32], 'network'),
+          container: immutableIdentity(container, [32, 64], 'container'),
+        };
         if (aliases.length > 0) withValue.aliases = aliases;
         return done('network_connect', withValue);
       },
-      disconnect: (reference, container) => done('network_disconnect', { reference: immutableIdentity(reference, [32], 'network'), container: immutableIdentity(container, [32, 64], 'container') }),
+      disconnect: (reference, container) =>
+        done('network_disconnect', {
+          reference: immutableIdentity(reference, [32], 'network'),
+          container: immutableIdentity(container, [32, 64], 'container'),
+        }),
     },
     terminal: {
       panes: async () => expect(await session.call('pane_list'), 'panes'),
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
-      openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
-      split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
+      openTab: async (title) =>
+        expect(await session.call('terminal_open_tab', { title }), 'identity'),
+      split: async (slot, division) =>
+        expect(await session.call('terminal_split', { slot, division }), 'identity'),
       splitObserved: (slot, generation, revision, division) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-          throw new TypeError('terminal split requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        ) {
+          throw new TypeError(
+            'terminal split requires nonnegative safe integer generation and revision',
+          );
         }
-        return session.call('terminal_split_observed', { slot, generation, revision, division })
+        return session
+          .call('terminal_split_observed', { slot, generation, revision, division })
           .then((reply) => expect(reply, 'identity'));
       },
       spawn: (slot, command) => {
-        if (!Array.isArray(command) || command.length === 0 || command.length > 64
-          || command.some((argument) => typeof argument !== 'string'
-            || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
-          || command[0].length === 0
-          || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) {
-          throw new RangeError('terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+        if (
+          !Array.isArray(command) ||
+          command.length === 0 ||
+          command.length > 64 ||
+          command.some(
+            (argument) =>
+              typeof argument !== 'string' ||
+              new TextEncoder().encode(argument).byteLength > 4096 ||
+              argument.includes('\0'),
+          ) ||
+          command[0].length === 0 ||
+          command.reduce(
+            (bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength,
+            0,
+          ) >
+            32 * 1024
+        ) {
+          throw new RangeError(
+            'terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate',
+          );
         }
         return done('terminal_spawn', { slot, command: [...command] });
       },
       spawnObserved: (slot, generation, revision, command) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-          throw new TypeError('terminal spawn requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        ) {
+          throw new TypeError(
+            'terminal spawn requires nonnegative safe integer generation and revision',
+          );
         }
-        if (!Array.isArray(command) || command.length === 0 || command.length > 64
-          || command.some((argument) => typeof argument !== 'string'
-            || new TextEncoder().encode(argument).byteLength > 4096 || argument.includes('\0'))
-          || command[0].length === 0
-          || command.reduce((bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength, 0) > 32 * 1024) {
-          throw new RangeError('terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate');
+        if (
+          !Array.isArray(command) ||
+          command.length === 0 ||
+          command.length > 64 ||
+          command.some(
+            (argument) =>
+              typeof argument !== 'string' ||
+              new TextEncoder().encode(argument).byteLength > 4096 ||
+              argument.includes('\0'),
+          ) ||
+          command[0].length === 0 ||
+          command.reduce(
+            (bytes, argument) => bytes + new TextEncoder().encode(argument).byteLength,
+            0,
+          ) >
+            32 * 1024
+        ) {
+          throw new RangeError(
+            'terminal command must contain 1..=64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in aggregate',
+          );
         }
-        return done('terminal_spawn_observed', { slot, generation, revision, command: [...command] });
+        return done('terminal_spawn_observed', {
+          slot,
+          generation,
+          revision,
+          command: [...command],
+        });
       },
-      read: async (slot, lines) => expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
-      semantics: async (slot) => expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+      read: async (slot, lines) =>
+        expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+      semantics: async (slot) =>
+        expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
       toText: async (slot, { lines } = {}) => {
         const inventory = expect(await session.call('pane_list'), 'panes');
@@ -426,7 +621,10 @@ export function workspace(session, { signal } = {}) {
           throw new Error(`${detail}: ${slot}`);
         }
         if (pane.kind === 'terminal') {
-          const snapshot = expect(await session.call('terminal_read_pane', { slot, lines }), 'text');
+          const snapshot = expect(
+            await session.call('terminal_read_pane', { slot, lines }),
+            'text',
+          );
           return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
         }
         const snapshot = expect(await session.call('pane_semantic_read', { slot }), 'semantics');
@@ -594,9 +792,13 @@ export function workspace(session, { signal } = {}) {
       await api.containers.start(identity);
       const container = await Promise.race([
         running,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      return container === null ? { changed: false, id: identity, state: 'running' } : { changed: true, container };
+      return container === null
+        ? { changed: false, id: identity, state: 'running' }
+        : { changed: true, container };
     } finally {
       clearTimeout(timer);
       await stop();
@@ -607,7 +809,11 @@ export function workspace(session, { signal } = {}) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('container stop wait timeout must be between 1 and 30000ms');
     }
-    let sequence = 0; let baseline = 0; let stopped = false; let observed; let timer;
+    let sequence = 0;
+    let baseline = 0;
+    let stopped = false;
+    let observed;
+    let timer;
     const exited = new Promise((resolve) => {
       observed = (containers) => {
         sequence += 1;
@@ -623,9 +829,13 @@ export function workspace(session, { signal } = {}) {
       await api.containers.stop(identity);
       const container = await Promise.race([
         exited,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      return container === null ? { changed: false, id: identity, state: 'exited' } : { changed: true, container };
+      return container === null
+        ? { changed: false, id: identity, state: 'exited' }
+        : { changed: true, container };
     } finally {
       clearTimeout(timer);
       await stopWatching();
@@ -633,8 +843,13 @@ export function workspace(session, { signal } = {}) {
   };
   api.containers.removeAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container remove wait timeout must be between 1 and 30000ms');
-    let sequence = 0; let baseline = 0; let removing = false; let observed; let timer;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('container remove wait timeout must be between 1 and 30000ms');
+    let sequence = 0;
+    let baseline = 0;
+    let removing = false;
+    let observed;
+    let timer;
     const absent = new Promise((resolve) => {
       observed = (inventory) => {
         sequence += 1;
@@ -647,7 +862,12 @@ export function workspace(session, { signal } = {}) {
     try {
       removing = true;
       await api.containers.remove(identity);
-      const removed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      const removed = await Promise.race([
+        absent.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
       return { changed: removed, id: identity };
     } finally {
       clearTimeout(timer);
@@ -656,9 +876,14 @@ export function workspace(session, { signal } = {}) {
   };
   api.containers.restartAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
-    if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('container restart wait requires an observed nonnegative safe generation');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('container restart wait timeout must be between 1 and 30000ms');
-    let observed; let timer;
+    if (!Number.isSafeInteger(generation) || generation < 0)
+      throw new TypeError(
+        'container restart wait requires an observed nonnegative safe generation',
+      );
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('container restart wait timeout must be between 1 and 30000ms');
+    let observed;
+    let timer;
     const restarted = new Promise((resolve) => {
       observed = (containers) => {
         const current = containers.find((container) => container.id === identity);
@@ -668,31 +893,58 @@ export function workspace(session, { signal } = {}) {
     const stopWatching = await api.watchContainers(observed);
     try {
       await api.containers.restart(identity);
-      const container = await Promise.race([restarted, new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); })]);
-      return container === null ? { changed: false, id: identity, generation } : { changed: true, container };
+      const container = await Promise.race([
+        restarted,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
+      ]);
+      return container === null
+        ? { changed: false, id: identity, generation }
+        : { changed: true, container };
     } finally {
       clearTimeout(timer);
       await stopWatching();
     }
   };
   api.watchImageInventory = (listener) => watch('images', 'images', listener, 'image inventory');
-  api.watchImages = (listener) => api.watchImageInventory((inventory) => listener(inventory.images));
-  api.watchVolumeInventory = (listener) => watch('volumes', 'volumes', listener, 'volume inventory');
-  api.watchVolumes = (listener) => api.watchVolumeInventory((inventory) => listener(inventory.volumes));
-  api.watchNetworkInventory = (listener) => watch('networks', 'networks', listener, 'network inventory');
-  api.watchNetworks = (listener) => api.watchNetworkInventory((inventory) => listener(inventory.networks));
+  api.watchImages = (listener) =>
+    api.watchImageInventory((inventory) => listener(inventory.images));
+  api.watchVolumeInventory = (listener) =>
+    watch('volumes', 'volumes', listener, 'volume inventory');
+  api.watchVolumes = (listener) =>
+    api.watchVolumeInventory((inventory) => listener(inventory.volumes));
+  api.watchNetworkInventory = (listener) =>
+    watch('networks', 'networks', listener, 'network inventory');
+  api.watchNetworks = (listener) =>
+    api.watchNetworkInventory((inventory) => listener(inventory.networks));
   api.images.removeAndWait = async (reference, { timeoutMs = 30_000 } = {}) => {
     const digest = immutableDigest(reference, 'image');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('image remove wait timeout must be between 1 and 30000ms');
-    let removing = false; let timer; let finish;
-    const absent = new Promise((resolve) => { finish = resolve; });
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('image remove wait timeout must be between 1 and 30000ms');
+    let removing = false;
+    let timer;
+    let finish;
+    const absent = new Promise((resolve) => {
+      finish = resolve;
+    });
     const stopWatching = await api.watchImageInventory((inventory) => {
-      if (removing && !inventory.truncated && !inventory.images.some((image) => image.id === digest)) finish();
+      if (
+        removing &&
+        !inventory.truncated &&
+        !inventory.images.some((image) => image.id === digest)
+      )
+        finish();
     });
     try {
       removing = true;
       await api.images.remove(digest);
-      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      const changed = await Promise.race([
+        absent.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
       return { changed, id: digest };
     } finally {
       clearTimeout(timer);
@@ -701,16 +953,31 @@ export function workspace(session, { signal } = {}) {
   };
   api.volumes.removeAndWait = async (name, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(generation, [32], 'volume generation');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('volume remove wait timeout must be between 1 and 30000ms');
-    let removing = false; let timer; let finish;
-    const absent = new Promise((resolve) => { finish = resolve; });
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('volume remove wait timeout must be between 1 and 30000ms');
+    let removing = false;
+    let timer;
+    let finish;
+    const absent = new Promise((resolve) => {
+      finish = resolve;
+    });
     const stopWatching = await api.watchVolumeInventory((inventory) => {
-      if (removing && !inventory.truncated && !inventory.volumes.some((volume) => volume.name === name && volume.generation === identity)) finish();
+      if (
+        removing &&
+        !inventory.truncated &&
+        !inventory.volumes.some((volume) => volume.name === name && volume.generation === identity)
+      )
+        finish();
     });
     try {
       removing = true;
       await api.volumes.remove(name, identity);
-      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      const changed = await Promise.race([
+        absent.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
       return { changed, name, generation: identity };
     } finally {
       clearTimeout(timer);
@@ -719,16 +986,31 @@ export function workspace(session, { signal } = {}) {
   };
   api.networks.removeAndWait = async (reference, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(reference, [32], 'network');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('network remove wait timeout must be between 1 and 30000ms');
-    let removing = false; let timer; let finish;
-    const absent = new Promise((resolve) => { finish = resolve; });
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('network remove wait timeout must be between 1 and 30000ms');
+    let removing = false;
+    let timer;
+    let finish;
+    const absent = new Promise((resolve) => {
+      finish = resolve;
+    });
     const stopWatching = await api.watchNetworkInventory((inventory) => {
-      if (removing && !inventory.truncated && !inventory.networks.some((network) => network.id === identity)) finish();
+      if (
+        removing &&
+        !inventory.truncated &&
+        !inventory.networks.some((network) => network.id === identity)
+      )
+        finish();
     });
     try {
       removing = true;
       await api.networks.remove(identity);
-      const changed = await Promise.race([absent.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+      const changed = await Promise.race([
+        absent.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
       return { changed, id: identity };
     } finally {
       clearTimeout(timer);
@@ -736,26 +1018,44 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
-  api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
+  api.watchPaneChanges = (listener) =>
+    watch('pane-changes', 'pane_changes', listener, 'pane change');
   api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane text wait requires a nonempty slot');
-    if (after == null || !Number.isSafeInteger(after.generation) || after.generation < 0
-      || !Number.isSafeInteger(after.revision) || after.revision < 0) {
-      throw new TypeError('pane text wait requires an exact nonnegative generation and revision cursor');
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('pane text wait requires a nonempty slot');
+    if (
+      after == null ||
+      !Number.isSafeInteger(after.generation) ||
+      after.generation < 0 ||
+      !Number.isSafeInteger(after.revision) ||
+      after.revision < 0
+    ) {
+      throw new TypeError(
+        'pane text wait requires an exact nonnegative generation and revision cursor',
+      );
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('pane text wait timeout must be between 1 and 30000ms');
     }
-    let dispose; let timer; let settled = false; let reading = false; let pending;
+    let dispose;
+    let timer;
+    let settled = false;
+    let reading = false;
+    let pending;
     return new Promise((resolve, reject) => {
       const finish = (value, error) => {
         if (settled) return;
-        settled = true; clearTimeout(timer);
-        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+        settled = true;
+        clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
       const observe = (change) => {
-        if (settled || change.slot !== slot
-          || (change.generation === after.generation && change.revision === after.revision)) return;
+        if (
+          settled ||
+          change.slot !== slot ||
+          (change.generation === after.generation && change.revision === after.revision)
+        )
+          return;
         pending = change;
         if (reading) return;
         reading = true;
@@ -792,9 +1092,15 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('terminal input wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
@@ -805,7 +1111,9 @@ export function workspace(session, { signal } = {}) {
       await api.terminal.writeInput(slot, generation, revision, contents);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, before };
       const after = await api.terminal.read(slot, lines);
@@ -818,10 +1126,24 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal spawn wait requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal spawn wait requires nonnegative safe integer generation and revision');
+  api.terminal.spawnAndWait = async (
+    slot,
+    generation,
+    revision,
+    command,
+    { lines, timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal spawn wait requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal spawn wait requires nonnegative safe integer generation and revision',
+      );
     }
     const argv = [...exactCommand(command)];
     if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
@@ -831,9 +1153,15 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('terminal spawn wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
@@ -844,7 +1172,9 @@ export function workspace(session, { signal } = {}) {
       await api.terminal.spawnObserved(slot, generation, revision, argv);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, command: argv, before };
       const after = await api.terminal.read(slot, lines);
@@ -857,12 +1187,34 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.terminal.resizeGridAndWait = async (slot, generation, revision, columns, rows, { lines, timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal resize wait requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal resize wait requires nonnegative safe integer generation and revision');
+  api.terminal.resizeGridAndWait = async (
+    slot,
+    generation,
+    revision,
+    columns,
+    rows,
+    { lines, timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal resize wait requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal resize wait requires nonnegative safe integer generation and revision',
+      );
     }
-    if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) {
+    if (
+      !Number.isInteger(columns) ||
+      !Number.isInteger(rows) ||
+      columns < 1 ||
+      rows < 1 ||
+      columns > 1000 ||
+      rows > 1000
+    ) {
       throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
     }
     if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
@@ -872,9 +1224,15 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('terminal resize wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
@@ -885,11 +1243,14 @@ export function workspace(session, { signal } = {}) {
       await api.terminal.resizeGridObserved(slot, generation, revision, columns, rows);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, columns, rows, before };
       const after = await api.terminal.read(slot, lines);
-      if (after.generation !== generation) throw new Error('resized pane slot was replaced before verification');
+      if (after.generation !== generation)
+        throw new Error('resized pane slot was replaced before verification');
       if (after.revision === revision || after.columns !== columns || after.rows !== rows) {
         throw new Error('pane changed without applying the requested terminal grid');
       }
@@ -905,7 +1266,9 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('terminal tab wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => changed(change));
     let timer;
     let tab;
@@ -931,27 +1294,42 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane semantic action requires a nonempty slot');
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('pane semantic action requires a nonempty slot');
     exactSemanticAction(action);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('pane semantic action wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot
-        && (change.generation !== action.generation || change.revision !== action.revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== action.generation || change.revision !== action.revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       await api.terminal.act(slot, action);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      if (change === null) return { changed: false, after: { generation: action.generation, revision: action.revision } };
+      if (change === null)
+        return {
+          changed: false,
+          after: { generation: action.generation, revision: action.revision },
+        };
       const readable = await api.terminal.toText(slot, { lines });
-      if (readable.snapshot.generation === action.generation && readable.snapshot.revision === action.revision) {
+      if (
+        readable.snapshot.generation === action.generation &&
+        readable.snapshot.revision === action.revision
+      ) {
         throw new Error('pane change did not advance the readable snapshot cursor');
       }
       return { changed: true, readable };
@@ -1047,19 +1425,38 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.terminal.closeAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal close requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal close requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal close requires nonnegative safe integer generation and revision',
+      );
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('terminal close wait timeout must be between 1 and 30000ms');
     }
-    let pending = false; let wake;
-    const next = () => pending ? Promise.resolve() : new Promise((resolve) => { wake = resolve; });
+    let pending = false;
+    let wake;
+    const next = () =>
+      pending
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            wake = resolve;
+          });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot !== slot
-        || (change.generation === generation && change.revision === revision)) return;
-      pending = true; wake?.(); wake = undefined;
+      if (
+        change.slot !== slot ||
+        (change.generation === generation && change.revision === revision)
+      )
+        return;
+      pending = true;
+      wake?.();
+      wake = undefined;
     });
     const deadline = Date.now() + timeoutMs;
     try {
@@ -1070,7 +1467,9 @@ export function workspace(session, { signal } = {}) {
         let timer;
         const event = await Promise.race([
           next().then(() => true),
-          new Promise((resolve) => { timer = setTimeout(() => resolve(false), remaining); }),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve(false), remaining);
+          }),
         ]);
         clearTimeout(timer);
         if (!event) return { changed: false, slot, after: { generation, revision } };
@@ -1306,9 +1705,13 @@ export function workspace(session, { signal } = {}) {
       await api.containers.signalExecution(executionId, signal);
       const execution = await Promise.race([
         transition,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      return execution === null ? { changed: false, id: executionId, state, after } : { changed: true, execution };
+      return execution === null
+        ? { changed: false, id: executionId, state, after }
+        : { changed: true, execution };
     } finally {
       clearTimeout(timer);
       await stop();
@@ -1316,17 +1719,28 @@ export function workspace(session, { signal } = {}) {
   };
   api.containers.removeExecutionAndWait = async (id, after, { timeoutMs = 30_000 } = {}) => {
     const executionId = immutableIdentity(id, [32], 'execution');
-    if (after == null || typeof after.running !== 'boolean'
-      || !Number.isSafeInteger(after.exit_code) || !Number.isSafeInteger(after.pid)) {
-      throw new TypeError('execution removal wait requires the exact running, exit_code, and pid cursor');
+    if (
+      after == null ||
+      typeof after.running !== 'boolean' ||
+      !Number.isSafeInteger(after.exit_code) ||
+      !Number.isSafeInteger(after.pid)
+    ) {
+      throw new TypeError(
+        'execution removal wait requires the exact running, exit_code, and pid cursor',
+      );
     }
-    if (after.running) throw new TypeError('execution removal wait requires an observed finished execution');
+    if (after.running)
+      throw new TypeError('execution removal wait requires an observed finished execution');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('execution removal wait timeout must be between 1 and 30000ms');
     }
-    const differs = (execution) => execution.running !== after.running
-      || execution.exit_code !== after.exit_code || execution.pid !== after.pid;
-    let removing = false; let observed; let timer;
+    const differs = (execution) =>
+      execution.running !== after.running ||
+      execution.exit_code !== after.exit_code ||
+      execution.pid !== after.pid;
+    let removing = false;
+    let observed;
+    let timer;
     const absent = new Promise((resolve) => {
       observed = (catalogue) => {
         if (!removing || catalogue.truncated) return;
@@ -1341,7 +1755,9 @@ export function workspace(session, { signal } = {}) {
       await api.containers.removeExecution(executionId);
       const removed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
       ]);
       return { changed: removed, id: executionId };
     } finally {
@@ -1373,7 +1789,9 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.enable(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       return extension === null
         ? { changed: false, name, image_digest: digest }
@@ -1393,7 +1811,8 @@ export function workspace(session, { signal } = {}) {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (!current) reject(new Error(`extension ${name} disappeared while disabling`));
-        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while disabling`));
+        else if (current.image_digest !== digest)
+          reject(new Error(`extension ${name} was replaced while disabling`));
         else if (!current.enabled) resolve(current);
       };
     });
@@ -1403,7 +1822,9 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.disable(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       return extension === null
         ? { changed: false, name, image_digest: digest }
@@ -1423,7 +1844,8 @@ export function workspace(session, { signal } = {}) {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (!current) reject(new Error(`extension ${name} disappeared while retrying`));
-        else if (current.image_digest !== digest) reject(new Error(`extension ${name} was replaced while retrying`));
+        else if (current.image_digest !== digest)
+          reject(new Error(`extension ${name} was replaced while retrying`));
         else if (current.enabled && current.status === 'duty') resolve(current);
       };
     });
@@ -1433,7 +1855,9 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.retry(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       return extension === null
         ? { changed: false, name, image_digest: digest }
@@ -1461,7 +1885,9 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.remove(name, digest);
       const replacement = await Promise.race([
         inventory,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(undefined), timeoutMs);
+        }),
       ]);
       return replacement === undefined
         ? { changed: false, name, image_digest: digest }
@@ -1471,16 +1897,31 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
-  const commitAcquisitionAndWait = async (operation, job, revision, granted, { timeoutMs = 30_000 } = {}) => {
+  api.watchExtensionAcquisitions = (listener) =>
+    watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
+  const commitAcquisitionAndWait = async (
+    operation,
+    job,
+    revision,
+    granted,
+    containers = { selectors: [], create: false },
+    { timeoutMs = 30_000 } = {},
+  ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError(`extension ${operation} wait requires a nonnegative safe integer revision`);
+      throw new TypeError(
+        `extension ${operation} wait requires a nonnegative safe integer revision`,
+      );
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError(`extension ${operation} wait timeout must be between 1 and 30000ms`);
     }
     const status = await api.extensions.acquisition(job);
-    if (status.job !== job || status.revision !== revision || status.state !== 'ready' || !status.candidate) {
+    if (
+      status.job !== job ||
+      status.revision !== revision ||
+      status.state !== 'ready' ||
+      !status.candidate
+    ) {
       throw new Error(`extension ${operation} requires the exact ready acquisition revision`);
     }
     const candidate = status.candidate;
@@ -1494,15 +1935,21 @@ export function workspace(session, { signal } = {}) {
     const inventory = new Promise((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === candidate.name);
-        if (!authorityReturned) { latest = current ?? null; return; }
+        if (!authorityReturned) {
+          latest = current ?? null;
+          return;
+        }
         if (current?.image_digest === digest) resolve(current);
-        else reject(new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`));
+        else
+          reject(
+            new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`),
+          );
       };
     });
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](job, revision, granted);
+      const committed = await api.extensions[operation](job, revision, granted, containers);
       if (committed.name !== candidate.name || committed.image_digest !== digest) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }
@@ -1510,7 +1957,9 @@ export function workspace(session, { signal } = {}) {
       if (latest !== undefined) observed(latest === null ? [] : [latest]);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       return extension === null
         ? { changed: false, name: candidate.name, image_digest: digest, revision }
@@ -1520,23 +1969,37 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.extensions.installAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('install', job, revision, granted, options);
-  api.extensions.updateAndWait = (job, revision, granted, options) => commitAcquisitionAndWait('update', job, revision, granted, options);
+  api.extensions.installAndWait = (job, revision, granted, containers, options) =>
+    commitAcquisitionAndWait('install', job, revision, granted, containers, options);
+  api.extensions.updateAndWait = (job, revision, granted, containers, options) =>
+    commitAcquisitionAndWait('update', job, revision, granted, containers, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
-    if (typeof job !== 'string' || job.length === 0 || new TextEncoder().encode(job).byteLength > 128) {
+    if (
+      typeof job !== 'string' ||
+      job.length === 0 ||
+      new TextEncoder().encode(job).byteLength > 128
+    ) {
       throw new TypeError('extension acquisition wait requires a 1..128 byte job identity');
     }
     if (!Number.isSafeInteger(afterRevision) || afterRevision < 0) {
-      throw new TypeError('extension acquisition wait requires a nonnegative safe integer revision');
+      throw new TypeError(
+        'extension acquisition wait requires a nonnegative safe integer revision',
+      );
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('extension acquisition wait timeout must be between 1 and 30000ms');
     }
-    let dispose; let timer; let settled = false; let reading = false; let latest;
+    let dispose;
+    let timer;
+    let settled = false;
+    let reading = false;
+    let latest;
     return new Promise((resolve, reject) => {
       const finish = (value, error) => {
-        if (settled) return; settled = true; clearTimeout(timer);
-        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
       const observe = (change) => {
         if (settled || change.job !== job || change.revision <= afterRevision) return;
@@ -1572,7 +2035,8 @@ export function workspace(session, { signal } = {}) {
 export function requestCapability(call) {
   const capability = PROTOCOL_REQUEST_CAPABILITIES[call];
   if (capability !== undefined && capability !== null) return capability;
-  if (capability === null) throw new RangeError(`extension request ${call} has topic-selected capability`);
+  if (capability === null)
+    throw new RangeError(`extension request ${call} has topic-selected capability`);
   throw new RangeError(`unclassified extension request ${call}`);
 }
 

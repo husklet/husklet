@@ -44,6 +44,7 @@ pub(crate) struct AcquisitionCandidate {
     pub name: String,
     pub version: String,
     pub requested: Grant,
+    pub requested_containers: hl_extension::ContainerGrant,
     pub installed_digest: Option<String>,
 }
 
@@ -270,16 +271,40 @@ impl ExtensionAcquisitions {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn install(&self, job: AcquisitionJob, revision: u64, consented: &Grant) -> Result<(), HostError> {
+        self.install_scoped(job, revision, consented, &hl_extension::ContainerGrant::default())
+    }
+
+    pub(crate) fn install_scoped(
+        &self,
+        job: AcquisitionJob,
+        revision: u64,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+    ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, _) = self.take_ready(job, revision)?;
         let result = Roster::workspace(&self.workspace)
-            .and_then(|mut roster| roster.register(&candidate.manifest, &candidate.digest, consented, moment()))
+            .and_then(|mut roster| {
+                roster.register_scoped(&candidate.manifest, &candidate.digest, consented, containers, moment())
+            })
             .map_err(|error| HostError::Failed(error.to_string()));
         self.finish(job, result, AcquisitionState::Installed)
     }
 
+    #[cfg(test)]
     pub(crate) fn update(&self, job: AcquisitionJob, revision: u64, consented: &Grant) -> Result<(), HostError> {
+        self.update_scoped(job, revision, consented, &hl_extension::ContainerGrant::default())
+    }
+
+    pub(crate) fn update_scoped(
+        &self,
+        job: AcquisitionJob,
+        revision: u64,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+    ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, installed_digest) = self.take_ready(job, revision)?;
         let result = (|| {
@@ -290,7 +315,7 @@ impl ExtensionAcquisitions {
                 .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
-                .commit_update(update, consented, moment())
+                .commit_update_scoped(update, consented, containers, moment())
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
@@ -389,6 +414,7 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 name: candidate.manifest.name.to_string(),
                 version: candidate.manifest.version.clone(),
                 requested: candidate.manifest.capabilities.clone(),
+                requested_containers: candidate.manifest.containers.clone(),
                 installed_digest,
             };
             (AcquisitionState::Ready(visible), Some(candidate))
@@ -414,6 +440,7 @@ mod tests {
 
     fn manifest(version: &str, capabilities: &[Capability]) -> Manifest {
         Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("sample").unwrap(),
             display_name: "Sample".into(),
             version: version.into(),
@@ -474,17 +501,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let release = Arc::new(std::sync::Barrier::new(2));
         let worker_release = Arc::clone(&release);
-        let service = ExtensionAcquisitions::with_acquirer(
-            &workspace(root.path()),
-            move |_, reference, progress, _| {
+        let service =
+            ExtensionAcquisitions::with_acquirer(&workspace(root.path()), move |_, reference, progress, _| {
                 worker_release.wait();
                 let _ = progress.send(Acquisition::Ready(Candidate {
                     reference: reference.into(),
                     digest: "sha256:ready".into(),
                     manifest: manifest("1.0.0", &[]),
                 }));
-            },
-        );
+            });
         let job = service.start("registry/sample:1").unwrap();
         let observed = service.status(job).unwrap();
         release.wait();

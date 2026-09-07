@@ -651,6 +651,8 @@ pub struct ExtensionCandidate {
     pub image_digest: String,
     pub requested: crate::Grant,
     #[serde(default)]
+    pub requested_containers: crate::ContainerGrant,
+    #[serde(default)]
     pub installed_image_digest: Option<String>,
 }
 
@@ -703,10 +705,22 @@ pub trait ExtensionStore {
     fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
-    fn install(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+    fn install(
+        &self,
+        _job: &str,
+        _revision: u64,
+        _granted: &crate::Grant,
+        _containers: &crate::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension installation is unavailable".into()))
     }
-    fn update(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+    fn update(
+        &self,
+        _job: &str,
+        _revision: u64,
+        _granted: &crate::Grant,
+        _containers: &crate::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension update is unavailable".into()))
     }
 }

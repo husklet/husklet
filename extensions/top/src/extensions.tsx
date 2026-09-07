@@ -148,6 +148,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.job,
         acquisition.revision,
         granted,
+        acquisition.candidate.requested_containers,
       );
       setAcquisition(null);
       setReference('');
@@ -295,6 +296,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               {acquisition.candidate.requested.length === 0 && (
                 <Text label="This extension requests no capabilities." />
               )}
+              <Text label="Container access" color="text-dim" />
+              {acquisition.candidate.requested_containers.selectors.map((selector, index) => (
+                <Text
+                  key={`${index}:${JSON.stringify(selector)}`}
+                  label={
+                    'all' in selector
+                      ? 'All workspace containers'
+                      : 'id' in selector
+                        ? `Exact container ${selector.id}`
+                        : `Container named ${selector.name}`
+                  }
+                  wrap
+                />
+              ))}
+              {acquisition.candidate.requested_containers.create && (
+                <Text label="May create containers" color="warning" />
+              )}
+              {acquisition.candidate.requested_containers.selectors.length === 0 &&
+                !acquisition.candidate.requested_containers.create && (
+                  <Text label="No container resources requested." color="text-dim" />
+                )}
               <Button
                 label={
                   busy === 'update'

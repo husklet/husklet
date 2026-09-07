@@ -87,11 +87,13 @@ pub enum Request {
         job: String,
         revision: u64,
         granted: crate::Grant,
+        containers: crate::ContainerGrant,
     },
     ExtensionUpdate {
         job: String,
         revision: u64,
         granted: crate::Grant,
+        containers: crate::ContainerGrant,
     },
     ContainerList,
     ContainerInspect {

@@ -967,6 +967,32 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ContainerGrant": {
+    "fields": [
+      {
+        "name": "selectors",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerSelector"
+          }
+        }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
   "ContainerInventory": {
     "fields": [
       {
@@ -1090,6 +1116,59 @@ const definitions = {
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "ContainerSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Id",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "Name",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
   },
   "ContainerSummary": {
     "fields": [
@@ -1577,6 +1656,14 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "Grant"
+        }
+      },
+      {
+        "name": "requested_containers",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "ContainerGrant"
         }
       },
       {
@@ -7268,6 +7355,14 @@ const roots = {
                 "kind": "ref",
                 "name": "Grant"
               }
+            },
+            {
+              "name": "containers",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ContainerGrant"
+              }
             }
           ],
           "kind": "struct"
@@ -7301,6 +7396,14 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "Grant"
+              }
+            },
+            {
+              "name": "containers",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ContainerGrant"
               }
             }
           ],
@@ -10237,6 +10340,16 @@ function validate(schema, value, path) {
 function validateEnum(schema, value, path) {
   const tag = schema.serde?.tag;
   const content = schema.serde?.content;
+  if (schema.serde?.untagged) {
+    const candidates = schema.variants.filter((variant) => {
+      if (variant.payload.kind !== 'struct' || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const keys = Object.keys(value);
+      return keys.length === variant.payload.fields.length
+        && keys.every((key) => variant.payload.fields.some((field) => field.name === key));
+    });
+    if (candidates.length !== 1) fail(path, 'exactly one untagged variant');
+    return validate(candidates[0].payload, value, path);
+  }
   if (tag) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value[tag] !== 'string') fail(path, `an object tagged by ${tag}`);
     const variant = schema.variants.find((entry) => entry.name === value[tag]);

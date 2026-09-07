@@ -677,6 +677,32 @@
       "kind": "struct",
       "serde": {}
     },
+    "ContainerGrant": {
+      "fields": [
+        {
+          "name": "selectors",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerSelector"
+            }
+          }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
     "ContainerInventory": {
       "fields": [
         {
@@ -800,6 +826,59 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "ContainerSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Id",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Name",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "ContainerSummary": {
       "fields": [
@@ -1287,6 +1366,14 @@
           "schema": {
             "kind": "ref",
             "name": "Grant"
+          }
+        },
+        {
+          "name": "requested_containers",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ContainerGrant"
           }
         },
         {
@@ -7890,6 +7977,14 @@
                   "kind": "ref",
                   "name": "Grant"
                 }
+              },
+              {
+                "name": "containers",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerGrant"
+                }
               }
             ],
             "kind": "struct"
@@ -7923,6 +8018,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "Grant"
+                }
+              },
+              {
+                "name": "containers",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerGrant"
                 }
               }
             ],
@@ -10824,7 +10927,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:7ee95bb4b4692e42",
+  "source_fingerprint": "fnv1a64:40793df1806457f1",
   "specification_version": 1,
   "topics": [
     {

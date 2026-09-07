@@ -4,6 +4,100 @@ use hl_rpc::{Rejection, RelativePath};
 
 use crate::capability::{Capability, Grant};
 
+/// One exact container an extension asks to see, or an explicit workspace-wide selector.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[serde(untagged)]
+pub enum ContainerSelector {
+    Id { id: String },
+    Name { name: String },
+    All { all: bool },
+}
+
+impl<'de> serde::Deserialize<'de> for ContainerSelector {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            id: Option<String>,
+            name: Option<String>,
+            all: Option<bool>,
+        }
+        let raw = <Raw as serde::Deserialize>::deserialize(deserializer)?;
+        match (raw.id, raw.name, raw.all) {
+            (Some(id), None, None) => Ok(Self::Id { id }),
+            (None, Some(name), None) => Ok(Self::Name { name }),
+            (None, None, Some(all)) => Ok(Self::All { all }),
+            _ => Err(serde::de::Error::custom(
+                "a container selector must contain exactly one of id, name, or all",
+            )),
+        }
+    }
+}
+
+/// Container resource authority, independent from the verb capabilities.
+///
+/// An omitted value is empty. Workspace-wide authority therefore requires an
+/// explicit `[{ all = true }]`, and creation is separately consented.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerGrant {
+    #[serde(default)]
+    pub selectors: Vec<ContainerSelector>,
+    #[serde(default)]
+    pub create: bool,
+}
+
+impl ContainerGrant {
+    pub const SELECTOR_LIMIT: usize = 128;
+
+    #[must_use]
+    pub fn intersect(&self, consented: &Self) -> Self {
+        let selectors = self
+            .selectors
+            .iter()
+            .filter(|selector| consented.selectors.contains(selector))
+            .cloned()
+            .collect();
+        Self {
+            selectors,
+            create: self.create && consented.create,
+        }
+    }
+
+    #[must_use]
+    pub fn all(&self) -> bool {
+        self.selectors
+            .iter()
+            .any(|selector| matches!(selector, ContainerSelector::All { all: true }))
+    }
+
+    fn validate(&self) -> Result<(), Invalid> {
+        if self.selectors.len() > Self::SELECTOR_LIMIT {
+            return Err(Invalid::ContainerSelectors);
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for selector in &self.selectors {
+            let valid = match selector {
+                ContainerSelector::Id { id } => {
+                    matches!(id.len(), 32 | 64) && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }
+                ContainerSelector::Name { name } => {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+                }
+                ContainerSelector::All { all } => *all,
+            };
+            if !valid || !unique.insert(selector) {
+                return Err(Invalid::ContainerSelectors);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Identity of an extension. Also the key its grant and state are stored under.
 pub type ExtensionName = hl_rpc::PeerName;
 
@@ -128,6 +222,9 @@ pub struct Manifest {
     pub version: String,
     pub protocol: u32,
     pub capabilities: Grant,
+    /// Exact container resources requested. Omission intentionally means none.
+    #[serde(default)]
+    pub containers: ContainerGrant,
     #[serde(default)]
     pub entrypoint: Option<Vec<String>>,
     #[serde(default)]
@@ -195,6 +292,14 @@ impl Manifest {
         {
             return Err(Invalid::Undeclared(Capability::FilesystemRead));
         }
+        manifest.containers.validate()?;
+        if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
+            && !manifest.capabilities.holds(Capability::ContainerRead)
+            && !manifest.capabilities.holds(Capability::ContainerControl)
+            && !manifest.capabilities.holds(Capability::ContainerAttach)
+        {
+            return Err(Invalid::Undeclared(Capability::ContainerRead));
+        }
         Ok(manifest)
     }
 
@@ -222,6 +327,7 @@ pub enum Invalid {
     Protocol { declared: u32, supported: u32 },
     Undeclared(Capability),
     PaneProviders,
+    ContainerSelectors,
 }
 
 impl std::fmt::Display for Invalid {
@@ -250,8 +356,52 @@ impl std::fmt::Display for Invalid {
                 write!(formatter, "manifest uses {} without declaring it", capability.as_str())
             }
             Self::PaneProviders => formatter.write_str("pane provider ids must be unique and titles must not be empty"),
+            Self::ContainerSelectors => formatter.write_str("container selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
         }
     }
 }
 
 impl std::error::Error for Invalid {}
+
+#[cfg(test)]
+mod tests {
+    use super::{ContainerGrant, ContainerSelector, Manifest};
+    use crate::PROTOCOL;
+
+    fn document(extra: &str) -> String {
+        format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}")
+    }
+
+    #[test]
+    fn omitted_container_scope_is_empty_not_wildcard() {
+        let manifest = Manifest::parse(&document(""), PROTOCOL).unwrap();
+        assert_eq!(manifest.containers, ContainerGrant::default());
+        assert!(!manifest.containers.all());
+    }
+
+    #[test]
+    fn wildcard_and_creation_are_both_explicit() {
+        let manifest = Manifest::parse(
+            &document("[containers]\nselectors = [{ all = true }]\ncreate = true\n"),
+            PROTOCOL,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.containers.selectors,
+            vec![ContainerSelector::All { all: true }]
+        );
+        assert!(manifest.containers.create);
+    }
+
+    #[test]
+    fn false_wildcards_duplicates_and_malformed_identities_fail_closed() {
+        for scope in [
+            "[containers]\nselectors = [{ all = false }]\n",
+            "[containers]\nselectors = [{ name = \"api\" }, { name = \"api\" }]\n",
+            "[containers]\nselectors = [{ id = \"short\" }]\n",
+            "[containers]\nselectors = [{ id = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", name = \"api\" }]\n",
+        ] {
+            assert!(Manifest::parse(&document(scope), PROTOCOL).is_err(), "accepted {scope}");
+        }
+    }
+}

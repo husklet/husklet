@@ -180,8 +180,28 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when the name is already installed or the
     /// digest is empty, and `Refusal::Record` when the record cannot be written.
     pub fn register(&mut self, manifest: &Manifest, digest: &str, consented: &Grant, at: i64) -> Result<(), Refusal> {
+        self.register_scoped(
+            manifest,
+            digest,
+            consented,
+            &hl_extension::ContainerGrant::default(),
+            at,
+        )
+    }
+
+    pub fn register_scoped(
+        &mut self,
+        manifest: &Manifest,
+        digest: &str,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        at: i64,
+    ) -> Result<(), Refusal> {
         let previous = self.installation.clone();
-        let record = self.installation.install(manifest, digest, consented, at)?.clone();
+        let record = self
+            .installation
+            .install_scoped(manifest, digest, consented, containers, at)?
+            .clone();
         if let Err(fault) = self.records.save(&record) {
             self.installation = previous;
             return Err(fault.into());
@@ -212,9 +232,19 @@ impl<S: Storage> Roster<S> {
     /// so either both in-memory policy and durable authority advance or neither
     /// does; the old host remains mounted until the caller refreshes afterward.
     pub fn commit_update(&mut self, update: Update, consented: &Grant, at: i64) -> Result<(), UpdateRefusal> {
+        self.commit_update_scoped(update, consented, &hl_extension::ContainerGrant::default(), at)
+    }
+
+    pub fn commit_update_scoped(
+        &mut self,
+        update: Update,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        at: i64,
+    ) -> Result<(), UpdateRefusal> {
         let records = &self.records;
         self.installation
-            .commit_update(update, consented, at, |_, next| records.save(next))
+            .commit_update_scoped(update, consented, containers, at, |_, next| records.save(next))
             .map(|_| ())
             .map_err(|failure| match failure {
                 UpdateFailure::Refused(objection) => UpdateRefusal::Policy(objection),
@@ -360,6 +390,7 @@ impl<S> std::fmt::Debug for Roster<S> {
 #[must_use]
 pub fn described(record: &Record) -> Manifest {
     let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
+        containers: hl_extension::ContainerGrant::default(),
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: record.version.clone(),
@@ -378,16 +409,18 @@ pub fn described(record: &Record) -> Manifest {
     manifest.version.clone_from(&record.version);
     manifest.protocol = hl_extension::PROTOCOL;
     manifest.capabilities.clone_from(&record.granted);
+    manifest.containers.clone_from(&record.containers);
     manifest.pane_providers.clone_from(&record.pane_providers);
     manifest
 }
 
 /// Puts one stored record under the policy, in the state it was stored in.
 fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objection> {
-    installation.install(
+    installation.install_scoped(
         &described(record),
         &record.image_digest,
         &record.granted,
+        &record.containers,
         record.installed_at,
     )?;
     if record.enabled {
@@ -445,6 +478,7 @@ mod tests {
 
     fn manifest(name: &str, capabilities: &[Capability]) -> Manifest {
         Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new(name).expect("name"),
             display_name: name.to_owned(),
             version: "1.0.0".to_owned(),

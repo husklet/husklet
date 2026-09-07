@@ -792,11 +792,23 @@ impl ExtensionStore for Host {
         self.cancelled_revision.set(Some(revision));
         Ok(())
     }
-    fn install(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn install(
+        &self,
+        job: &str,
+        _revision: u64,
+        _granted: &Grant,
+        _containers: &hl_extension::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.install");
         ExtensionStore::inspect(self, job)
     }
-    fn update(&self, job: &str, _revision: u64, _granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn update(
+        &self,
+        job: &str,
+        _revision: u64,
+        _granted: &Grant,
+        _containers: &hl_extension::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.update");
         ExtensionStore::inspect(self, job)
     }
@@ -831,6 +843,10 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
             .map(|root| RelativePath::new(*root).expect("root"))
             .collect(),
     ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::All { all: true }],
+        create: true,
+    })
 }
 
 fn path(value: &str) -> RelativePath {
@@ -963,6 +979,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
+                containers: hl_extension::ContainerGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -971,6 +988,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
+                containers: hl_extension::ContainerGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1979,7 +1997,10 @@ fn execution_removal_refuses_aliases_before_control_authority() {
         session.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
         Ok(Reply::Done)
     );
-    assert_eq!(host.ledger.reached(), ["executions.remove"]);
+    assert_eq!(
+        host.ledger.reached(),
+        ["executions.inspect", "containers.list", "executions.remove"]
+    );
 }
 
 #[test]
@@ -2054,9 +2075,14 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     assert_eq!(
         host.ledger.reached(),
         [
+            "containers.list",
             "containers.stop",
+            "containers.list",
             "containers.remove",
+            "containers.list",
             "containers.kill",
+            "executions.inspect",
+            "containers.list",
             "executions.kill"
         ]
     );
@@ -2103,7 +2129,7 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
             &services(&host),
         )
         .unwrap();
-    assert_eq!(host.ledger.reached(), ["containers.rename"]);
+    assert_eq!(host.ledger.reached(), ["containers.list", "containers.rename"]);
 }
 
 #[test]
@@ -2253,6 +2279,79 @@ fn a_refusal_is_reported_rather_than_answered_emptily() {
         Failure::Denied { capability, .. } => assert_eq!(capability, "containers:read"),
         other => panic!("an empty list would be worse than a refusal, got {other:?}"),
     }
+}
+
+#[test]
+fn container_capabilities_without_resource_consent_expose_nothing() {
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("scoped").unwrap(),
+        Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+        Vec::new(),
+    ));
+
+    assert_eq!(
+        session.dispatch(&Request::ContainerList, &services(&host)).unwrap(),
+        Reply::Containers(Vec::new())
+    );
+    let failure = session
+        .dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host))
+        .expect_err("an unselected container is denied");
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(!host.ledger.reached().contains(&"containers.stop"));
+}
+
+#[test]
+fn exact_name_scope_filters_inventory_and_create_is_independent() {
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("scoped").unwrap(),
+        Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+        Vec::new(),
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::Name { name: "api".into() }],
+        create: false,
+    });
+
+    assert!(matches!(
+        session.dispatch(&Request::ContainerList, &services(&host)).unwrap(),
+        Reply::Containers(containers) if containers == vec![Host::container()]
+    ));
+    let creation = Request::ContainerCreate {
+        spec: hl_extension::port::ContainerCreateSpec {
+            image: "alpine:3.20".into(),
+            name: "worker".into(),
+            hostname: None,
+            entrypoint: None,
+            command: Vec::new(),
+            environment: Vec::new(),
+            working_directory: None,
+            user: None,
+            labels: Vec::new(),
+            mounts: Vec::new(),
+            network: None,
+            ports: Vec::new(),
+            memory_mb: None,
+            cpus: None,
+            pids_limit: None,
+        },
+    };
+    assert!(matches!(
+        session.dispatch(&creation, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(!host.ledger.reached().contains(&"containers.create"));
+    assert!(matches!(
+        session.dispatch(
+            &Request::ContainerStop {
+                id: "c".repeat(64),
+            },
+            &services(&host),
+        ),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(!host.ledger.reached().contains(&"containers.stop"));
 }
 
 #[test]
@@ -2478,7 +2577,7 @@ fn container_exec_returns_the_real_execution_identity() {
         )
         .expect("exec starts");
     assert_eq!(reply, Reply::Identity("e1".into()));
-    assert_eq!(host.ledger.reached(), vec!["containers.exec"]);
+    assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
 }
 
 #[test]
@@ -2544,7 +2643,7 @@ fn a_host_failure_is_distinguished_from_a_refusal() {
         matches!(failure, Failure::Absent { .. }),
         "'it does not exist' must not read as 'you may not', got {failure:?}"
     );
-    assert_eq!(host.ledger.reached(), vec!["containers.inspect"]);
+    assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.inspect"]);
 }
 
 #[test]
@@ -2825,7 +2924,10 @@ fn container_attachment_requires_its_dedicated_grant_and_preserves_exact_argv() 
         granted.dispatch(&request, &services(&host)).expect("dedicated grant"),
         Reply::Identity(ref slot) if slot == "attached-pane"
     ));
-    assert_eq!(host.ledger.reached(), vec!["terminal.attach_container"]);
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["containers.list", "terminal.attach_container"]
+    );
 
     let invalid = Request::ContainerAttachTerminal {
         id: "friendly".into(),
