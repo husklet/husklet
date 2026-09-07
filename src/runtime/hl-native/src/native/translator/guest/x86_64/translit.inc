@@ -11229,30 +11229,51 @@ static int translit_direct_call_signal_stage_test(void) {
         translit_test_call_high_end == NULL || translit_test_call_committed == NULL ||
         translit_test_call_instruction_end == NULL || translit_test_call_site.save_end == NULL ||
         translit_test_call_site.end == NULL ||
-        !(translit_test_call_instruction_start < translit_test_call_low_end &&
-          translit_test_call_low_end < translit_test_call_high_end &&
-          translit_test_call_high_end < translit_test_call_committed &&
-          translit_test_call_committed <= translit_test_call_site.save_end &&
+        !(translit_test_call_instruction_start + 9 <= translit_test_call_site.save_end &&
           translit_test_call_site.save_end < translit_test_call_site.end &&
           translit_test_call_site.end <= translit_test_call_instruction_end))
         return 0;
+    // Frozen independently from the marker fields: direct CALL begins with two imm32 stores and the
+    // architectural RSP commit. Any moved marker, changed displacement or reordered operation fails here.
+    uint8_t *start = translit_test_call_instruction_start;
+    const uint8_t low_prefix[4] = {0xc7, 0x44, 0x24, 0xf8};
+    const uint8_t high_prefix[4] = {0xc7, 0x44, 0x24, 0xfc};
+    const uint8_t lea_rsp_minus_8[8] = {0x48, 0x8d, 0xa4, 0x24, 0xf8, 0xff, 0xff, 0xff};
+    const uint8_t save_rax_prefix[5] = {0x65, 0x48, 0x89, 0x04, 0x25};
+    const uint64_t return_word = translit_test_call_source_guest + 5;
+    uint32_t encoded_low = 0, encoded_high = 0, saved_rax_disp = UINT32_MAX;
+    memcpy(&encoded_low, start + 4, sizeof encoded_low);
+    memcpy(&encoded_high, start + 12, sizeof encoded_high);
+    memcpy(&saved_rax_disp, translit_test_call_site.save_end - 4, sizeof saved_rax_disp);
+    if (memcmp(start, low_prefix, sizeof low_prefix) != 0 ||
+        memcmp(start + 8, high_prefix, sizeof high_prefix) != 0 ||
+        memcmp(start + 16, lea_rsp_minus_8, sizeof lea_rsp_minus_8) != 0 ||
+        encoded_low != (uint32_t)return_word || encoded_high != (uint32_t)(return_word >> 32) ||
+        translit_test_call_low_end != start + 8 || translit_test_call_high_end != start + 16 ||
+        translit_test_call_committed != start + 24 ||
+        translit_test_call_site.save_end < start + 33 ||
+        memcmp(translit_test_call_site.save_end - 9, save_rax_prefix, sizeof save_rax_prefix) != 0 ||
+        saved_rax_disp != R_OFF(HL_X64_RAX))
+        return 0;
     uint64_t stack_words[4] = {0};
     uint64_t original_rsp = (uint64_t)(uintptr_t)&stack_words[2];
-    const uint64_t return_word = translit_test_call_source_guest + 5;
+    uint8_t *const low_end = start + 8;
+    uint8_t *const high_end = start + 16;
+    uint8_t *const committed_at = start + 24;
     int saved_selected = translit_selected;
     translit_selected = 1;
     int exact = 1;
     for (uint8_t *pc = translit_test_call_instruction_start;
          exact && pc < translit_test_call_instruction_end; ++pc) {
-        int committed = pc >= translit_test_call_committed;
+        int committed = pc >= committed_at;
         int rax_canonical = pc >= translit_test_call_site.save_end &&
                             (translit_test_call_site.restore_end == NULL ||
                              pc < translit_test_call_site.restore_end);
         struct cpu cpu = {0}, expected_flags = {0};
         ucontext_t native = {0};
-        uint64_t stack_image = pc < translit_test_call_low_end
+        uint64_t stack_image = pc < low_end
                                    ? UINT64_C(0xfeedfacecafebeef)
-                               : pc < translit_test_call_high_end
+                               : pc < high_end
                                    ? (UINT64_C(0xfeedface00000000) | (uint32_t)return_word)
                                    : return_word;
         stack_words[1] = stack_image;
