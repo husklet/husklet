@@ -253,6 +253,7 @@ impl Conversation {
                 delete: roots.clone(),
                 rename: roots,
             },
+            hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -264,6 +265,7 @@ impl Conversation {
         queue: Queue,
         containers: hl_extension::ContainerGrant,
         filesystem: hl_extension::FilesystemGrant,
+        workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     ) -> io::Result<Self> {
         let control = stream.try_clone()?;
         Ok(Self {
@@ -275,6 +277,7 @@ impl Conversation {
             session: Session::new(authority)
                 .with_containers(containers)
                 .with_filesystem(filesystem)
+                .with_workspace_environment(workspace_environment)
                 .with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
@@ -1610,6 +1613,7 @@ mod tests {
                     write: vec![RelativePath::new("workspace.toml").unwrap()],
                     ..hl_extension::FilesystemGrant::default()
                 },
+                hl_extension::WorkspaceEnvironmentGrant::default(),
             )?;
             conversation.greet()?;
             conversation.serve(&services(&host))
@@ -1627,6 +1631,36 @@ mod tests {
                 Vec::new(),
             );
             let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn workspace_environment_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").unwrap(),
+                Grant::new([Capability::WorkspaceRead, Capability::WorkspaceEnvironmentRead]),
+                Vec::new(),
+            );
+            let grant = hl_extension::WorkspaceEnvironmentGrant {
+                selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                    workspace: "dev".into(),
+                    name: "DATABASE_PASSWORD".into(),
+                }],
+            };
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::FilesystemGrant::default(),
+                grant,
+            )?;
             conversation.greet()?;
             conversation.serve(&services(&host))
         });
@@ -2053,6 +2087,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_workspace_environment_consent_crosses_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = workspace_environment_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(&mut wire, &Request::WorkspaceInspect { name: "dev".into() });
+        let Reply::WorkspaceConfiguration(configuration) = codec::read_reply(&answer).unwrap() else {
+            panic!("unexpected reply")
+        };
+        assert_eq!(configuration.environment, vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())]);
+        assert!(!configuration.environment_redacted);
+        drop(wire);
+        assert_eq!(served.join().unwrap(), Ok(()));
+    }
+
+    #[test]
     fn a_ping_is_answered_without_disturbing_the_next_call() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
@@ -2269,6 +2319,7 @@ mod tests {
                 create: false,
             },
             hl_extension::FilesystemGrant::default(),
+            hl_extension::WorkspaceEnvironmentGrant::default(),
         )
         .expect("conversation");
         let host = Host { ledger };

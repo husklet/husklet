@@ -24,6 +24,7 @@ import {
   type ContainerGrant,
   type ContainerSelector,
   type FilesystemGrant,
+  type WorkspaceEnvironmentGrant,
   type WorkspaceApi,
 } from '@husklet/react';
 
@@ -126,6 +127,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   });
   const [grantedFilesystem, setGrantedFilesystem] =
     React.useState<FilesystemGrant>(emptyFilesystemGrant);
+  const [grantedWorkspaceEnvironment, setGrantedWorkspaceEnvironment] =
+    React.useState<WorkspaceEnvironmentGrant>({ selectors: [] });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -218,6 +221,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
+            setGrantedWorkspaceEnvironment({ selectors: [] });
           }
         }
         if (
@@ -261,6 +265,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         granted,
         grantedContainers,
         grantedFilesystem,
+        { workspaceEnvironment: grantedWorkspaceEnvironment },
       );
       setAcquisition(null);
       setReference('');
@@ -343,6 +348,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     catalogue?.entries.filter(
       (entry) => !installed.some((extension) => extension.name === entry.id),
     ) ?? [];
+  const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
+    selectors: [],
+  };
 
   return (
     <Scroll grow height="fill">
@@ -543,6 +551,38 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 granted={grantedFilesystem}
                 onChange={setGrantedFilesystem}
               />
+              <Text label="Workspace environment values" color="text-dim" />
+              {requestedWorkspaceEnvironment.selectors.map((selector) => {
+                const key = 'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`;
+                const checked = grantedWorkspaceEnvironment.selectors.some(
+                  (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                );
+                return (
+                  <FormControlLabel
+                    key={key}
+                    label={
+                      'all' in selector
+                        ? 'All workspace environment values'
+                        : `${selector.name} in workspace ${selector.workspace}`
+                    }
+                    gap={2}
+                  >
+                    <Switch
+                      checked={checked}
+                      onToggle={(event: Change) =>
+                        setGrantedWorkspaceEnvironment((current) => ({
+                          selectors: event.value
+                            ? [...current.selectors, selector]
+                            : current.selectors.filter(
+                                (candidate) =>
+                                  JSON.stringify(candidate) !== JSON.stringify(selector),
+                              ),
+                        }))
+                      }
+                    />
+                  </FormControlLabel>
+                );
+              })}
               <Button
                 label={
                   busy === 'update'

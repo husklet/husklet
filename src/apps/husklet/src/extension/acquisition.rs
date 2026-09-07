@@ -46,6 +46,7 @@ pub(crate) struct AcquisitionCandidate {
     pub requested: Grant,
     pub requested_containers: hl_extension::ContainerGrant,
     pub requested_filesystem: hl_extension::FilesystemGrant,
+    pub requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     pub installed_digest: Option<String>,
 }
 
@@ -290,6 +291,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -300,9 +302,21 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, _) = self.take_ready(job, revision)?;
+        if candidate
+            .manifest
+            .workspace_environment
+            .selectors
+            .iter()
+            .any(|selector| matches!(selector, hl_extension::WorkspaceEnvironmentSelector::All { .. }))
+        {
+            return Err(HostError::Failed(
+                "external extensions cannot request all workspace environment values".into(),
+            ));
+        }
         let result = Roster::workspace(&self.workspace)
             .and_then(|mut roster| {
                 roster.register_resource_scoped(
@@ -311,6 +325,7 @@ impl ExtensionAcquisitions {
                     consented,
                     containers,
                     filesystem,
+                    workspace_environment,
                     moment(),
                 )
             })
@@ -336,6 +351,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -346,9 +362,21 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, installed_digest) = self.take_ready(job, revision)?;
+        if candidate
+            .manifest
+            .workspace_environment
+            .selectors
+            .iter()
+            .any(|selector| matches!(selector, hl_extension::WorkspaceEnvironmentSelector::All { .. }))
+        {
+            return Err(HostError::Failed(
+                "external extensions cannot request all workspace environment values".into(),
+            ));
+        }
         let result = (|| {
             let installed_digest = installed_digest
                 .ok_or_else(|| "the extension was not installed when consent was requested".to_owned())?;
@@ -357,7 +385,7 @@ impl ExtensionAcquisitions {
                 .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
-                .commit_update_resource_scoped(update, consented, containers, filesystem, moment())
+                .commit_update_resource_scoped(update, consented, containers, filesystem, workspace_environment, moment())
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
@@ -458,6 +486,7 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 requested: candidate.manifest.capabilities.clone(),
                 requested_containers: candidate.manifest.containers.clone(),
                 requested_filesystem: candidate.manifest.filesystem.clone(),
+                requested_workspace_environment: candidate.manifest.workspace_environment.clone(),
                 installed_digest,
             };
             (AcquisitionState::Ready(visible), Some(candidate))
@@ -495,6 +524,7 @@ mod tests {
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }
     }
 

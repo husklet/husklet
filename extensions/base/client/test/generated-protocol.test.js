@@ -152,6 +152,9 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
         delete: [],
         rename: [],
       },
+      workspace_environment: {
+        selectors: [{ workspace: 'dev', name: 'PGPASSWORD' }],
+      },
     },
   };
   assert.deepEqual(validateRequest(base), base);

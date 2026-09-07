@@ -140,11 +140,12 @@ impl ExtensionStore for ExtensionManagement {
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
-            .install_resource_scoped(job, revision, granted, containers, filesystem)?;
+            .install_resource_scoped(job, revision, granted, containers, filesystem, workspace_environment)?;
         super::revision::publish_inventory_change(&self.workspace);
         let installed = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -161,11 +162,12 @@ impl ExtensionStore for ExtensionManagement {
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
-            .update_resource_scoped(job, revision, granted, containers, filesystem)?;
+            .update_resource_scoped(job, revision, granted, containers, filesystem, workspace_environment)?;
         super::revision::publish_inventory_change(&self.workspace);
         let updated = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -227,6 +229,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 requested: candidate.requested,
                 requested_containers: candidate.requested_containers,
                 requested_filesystem: candidate.requested_filesystem,
+                requested_workspace_environment: candidate.requested_workspace_environment,
                 installed_image_digest: candidate.installed_digest,
             };
             ("ready", None, Some(candidate), None)
@@ -315,6 +318,7 @@ mod tests {
                 state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                     requested_containers: hl_extension::ContainerGrant::default(),
                     requested_filesystem: hl_extension::FilesystemGrant::default(),
+                    requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                     reference: "registry.example/team/tool:2".into(),
                     digest: "sha256:new".into(),
                     name: "sample".into(),
@@ -339,6 +343,7 @@ mod tests {
             state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                 requested_containers: hl_extension::ContainerGrant::default(),
                 requested_filesystem: hl_extension::FilesystemGrant::default(),
+                requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 reference: "registry.example/team/tool:latest".into(),
                 digest: digest.clone(),
                 name: "sample".into(),

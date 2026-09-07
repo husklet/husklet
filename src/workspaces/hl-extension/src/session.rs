@@ -44,6 +44,7 @@ pub struct Session {
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
     filesystem: FilesystemGrant,
+    workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
 }
 
@@ -97,6 +98,7 @@ impl Session {
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
             filesystem: FilesystemGrant::default(),
+            workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
         }
     }
@@ -111,6 +113,12 @@ impl Session {
     #[must_use]
     pub fn with_filesystem(mut self, filesystem: FilesystemGrant) -> Self {
         self.filesystem = filesystem;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_environment(mut self, grant: crate::WorkspaceEnvironmentGrant) -> Self {
+        self.workspace_environment = grant;
         self
     }
 
@@ -762,8 +770,10 @@ impl Session {
         match request {
             Request::WorkspaceInspect { name } => {
                 let mut configuration = port.inspect(name)?;
-                configuration.environment.clear();
-                configuration.environment_redacted = true;
+                let permitted = self.peer.authority().granted::<Capability>().holds(Capability::WorkspaceEnvironmentRead);
+                let original = configuration.environment.len();
+                configuration.environment.retain(|(variable, _)| permitted && self.workspace_environment.permits(name, variable));
+                configuration.environment_redacted = configuration.environment.len() != original;
                 Ok(Reply::WorkspaceConfiguration(configuration))
             }
             Request::WorkspaceCreate { configuration } => {
@@ -852,6 +862,7 @@ impl Session {
                 granted,
                 containers,
                 filesystem,
+                workspace_environment,
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
@@ -862,6 +873,7 @@ impl Session {
                     granted,
                     containers,
                     filesystem,
+                    workspace_environment,
                 )?))
             }
             Request::ExtensionUpdate {
@@ -871,6 +883,7 @@ impl Session {
                 granted,
                 containers,
                 filesystem,
+                workspace_environment,
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
@@ -881,6 +894,7 @@ impl Session {
                     granted,
                     containers,
                     filesystem,
+                    workspace_environment,
                 )?))
             }
             _ => Err(Failure::Unsupported {

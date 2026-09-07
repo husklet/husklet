@@ -45,10 +45,13 @@ fn install_defaults_with(
             ));
         }
         roster
-            .register(
+            .register_resource_scoped(
                 &candidate.manifest,
                 &candidate.digest,
                 &candidate.manifest.capabilities,
+                &candidate.manifest.containers,
+                &candidate.manifest.filesystem,
+                &candidate.manifest.workspace_environment,
                 moment(),
             )
             .map_err(|error| error.to_string())?;
@@ -104,6 +107,7 @@ mod tests {
                     protocol: hl_extension::PROTOCOL,
                     capabilities: Grant::new([
                         Capability::WorkspaceRead,
+                        Capability::WorkspaceEnvironmentRead,
                         Capability::ExtensionRead,
                         Capability::Interface,
                     ]),
@@ -116,6 +120,9 @@ mod tests {
                     pane_providers: Vec::new(),
                     resources: Resources::default(),
                     filesystem: hl_extension::FilesystemGrant::default(),
+                    workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
+                        selectors: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+                    },
                 },
             })
         })

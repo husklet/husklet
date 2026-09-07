@@ -34,6 +34,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": false,
     "mutates": false,
+    "wire": "workspace-environment:read"
+  },
+  {
+    "executes": false,
+    "mutates": false,
     "wire": "containers:read"
   },
   {
@@ -513,6 +518,12 @@ const definitions = {
       },
       {
         "name": "workspaces:events",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "workspace-environment:read",
         "payload": {
           "kind": "unit"
         }
@@ -1796,6 +1807,14 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "FilesystemGrant"
+        }
+      },
+      {
+        "name": "requested_workspace_environment",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "WorkspaceEnvironmentGrant"
         }
       },
       {
@@ -6358,6 +6377,70 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "WorkspaceEnvironmentGrant": {
+    "fields": [
+      {
+        "name": "selectors",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "WorkspaceEnvironmentSelector"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
+  "WorkspaceEnvironmentSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Exact",
+        "payload": {
+          "fields": [
+            {
+              "name": "workspace",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
+  },
   "WorkspaceEvent": {
     "kind": "enum",
     "serde": {
@@ -7721,6 +7804,14 @@ const roots = {
                 "kind": "ref",
                 "name": "FilesystemGrant"
               }
+            },
+            {
+              "name": "workspace_environment",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "WorkspaceEnvironmentGrant"
+              }
             }
           ],
           "kind": "struct"
@@ -7777,6 +7868,14 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "FilesystemGrant"
+              }
+            },
+            {
+              "name": "workspace_environment",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "WorkspaceEnvironmentGrant"
               }
             }
           ],

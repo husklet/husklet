@@ -686,6 +686,8 @@ pub struct ExtensionCandidate {
     #[serde(default)]
     pub requested_filesystem: crate::FilesystemGrant,
     #[serde(default)]
+    pub requested_workspace_environment: crate::WorkspaceEnvironmentGrant,
+    #[serde(default)]
     pub installed_image_digest: Option<String>,
 }
 
@@ -801,6 +803,7 @@ pub trait ExtensionStore {
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
         _filesystem: &crate::FilesystemGrant,
+        _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension installation is unavailable".into()))
     }
@@ -812,6 +815,7 @@ pub trait ExtensionStore {
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
         _filesystem: &crate::FilesystemGrant,
+        _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension update is unavailable".into()))
     }

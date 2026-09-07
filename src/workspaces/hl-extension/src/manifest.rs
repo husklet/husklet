@@ -20,6 +20,63 @@ pub struct FilesystemGrant {
     pub rename: Vec<RelativePath>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceEnvironmentGrant {
+    #[serde(default)]
+    pub selectors: Vec<WorkspaceEnvironmentSelector>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum WorkspaceEnvironmentSelector {
+    Exact { workspace: String, name: String },
+    All { all: bool },
+}
+
+impl WorkspaceEnvironmentGrant {
+    pub const LIMIT: usize = 128;
+    pub const BYTES: usize = 16 * 1024;
+
+    #[must_use]
+    pub fn permits(&self, workspace: &str, name: &str) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            WorkspaceEnvironmentSelector::Exact { workspace: selected, name: selected_name } =>
+                selected == workspace && selected_name == name,
+            WorkspaceEnvironmentSelector::All { all } => *all,
+        })
+    }
+
+    #[must_use]
+    pub fn intersect(&self, consented: &Self) -> Self {
+        let all = consented.selectors.contains(&WorkspaceEnvironmentSelector::All { all: true });
+        Self { selectors: self.selectors.iter().filter(|item| all || consented.selectors.contains(item)).cloned().collect() }
+    }
+
+    fn validate(&self, built_in_top: bool) -> Result<(), Invalid> {
+        let mut bytes = 0usize;
+        for selector in &self.selectors {
+            match selector {
+                WorkspaceEnvironmentSelector::Exact { workspace, name } => {
+                    let valid_name = name.bytes().enumerate().all(|(index, byte)|
+                        byte == b'_' || byte.is_ascii_alphabetic() || index > 0 && byte.is_ascii_digit());
+                    if workspace.is_empty() || workspace.chars().any(char::is_control) || name.is_empty() || !valid_name {
+                        return Err(Invalid::WorkspaceEnvironment);
+                    }
+                    bytes = bytes.checked_add(workspace.len() + name.len()).ok_or(Invalid::WorkspaceEnvironment)?;
+                }
+                WorkspaceEnvironmentSelector::All { all: true } if built_in_top => {}
+                WorkspaceEnvironmentSelector::All { .. } => return Err(Invalid::WorkspaceEnvironment),
+            }
+        }
+        if self.selectors.len() > Self::LIMIT || bytes > Self::BYTES
+            || self.selectors.iter().collect::<std::collections::BTreeSet<_>>().len() != self.selectors.len() {
+            return Err(Invalid::WorkspaceEnvironment);
+        }
+        Ok(())
+    }
+}
+
 impl FilesystemGrant {
     pub const ROOT_LIMIT: usize = 128;
 
@@ -303,6 +360,8 @@ pub struct Manifest {
     /// Path authority is separate by verb; writable paths are not implicitly readable.
     #[serde(default)]
     pub filesystem: FilesystemGrant,
+    #[serde(default)]
+    pub workspace_environment: WorkspaceEnvironmentGrant,
 }
 
 impl Manifest {
@@ -367,6 +426,12 @@ impl Manifest {
             return Err(Invalid::Undeclared(Capability::FilesystemWrite));
         }
         manifest.filesystem.validate()?;
+        if !manifest.workspace_environment.selectors.is_empty()
+            && !manifest.capabilities.holds(Capability::WorkspaceEnvironmentRead)
+        {
+            return Err(Invalid::Undeclared(Capability::WorkspaceEnvironmentRead));
+        }
+        manifest.workspace_environment.validate(manifest.name.to_string() == "top")?;
         manifest.containers.validate()?;
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)
@@ -404,6 +469,7 @@ pub enum Invalid {
     PaneProviders,
     ContainerSelectors,
     FilesystemRoots,
+    WorkspaceEnvironment,
 }
 
 impl std::fmt::Display for Invalid {
@@ -434,6 +500,7 @@ impl std::fmt::Display for Invalid {
             Self::PaneProviders => formatter.write_str("pane provider ids must be unique and titles must not be empty"),
             Self::ContainerSelectors => formatter.write_str("container selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
             Self::FilesystemRoots => formatter.write_str("filesystem scopes must contain at most 128 unique read or write roots"),
+            Self::WorkspaceEnvironment => formatter.write_str("workspace environment scopes must be bounded unique exact pairs; all is reserved for top"),
         }
     }
 }

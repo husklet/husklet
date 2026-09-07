@@ -427,11 +427,11 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
-        await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
+      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { selectors: [] }) => expect(
+        await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem, workspace_environment: workspaceEnvironment }), 'extension',
       ),
-      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
-        await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
+      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { selectors: [] }) => expect(
+        await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem, workspace_environment: workspaceEnvironment }), 'extension',
       ),
     },
     containers: {
@@ -1962,7 +1962,7 @@ export function workspace(session, { signal } = {}) {
     granted,
     containers = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
-    { timeoutMs = 30_000 } = {},
+    { timeoutMs = 30_000, workspaceEnvironment = { selectors: [] } } = {},
   ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
       throw new TypeError(
@@ -2006,7 +2006,7 @@ export function workspace(session, { signal } = {}) {
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](job, revision, digest, granted, containers, filesystem);
+      const committed = await api.extensions[operation](job, revision, digest, granted, containers, filesystem, workspaceEnvironment);
       if (committed.name !== candidate.name || committed.image_digest !== digest) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }

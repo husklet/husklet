@@ -848,6 +848,7 @@ impl ExtensionStore for Host {
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
+        _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.install");
         ExtensionStore::inspect(self, job)
@@ -860,6 +861,7 @@ impl ExtensionStore for Host {
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
+        _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.update");
         ExtensionStore::inspect(self, job)
@@ -962,6 +964,35 @@ fn workspace_inspection_always_redacts_environment_values() {
     let Reply::WorkspaceConfiguration(configuration) = reply else {
         panic!("unexpected reply")
     };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
+}
+
+#[test]
+fn workspace_environment_grant_filters_by_exact_workspace_and_name() {
+    let host = Host::new();
+    let authority = Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::WorkspaceRead, Capability::WorkspaceEnvironmentRead]),
+        Vec::new(),
+    );
+    let mut scoped = Session::new(authority).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+        selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+            workspace: "other".into(),
+            name: "DATABASE_PASSWORD".into(),
+        }],
+    });
+    let reply = scoped
+        .dispatch(&Request::WorkspaceInspect { name: "other".into() }, &services(&host))
+        .expect("exact grant");
+    let Reply::WorkspaceConfiguration(configuration) = reply else { panic!("unexpected reply") };
+    assert_eq!(configuration.environment, vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())]);
+    assert!(!configuration.environment_redacted);
+
+    let reply = scoped
+        .dispatch(&Request::WorkspaceInspect { name: "sibling".into() }, &services(&host))
+        .expect("wrong workspace remains inspectable but secret-free");
+    let Reply::WorkspaceConfiguration(configuration) = reply else { panic!("unexpected reply") };
     assert!(configuration.environment.is_empty());
     assert!(configuration.environment_redacted);
 }
@@ -1086,6 +1117,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1097,6 +1129,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1776,6 +1809,7 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
                 granted: Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             &services(&host),
         ),
