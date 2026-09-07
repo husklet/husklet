@@ -2996,6 +2996,60 @@ mod tests {
     }
 
     #[test]
+    fn invalid_exec_environment_never_echoes_its_secret_and_the_session_recovers() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let secret = "sentinel-password-never-in-a-socket-reply";
+
+        let failure = ask(
+            &mut wire,
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["psql".into()],
+                environment: vec![
+                    ("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new(secret)),
+                    (
+                        "PGPASSWORD".into(),
+                        hl_extension::ExecEnvironmentValue::new("duplicate"),
+                    ),
+                ],
+                user: None,
+                working_directory: None,
+            },
+        );
+        assert!(codec::is_failure(&failure), "duplicate environment names are refused");
+        assert!(
+            !failure
+                .payload
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "the failure frame echoed an environment secret"
+        );
+        assert!(ledger.reached().is_empty(), "invalid environment reached a service");
+
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn a_frame_that_is_not_a_call_is_refused_without_ending_the_conversation() {
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::new(Ledger::default()));
         let mut wire = Wire::new(theirs);
