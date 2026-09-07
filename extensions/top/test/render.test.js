@@ -441,6 +441,34 @@ test('extension discovery distinguishes catalogue loading from a complete empty 
   assert.ok(labelled(stage, 'No additional extensions are available in the built-in catalogue.'));
 });
 
+test('extension discovery can retry a failed catalogue without leaving the page', async () => {
+  let attempts = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          catalogue: async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error('catalogue service is offline');
+            return firstPartyCatalogue();
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Catalogue unavailable: catalogue service is offline'));
+  assert.ok(labelled(stage, 'Retry catalogue'));
+
+  invoke(stage, 'Retry catalogue');
+  await settled();
+  assert.equal(attempts, 2);
+  assert.ok(labelled(stage, 'Review Component playground'));
+});
+
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
   const references = [];
   let attempt = 0;

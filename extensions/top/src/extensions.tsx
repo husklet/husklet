@@ -156,21 +156,24 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   React.useEffect(() => {
     void reload();
   }, [reload]);
-  React.useEffect(() => {
-    const catalogue = api.extensions.catalogue;
-    if (!catalogue) return;
-    void catalogue()
-      .then((value) => {
-        setCatalogue(value);
-        setCatalogueError('');
-        setCatalogueState('ready');
-      })
-      .catch((cause) => {
-        setCatalogue(null);
-        setCatalogueError(message(cause));
-        setCatalogueState('error');
-      });
+  const loadCatalogue = React.useCallback(async () => {
+    const readCatalogue = api.extensions.catalogue;
+    if (!readCatalogue) return;
+    setCatalogueState('loading');
+    setCatalogueError('');
+    try {
+      const value = await readCatalogue();
+      setCatalogue(value);
+      setCatalogueState('ready');
+    } catch (cause) {
+      setCatalogue(null);
+      setCatalogueError(message(cause));
+      setCatalogueState('error');
+    }
   }, [api]);
+  React.useEffect(() => {
+    void loadCatalogue();
+  }, [loadCatalogue]);
   React.useEffect(() => {
     let dispose: (() => Promise<void>) | undefined;
     void api
@@ -421,8 +424,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             {catalogue && !catalogue.complete && (
               <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
             )}
-            {catalogueError && (
-              <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
+            {catalogueState === 'error' && (
+              <Column gap={1}>
+                <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
+                <Row>
+                  <Button label="Retry catalogue" onInvoke={loadCatalogue} />
+                </Row>
+              </Column>
             )}
           </Column>
         )}
