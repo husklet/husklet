@@ -287,6 +287,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       setBusy('');
     }
   };
+  const dismissReview = () => {
+    setAcquisition(null);
+    setGranted([]);
+    setGrantedContainers({ selectors: [], create: false });
+    setGrantedFilesystem(emptyFilesystemGrant());
+    setGrantedWorkspaceEnvironment({ read: [], write: [] });
+    candidateKey.current = '';
+    setError('');
+  };
   const cancel = async () => {
     if (
       !acquisition ||
@@ -590,19 +599,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   );
                 }),
               )}
-              <Button
-                label={
-                  busy === 'update'
-                    ? 'Updating…'
-                    : busy === 'install'
-                      ? 'Installing…'
-                      : acquisition.candidate.installed_image_digest
-                        ? 'Update extension'
-                        : 'Install extension'
-                }
-                enabled={!busy && acquisition.state === 'ready'}
-                onInvoke={publish}
-              />
+              <Row gap={1} wrap>
+                <Button
+                  label={
+                    busy === 'update'
+                      ? 'Updating…'
+                      : busy === 'install'
+                        ? 'Installing…'
+                        : acquisition.candidate.installed_image_digest
+                          ? 'Update extension'
+                          : 'Install extension'
+                  }
+                  enabled={!busy && acquisition.state === 'ready'}
+                  onInvoke={publish}
+                />
+                <Button
+                  label="Cancel review"
+                  variant="ghost"
+                  enabled={!busy}
+                  onInvoke={dismissReview}
+                />
+              </Row>
             </CardContent>
           )}
           {acquisition && acquisition.state !== 'ready' && (

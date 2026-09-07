@@ -722,6 +722,53 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.ok(labelled(stage, 'assistant installed and verified.'));
 });
 
+test('a ready extension review can be abandoned without granting authority', async () => {
+  const calls = [];
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'candidate' }),
+          acquisition: async () => ({
+            job: 'candidate',
+            reference: 'registry.example/assistant:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'assistant',
+              version: '1.0.0',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['containers:read'],
+            },
+            error: null,
+          }),
+          installAndWait: async (...args) => calls.push(args),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/assistant:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  toggleSwitch(stage, 0, true);
+  assert.ok(labelled(stage, 'Cancel review'));
+  invoke(stage, 'Cancel review');
+  await settled();
+  assert.deepEqual(calls, []);
+  assert.equal(
+    fieldValue(stage, 'registry.example/extension:version'),
+    'registry.example/assistant:1',
+    'the reference remains available for a later reinspection',
+  );
+});
+
 test('installed extension removal requires final consent and a failure remains retryable', async () => {
   const calls = [];
   let removes = 0;
