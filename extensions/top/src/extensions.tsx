@@ -30,6 +30,72 @@ type Change = { value?: unknown };
 
 const STORYBOOK_IMAGE = 'ghcr.io/husklet/husklet/extension-storybook:latest';
 const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
+const FILESYSTEM_VERBS = [
+  { key: 'read', label: 'View contents', meaning: 'read' },
+  { key: 'write', label: 'Modify existing contents', meaning: 'write' },
+  { key: 'create', label: 'Create new entries', meaning: 'create' },
+  { key: 'delete', label: 'Delete entries', meaning: 'delete' },
+  { key: 'rename', label: 'Rename or move entries', meaning: 'rename' },
+] as const;
+type FilesystemVerb = (typeof FILESYSTEM_VERBS)[number]['key'];
+
+function emptyFilesystemGrant(): Required<FilesystemGrant> {
+  return { read: [], write: [], create: [], delete: [], rename: [] };
+}
+
+function filesystemRoots(grant: FilesystemGrant, verb: FilesystemVerb): string[] {
+  return grant[verb] ?? [];
+}
+
+function FilesystemConsent({
+  requested,
+  granted,
+  onChange,
+}: {
+  requested: FilesystemGrant;
+  granted: FilesystemGrant;
+  onChange: React.Dispatch<React.SetStateAction<FilesystemGrant>>;
+}) {
+  const requestCount = FILESYSTEM_VERBS.reduce(
+    (count, { key }) => count + filesystemRoots(requested, key).length,
+    0,
+  );
+  if (requestCount === 0) return <Text label="No workspace paths requested." color="text-dim" />;
+
+  return (
+    <Column gap={1}>
+      <Text
+        label="Each switch grants only the named action and root. Modify cannot create, delete, or rename."
+        color="text-dim"
+        wrap
+      />
+      {FILESYSTEM_VERBS.flatMap(({ key, label, meaning }) =>
+        filesystemRoots(requested, key).map((path) => (
+          <FormControlLabel
+            key={`${key}:${path}`}
+            label={`${label} · ${path} (${meaning})`}
+            gap={2}
+          >
+            <Switch
+              checked={filesystemRoots(granted, key).includes(path)}
+              onToggle={(event: Change) =>
+                onChange((current) => {
+                  const roots = filesystemRoots(current, key);
+                  return {
+                    ...current,
+                    [key]: event.value
+                      ? [...new Set([...roots, path])]
+                      : roots.filter((candidate) => candidate !== path),
+                  };
+                })
+              }
+            />
+          </FormControlLabel>
+        )),
+      )}
+    </Column>
+  );
+}
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
@@ -45,10 +111,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   });
-  const [grantedFilesystem, setGrantedFilesystem] = React.useState<FilesystemGrant>({
-    read: [],
-    write: [],
-  });
+  const [grantedFilesystem, setGrantedFilesystem] =
+    React.useState<FilesystemGrant>(emptyFilesystemGrant);
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -123,7 +187,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             // including during an update where a manifest may have widened.
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
-            setGrantedFilesystem({ read: [], write: [] });
+            setGrantedFilesystem(emptyFilesystemGrant());
           }
         }
         if (
@@ -242,8 +306,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     create: false,
   };
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
-    read: [],
-    write: [],
+    ...emptyFilesystemGrant(),
   };
 
   return (
@@ -427,30 +490,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 <Text label="No container resources requested." color="text-dim" />
               )}
               <Text label="Workspace files" color="text-dim" />
-              {(['read', 'write'] as const).flatMap((verb) =>
-                requestedFilesystem[verb].map((path) => (
-                  <FormControlLabel
-                    key={`${verb}:${path}`}
-                    label={`${verb === 'read' ? 'Read' : 'Modify'} ${path}`}
-                    gap={2}
-                  >
-                    <Switch
-                      checked={grantedFilesystem[verb].includes(path)}
-                      onToggle={(event: Change) =>
-                        setGrantedFilesystem((current) => ({
-                          ...current,
-                          [verb]: event.value
-                            ? [...new Set([...current[verb], path])]
-                            : current[verb].filter((candidate) => candidate !== path),
-                        }))
-                      }
-                    />
-                  </FormControlLabel>
-                )),
-              )}
-              {requestedFilesystem.read.length === 0 && requestedFilesystem.write.length === 0 && (
-                <Text label="No workspace paths requested." color="text-dim" />
-              )}
+              <FilesystemConsent
+                requested={requestedFilesystem}
+                granted={grantedFilesystem}
+                onChange={setGrantedFilesystem}
+              />
               <Button
                 label={
                   busy === 'update'

@@ -306,7 +306,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
 });
 
 for (const updating of [false, true]) {
-  test(`extension ${updating ? 'update' : 'install'} independently narrows requested container authority`, async () => {
+  test(`extension ${updating ? 'update' : 'install'} independently narrows container and filesystem authority`, async () => {
     const calls = [];
     const candidate = {
       name: 'scoped',
@@ -317,7 +317,13 @@ for (const updating of [false, true]) {
         selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
         create: true,
       },
-      requested_filesystem: { read: ['src'], write: ['src/config.json'] },
+      requested_filesystem: {
+        read: ['src', 'docs'],
+        write: ['src/config.json'],
+        create: ['generated'],
+        delete: ['cache'],
+        rename: ['migrations'],
+      },
       installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
     };
     const stage = host();
@@ -373,15 +379,30 @@ for (const updating of [false, true]) {
       'Create new containers',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.ok(labelled(stage, 'Read src'));
-    assert.ok(labelled(stage, 'Modify src/config.json'));
-    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false, false, false]);
+    assert.ok(
+      labelled(
+        stage,
+        'Each switch grants only the named action and root. Modify cannot create, delete, or rename.',
+      ),
+    );
+    for (const label of [
+      'View contents · src (read)',
+      'View contents · docs (read)',
+      'Modify existing contents · src/config.json (write)',
+      'Create new entries · generated (create)',
+      'Delete entries · cache (delete)',
+      'Rename or move entries · migrations (rename)',
+    ])
+      assert.ok(labelled(stage, label), label);
+    assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
 
     toggleSwitch(stage, 0, true);
     toggleSwitch(stage, 2, true);
     toggleSwitch(stage, 3, true);
     toggleSwitch(stage, 2, false);
-    toggleSwitch(stage, 4, true);
+    toggleSwitch(stage, 5, true);
+    toggleSwitch(stage, 7, true);
+    toggleSwitch(stage, 9, true);
     invoke(stage, updating ? 'Update extension' : 'Install extension');
     await settled();
     await settled();
@@ -392,7 +413,13 @@ for (const updating of [false, true]) {
       selectors: [{ name: 'database' }],
       create: true,
     });
-    assert.deepEqual(calls[0][4], { read: ['src'], write: [] });
+    assert.deepEqual(calls[0][4], {
+      read: ['docs'],
+      write: [],
+      create: ['generated'],
+      delete: [],
+      rename: ['migrations'],
+    });
   });
 }
 
