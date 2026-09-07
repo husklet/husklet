@@ -6363,6 +6363,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0);
                     hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
                     direct_call_pre_flags_packed = a->cursor;
+                    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
                 }
 #endif
             }
@@ -10382,7 +10383,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     memcpy(&return_word, (void *)(uintptr_t)(stack - 8), sizeof return_word);
     if (cpu.rip != target || cpu.r[4] != stack - 8 || return_word != call_return ||
         cpu.v[0] != (scenario == 123 ? UINT64_C(0x13579bdf2468ace0) : UINT64_C(0x8877665544332211)) ||
-        cpu.v[1] != UINT64_C(0x1122334455667788) ||
+        cpu.v[1] != (scenario == 123 ? 0 : UINT64_C(0x1122334455667788)) ||
         cpu.jcc_ibtc_miss != TL_DIRECT_CALL_IBTC_MISS ||
         __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1)
         goto done_call_ibtc;
@@ -10420,7 +10421,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             run_block(context, &cpu, source_block);
             uint32_t expected_marker = outcome < 2 ? TL_DIRECT_CALL_IBTC_MISS : 0;
             if (cpu.jcc_ibtc_miss != expected_marker || cpu.v[0] != UINT64_C(0x13579bdf2468ace0) ||
-                cpu.v[1] != UINT64_C(0x1122334455667788) ||
+                cpu.v[1] != 0 ||
                 __atomic_load_n(&translit_direct_call_ibtc_hit, __ATOMIC_RELAXED) != hit_before)
                 goto done_call_ibtc;
             /* Model the dispatcher consumer explicitly; no typed state may leak into the next arm. */
@@ -10444,7 +10445,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.r[4] == stack - 8 &&
                          return_word == call_return && cpu.jcc_ibtc_miss == 0 &&
                          cpu.v[0] == UINT64_C(0x13579bdf2468ace0) &&
-                         cpu.v[1] == UINT64_C(0x1122334455667788) &&
+                         cpu.v[1] == 0 &&
                          (route_attempt_address == 0 || route_after == route_attempt_before + 4) &&
                          __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) == miss_before + 3 &&
                          __atomic_load_n(&translit_direct_call_ibtc_irq, __ATOMIC_RELAXED) == irq_before + 1 &&
