@@ -253,6 +253,32 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
+  let resolveCatalogue;
+  const catalogue = new Promise((resolve) => {
+    resolveCatalogue = resolve;
+  });
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: { list: async () => [], catalogue: () => catalogue },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Loading extension catalogue…'));
+  assert.equal(
+    labelled(stage, 'No additional extensions are available in the built-in catalogue.'),
+    undefined,
+  );
+
+  resolveCatalogue({ entries: [], complete: true });
+  await settled();
+  assert.ok(labelled(stage, 'No additional extensions are available in the built-in catalogue.'));
+});
+
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
   const references = [];
   let attempt = 0;

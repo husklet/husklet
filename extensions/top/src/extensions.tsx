@@ -108,6 +108,9 @@ function FilesystemConsent({
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
+  const [catalogueState, setCatalogueState] = React.useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
   const [catalogueError, setCatalogueError] = React.useState('');
   const [inventoryState, setInventoryState] = React.useState<
     'loading' | 'empty' | 'error' | 'ready'
@@ -157,10 +160,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       .then((value) => {
         setCatalogue(value);
         setCatalogueError('');
+        setCatalogueState('ready');
       })
       .catch((cause) => {
         setCatalogue(null);
         setCatalogueError(message(cause));
+        setCatalogueState('error');
       });
   }, [api]);
   React.useEffect(() => {
@@ -334,6 +339,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
+  const availableCatalogue =
+    catalogue?.entries.filter(
+      (entry) => !installed.some((extension) => extension.name === entry.id),
+    ) ?? [];
 
   return (
     <Scroll grow height="fill">
@@ -357,30 +366,40 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 />
               </CardContent>
             </Card>
-            {catalogue?.entries
-              .filter((entry) => !installed.some((extension) => extension.name === entry.id))
-              .map((entry) => (
-                <Card
-                  key={entry.id}
-                  grow={false}
-                  justify="start"
-                  width={CONTENT_WIDTH}
-                  variant="filled"
-                >
-                  <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
-                  <CardContent gap={1}>
-                    <Text label={entry.description} color="text-dim" wrap />
-                    <Text label={`Source ${entry.source}`} color="text-dim" wrap />
-                    <Row>
-                      <Button
-                        label={`Review ${entry.title}`}
-                        enabled={!busy}
-                        onInvoke={() => inspect(entry.reference)}
-                      />
-                    </Row>
-                  </CardContent>
-                </Card>
-              ))}
+            {catalogueState === 'loading' && (
+              <Row gap={1} align="center">
+                <Spinner />
+                <Text label="Loading extension catalogue…" color="text-dim" />
+              </Row>
+            )}
+            {catalogueState === 'ready' && availableCatalogue.length === 0 && (
+              <InlineMessage
+                label="No additional extensions are available in the built-in catalogue."
+                tone="neutral"
+              />
+            )}
+            {availableCatalogue.map((entry) => (
+              <Card
+                key={entry.id}
+                grow={false}
+                justify="start"
+                width={CONTENT_WIDTH}
+                variant="filled"
+              >
+                <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                <CardContent gap={1}>
+                  <Text label={entry.description} color="text-dim" wrap />
+                  <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                  <Row>
+                    <Button
+                      label={`Review ${entry.title}`}
+                      enabled={!busy}
+                      onInvoke={() => inspect(entry.reference)}
+                    />
+                  </Row>
+                </CardContent>
+              </Card>
+            ))}
             {catalogue && !catalogue.complete && (
               <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
             )}
