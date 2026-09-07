@@ -151,6 +151,15 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
+  assert.ok(
+    ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
+    'the settings editor retains a readable width instead of stretching with the window',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Storage directory', 'Card', 'Justify')?.Align,
+    'Start',
+    'cross-axis alignment lets the settings width govern native layout',
+  );
   invoke(stage, 'Extensions');
   await settled();
   await settled();
@@ -4253,10 +4262,12 @@ function ancestorProperty(stage, label, tag, prop) {
   let node = labelled(stage, label)?.SetProp.id;
   while (parents.has(node)) {
     node = parents.get(node);
-    if (tags.get(node) === tag)
-      return patches
+    if (tags.get(node) === tag) {
+      const value = patches
         .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
         .at(-1)?.SetProp.value;
+      if (value !== undefined) return value;
+    }
   }
   return undefined;
 }
