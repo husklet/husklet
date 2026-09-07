@@ -526,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_call_pre_spill_option_is_sent_only_when_typed_policy_enables_it() {
+    fn direct_call_pre_spill_option_preserves_explicit_false_and_true_policy() {
         let mut launch = launch();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL"), None);

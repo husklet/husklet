@@ -125,7 +125,9 @@ impl Config {
             translation_cache: None,
             translation_cache_observability: false,
             translation_symbols: None,
-            direct_call_pre_spill: false,
+            // Same-ISA translated calls use the proven pre-spill guard by default. The
+            // explicit setter remains the rollback switch; pcache keeps its own path.
+            direct_call_pre_spill: true,
         }
     }
 
@@ -175,10 +177,11 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
-    fn direct_call_pre_spill_defaults_off_and_honors_explicit_override() {
+    fn direct_call_pre_spill_defaults_on_and_honors_both_explicit_overrides() {
         let default = Config::new("/state");
-        assert!(!default.direct_call_pre_spill);
-        assert!(default.direct_call_pre_spill(true).direct_call_pre_spill);
+        assert!(default.direct_call_pre_spill);
+        assert!(!Config::new("/state").direct_call_pre_spill(false).direct_call_pre_spill);
+        assert!(Config::new("/state").direct_call_pre_spill(true).direct_call_pre_spill);
     }
 
     #[test]

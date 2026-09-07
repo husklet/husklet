@@ -609,11 +609,8 @@ impl<'a> CaseExecution<'a> {
         let output = state.join("output");
         let diagnostics = state.join("backend-diagnostics");
         let mut diagnostic_offset = 0;
-        let direct_call_guard = self
-            .case
-            .engine_options
-            .direct_call_pre_spill()
-            .filter(|_| self.target == Target::Amd64);
+        let direct_call_guard = (self.target == Target::Amd64)
+            .then(|| self.case.engine_options.direct_call_pre_spill().unwrap_or(true));
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
             .into_iter()

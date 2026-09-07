@@ -378,10 +378,14 @@ mod tests {
     fn direct_call_pre_spill_is_a_typed_engine_option() {
         let (_, default) = EngineOptions::split(&entries(&[])).unwrap();
         assert_eq!(default.direct_call_pre_spill(), None);
-        let (guest, options) =
+        let (guest, enabled) =
             EngineOptions::split(&entries(&[("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "1")])).unwrap();
         assert!(guest.is_empty());
-        assert_eq!(options.direct_call_pre_spill(), Some(true));
+        assert_eq!(enabled.direct_call_pre_spill(), Some(true));
+        let (guest, disabled) =
+            EngineOptions::split(&entries(&[("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "0")])).unwrap();
+        assert!(guest.is_empty());
+        assert_eq!(disabled.direct_call_pre_spill(), Some(false));
     }
 
     #[test]

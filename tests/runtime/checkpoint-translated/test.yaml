@@ -13,7 +13,6 @@ cases:
     compat: { class: compatibility }
     timeout: 120
     run: [/checkpoint-state]
-    environment: { HL_TRANSLIT_DIRECT_CALL_PRE_SPILL: "1" }
     orchestration: { container-checkpoint-cycles: 2 }
     expect:
       exit: 0
