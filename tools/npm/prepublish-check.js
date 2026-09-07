@@ -1,75 +1,90 @@
-import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const packageRoot = (name) => path.join(root, 'extensions', 'base', name);
-const read = (name) => JSON.parse(fs.readFileSync(path.join(packageRoot(name), 'package.json')));
-const client = read('client');
-const clientStarter = JSON.parse(
-  fs.readFileSync(path.join(root, 'extensions/base/client/examples/starter/package.json')),
+const root = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
 );
-const react = read('react');
+const packageRoot = (name) => path.join(root, "extensions", "base", name);
+const read = (name) =>
+  JSON.parse(fs.readFileSync(path.join(packageRoot(name), "package.json")));
+const client = read("client");
+const clientStarter = JSON.parse(
+  fs.readFileSync(
+    path.join(root, "extensions/base/client/examples/starter/package.json"),
+  ),
+);
+const react = read("react");
 const starter = JSON.parse(
-  fs.readFileSync(path.join(root, 'extensions/base/react/examples/starter/package.json')),
+  fs.readFileSync(
+    path.join(root, "extensions/base/react/examples/starter/package.json"),
+  ),
 );
 const expected = process.env.RELEASE_VERSION ?? client.version;
 for (const manifest of [client, react]) {
   assert.equal(manifest.version, expected);
-  assert.deepEqual(manifest.publishConfig, { access: 'public', provenance: true });
+  assert.deepEqual(manifest.publishConfig, {
+    access: "public",
+    provenance: true,
+  });
 }
-assert.equal(react.dependencies['@husklet/client'], expected);
-assert.equal(clientStarter.dependencies['@husklet/client'], expected);
-assert.equal(starter.dependencies['@husklet/client'], expected);
-assert.equal(starter.dependencies['@husklet/react'], expected);
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-pack-'));
+assert.equal(react.dependencies["@husklet/client"], expected);
+assert.equal(clientStarter.dependencies["@husklet/client"], expected);
+assert.equal(starter.dependencies["@husklet/client"], expected);
+assert.equal(starter.dependencies["@husklet/react"], expected);
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "husklet-pack-"));
 try {
   const pack = (name) => {
     const result = JSON.parse(
-      execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
-        cwd: packageRoot(name),
-        encoding: 'utf8',
-      }),
+      execFileSync(
+        "npm",
+        ["pack", "--json", "--ignore-scripts", "--pack-destination", scratch],
+        {
+          cwd: packageRoot(name),
+          encoding: "utf8",
+        },
+      ),
     )[0];
     assert.equal(result.name, `@husklet/${name}`);
-    assert(result.integrity.startsWith('sha512-'));
+    assert(result.integrity.startsWith("sha512-"));
     return path.join(scratch, result.filename);
   };
-  const clientTarball = pack('client');
-  const reactTarball = pack('react');
-  const consumer = path.join(scratch, 'consumer');
+  const clientTarball = pack("client");
+  const reactTarball = pack("react");
+  const consumer = path.join(scratch, "consumer");
   fs.mkdirSync(consumer);
   fs.writeFileSync(
-    path.join(consumer, 'package.json'),
-    JSON.stringify({ private: true, type: 'module' }),
+    path.join(consumer, "package.json"),
+    JSON.stringify({ private: true, type: "module" }),
   );
   execFileSync(
-    'npm',
+    "npm",
     [
-      'install',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
       clientTarball,
       reactTarball,
-      'react@18.3.1',
+      "react@18.3.1",
     ],
     { cwd: consumer },
   );
   execFileSync(
     process.execPath,
     [
-      '--input-type=module',
-      '--eval',
+      "--input-type=module",
+      "--eval",
       "import { Session, workspace } from '@husklet/client'; import { Session as ReactSession } from '@husklet/react'; if (Session !== ReactSession || typeof workspace !== 'function') process.exit(1)",
     ],
     { cwd: consumer },
   );
   fs.writeFileSync(
-    path.join(consumer, 'consumer.ts'),
+    path.join(consumer, "consumer.ts"),
     `
 import { Session, workspace } from '@husklet/client';
 import type { ExtensionCapability, PaneText as WirePaneText } from '@husklet/client/protocol';
@@ -92,22 +107,26 @@ void projection;
 `,
   );
   fs.writeFileSync(
-    path.join(consumer, 'tsconfig.json'),
+    path.join(consumer, "tsconfig.json"),
     JSON.stringify({
       compilerOptions: {
         strict: true,
         noEmit: true,
-        target: 'ES2022',
-        module: 'NodeNext',
-        moduleResolution: 'NodeNext',
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
         skipLibCheck: false,
       },
-      include: ['consumer.ts'],
+      include: ["consumer.ts"],
     }),
   );
-  execFileSync(path.join(root, 'node_modules/.bin/tsc'), ['--project', 'tsconfig.json'], {
-    cwd: consumer,
-  });
+  execFileSync(
+    path.join(root, "extensions/node_modules/.bin/tsc"),
+    ["--project", "tsconfig.json"],
+    {
+      cwd: consumer,
+    },
+  );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

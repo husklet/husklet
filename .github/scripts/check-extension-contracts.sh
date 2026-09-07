@@ -14,7 +14,15 @@ node -e '
   const fs = require("node:fs");
   const path = require("node:path");
   const root = process.argv[1];
-  const workspaces = JSON.parse(fs.readFileSync(path.join(root, "package.json"))).workspaces;
+  for (const name of ["package.json", "package-lock.json", "eslint.config.js", "prettier.config.js"]) {
+    if (fs.existsSync(path.join(root, name))) {
+      throw new Error(`${name} belongs in extensions/, not the repository root`);
+    }
+    if (!fs.existsSync(path.join(root, "extensions", name))) {
+      throw new Error(`extensions/${name} is required`);
+    }
+  }
+  const workspaces = JSON.parse(fs.readFileSync(path.join(root, "extensions/package.json"))).workspaces;
   if (!Array.isArray(workspaces)) {
     throw new Error("package.json workspaces must be an array");
   }
@@ -22,8 +30,8 @@ node -e '
     if (fs.existsSync(path.join(root, "packages", name))) {
       throw new Error(`packages/${name} is retired; extension SDK source belongs in extensions/base/${name}`);
     }
-    const expected = `extensions/base/${name}`;
-    if (!fs.existsSync(path.join(root, expected, "package.json")) || !workspaces.includes(expected)) {
+    const expected = `base/${name}`;
+    if (!fs.existsSync(path.join(root, "extensions", expected, "package.json")) || !workspaces.includes(expected)) {
       throw new Error(`${expected} must contain SDK source and be an npm workspace`);
     }
   }
@@ -59,7 +67,7 @@ node -e '
     }
   }
   for (const directory of runnable) {
-    const expected = `extensions/${directory.name}`;
+    const expected = directory.name;
     if (workspaces.filter((value) => value === expected).length !== 1) {
       throw new Error(`package.json must include runnable ${expected} exactly once`);
     }

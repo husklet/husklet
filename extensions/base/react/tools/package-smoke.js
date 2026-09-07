@@ -374,7 +374,7 @@ try {
     }
     void ProviderView;
   `);
-  execFileSync(path.resolve(root, '../../../node_modules/.bin/tsc'), [
+  execFileSync(path.resolve(root, '../../node_modules/.bin/tsc'), [
     '--noEmit', '--strict', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
   ], { cwd: consumer, stdio: 'pipe' });

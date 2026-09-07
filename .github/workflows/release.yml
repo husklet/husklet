@@ -102,35 +102,35 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: extensions/package-lock.json
 
       - name: Install the locked package graph
-        run: npm ci
+        run: npm --prefix extensions ci
 
       - name: Install an OIDC-capable npm CLI
         run: npm install --global npm@11.6.2
 
       - name: Test client and React packages
-        run: npm test --workspace @husklet/client
+        run: npm --prefix extensions test --workspace @husklet/client
 
       - name: Test React source and packed-package consumer
-        run: npm test --workspace @husklet/react
+        run: npm --prefix extensions test --workspace @husklet/react
 
       - name: Bind both packages independently to the release version
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
-          npm pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
+          npm --prefix extensions pkg set "version=$RELEASE_VERSION" --workspace @husklet/client
+          npm --prefix extensions pkg set "version=$RELEASE_VERSION" --workspace @husklet/react
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix extensions/base/client/examples/starter
-          npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
+          npm --prefix extensions pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --workspace @husklet/react
           npm pkg set "dependencies.@husklet/client=$RELEASE_VERSION" --prefix extensions/base/react/examples/starter
           npm pkg set "dependencies.@husklet/react=$RELEASE_VERSION" --prefix extensions/base/react/examples/starter
           sed -i "s|^ARG HUSKLET_BASE_IMAGE=.*|ARG HUSKLET_BASE_IMAGE=ghcr.io/husklet/husklet/extension-base:$RELEASE_VERSION|" extensions/base/react/examples/starter/Dockerfile
           sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" extensions/base/client/examples/starter/extension.toml
           sed -i "s/^version = .*/version = \"$RELEASE_VERSION\"/" extensions/base/react/examples/starter/extension.toml
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm --prefix extensions install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Verify and pack-test the exact package pair
         env:
@@ -154,15 +154,15 @@ jobs:
             if (actual !== expected) throw new Error(`${name} is ${actual}, expected ${expected}`);
           }
           NODE
-          npm run pack:check --workspace @husklet/client
-          npm run pack:check --workspace @husklet/react
-          npm pack --dry-run --ignore-scripts --workspace @husklet/client
-          npm pack --dry-run --ignore-scripts --workspace @husklet/react
+          npm --prefix extensions run pack:check --workspace @husklet/client
+          npm --prefix extensions run pack:check --workspace @husklet/react
+          npm --prefix extensions pack --dry-run --ignore-scripts --workspace @husklet/client
+          npm --prefix extensions pack --dry-run --ignore-scripts --workspace @husklet/react
 
       - name: Install and import the exact release tarball pair
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: npm run prepublish:check
+        run: npm --prefix extensions run prepublish:check
 
       - name: Refuse mismatched duplicates and make partial publication retryable
         id: publication
@@ -172,16 +172,16 @@ jobs:
 
       - name: Publish client with npm trusted publishing
         if: steps.publication.outputs.client == 'true'
-        run: npm publish --workspace @husklet/client --access public --provenance
+        run: npm --prefix extensions publish --workspace @husklet/client --access public --provenance
 
       - name: Publish React with npm trusted publishing
         if: steps.publication.outputs.react == 'true'
-        run: npm publish --workspace @husklet/react --access public --provenance
+        run: npm --prefix extensions publish --workspace @husklet/react --access public --provenance
 
       - name: Install and import the published package pair from npm
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: npm run postpublish:check
+        run: npm --prefix extensions run postpublish:check
 
   extension-base:
     name: Publish extension base / multi-architecture

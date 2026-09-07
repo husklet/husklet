@@ -5,17 +5,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', 'extensions/storybook/src/catalogue.json'],
+    ignores: ['**/dist/**', '**/node_modules/**', 'storybook/src/catalogue.json'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   {
-    files: [
-      'extensions/*/src/**/*.{ts,tsx}',
-      'extensions/*/examples/**/*.{ts,tsx}',
-      'extensions/*/vite.config.ts',
-    ],
+    files: ['*/src/**/*.{ts,tsx}', '*/examples/**/*.{ts,tsx}', '*/vite.config.ts'],
     rules: {
       curly: ['error', 'all'],
       eqeqeq: ['error', 'always', { null: 'ignore' }],
