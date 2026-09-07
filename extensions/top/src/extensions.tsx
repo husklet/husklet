@@ -9,6 +9,7 @@ import {
   Column,
   ConfirmAction,
   Entry,
+  FormControlLabel,
   Heading,
   InlineMessage,
   ResourceState,
@@ -20,6 +21,8 @@ import {
   type ExtensionAcquisitionStatus,
   type ExtensionCapability,
   type ExtensionSummary,
+  type ContainerGrant,
+  type ContainerSelector,
   type WorkspaceApi,
 } from '@husklet/react';
 
@@ -37,6 +40,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [reference, setReference] = React.useState('');
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
+  const [grantedContainers, setGrantedContainers] = React.useState<ContainerGrant>({
+    selectors: [],
+    create: false,
+  });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -108,6 +115,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           if (candidateKey.current !== key) {
             candidateKey.current = key;
             setGranted(status.candidate.requested);
+            // Resource authority is opt-in. A review, including an update,
+            // starts from no container identities instead of silently widening
+            // authority to every selector in the manifest.
+            setGrantedContainers({ selectors: [], create: false });
           }
         }
         if (
@@ -148,7 +159,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.job,
         acquisition.revision,
         granted,
-        acquisition.candidate.requested_containers,
+        grantedContainers,
       );
       setAcquisition(null);
       setReference('');
@@ -219,6 +230,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     } finally {
       setBusy('');
     }
+  };
+  const requestedContainers = acquisition?.candidate?.requested_containers ?? {
+    selectors: [],
+    create: false,
   };
 
   return (
@@ -297,24 +312,52 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 <Text label="This extension requests no capabilities." />
               )}
               <Text label="Container access" color="text-dim" />
-              {acquisition.candidate.requested_containers.selectors.map((selector, index) => (
+              {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
                 <Text
-                  key={`${index}:${JSON.stringify(selector)}`}
-                  label={
-                    'all' in selector
-                      ? 'All workspace containers'
-                      : 'id' in selector
-                        ? `Exact container ${selector.id}`
-                        : `Container named ${selector.name}`
-                  }
+                  label="Container access starts off. Select only what this extension needs."
+                  color="text-dim"
                   wrap
                 />
-              ))}
-              {acquisition.candidate.requested_containers.create && (
-                <Text label="May create containers" color="warning" />
               )}
-              {acquisition.candidate.requested_containers.selectors.length === 0 &&
-                !acquisition.candidate.requested_containers.create && (
+              {requestedContainers.selectors.map((selector) => {
+                const key = selectorKey(selector);
+                const selected = grantedContainers.selectors.some(
+                  (candidate) => selectorKey(candidate) === key,
+                );
+                return (
+                  <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                    <Switch
+                      checked={selected}
+                      onToggle={(event: Change) =>
+                        setGrantedContainers((current) => ({
+                          ...current,
+                          selectors: event.value
+                            ? current.selectors.some((candidate) => selectorKey(candidate) === key)
+                              ? current.selectors
+                              : [...current.selectors, selector]
+                            : current.selectors.filter(
+                                (candidate) => selectorKey(candidate) !== key,
+                              ),
+                        }))
+                      }
+                    />
+                  </FormControlLabel>
+                );
+              })}
+              {requestedContainers.create && (
+                <FormControlLabel label="Create new containers" gap={2}>
+                  <Switch
+                    checked={grantedContainers.create}
+                    onToggle={(event: Change) =>
+                      setGrantedContainers((current) => ({
+                        ...current,
+                        create: Boolean(event.value),
+                      }))
+                    }
+                  />
+                </FormControlLabel>
+              )}
+              {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
                   <Text label="No container resources requested." color="text-dim" />
                 )}
               <Button
@@ -426,6 +469,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message.slice(0, 500) : String(cause).slice(0, 500);
+}
+
+function selectorKey(selector: ContainerSelector): string {
+  if ('all' in selector) return 'all';
+  if ('id' in selector) return `id:${selector.id}`;
+  return `name:${selector.name}`;
+}
+
+function selectorLabel(selector: ContainerSelector): string {
+  if ('all' in selector) return 'All workspace containers';
+  if ('id' in selector) return `Exact container ${selector.id}`;
+  return `Container named ${selector.name}`;
 }
 
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {

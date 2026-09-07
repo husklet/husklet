@@ -180,6 +180,79 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+for (const updating of [false, true]) {
+  test(`extension ${updating ? 'update' : 'install'} independently narrows requested container authority`, async () => {
+    const calls = [];
+    const candidate = {
+      name: 'scoped',
+      version: '2.0.0',
+      image_digest: `sha256:${'a'.repeat(64)}`,
+      requested: [],
+      requested_containers: {
+        selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
+        create: true,
+      },
+      installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
+    };
+    const stage = host();
+    stage.render(
+      h(Extensions, {
+        api: {
+          extensions: {
+            list: async () => [],
+            startAcquisition: async () => ({ job: 'scoped-review' }),
+            acquisition: async () => ({
+              job: 'scoped-review',
+              revision: 4,
+              state: 'ready',
+              progress: null,
+              candidate,
+              error: null,
+            }),
+            [`${updating ? 'update' : 'install'}AndWait`]: async (...args) => {
+              calls.push(args);
+              return { changed: true, extension: { ...candidate, status: 'running' } };
+            },
+          },
+          watchExtensions: async () => () => {},
+        },
+      }),
+    );
+    await settled();
+    change(stage, 'registry.example/extension:version', 'local/scoped:2');
+    invoke(stage, 'Inspect');
+    await settled();
+    await settled();
+
+    assert.ok(
+      labelled(stage, 'Container access starts off. Select only what this extension needs.'),
+    );
+    for (const label of [
+      'Container named database',
+      `Exact container ${'c'.repeat(64)}`,
+      'All workspace containers',
+      'Create new containers',
+    ])
+      assert.ok(labelled(stage, label), label);
+    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false]);
+
+    toggleSwitch(stage, 0, true);
+    toggleSwitch(stage, 2, true);
+    toggleSwitch(stage, 3, true);
+    toggleSwitch(stage, 2, false);
+    invoke(stage, updating ? 'Update extension' : 'Install extension');
+    await settled();
+    await settled();
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].slice(0, 3), ['scoped-review', 4, []]);
+    assert.deepEqual(calls[0][3], {
+      selectors: [{ name: 'database' }],
+      create: true,
+    });
+  });
+}
+
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
   const calls = [];
   let installs = 0;
@@ -3713,6 +3786,32 @@ function labelled(stage, label) {
         'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value?.Text === label,
     )
     .at(-1);
+}
+
+function switchNodes(stage) {
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.Create?.tag === 'Switch')
+    .map((patch) => patch.Create.id);
+}
+
+function latestSwitchValues(stage) {
+  return switchNodes(stage).map(
+    (node) =>
+      stage.frames
+        .flatMap((frame) => frame.patches)
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === 'Checked')
+        .at(-1)?.SetProp.value?.Flag,
+  );
+}
+
+function toggleSwitch(stage, index, value) {
+  const node = switchNodes(stage)[index];
+  assert.notEqual(node, undefined, `switch ${index} is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Toggle', node, id: `${node}:Toggle`, value }),
+    `switch ${index} toggles`,
+  );
 }
 
 function invoke(stage, label) {
