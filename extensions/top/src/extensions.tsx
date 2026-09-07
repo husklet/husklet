@@ -237,7 +237,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   return (
     <Scroll grow height="fill">
-      <Column pad={2} gap={2}>
+      <Column pad={2} gap={1}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
@@ -245,35 +245,37 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           wrap
         />
         <Heading label="Discover" scale="caption" />
-        <Card variant="outline">
-          <CardHeader label="Workspace control" detail="First-party · Included" />
-          <CardContent gap={1}>
-            <Text
-              label="Manage workspace settings, containers, processes, storage, networks, and terminal panes from one compact tab."
-              color="text-dim"
-              wrap
-            />
-          </CardContent>
-        </Card>
-        {!installed.some((extension) => extension.name === 'storybook') && (
-          <Card variant="outline">
-            <CardHeader label="Component playground" detail="First-party · Storybook" />
+        <Row gap={1} wrap>
+          <Card grow={false} width={{ chars: 28 }} variant="outline">
+            <CardHeader label="Workspace control" detail="First-party · Included" />
             <CardContent gap={1}>
               <Text
-                label="Explore every extension UI component, including large tables, terminals, diffs, metrics, and confirmation flows."
+                label="Settings, runtime resources, and terminal panes in one compact tab."
                 color="text-dim"
                 wrap
               />
             </CardContent>
-            <CardActions>
-              <Button
-                label="Review access"
-                enabled={!busy}
-                onInvoke={() => inspect(STORYBOOK_IMAGE)}
-              />
-            </CardActions>
           </Card>
-        )}
+          {!installed.some((extension) => extension.name === 'storybook') && (
+            <Card grow={false} width={{ chars: 28 }} variant="outline">
+              <CardHeader label="Component playground" detail="First-party · Storybook" />
+              <CardContent gap={1}>
+                <Text
+                  label="Explore extension components, large tables, terminals, diffs, and metrics."
+                  color="text-dim"
+                  wrap
+                />
+              </CardContent>
+              <CardActions>
+                <Button
+                  label="Review access"
+                  enabled={!busy}
+                  onInvoke={() => inspect(STORYBOOK_IMAGE)}
+                />
+              </CardActions>
+            </Card>
+          )}
+        </Row>
         <Card variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
@@ -454,43 +456,41 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 detail={extension.version ?? extension.image_digest}
               />
               <CardContent>
-                <Row gap={2}>
+                <Row gap={1} align="center" wrap>
                   <Badge label={extension.status} />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
                   />
+                  {extension.status.startsWith('fault:') ? (
+                    <Button
+                      label="Retry"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'retry')}
+                    />
+                  ) : extension.enabled ? (
+                    <Button
+                      label="Disable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'disable')}
+                    />
+                  ) : (
+                    <Button
+                      label="Enable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'enable')}
+                    />
+                  )}
+                  <ConfirmAction
+                    label="Remove"
+                    confirmLabel={`Remove ${extension.name}`}
+                    question={`Remove ${extension.name} from this workspace?`}
+                    authorityKey={extension.image_digest}
+                    enabled={!busy}
+                    onConfirm={() => lifecycle(extension, 'remove')}
+                  />
                 </Row>
               </CardContent>
-              <CardActions gap={1}>
-                {extension.status.startsWith('fault:') ? (
-                  <Button
-                    label="Retry"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'retry')}
-                  />
-                ) : extension.enabled ? (
-                  <Button
-                    label="Disable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'disable')}
-                  />
-                ) : (
-                  <Button
-                    label="Enable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'enable')}
-                  />
-                )}
-                <ConfirmAction
-                  label="Remove"
-                  confirmLabel={`Remove ${extension.name}`}
-                  question={`Remove ${extension.name} from this workspace?`}
-                  authorityKey={extension.image_digest}
-                  enabled={!busy}
-                  onConfirm={() => lifecycle(extension, 'remove')}
-                />
-              </CardActions>
             </Card>
           ))}
         </ResourceState>
