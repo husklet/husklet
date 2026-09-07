@@ -66,7 +66,6 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   for (const label of [
-    'Top',
     'Resource overview',
     'Workspace',
     'Extensions',
@@ -179,6 +178,118 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     fieldValue(stage, 'registry.example/extension:version'),
     'ghcr.io/husklet/husklet/extension-storybook:latest',
   );
+});
+
+test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
+  const calls = [];
+  let installs = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            calls.push(['inspect', reference]);
+            return { job: 'candidate' };
+          },
+          acquisition: async () => ({
+            job: 'candidate',
+            revision: 7,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'assistant',
+              version: '1.2.0',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['containers:read', 'terminals:output'],
+            },
+            error: null,
+          }),
+          installAndWait: async (job, revision, granted) => {
+            calls.push(['install', job, revision, granted]);
+            installs += 1;
+            if (installs === 1) throw new Error('signature verification unavailable');
+            return { changed: true, extension: { name: 'assistant' } };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
+  submit(stage, 'registry.example/extension:version');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.ok(labelled(stage, 'Read and write terminal text'));
+  assert.ok(
+    labelled(stage, 'containers:read'),
+    'exact authority remains visible beside plain language',
+  );
+
+  invoke(stage, 'Install extension');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'signature verification unavailable'));
+  assert.ok(labelled(stage, 'Install extension'), 'failed installation retains a direct retry');
+  invoke(stage, 'Install extension');
+  await settled();
+  await settled();
+  assert.deepEqual(calls.at(-1), [
+    'install',
+    'candidate',
+    7,
+    ['containers:read', 'terminals:output'],
+  ]);
+  assert.ok(labelled(stage, 'assistant installed and verified.'));
+});
+
+test('installed extension removal requires final consent and a failure remains retryable', async () => {
+  const calls = [];
+  let removes = 0;
+  const extension = {
+    name: 'assistant',
+    image_digest: `sha256:${'b'.repeat(64)}`,
+    version: '1.2.0',
+    enabled: true,
+    status: 'running',
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [extension],
+          removeAndWait: async (name, digest) => {
+            calls.push([name, digest]);
+            removes += 1;
+            if (removes === 1) throw new Error('extension is still stopping');
+            return { changed: true, extension };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Remove');
+  assert.deepEqual(calls, [], 'opening consent carries no removal authority');
+  assert.ok(labelled(stage, 'Remove assistant from this workspace?'));
+  invoke(stage, 'Remove assistant');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
+  invoke(stage, 'Remove');
+  invoke(stage, 'Remove assistant');
+  await settled();
+  await settled();
+  assert.equal(calls.length, 2);
+  assert.ok(labelled(stage, 'assistant removed and verified.'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -3636,6 +3747,23 @@ function change(stage, placeholder, value) {
   assert.ok(
     stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
     `${placeholder} changes`,
+  );
+}
+
+function submit(stage, placeholder) {
+  const node = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.prop === 'Placeholder' &&
+        patch.SetProp.value?.Text === placeholder,
+    )
+    .at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${placeholder} field is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Submit', node, id: `${node}:Submit`, value: null }),
+    `${placeholder} submits`,
   );
 }
 

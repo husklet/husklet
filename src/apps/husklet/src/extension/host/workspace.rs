@@ -42,6 +42,111 @@ impl super::Host {
             audience,
         )
     }
+
+    /// Runs a checked-out extension as a host process for deterministic GUI
+    /// diagnostics. The socket, handshake, authority, services, and renderer
+    /// are production paths; only OCI acquisition and container supervision
+    /// are bypassed.
+    #[doc(hidden)]
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn local_extension(
+        workspace: &WorkspaceConfig,
+        name: &ExtensionName,
+        terminal: Arc<dyn TerminalSurface + Send + Sync>,
+        events: super::Events,
+        entrypoint: impl Into<PathBuf>,
+        audience: super::Audience,
+    ) -> Self {
+        Self::open(
+            LocalWorkspace::new(workspace, name, entrypoint.into())
+                .through(terminal)
+                .observing(events),
+            audience,
+        )
+    }
+}
+
+#[cfg(debug_assertions)]
+struct LocalWorkspace {
+    workspace: Workspace,
+    entrypoint: PathBuf,
+    child: Mutex<Option<std::process::Child>>,
+}
+
+#[cfg(debug_assertions)]
+impl LocalWorkspace {
+    fn new(workspace: &WorkspaceConfig, name: &ExtensionName, entrypoint: PathBuf) -> Self {
+        Self {
+            workspace: Workspace::extension(workspace, name),
+            entrypoint,
+            child: Mutex::new(None),
+        }
+    }
+
+    fn through(mut self, terminal: Arc<dyn TerminalSurface + Send + Sync>) -> Self {
+        self.workspace = self.workspace.through(terminal);
+        self
+    }
+
+    fn observing(mut self, events: super::Events) -> Self {
+        self.workspace = self.workspace.observing(events);
+        self
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Supply for LocalWorkspace {
+    fn plan(&self) -> Result<Option<Plan>, String> {
+        let Some(record) = self.workspace.record()? else {
+            return Ok(None);
+        };
+        let manifest = described(&record);
+        let image = Image {
+            reference: self.entrypoint.display().to_string(),
+            digest: record.image_digest.clone(),
+            entrypoint: vec![self.entrypoint.display().to_string()],
+            command: Vec::new(),
+            user: String::new(),
+        };
+        let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.workspace.socket(&record.name))
+            .generation(record.installed_at);
+        Ok(Some(Plan {
+            record,
+            manifest,
+            spec,
+            workspace: self.workspace.config.name.clone(),
+        }))
+    }
+
+    fn ensure(&self, plan: &Plan) -> Result<(), String> {
+        let child = std::process::Command::new("node")
+            .arg(&self.entrypoint)
+            .env("HUSKLET_EXTENSION_SOCKET", plan.spec.socket())
+            .spawn()
+            .map_err(|error| format!("start local extension {}: {error}", self.entrypoint.display()))?;
+        *self.child.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);
+        Ok(())
+    }
+
+    fn startup_failure(&self, _plan: &Plan) -> Result<Option<String>, String> {
+        let mut child = self.child.lock().unwrap_or_else(PoisonError::into_inner);
+        match child.as_mut().and_then(|child| child.try_wait().ok()).flatten() {
+            Some(status) => Ok(Some(format!("local extension stopped with {status}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
+        self.workspace.attend(plan, conversation)
+    }
+
+    fn halt(&self, _plan: &Plan) {
+        if let Some(mut child) = self.child.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 /// The real supply: one workspace, its records, and its container daemon.
@@ -301,7 +406,7 @@ impl Supply for Workspace {
 
 #[cfg(test)]
 mod halt_tests {
-    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Resources, PROTOCOL};
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Resources};
 
     use super::{Image, Plan, SidecarSpec, Supply as _, Workspace};
 
@@ -647,8 +752,8 @@ impl WorkspaceControl for Store {
 
 #[cfg(test)]
 mod workspace_control_tests {
-    use hl_extension::port::WorkspaceControl as _;
     use hl_extension::ExtensionName;
+    use hl_extension::port::WorkspaceControl as _;
 
     use super::{Store, Workspace};
 

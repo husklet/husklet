@@ -104,6 +104,9 @@ struct AppConfig {
     create_image: Option<String>,
     /// Debug: write `ok` or the bounded provisioning error after an automated creation attempt.
     create_receipt: Option<String>,
+    /// Debug builds only: run checked-out Top as a local socket peer.
+    #[cfg(debug_assertions)]
+    local_extension: Option<String>,
     #[cfg(feature = "gui-checkpoint-e2e")]
     checkpoint_journey: Option<String>,
     environment: host::environment::Environment,
@@ -130,6 +133,8 @@ impl AppConfig {
             create_workspace: std::env::var("HL_TERM_CREATE_WS").ok(),
             create_image: std::env::var("HL_TERM_CREATE_IMAGE").ok(),
             create_receipt: std::env::var("HL_TERM_CREATE_RECEIPT").ok(),
+            #[cfg(debug_assertions)]
+            local_extension: std::env::var("HL_TERM_LOCAL_EXTENSION").ok(),
             #[cfg(feature = "gui-checkpoint-e2e")]
             checkpoint_journey: std::env::var("HL_GUI_CHECKPOINT_JOURNEY").ok(),
             screenshot_ms: std::env::var("HL_TERM_SHOT_MS")

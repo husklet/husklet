@@ -257,6 +257,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 value={reference}
                 placeholder="registry.example/extension:version"
                 onChange={(event: Change) => setReference(String(event.value ?? '').slice(0, 512))}
+                onSubmit={() => inspect()}
               />
               <Button
                 label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
@@ -268,7 +269,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           {acquisition?.candidate && (
             <CardContent gap={1}>
               <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
-              <Text label={acquisition.candidate.image_digest} wrap />
+              <Text
+                label={compactDigest(acquisition.candidate.image_digest)}
+                tooltip={acquisition.candidate.image_digest}
+              />
               <Text label="Capability access" color="text-dim" />
               {acquisition.candidate.requested.map((capability) => (
                 <Row key={capability} gap={2} align="center">
@@ -282,7 +286,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       )
                     }
                   />
-                  <Text label={capability} />
+                  <Column gap={0}>
+                    <Text label={capabilityLabel(capability)} />
+                    <Text label={capability} color="text-dim" />
+                  </Column>
                 </Row>
               ))}
               {acquisition.candidate.requested.length === 0 && (
@@ -352,7 +359,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <CardContent>
                 <Row gap={2}>
                   <Badge label={extension.status} />
-                  <Text label={extension.image_digest} wrap />
+                  <Text
+                    label={compactDigest(extension.image_digest)}
+                    tooltip={extension.image_digest}
+                  />
                 </Row>
               </CardContent>
               <CardActions gap={1}>
@@ -420,4 +430,62 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
 
 function capitalize(value: string): string {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function capabilityLabel(capability: ExtensionCapability): string {
+  const known: Partial<Record<ExtensionCapability, string>> = {
+    'workspaces:read': 'View workspace settings',
+    'workspaces:control': 'Modify workspace settings',
+    'workspaces:events': 'Observe workspace lifecycle',
+    'extensions:read': 'View installed extensions',
+    'extensions:control': 'Enable, disable, retry, and remove extensions',
+    'extensions:install': 'Install and update extensions',
+    'containers:read': 'View containers and processes',
+    'containers:control': 'Create, start, stop, and remove containers',
+    'containers:attach': 'Run commands inside containers',
+    'images:read': 'View images',
+    'images:write': 'Pull and remove images',
+    'volumes:read': 'View volumes',
+    'volumes:write': 'Create and remove volumes',
+    'networks:read': 'View networks',
+    'networks:write': 'Create and modify networks',
+    'terminals:read': 'View terminal tabs and panes',
+    'terminals:control': 'Create and rearrange terminal panes',
+    'terminals:output': 'Read and write terminal text',
+    'panes:observe': 'Observe pane interaction',
+    'panes:semantic-read': 'Read structured pane interfaces',
+    'panes:semantic-control': 'Operate structured pane interfaces',
+    'interface:render': 'Render this extension interface',
+  };
+  if (known[capability]) return known[capability];
+  const [resource, authority] = capability.split(':');
+  const action =
+    authority === 'read'
+      ? 'View'
+      : authority === 'control'
+        ? 'Control'
+        : authority === 'install'
+          ? 'Install'
+          : authority === 'write'
+            ? 'Modify'
+            : authority === 'output'
+              ? 'Read output from'
+              : authority === 'observe'
+                ? 'Observe'
+                : authority === 'render'
+                  ? 'Render'
+                  : titleWords(authority);
+  return `${action} ${titleWords(resource)}`;
+}
+
+function titleWords(value = ''): string {
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`)
+    .join(' ');
+}
+
+function compactDigest(digest: string): string {
+  return digest.length > 32 ? `${digest.slice(0, 19)}…${digest.slice(-8)}` : digest;
 }

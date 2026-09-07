@@ -50,9 +50,7 @@ export function Navigation({
   onSelect: (section: Section) => void;
 }) {
   return (
-    <Column grow={false} width={{ chars: 18 }} height="fill" pad={1} gap={1}>
-      <Heading label="Top" scale="title" />
-      <Text label="Workspace control" color="text-dim" />
+    <Column grow={false} width={{ chars: 14 }} height="fill" pad={1} gap={1}>
       <Scroll grow height="fill">
         <Column gap={1}>
           {SECTIONS.map((name) => (

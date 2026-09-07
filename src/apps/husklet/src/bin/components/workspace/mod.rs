@@ -199,7 +199,52 @@ fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> s
 
 fn provision_workspace(workspace: WorkspaceConfig) -> std::io::Result<()> {
     let path = Home::current().workspaces_config();
+    #[cfg(debug_assertions)]
+    if let Some(entrypoint) = AppConfig::get().local_extension.as_deref() {
+        let installed = workspace.clone();
+        return provision_workspace_with(path, workspace, |_| install_local_top(&installed, entrypoint));
+    }
     provision_workspace_with(path, workspace, hl::extension::install_defaults)
+}
+
+/// Registers the checked-out Top declaration for the debug local-sidecar path.
+/// The extension still speaks the production socket protocol; this replaces
+/// only registry acquisition, which is unavailable on headless test hosts.
+#[cfg(debug_assertions)]
+fn install_local_top(workspace: &WorkspaceConfig, entrypoint: &str) -> Result<(), String> {
+    use sha2::Digest as _;
+
+    let manifest_path = std::path::Path::new(entrypoint)
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(|root| root.join("extension.toml"))
+        .ok_or_else(|| "the local extension entrypoint has no package root".to_owned())?;
+    let document = std::fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?;
+    let manifest =
+        hl_extension::Manifest::parse(&document, hl_extension::PROTOCOL).map_err(|error| error.to_string())?;
+    if manifest.name.as_str() != "top" {
+        return Err(format!(
+            "{} declares {}, expected top",
+            manifest_path.display(),
+            manifest.name
+        ));
+    }
+    let digest = sha2::Sha256::digest(document.as_bytes())
+        .iter()
+        .fold(String::from("sha256:"), |mut text, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
+    let installed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX));
+    let mut roster = hl::extension::Roster::workspace(workspace).map_err(|error| error.to_string())?;
+    roster
+        .register(&manifest, &digest, &manifest.capabilities, installed_at)
+        .map_err(|error| error.to_string())?;
+    roster.enable(&manifest.name).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn provision_workspace_with(

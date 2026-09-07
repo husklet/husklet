@@ -54,29 +54,43 @@ impl<'a> Overview<'a> {
         // The two halves were built apart and carry the same three cases under
         // their own names, because the page lives in this binary and the host
         // lives in the library; this is the whole of the translation.
-        let host = std::rc::Rc::new(hl::extension::Host::extension(
-            workspace,
-            name,
-            std::sync::Arc::clone(terminal),
-            events,
-            Box::new(move |report| {
-                let delivery = match report {
-                    Report::Frame(frame) => Delivery::FrameAt {
-                        slot: frame.slot,
-                        frame: frame.frame,
-                    },
-                    Report::Source(mutation) => Delivery::SourceAt {
-                        slot: mutation.slot,
-                        mutation: mutation.mutation,
-                    },
-                    Report::Loss(reason) => Delivery::Loss(reason),
-                    Report::Fault { restarts } => Delivery::Fault { restarts },
-                };
-                // A page that has gone away is not a failure: the host is about
-                // to be dropped with it.
-                drop(post.send(delivery));
-            }),
-        ));
+        let audience = Box::new(move |report| {
+            let delivery = match report {
+                Report::Frame(frame) => Delivery::FrameAt {
+                    slot: frame.slot,
+                    frame: frame.frame,
+                },
+                Report::Source(mutation) => Delivery::SourceAt {
+                    slot: mutation.slot,
+                    mutation: mutation.mutation,
+                },
+                Report::Loss(reason) => Delivery::Loss(reason),
+                Report::Fault { restarts } => Delivery::Fault { restarts },
+            };
+            // A page that has gone away is not a failure: the host is about
+            // to be dropped with it.
+            drop(post.send(delivery));
+        });
+        #[cfg(debug_assertions)]
+        let host = if name.as_str() == "top" {
+            if let Some(entrypoint) = AppConfig::get().local_extension.as_deref() {
+                hl::extension::Host::local_extension(
+                    workspace,
+                    name,
+                    std::sync::Arc::clone(terminal),
+                    events,
+                    entrypoint,
+                    audience,
+                )
+            } else {
+                hl::extension::Host::extension(workspace, name, std::sync::Arc::clone(terminal), events, audience)
+            }
+        } else {
+            hl::extension::Host::extension(workspace, name, std::sync::Arc::clone(terminal), events, audience)
+        };
+        #[cfg(not(debug_assertions))]
+        let host = hl::extension::Host::extension(workspace, name, std::sync::Arc::clone(terminal), events, audience);
+        let host = std::rc::Rc::new(host);
         // The page never names the host, so the sink is where the two vocabularies
         // meet: one enum for what a person did, one for what the extension said.
         let ordered = std::rc::Rc::clone(&host);
