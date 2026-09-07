@@ -2575,7 +2575,7 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned(), generation: Some(4) });
+        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned(), generation: 4 });
 
         assert!(codec::is_failure(&answer), "a refusal is reported as one");
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {

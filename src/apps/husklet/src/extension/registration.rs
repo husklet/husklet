@@ -167,7 +167,7 @@ impl Candidate {
         cancellation.check()?;
         platform(&inspection, architecture)?;
         let _ = progress.send(Acquisition::ReadingManifest);
-        let path = manifest_path(&inspection.config.labels);
+        let path = manifest_path(&inspection.config.labels)?;
         let content = immutable_content(reference, &inspection.id)?;
         let archive = extract(&bridge, content, &path, cancellation)?;
         cancellation.check()?;
@@ -324,14 +324,23 @@ async fn read(bridge: &Bridge, container: &str, path: &str) -> Result<Vec<u8>, S
 /// A label that is present but blank falls back to the default rather than
 /// reading the container root, because an empty path is a build mistake and the
 /// default is what the author meant.
-#[must_use]
-pub fn manifest_path(labels: &BTreeMap<String, String>) -> String {
-    labels
+pub fn manifest_path(labels: &BTreeMap<String, String>) -> Result<String, String> {
+    let path = labels
         .get(Manifest::LABEL)
         .map(|path| path.trim())
         .filter(|path| !path.is_empty())
         .unwrap_or(Manifest::DEFAULT_PATH)
-        .to_owned()
+        .to_owned();
+    if path.len() > 4_096 {
+        return Err("the extension manifest path is longer than 4096 bytes".to_owned());
+    }
+    if !path.starts_with('/') {
+        return Err("the extension manifest path must be absolute".to_owned());
+    }
+    if path.contains('\0') || path.split('/').any(|component| matches!(component, "." | "..")) {
+        return Err("the extension manifest path must be NUL-free and contain no dot segments".to_owned());
+    }
+    Ok(path)
 }
 
 /// The document inside the archive the daemon returned.
@@ -431,19 +440,34 @@ mod tests {
 
     #[test]
     fn an_unlabelled_image_is_read_at_the_default_path() {
-        assert_eq!(manifest_path(&BTreeMap::new()), Manifest::DEFAULT_PATH);
+        assert_eq!(manifest_path(&BTreeMap::new()).unwrap(), Manifest::DEFAULT_PATH);
     }
 
     #[test]
     fn a_labelled_image_is_read_where_it_says() {
         let labels = BTreeMap::from([(Manifest::LABEL.to_owned(), " /opt/extension.toml ".to_owned())]);
-        assert_eq!(manifest_path(&labels), "/opt/extension.toml");
+        assert_eq!(manifest_path(&labels).unwrap(), "/opt/extension.toml");
     }
 
     #[test]
     fn a_blank_label_falls_back_rather_than_reading_the_root() {
         let labels = BTreeMap::from([(Manifest::LABEL.to_owned(), String::new())]);
-        assert_eq!(manifest_path(&labels), Manifest::DEFAULT_PATH);
+        assert_eq!(manifest_path(&labels).unwrap(), Manifest::DEFAULT_PATH);
+    }
+
+    #[test]
+    fn an_image_cannot_point_manifest_discovery_outside_an_absolute_bounded_path() {
+        for path in [
+            "relative.toml",
+            "/etc/../secret",
+            "/etc/./extension.toml",
+            "/etc/nul\0.toml",
+        ] {
+            let labels = BTreeMap::from([(Manifest::LABEL.to_owned(), path.to_owned())]);
+            assert!(manifest_path(&labels).is_err(), "accepted {path:?}");
+        }
+        let labels = BTreeMap::from([(Manifest::LABEL.to_owned(), format!("/{}", "x".repeat(4_096)))]);
+        assert!(manifest_path(&labels).is_err());
     }
 
     #[test]
@@ -686,7 +710,13 @@ mod tests {
         assert_eq!(request.image, candidate.digest);
         assert_eq!(request.entrypoint, Some(vec!["/opt/husklet/arm64".to_owned()]));
         assert_eq!(request.user.as_deref(), Some("65532:65532"));
-        assert_eq!(request.env, Some(vec![format!("{SOCKET_VARIABLE}={SOCKET_TARGET}")]));
+        assert_eq!(
+            request.env,
+            Some(vec![
+                format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                "NODE_OPTIONS=--jitless".to_owned(),
+            ])
+        );
         assert_eq!(host.network_mode, "none");
         assert_eq!(host.mounts.len(), 1);
         assert_eq!(host.mounts[0].source, credential.to_string_lossy());
