@@ -189,6 +189,9 @@ try {
   process.stdout.write(
     `${JSON.stringify({ container: container.id, processes: processes.processes.length, queryRows: total, networks: networks.length, slot: surface.slot })}\n`,
   );
+  // Keep serving viewport requests until Husklet stops this extension. Without
+  // this wait, the first render succeeds and every later scroll is disconnected.
+  await session.closed;
 } finally {
   await session.close();
 }

@@ -1058,7 +1058,9 @@ test('real socket write backpressure admits no further calls until drain', async
     }),
   );
   await bounded(second, 'second call');
+  const ended = session.closed;
   await bounded(session.close(), 'close');
+  assert.match((await bounded(ended, 'closed lifecycle')).message, /extension session closed/);
   for (const [event, count] of Object.entries(baselineListeners))
     assert.equal(client.listenerCount(event), count);
   host.destroy();

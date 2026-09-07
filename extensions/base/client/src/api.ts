@@ -571,6 +571,8 @@ export interface CallOptions {
 export declare class Session {
   static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
   readonly ready: Promise<void>;
+  /** Resolves once with the reason this session ended. */
+  readonly closed: Promise<Error>;
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
   call<C extends WireCall>(

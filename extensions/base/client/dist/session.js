@@ -223,6 +223,8 @@ export class Session {
     #timeout;
     #closed = false;
     #closeReason;
+    #closedPromise;
+    #resolveClosed;
     #granted = [];
     #greeted;
     #ready;
@@ -269,6 +271,9 @@ export class Session {
             this.#ready = resolve;
             this.#rejectReady = reject;
         });
+        this.#closedPromise = new Promise((resolve) => {
+            this.#resolveClosed = resolve;
+        });
         this.#onReply = onReply;
         this.#onRows = onRows;
         this.#onEventError = onEventError;
@@ -297,6 +302,10 @@ export class Session {
     /** Resolves when the handshake is complete and calls may be sent. */
     get ready() {
         return this.#greeted;
+    }
+    /** Resolves once with the reason this session ended. */
+    get closed() {
+        return this.#closedPromise;
     }
     /** Opens the socket the host provided. */
     static connect(path = extensionSocketPath(), handlers = {}) {
@@ -658,6 +667,7 @@ export class Session {
         this.#topics.clear();
         this.#eventTopics.clear();
         this.#deferredCredits.clear();
+        this.#resolveClosed(error);
         try {
             this.#onClose(error);
         }
