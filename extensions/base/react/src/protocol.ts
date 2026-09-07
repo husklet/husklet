@@ -71,6 +71,9 @@ const KIND = {
   RowHeight: 'number',
   Choices: 'choices',
 };
+type PropName = keyof typeof KIND;
+type PropertyBag = Record<string, unknown>;
+type Handler = (...arguments_: unknown[]) => unknown;
 
 /** Every property, spelled as the React prop that carries it. */
 export const PROPS = new Map(Object.keys(KIND).map((prop) => [camel(prop), prop]));
@@ -121,19 +124,19 @@ const TOKENS = [
   'Info',
 ];
 
-function camel(name) {
-  return name[0].toLowerCase() + name.slice(1);
+function camel(name: string): string {
+  return (name[0]?.toLowerCase() ?? '') + name.slice(1);
 }
 
 /** `accent`, `text-dim` and `TextDim` all name the same variant. */
-function pascal(value) {
+function pascal(value: unknown): string {
   return String(value)
     .split(/[-_\s]+/)
-    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .map((part) => (part[0]?.toUpperCase() ?? '') + part.slice(1))
     .join('');
 }
 
-function member(value, permitted, what) {
+function member(value: unknown, permitted: readonly string[], what: string): string {
   const chosen = pascal(value);
   if (!permitted.includes(chosen)) {
     throw new Error(
@@ -149,13 +152,15 @@ function member(value, permitted, what) {
  * A bare number is steps on the 4px scale, because that is what almost every
  * description means; the named sizes and the character width are spelled out.
  */
-export function length(value) {
+export function length(value: unknown): unknown {
   if (typeof value === 'number') return { Step: Math.max(0, Math.round(value)) };
   if (value === 'fill') return 'Fill';
   if (value === 'content') return 'Content';
   if (value && typeof value === 'object') {
-    if (typeof value.chars === 'number') return { Chars: Math.max(0, Math.round(value.chars)) };
-    if (typeof value.step === 'number') return { Step: Math.max(0, Math.round(value.step)) };
+    if ('chars' in value && typeof value.chars === 'number')
+      return { Chars: Math.max(0, Math.round(value.chars)) };
+    if ('step' in value && typeof value.step === 'number')
+      return { Step: Math.max(0, Math.round(value.step)) };
   }
   throw new Error(
     `a length is a number of steps, "fill", "content", {chars} or {step}, not ${JSON.stringify(value)}`,
@@ -163,7 +168,7 @@ export function length(value) {
 }
 
 /** Translates one React prop value into a tagged `PropValue`. */
-export function value(prop, given) {
+export function value(prop: PropName, given: unknown): unknown {
   const kind = KIND[prop];
   switch (kind) {
     case 'text':
@@ -200,9 +205,9 @@ export function value(prop, given) {
       return { Source: Math.round(Number(given)) };
     case 'choices':
       return {
-        Choices: given.map((choice) => ({
-          value: String(choice.value),
-          label: String(choice.label),
+        Choices: (given as unknown[]).map((choice) => ({
+          value: String((choice as PropertyBag).value),
+          label: String((choice as PropertyBag).label),
         })),
       };
     case 'schema':
@@ -215,27 +220,26 @@ export function value(prop, given) {
 }
 
 /** A value whose shape the property does not decide, such as a field's value. */
-function infer(given) {
+function infer(given: unknown): unknown {
   if (typeof given === 'boolean') return { Flag: given };
   if (typeof given === 'number')
     return Number.isInteger(given) ? { Integer: given } : { Number: given };
   return { Text: String(given) };
 }
 
-function edges(given) {
+function edges(given: unknown): unknown {
   if (given === null) return { Nothing: null };
   if (typeof given !== 'object' || Array.isArray(given)) return { Length: length(given) };
   const sides = ['top', 'end', 'bottom', 'start'];
   if (!sides.some((side) => side in given)) return { Length: length(given) };
+  const bag = given as PropertyBag;
   const zero = { Step: 0 };
   return {
-    Edges: Object.fromEntries(
-      sides.map((side) => [side, side in given ? length(given[side]) : zero]),
-    ),
+    Edges: Object.fromEntries(sides.map((side) => [side, side in bag ? length(bag[side]) : zero])),
   };
 }
 
-function bounds(given) {
+function bounds(given: unknown): unknown {
   if (given && typeof given === 'object' && ('minimum' in given || 'maximum' in given)) {
     return {
       Bounds: {
@@ -247,18 +251,20 @@ function bounds(given) {
   return { Length: length(given) };
 }
 
-function column(given) {
+function column(given: unknown) {
+  if (given === null || typeof given !== 'object') throw new TypeError('column must be an object');
+  const item = given as PropertyBag;
   return {
-    key: String(given.key),
-    title: String(given.title ?? given.key),
-    width: given.width === undefined ? 'Content' : length(given.width),
-    align: given.align === undefined ? 'Start' : member(given.align, ALIGNS, 'an alignment'),
-    sortable: Boolean(given.sortable),
-    editable: Boolean(given.editable),
+    key: String(item.key),
+    title: String(item.title ?? item.key),
+    width: item.width === undefined ? 'Content' : length(item.width),
+    align: item.align === undefined ? 'Start' : member(item.align, ALIGNS, 'an alignment'),
+    sortable: Boolean(item.sortable),
+    editable: Boolean(item.editable),
   };
 }
 
-function schema(given) {
+function schema(given: unknown) {
   if (!Array.isArray(given)) throw new TypeError('schema must be an array');
   if (given.length > TABLE_COLUMN_LIMIT) {
     throw new RangeError(`schema has ${given.length} columns; limit is ${TABLE_COLUMN_LIMIT}`);
@@ -282,9 +288,13 @@ function schema(given) {
 }
 
 /** Translate the public React-friendly column schema on a windowed source open. */
-export function sourceMutation(given) {
-  if (given?.Open === undefined) return given;
-  return { Open: { ...given.Open, columns: schema(given.Open.columns) } };
+export function sourceMutation(given: unknown): unknown {
+  if (given === null || typeof given !== 'object' || !('Open' in given) || given.Open === undefined)
+    return given;
+  if (given.Open === null || typeof given.Open !== 'object')
+    throw new TypeError('Open must be an object');
+  const open = given.Open as PropertyBag;
+  return { Open: { ...open, columns: schema(open.columns) } };
 }
 
 /**
@@ -294,9 +304,9 @@ export function sourceMutation(given) {
  * silently does nothing is the worst possible failure for someone writing an
  * interface they cannot inspect.
  */
-export function partition(type, props) {
-  const values = new Map();
-  const handlers = new Map();
+export function partition(type: string, props: PropertyBag) {
+  const values = new Map<string, unknown>();
+  const handlers = new Map<string, Handler>();
   for (const [name, given] of Object.entries(props)) {
     if (RESERVED.has(name)) continue;
     const trigger = TRIGGERS.get(name);
@@ -304,7 +314,7 @@ export function partition(type, props) {
       if (typeof given !== 'function' && given !== null && given !== undefined) {
         throw new Error(`${name} on <${type}> takes a function`);
       }
-      if (given) handlers.set(trigger, given);
+      if (given) handlers.set(trigger, given as Handler);
       continue;
     }
     const prop = PROPS.get(name);
@@ -313,7 +323,7 @@ export function partition(type, props) {
     }
     // Absent and null both mean "the host should forget this property".
     if (given === undefined || given === null) continue;
-    values.set(prop, value(prop, given));
+    values.set(prop, value(prop as PropName, given));
   }
   // Text children are the label; a leaf tag has nowhere else to put them.
   const text = children(props);
@@ -322,7 +332,7 @@ export function partition(type, props) {
 }
 
 /** The text a node's children amount to, or null when they are elements. */
-export function children(props) {
+export function children(props: PropertyBag): string | null {
   const given = props.children;
   if (typeof given === 'string') return given;
   if (typeof given === 'number') return String(given);
@@ -330,6 +340,6 @@ export function children(props) {
 }
 
 /** Whether two tagged values would tell the host anything new. */
-export function same(left, right) {
+export function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }

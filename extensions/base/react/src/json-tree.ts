@@ -19,30 +19,32 @@ export const JSON_TREE_DEFAULTS = Object.freeze({
   maxStringLength: 512,
 });
 
-function limitedInteger(value, fallback, ceiling) {
-  return Number.isInteger(value) && value >= 1 ? Math.min(value, ceiling) : fallback;
+function limitedInteger(value: unknown, fallback: number, ceiling: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1
+    ? Math.min(value, ceiling)
+    : fallback;
 }
 
-function kind(value) {
+function kind(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   return typeof value === 'object' ? 'object' : typeof value;
 }
 
-function childrenOf(value) {
+function childrenOf(value: unknown): Array<[string, unknown]> {
   if (Array.isArray(value)) return value.map((child, index) => [String(index), child]);
-  if (value !== null && typeof value === 'object')
-    return Object.keys(value).map((key) => [key, value[key]]);
+  if (value !== null && typeof value === 'object') return Object.entries(value);
   return [];
 }
 
-function segment(parent, key, array) {
+function segment(parent: string, key: string, array: boolean): string {
   if (array) return `${parent}[${key}]`;
   return /^[A-Za-z_$][\w$]*$/.test(key) ? `${parent}.${key}` : `${parent}[${JSON.stringify(key)}]`;
 }
 
-function scalar(value, type, limit) {
+function scalar(value: unknown, type: string, limit: number) {
   if (type === 'string') {
+    if (typeof value !== 'string') throw new TypeError('string value changed during inspection');
     if (value.length <= limit) return { display: JSON.stringify(value), truncated: false };
     return {
       display: `${JSON.stringify(value.slice(0, limit))}… (+${value.length - limit} characters)`,
@@ -60,7 +62,7 @@ function scalar(value, type, limit) {
 
 /** Converts arbitrary JSON-like data to a finite, cycle-safe row model. */
 export function inspectJson(
-  value,
+  value: unknown,
   options: { maxDepth?: number; maxNodes?: number; maxStringLength?: number } = {},
 ) {
   const maxDepth = limitedInteger(options.maxDepth, JSON_TREE_DEFAULTS.maxDepth, 64);
@@ -70,11 +72,17 @@ export function inspectJson(
     JSON_TREE_DEFAULTS.maxStringLength,
     4096,
   );
-  const rows = [];
-  const seen = new WeakMap();
+  const rows: JsonRow[] = [];
+  const seen = new WeakMap<object, string>();
   let nodeLimit = false;
 
-  const visit = (current, path, parent, depth, key) => {
+  const visit = (
+    current: unknown,
+    path: string,
+    parent: string | null,
+    depth: number,
+    key: string,
+  ) => {
     if (rows.length >= maxNodes) {
       nodeLimit = true;
       return;
@@ -82,7 +90,7 @@ export function inspectJson(
     const type = kind(current);
     const entries = childrenOf(current);
     const expandable = type === 'array' || type === 'object';
-    if (expandable && seen.has(current)) {
+    if (expandable && typeof current === 'object' && current !== null && seen.has(current)) {
       rows.push({
         path,
         parent,
@@ -97,7 +105,7 @@ export function inspectJson(
       });
       return;
     }
-    if (expandable) seen.set(current, path);
+    if (expandable && typeof current === 'object' && current !== null) seen.set(current, path);
     const bounded = expandable
       ? {
           display: `${type === 'array' ? 'Array' : 'Object'}(${entries.length})`,
@@ -145,18 +153,35 @@ export function inspectJson(
   };
 }
 
+export interface JsonRow {
+  path: string;
+  parent: string | null;
+  depth: number;
+  key: string;
+  type: string;
+  value: unknown;
+  display: string;
+  expandable: boolean;
+  childCount: number;
+  truncated: boolean;
+}
+
 /** Applies expansion or search while retaining every ancestor of a match. */
-export function visibleJsonRows(rows, expanded = new Set(['$']), query = '') {
+export function visibleJsonRows(
+  rows: readonly JsonRow[],
+  expanded: ReadonlySet<string> = new Set(['$']),
+  query = '',
+): JsonRow[] {
   const term = String(query).trim().toLowerCase();
   if (term) {
     const byPath = new Map(rows.map((row) => [row.path, row]));
-    const retained = new Set();
+    const retained = new Set<string>();
     for (const row of rows) {
       if (`${row.path} ${row.type} ${row.display}`.toLowerCase().includes(term)) {
-        let current = row;
+        let current: JsonRow | undefined = row;
         while (current) {
           retained.add(current.path);
-          current = current.parent ? byPath.get(current.parent) : null;
+          current = current.parent ? byPath.get(current.parent) : undefined;
         }
       }
     }
@@ -164,13 +189,13 @@ export function visibleJsonRows(rows, expanded = new Set(['$']), query = '') {
   }
   const available = new Set(['$']);
   return rows.filter((row) => {
-    const visible = row.path === '$' || available.has(row.parent);
+    const visible = row.path === '$' || (row.parent !== null && available.has(row.parent));
     if (visible && row.expandable && expanded.has(row.path)) available.add(row.path);
     return visible;
   });
 }
 
-function tone(type) {
+function tone(type: string): string {
   if (type === 'string') return 'positive';
   if (type === 'number' || type === 'bigint') return 'accent';
   if (type === 'boolean') return 'warning';
@@ -178,8 +203,22 @@ function tone(type) {
   return 'neutral';
 }
 
-function copyText(row) {
-  return row.type === 'string' ? row.value.slice(0, 4096) : row.display;
+function copyText(row: JsonRow): string {
+  return row.type === 'string' && typeof row.value === 'string'
+    ? row.value.slice(0, 4096)
+    : row.display;
+}
+
+interface JsonTreeProps {
+  value: unknown;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxStringLength?: number;
+  initiallyExpanded?: string[];
+  onSelect?: (event: { path: string; type: string; value: unknown }) => void;
+  onCopy?: (event: { path: string; type: string; value: unknown; text: string }) => void;
+  height?: unknown;
+  grow?: boolean;
 }
 
 /** A bounded JSON/object inspector composed entirely from native components. */
@@ -193,7 +232,7 @@ export function JsonTree({
   onCopy,
   height = 'fill',
   grow = true,
-}) {
+}: JsonTreeProps) {
   const model = useMemo(
     () => inspectJson(value, { maxDepth, maxNodes, maxStringLength }),
     [value, maxDepth, maxNodes, maxStringLength],
@@ -201,7 +240,7 @@ export function JsonTree({
   const [expanded, setExpanded] = useState(() => new Set(initiallyExpanded));
   const [query, setQuery] = useState('');
   const rows = visibleJsonRows(model.rows, expanded, query);
-  const toggle = (path) =>
+  const toggle = (path: string) =>
     setExpanded((current) => {
       const next = new Set(current);
       if (next.has(path)) next.delete(path);
@@ -214,7 +253,8 @@ export function JsonTree({
     h(Search, {
       value: query,
       placeholder: 'Filter paths, types, and values',
-      onChange: (event) => setQuery(String(event.value ?? '')),
+      onChange: (event: unknown) =>
+        setQuery(String((event as { value?: unknown } | null)?.value ?? '')),
     }),
     model.truncated
       ? h(InlineMessage, {
