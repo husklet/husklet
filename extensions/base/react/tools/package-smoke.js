@@ -22,7 +22,7 @@ function hostWelcome(extension, granted) {
 
 async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false, oversizedRender = false, partialRender = false) {
   const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}${partialRender ? '-partial' : ''}.sock`);
-  const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const wire = await import(new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const calls = [];
   let peer;
   const server = net.createServer((stream) => {
@@ -122,7 +122,7 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
 
 async function runPackedStarterDenied(consumer, starter) {
   const socket = path.join(consumer, 'starter-interface-denied.sock');
-  const wire = await import(new URL('src/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const wire = await import(new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
   const requests = [];
   let peer;
   const server = net.createServer((stream) => {
@@ -188,7 +188,7 @@ try {
   }));
   const names = new Set(dryRun[0].files.map(({ path: name }) => name));
   for (const required of [
-    'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'src/index.js', 'src/index.d.ts',
+    'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'dist/index.js', 'dist/index.d.ts',
     'examples/starter/.dockerignore', 'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
     'examples/starter/package.json',
   ]) {
@@ -234,7 +234,7 @@ try {
   assert.equal(manifest.dependencies['@husklet/client'], manifest.version, 'React SDK must depend on the same public client version');
   assert.equal(manifest.dependencies['react-reconciler'], imageRuntimeManifest.dependencies['react-reconciler'],
     'published SDK reconciler must exactly match the multi-architecture base runtime');
-  assert.equal(manifest.exports['.'].types, './src/index.d.ts');
+  assert.equal(manifest.exports['.'].types, './dist/index.d.ts');
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
   const starterPackage = JSON.parse(fs.readFileSync(path.join(installedStarter, 'package.json'), 'utf8'));

@@ -4,12 +4,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import * as exported from '../src/components.js';
-import { tags } from '../src/components.js';
-import { LOG_VIEW_CHARACTER_LIMIT, vocabulary } from '../src/index.js';
+import * as exported from '../dist/components.js';
+import { tags } from '../dist/components.js';
+import { LOG_VIEW_CHARACTER_LIMIT, vocabulary } from '../dist/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const tagSource = path.resolve(here, '../../../../src/workspaces/hl-gui/src/node/tag.rs');
+const tagSource = path.resolve(here, '../../../../dist/workspaces/hl-gui/src/node/tag.rs');
 
 test('every tag in the catalogue is exported by name', () => {
   for (const tag of tags) {
@@ -33,7 +33,7 @@ test('the catalogue still matches the Rust vocabulary', (t) => {
 });
 
 test('the property vocabulary covers the whole Prop enum', (t) => {
-  const propSource = path.resolve(here, '../../../../src/workspaces/hl-gui/src/node/prop.rs');
+  const propSource = path.resolve(here, '../../../../dist/workspaces/hl-gui/src/node/prop.rs');
   if (!fs.existsSync(propSource)) return t.skip('the Rust tree is not beside this package');
   const source = fs.readFileSync(propSource, 'utf8');
   const body = source.slice(source.indexOf('pub enum Prop {'), source.indexOf('/// Orientation of a container'));

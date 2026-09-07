@@ -7,7 +7,8 @@ import { useEffect, useRef, useState } from 'react';
  * changing sessions or unmounting disposes the old observer exactly once.
  */
 export function useHostEvents(session, listener) {
-  if (!session || typeof session.onEvent !== 'function') throw new TypeError('useHostEvents needs a Session');
+  if (!session || typeof session.onEvent !== 'function')
+    throw new TypeError('useHostEvents needs a Session');
   if (typeof listener !== 'function') throw new TypeError('useHostEvents needs an event listener');
   const current = useRef(listener);
   current.current = listener;

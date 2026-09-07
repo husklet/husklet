@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
-const declarations = fs.readFileSync(path.resolve(here, '../src/index.d.ts'), 'utf8');
+const declarations = fs.readFileSync(path.resolve(here, '../dist/index.d.ts'), 'utf8');
 const clientDeclarations = fs.readFileSync(
   path.resolve(here, '../../client/src/index.d.ts'),
   'utf8',

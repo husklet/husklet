@@ -15,13 +15,13 @@
     "provenance": true
   },
   "type": "module",
-  "main": "src/index.js",
-  "types": "src/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.js",
-      "default": "./src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./catalogue": "./catalogue.json",
     "./package.json": "./package.json"
@@ -31,16 +31,21 @@
     "catalogue.json",
     "examples/starter",
     "examples/postgres-inspector.ts",
-    "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "npm run types:examples && node --test 'test/*.test.js' && node tools/package-smoke.js",
+    "build": "tsc -p tsconfig.json && node tools/types.js",
+    "prepack": "npm run build",
+    "test": "npm run build && npm run types:examples && node --test 'test/*.test.js' && node tools/package-smoke.js",
+    "lint": "eslint --config eslint.config.js 'src/**/*.{ts,tsx}' --max-warnings 0",
+    "format": "prettier --write 'src/**/*.{ts,tsx}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx}'",
     "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --esModuleInterop --skipLibCheck --noEmit examples/postgres-inspector.ts",
     "pack:check": "node tools/package-smoke.js",
     "catalogue": "cargo run -q --manifest-path ../../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
-    "types": "npm run catalogue && node tools/types.js"
+    "types": "npm run catalogue && npm run build"
   },
   "dependencies": {
     "@husklet/client": "0.1.0",

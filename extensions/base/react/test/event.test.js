@@ -6,10 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { connect, render, useHostEvents, usePaneSelection } from '../src/index.js';
-import { Button, Column, Container, DataTable, Text } from '../src/components.js';
-import { KIND, Reader, encode } from '../src/wire.js';
-import { PROTOCOL } from '../src/session.js';
+import { connect, render, useHostEvents, usePaneSelection } from '../dist/index.js';
+import { Button, Column, Container, DataTable, Text } from '../dist/components.js';
+import { KIND, Reader, encode } from '../dist/wire.js';
+import { PROTOCOL } from '../dist/session.js';
 
 /** A host that greets, records calls, and can push an event back. */
 async function host() {

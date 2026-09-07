@@ -14,8 +14,15 @@ function bounded(value) {
 
 /** A consistent loading, empty, failure, or ready boundary for host resources. */
 export function ResourceState({
-  state, loadingLabel = 'Loading…', emptyLabel = 'Nothing here', emptyDetail = '',
-  error = 'The resource could not be loaded.', retryLabel = 'Retry', onRetry, children, ...props
+  state,
+  loadingLabel = 'Loading…',
+  emptyLabel = 'Nothing here',
+  emptyDetail = '',
+  error = 'The resource could not be loaded.',
+  retryLabel = 'Retry',
+  onRetry,
+  children,
+  ...props
 }) {
   if (!['loading', 'empty', 'error', 'ready'].includes(state)) {
     throw new TypeError('ResourceState state must be loading, empty, error, or ready');
@@ -24,9 +31,18 @@ export function ResourceState({
     throw new TypeError('ResourceState onRetry must be a function');
   }
   if (state === 'ready') return React.createElement(React.Fragment, null, children);
-  if (state === 'loading') return React.createElement(Progress, { ...props, label: bounded(loadingLabel) });
-  if (state === 'empty') return React.createElement(EmptyState, { ...props, label: bounded(emptyLabel), detail: bounded(emptyDetail) });
-  return React.createElement(Column, { ...props, gap: 1 },
+  if (state === 'loading')
+    return React.createElement(Progress, { ...props, label: bounded(loadingLabel) });
+  if (state === 'empty')
+    return React.createElement(EmptyState, {
+      ...props,
+      label: bounded(emptyLabel),
+      detail: bounded(emptyDetail),
+    });
+  return React.createElement(
+    Column,
+    { ...props, gap: 1 },
     React.createElement(InlineMessage, { label: bounded(error), tone: 'danger' }),
-    onRetry ? React.createElement(Button, { label: bounded(retryLabel), onInvoke: onRetry }) : null);
+    onRetry ? React.createElement(Button, { label: bounded(retryLabel), onInvoke: onRetry }) : null,
+  );
 }

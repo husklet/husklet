@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
-import { Surface, reconciler } from '../src/reconciler.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
 import {
   COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT, value,
-} from '../src/protocol.js';
-import { Button, Column, Text } from '../src/components.js';
+} from '../dist/protocol.js';
+import { Button, Column, Text } from '../dist/components.js';
 
 /** A surface that keeps its frames instead of writing them to a socket. */
 function surface() {

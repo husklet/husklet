@@ -1,6 +1,7 @@
 // The public API: connect to the host, render React into its tab.
 
 import { Session } from '@husklet/client';
+import type { ConnectOptions } from '@husklet/client';
 import { Surface, reconciler } from './reconciler.js';
 import { PROPS, TRIGGERS, sourceMutation } from './protocol.js';
 export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } from './protocol.js';
@@ -9,6 +10,9 @@ export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } fr
 // framework-neutral SDK, while this module's explicit `connect` export remains
 // the React-aware override.
 export * from '@husklet/client';
+// The renderer's Row, Column, and Entry components intentionally share names
+// with client model types; the generated public declaration disambiguates them.
+// @ts-expect-error TypeScript cannot represent overlapping star re-exports.
 export * from './components.js';
 export * from './hooks.js';
 export * from './terminal-transcript.js';
@@ -21,10 +25,24 @@ const attached = new WeakMap();
 const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
 
-export async function connect({ path, onRows, onReply, onEvent, onEventError, onClose, pendingLimit, timeout, connectTimeout } = {}) {
-  let session;
-  session = await Session.connect(path, {
-    onRows, pendingLimit, timeout, connectTimeout, onEventError, onClose,
+export async function connect({
+  path,
+  onRows,
+  onReply,
+  onEvent,
+  onEventError,
+  onClose,
+  pendingLimit,
+  timeout,
+  connectTimeout,
+}: ConnectOptions = {}) {
+  const session = await Session.connect(path, {
+    onRows,
+    pendingLimit,
+    timeout,
+    connectTimeout,
+    onEventError,
+    onClose,
     onEvent: (payload, channel) => {
       deliver(session, payload);
       if (onEvent) onEvent(payload, channel);
@@ -43,7 +61,11 @@ export async function connect({ path, onRows, onReply, onEvent, onEventError, on
  * The tab is opened first because the host refuses a render before one exists.
  * Returns a handle whose `update` re-renders and whose `close` tears down.
  */
-export function render(element, session, { title = 'Extension', split = null, bootstrap = null } = {}) {
+export function render(
+  element,
+  session,
+  { title = 'Extension', split = null, bootstrap = null } = {},
+) {
   let registry = attached.get(session);
   if (!registry && bootstrap !== null) {
     registry = { handles: new Set(), slots: new Map(), routesEvents: false };
@@ -54,11 +76,12 @@ export function render(element, session, { title = 'Extension', split = null, bo
     session.onEvent((payload) => deliver(session, payload));
     registry.routesEvents = true;
   }
-  if (split !== null && (
-    typeof split !== 'object'
-    || typeof split.slot !== 'string'
-    || !['beside', 'below'].includes(split.division)
-  )) {
+  if (
+    split !== null &&
+    (typeof split !== 'object' ||
+      typeof split.slot !== 'string' ||
+      !['beside', 'below'].includes(split.division))
+  ) {
     throw new TypeError('split requires a slot and a beside or below division');
   }
   if (registry.handles.size >= SURFACE_LIMIT) {
@@ -87,45 +110,64 @@ export function render(element, session, { title = 'Extension', split = null, bo
       }
     })();
     deliveries.add(delivery);
-    delivery.catch((error) => { failed = error; }).finally(() => deliveries.delete(delivery));
+    delivery
+      .catch((error) => {
+        failed = error;
+      })
+      .finally(() => deliveries.delete(delivery));
   };
-  if (bootstrap !== null && (
-    typeof bootstrap !== 'object'
-    || typeof bootstrap.slot !== 'string'
-    || bootstrap.sequence !== 1
-    || bootstrap.nextNode !== 2
-    || bootstrap.bootstrapNode !== 1
-  )) throw new TypeError('bootstrap must be a token returned by bootstrapSurface');
-  const surface = new Surface(transmit, bootstrap === null ? undefined : {
-    sequence: bootstrap.sequence,
-    next: bootstrap.nextNode,
-    patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
-  });
+  if (
+    bootstrap !== null &&
+    (typeof bootstrap !== 'object' ||
+      typeof bootstrap.slot !== 'string' ||
+      bootstrap.sequence !== 1 ||
+      bootstrap.nextNode !== 2 ||
+      bootstrap.bootstrapNode !== 1)
+  )
+    throw new TypeError('bootstrap must be a token returned by bootstrapSurface');
+  const surface = new Surface(
+    transmit,
+    bootstrap === null
+      ? undefined
+      : {
+          sequence: bootstrap.sequence,
+          next: bootstrap.nextNode,
+          patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
+        },
+  );
   const handle = { surface };
   registry.handles.add(handle);
 
-  const opening = bootstrap !== null
-    ? Promise.resolve({ reply: 'identity', with: bootstrap.slot })
-    : split === null
-      ? session.call('interface_open_tab', { title })
-      : session.call('interface_split', { slot: split.slot, division: split.division });
-  const ready = opening.then((reply) => {
-    if (reply?.reply !== 'identity' || typeof reply.with !== 'string' || (bootstrap === null && reply.with.length === 0)) {
-      throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected identity`);
-    }
-    if (closed) return reply.with;
-    if (registry.slots.has(reply.with)) throw new Error(`host reused live surface slot ${reply.with}`);
-    slot = reply.with;
-    registry.slots.set(slot, handle);
-    for (const frame of queued.splice(0)) transmit(frame);
-    if (failed) throw failed;
-    return slot;
-  }).catch((error) => {
-    failed = error;
-    registry.handles.delete(handle);
-    if (slot !== null) registry.slots.delete(slot);
-    throw error;
-  });
+  const opening =
+    bootstrap !== null
+      ? Promise.resolve({ reply: 'identity', with: bootstrap.slot })
+      : split === null
+        ? session.call('interface_open_tab', { title })
+        : session.call('interface_split', { slot: split.slot, division: split.division });
+  const ready = opening
+    .then((reply) => {
+      if (
+        reply?.reply !== 'identity' ||
+        typeof reply.with !== 'string' ||
+        (bootstrap === null && reply.with.length === 0)
+      ) {
+        throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected identity`);
+      }
+      if (closed) return reply.with;
+      if (registry.slots.has(reply.with))
+        throw new Error(`host reused live surface slot ${reply.with}`);
+      slot = reply.with;
+      registry.slots.set(slot, handle);
+      for (const frame of queued.splice(0)) transmit(frame);
+      if (failed) throw failed;
+      return slot;
+    })
+    .catch((error) => {
+      failed = error;
+      registry.handles.delete(handle);
+      if (slot !== null) registry.slots.delete(slot);
+      throw error;
+    });
   // Existing fire-and-forget callers still get bounded cleanup on a refused
   // open; callers that need diagnostics await the same promise on the handle.
   void ready.catch(() => {});
@@ -144,8 +186,12 @@ export function render(element, session, { title = 'Extension', split = null, bo
     },
     async source(mutation) {
       const owned = await ready;
-      const reply = await session.call('source_resize_at', { slot: owned, mutation: sourceMutation(mutation) });
-      if (reply?.reply !== 'done') throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+      const reply = await session.call('source_resize_at', {
+        slot: owned,
+        mutation: sourceMutation(mutation),
+      });
+      if (reply?.reply !== 'done')
+        throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
     },
     close() {
       if (closed) return withdrawal ?? Promise.resolve();
@@ -201,12 +247,17 @@ export function deliver(session, payload) {
  */
 function interpret(payload) {
   if (!payload || typeof payload !== 'object') return null;
-  if (typeof payload.interaction !== 'string' || typeof payload.trigger !== 'string'
-      || typeof payload.id !== 'string') return null;
+  if (
+    typeof payload.interaction !== 'string' ||
+    typeof payload.trigger !== 'string' ||
+    typeof payload.id !== 'string'
+  )
+    return null;
   const wire = payload.value;
-  const value = wire && typeof wire === 'object'
-    ? (wire.Text ?? wire.Number ?? wire.Integer ?? wire.Flag ?? wire)
-    : (wire ?? null);
+  const value =
+    wire && typeof wire === 'object'
+      ? (wire.Text ?? wire.Number ?? wire.Integer ?? wire.Flag ?? wire)
+      : (wire ?? null);
   return { ...payload, value };
 }
 

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 
-import { CommandPaletteView, COMMAND_PALETTE_ITEM_LIMIT, filterCommands } from '../src/index.js';
-import { Surface, reconciler } from '../src/reconciler.js';
+import { CommandPaletteView, COMMAND_PALETTE_ITEM_LIMIT, filterCommands } from '../dist/index.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
 
 function stage() {
   const frames = [];

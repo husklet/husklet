@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import * as client from '@husklet/client';
-import * as react from '../src/index.js';
+import * as react from '../dist/index.js';
 
 test('React preserves the framework-neutral client exports by identity', () => {
   for (const [name, value] of Object.entries(client)) {

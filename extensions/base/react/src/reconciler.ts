@@ -119,7 +119,9 @@ function difference(surface, instance, before, after) {
   for (const [trigger, callback] of after.handlers) {
     surface.bind(instance.id, trigger, callback);
     if (before.handlers.has(trigger)) continue;
-    patches.push({ SetHandler: { id: instance.id, handler: { trigger, id: `${instance.id}:${trigger}` } } });
+    patches.push({
+      SetHandler: { id: instance.id, handler: { trigger, id: `${instance.id}:${trigger}` } },
+    });
   }
   for (const trigger of before.handlers.keys()) {
     if (after.handlers.has(trigger)) continue;
@@ -154,10 +156,16 @@ const config = {
 
   createInstance(type, props, surface) {
     const entry = describe(type);
-    const instance = { id: surface.allocate(), tag: type, detached: entry.detached, parent: null, surface };
-    surface.push({ Create: { id: instance.id, tag: type } });
     const split = partition(type, props);
-    instance.props = split;
+    const instance = {
+      id: surface.allocate(),
+      tag: type,
+      detached: entry.detached,
+      parent: null,
+      surface,
+      props: split,
+    };
+    surface.push({ Create: { id: instance.id, tag: type } });
     setProps(surface, instance, split.values);
     setHandlers(surface, instance, split.handlers);
     return instance;
@@ -179,7 +187,9 @@ const config = {
   commitTextUpdate() {},
 
   appendInitialChild(parent, child) {
-    parent.surface.push({ Insert: { parent: anchor(parent, child), child: child.id, before: null } });
+    parent.surface.push({
+      Insert: { parent: anchor(parent, child), child: child.id, before: null },
+    });
     child.parent = anchor(parent, child);
   },
 

@@ -77,9 +77,25 @@ export const PROPS = new Map(Object.keys(KIND).map((prop) => [camel(prop), prop]
 
 /** Every trigger, spelled as the React prop that carries its callback. */
 export const TRIGGERS = new Map(
-  ['Invoke', 'Change', 'Submit', 'Select', 'Edit', 'Sort', 'Activate', 'Toggle', 'Expand', 'Scroll', 'Close', 'Context', 'Key', 'Focus', 'Pointer', 'Drag', 'Drop'].map(
-    (trigger) => [`on${trigger}`, trigger],
-  ),
+  [
+    'Invoke',
+    'Change',
+    'Submit',
+    'Select',
+    'Edit',
+    'Sort',
+    'Activate',
+    'Toggle',
+    'Expand',
+    'Scroll',
+    'Close',
+    'Context',
+    'Key',
+    'Focus',
+    'Pointer',
+    'Drag',
+    'Drop',
+  ].map((trigger) => [`on${trigger}`, trigger]),
 );
 
 /** Props React owns; they never reach the host. */
@@ -120,7 +136,9 @@ function pascal(value) {
 function member(value, permitted, what) {
   const chosen = pascal(value);
   if (!permitted.includes(chosen)) {
-    throw new Error(`${what} is one of ${permitted.map(camel).join(', ')}, not ${JSON.stringify(value)}`);
+    throw new Error(
+      `${what} is one of ${permitted.map(camel).join(', ')}, not ${JSON.stringify(value)}`,
+    );
   }
   return chosen;
 }
@@ -139,7 +157,9 @@ export function length(value) {
     if (typeof value.chars === 'number') return { Chars: Math.max(0, Math.round(value.chars)) };
     if (typeof value.step === 'number') return { Step: Math.max(0, Math.round(value.step)) };
   }
-  throw new Error(`a length is a number of steps, "fill", "content", {chars} or {step}, not ${JSON.stringify(value)}`);
+  throw new Error(
+    `a length is a number of steps, "fill", "content", {chars} or {step}, not ${JSON.stringify(value)}`,
+  );
 }
 
 /** Translates one React prop value into a tagged `PropValue`. */
@@ -179,7 +199,12 @@ export function value(prop, given) {
     case 'source':
       return { Source: Math.round(Number(given)) };
     case 'choices':
-      return { Choices: given.map((choice) => ({ value: String(choice.value), label: String(choice.label) })) };
+      return {
+        Choices: given.map((choice) => ({
+          value: String(choice.value),
+          label: String(choice.label),
+        })),
+      };
     case 'schema':
       return { Schema: schema(given) };
     case 'infer':
@@ -192,7 +217,8 @@ export function value(prop, given) {
 /** A value whose shape the property does not decide, such as a field's value. */
 function infer(given) {
   if (typeof given === 'boolean') return { Flag: given };
-  if (typeof given === 'number') return Number.isInteger(given) ? { Integer: given } : { Number: given };
+  if (typeof given === 'number')
+    return Number.isInteger(given) ? { Integer: given } : { Number: given };
   return { Text: String(given) };
 }
 
@@ -202,7 +228,11 @@ function edges(given) {
   const sides = ['top', 'end', 'bottom', 'start'];
   if (!sides.some((side) => side in given)) return { Length: length(given) };
   const zero = { Step: 0 };
-  return { Edges: Object.fromEntries(sides.map((side) => [side, side in given ? length(given[side]) : zero])) };
+  return {
+    Edges: Object.fromEntries(
+      sides.map((side) => [side, side in given ? length(given[side]) : zero]),
+    ),
+  };
 }
 
 function bounds(given) {
@@ -244,7 +274,8 @@ function schema(given) {
     if (titleBytes === 0 || titleBytes > COLUMN_TITLE_BYTE_LIMIT) {
       throw new RangeError(`column title must be 1..=${COLUMN_TITLE_BYTE_LIMIT} UTF-8 bytes`);
     }
-    if (keys.has(item.key)) throw new Error(`duplicate table column key ${JSON.stringify(item.key)}`);
+    if (keys.has(item.key))
+      throw new Error(`duplicate table column key ${JSON.stringify(item.key)}`);
     keys.add(item.key);
   }
   return columns;

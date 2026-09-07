@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
-import { RESOURCE_STATE_TEXT_BYTE_LIMIT, ResourceState, Text } from '../src/index.js';
-import { Surface, reconciler } from '../src/reconciler.js';
+import { RESOURCE_STATE_TEXT_BYTE_LIMIT, ResourceState, Text } from '../dist/index.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
 
 const h = React.createElement;
 function stage() { const frames = []; const surface = new Surface((frame) => frames.push(frame)); const root = reconciler.createContainer(surface, 0, null, false, null, '', () => {}, null); return { frames, surface, render: (node) => reconciler.updateContainer(node, root, null, null) }; }
