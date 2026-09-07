@@ -452,6 +452,9 @@ static void translit_direct_call_ibtc_count(enum translit_direct_call_ibtc_count
 
 static void translit_emit_direct_call_guard_count(hl_x64_asm *a,
                                                    enum translit_direct_call_ibtc_counter kind) {
+    /* Observation is independent of candidate authority, but absent from timed
+       translations unless the diagnostic census was requested at translation. */
+    if (!g_prof) return;
     uintptr_t local = translit_direct_call_ibtc_dynamic_counter(kind);
     if (local != 0) hl_x64_atomic_inc_abs(a, local);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -10304,6 +10307,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 160;
+    int saved_prof = g_prof;
     translit_test_call_instruction_start = NULL;
     translit_test_call_low_end = NULL;
     translit_test_call_high_end = NULL;
@@ -10345,6 +10349,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     hl_x86_hot_context *context = hl_x86_hot_context_create(
         translit_fall_fixture_fetch, NULL, scenario == 122 ? hl_guest_fetch_authority_source() : NULL);
     if (context == NULL) return 161;
+    if (scenario == 123 || scenario == 124) g_prof = 1;
     hl_backend_tree_begin(1, effective_host_services());
     uint64_t source = translit_fall_fixture_guest;
     uint64_t target = source + target_offset;
@@ -10726,6 +10731,7 @@ done_call_ibtc:
     hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen);
     translit_shared_ibtc_stubs_reset();
+    g_prof = saved_prof;
     munmap(arena, arena_size);
     return result;
 }

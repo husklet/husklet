@@ -272,6 +272,15 @@ fn jcc_late_census_bounds_collision_probes_without_losing_in_range_repeats() {
 }
 
 #[test]
+fn direct_call_guard_v2_report_reconciles_and_fits_shared_record() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    for isa in [1, 2] {
+        hl_native::backend_tree_census_test(isa, 22)
+            .unwrap_or_else(|status| panic!("ISA {isa} direct-call guard report scenario failed: {status}"));
+    }
+}
+
+#[test]
 fn backend_shape_aggregates_nested_processes_and_keyed_forms() {
     let _serial = TEST_LOCK.lock().unwrap();
     for isa in [1, 2] {

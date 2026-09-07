@@ -718,13 +718,13 @@ struct hl_backend_tree_shared {
     _Atomic uint64_t direct_call_ibtc_fills;
     _Atomic uint64_t direct_call_ibtc_invalid_refusals;
     _Atomic uint64_t direct_call_ibtc_fast_redispatch;
-    _Atomic uint64_t direct_call_guard_enabled;
+    _Atomic uint64_t direct_call_guard_candidate_enabled;
     _Atomic uint64_t direct_call_guard_attempts;
-    _Atomic uint64_t direct_call_guard_hits;
+    _Atomic uint64_t direct_call_guard_fast_hits;
     _Atomic uint64_t direct_call_guard_key_misses;
     _Atomic uint64_t direct_call_guard_null_misses;
     _Atomic uint64_t direct_call_guard_irq;
-    _Atomic uint64_t direct_call_guard_slow;
+    _Atomic uint64_t direct_call_guard_slow_entries;
     _Atomic uint64_t sse_riprel_form_keyed;
     _Atomic uint64_t sse_riprel_form_overflow;
     _Atomic uint64_t sse_riprel_form_unique;
@@ -965,7 +965,7 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     if (g_backend_tree == NULL) return;
     /* The process option store is bound before this lifecycle entry. Snapshot
        the immutable hook authority; all outcome observation remains ungated. */
-    atomic_store_explicit(&g_backend_tree->direct_call_guard_enabled,
+    atomic_store_explicit(&g_backend_tree->direct_call_guard_candidate_enabled,
                           (uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0),
                           memory_order_relaxed);
     int self = (int)getpid();
@@ -1570,9 +1570,9 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
         "stop6_key=%llu stop6_count=%llu stop7_key=%llu stop7_count=%llu "
         "direct_call_ibtc_emitted=%llu direct_call_ibtc_hits=%llu direct_call_ibtc_misses=%llu "
         "direct_call_ibtc_irq=%llu direct_call_ibtc_fills=%llu direct_call_ibtc_invalid_refusals=%llu "
-        "direct_call_ibtc_fast_redispatch=%llu direct_call_guard_enabled=%llu "
-        "direct_call_guard_attempts=%llu direct_call_guard_hits=%llu direct_call_guard_key_misses=%llu "
-        "direct_call_guard_null_misses=%llu direct_call_guard_irq=%llu direct_call_guard_slow=%llu\n",
+        "direct_call_ibtc_fast_redispatch=%llu direct_call_guard_candidate_enabled=%llu "
+        "direct_call_guard_attempts=%llu direct_call_guard_fast_hits=%llu direct_call_guard_key_misses=%llu "
+        "direct_call_guard_null_misses=%llu direct_call_guard_irq=%llu direct_call_guard_slow_entries=%llu\n",
         (unsigned long long)summary.translated_entries, (unsigned long long)translated_transfers,
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_FALLTHROUGH],
         (unsigned long long)summary.translated_exit[HL_BACKEND_SHAPE_T_COND_TAKEN],
@@ -1721,13 +1721,14 @@ static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *
                                                 memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_ibtc_fast_redispatch,
                                                 memory_order_relaxed),
-        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_enabled, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_candidate_enabled,
+                                                memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_attempts, memory_order_relaxed),
-        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_hits, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_fast_hits, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_key_misses, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_null_misses, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_irq, memory_order_relaxed),
-        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_slow, memory_order_relaxed));
+        (unsigned long long)atomic_load_explicit(&shared->direct_call_guard_slow_entries, memory_order_relaxed));
 }
 
 static int hl_backend_exit_family_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {
@@ -1857,6 +1858,38 @@ static int hl_backend_tree_test_scenario(uint32_t scenario, const hl_host_servic
     if (scenario == 21) return hl_backend_tree_jcc_late_eligible_test() ? 0 : 119;
     hl_backend_tree_begin(1, host);
     if (g_backend_tree_self == NULL) return 10;
+    if (scenario == 22) {
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_candidate_enabled, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_attempts, 4, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_fast_hits, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_key_misses, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_null_misses, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_irq, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_backend_tree->direct_call_guard_slow_entries, 3, memory_order_relaxed);
+        char record[8192];
+        int formatted = hl_backend_shape_format(g_backend_tree, record, sizeof record);
+        return formatted > 0 && (size_t)formatted < sizeof record &&
+                       strstr(record, "backend-shape-detail version=2 ") != NULL &&
+                       strstr(record, "direct_call_guard_candidate_enabled=1 ") != NULL &&
+                       strstr(record, "direct_call_guard_attempts=4 ") != NULL &&
+                       strstr(record, "direct_call_guard_fast_hits=1 ") != NULL &&
+                       strstr(record, "direct_call_guard_key_misses=1 ") != NULL &&
+                       strstr(record, "direct_call_guard_null_misses=1 ") != NULL &&
+                       strstr(record, "direct_call_guard_irq=1 ") != NULL &&
+                       strstr(record, "direct_call_guard_slow_entries=3\n") != NULL &&
+                       atomic_load_explicit(&g_backend_tree->direct_call_guard_attempts,
+                                            memory_order_relaxed) ==
+                           atomic_load_explicit(&g_backend_tree->direct_call_guard_fast_hits,
+                                                memory_order_relaxed) +
+                               atomic_load_explicit(&g_backend_tree->direct_call_guard_key_misses,
+                                                    memory_order_relaxed) +
+                               atomic_load_explicit(&g_backend_tree->direct_call_guard_null_misses,
+                                                    memory_order_relaxed) +
+                               atomic_load_explicit(&g_backend_tree->direct_call_guard_irq,
+                                                    memory_order_relaxed)
+                   ? 0
+                   : 120;
+    }
     if (scenario == 17) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 0 ? 0 : 110;
     if (scenario == 18) return HL_BACKEND_TRANSLATION_CODEGEN_AVAILABLE == 1 ? 0 : 111;
     if (scenario == 19) {
@@ -2361,13 +2394,13 @@ static _Atomic uint64_t *hl_backend_tree_direct_call_ibtc_counter(
     case HL_BACKEND_DIRECT_CALL_IBTC_FILL: return &tree->direct_call_ibtc_fills;
     case HL_BACKEND_DIRECT_CALL_IBTC_INVALID_REFUSAL: return &tree->direct_call_ibtc_invalid_refusals;
     case HL_BACKEND_DIRECT_CALL_IBTC_FAST_REDISPATCH: return &tree->direct_call_ibtc_fast_redispatch;
-    case HL_BACKEND_DIRECT_CALL_GUARD_ENABLED: return &tree->direct_call_guard_enabled;
+    case HL_BACKEND_DIRECT_CALL_GUARD_ENABLED: return &tree->direct_call_guard_candidate_enabled;
     case HL_BACKEND_DIRECT_CALL_GUARD_ATTEMPT: return &tree->direct_call_guard_attempts;
-    case HL_BACKEND_DIRECT_CALL_GUARD_HIT: return &tree->direct_call_guard_hits;
+    case HL_BACKEND_DIRECT_CALL_GUARD_HIT: return &tree->direct_call_guard_fast_hits;
     case HL_BACKEND_DIRECT_CALL_GUARD_KEY_MISS: return &tree->direct_call_guard_key_misses;
     case HL_BACKEND_DIRECT_CALL_GUARD_NULL_MISS: return &tree->direct_call_guard_null_misses;
     case HL_BACKEND_DIRECT_CALL_GUARD_IRQ: return &tree->direct_call_guard_irq;
-    case HL_BACKEND_DIRECT_CALL_GUARD_SLOW: return &tree->direct_call_guard_slow;
+    case HL_BACKEND_DIRECT_CALL_GUARD_SLOW: return &tree->direct_call_guard_slow_entries;
     }
     return NULL;
 }
