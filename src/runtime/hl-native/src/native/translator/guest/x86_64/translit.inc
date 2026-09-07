@@ -258,6 +258,7 @@ enum translit_ret_fast_ibtc_counter {
 };
 
 static uintptr_t translit_ret_fast_ibtc_dynamic_counter(enum translit_ret_fast_ibtc_counter kind) {
+    if (!g_prof) return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     return (uintptr_t)&translit_ret_fast_ibtc_counters[kind];
 #else
@@ -305,6 +306,7 @@ _Static_assert(TL_JCC_IBTC_COUNT_EMITTED == HL_BACKEND_JCC_IBTC_EMITTED &&
 #endif
 
 static uintptr_t translit_jcc_ibtc_dynamic_counter(enum translit_jcc_ibtc_counter kind) {
+    if (!g_prof) return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     switch (kind) {
     case TL_JCC_IBTC_COUNT_HIT: return (uintptr_t)&translit_jcc_ibtc_hit;
@@ -346,6 +348,7 @@ enum translit_direct_jmp_ibtc_counter {
 };
 
 static uintptr_t translit_direct_jmp_ibtc_dynamic_counter(enum translit_direct_jmp_ibtc_counter kind) {
+    if (!g_prof) return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     switch (kind) {
     case TL_DIRECT_JMP_IBTC_COUNT_HIT: return (uintptr_t)&translit_direct_jmp_ibtc_hit;
@@ -406,6 +409,7 @@ enum translit_direct_call_ibtc_counter {
     TL_DIRECT_CALL_GUARD_SLOW,
 };
 static uintptr_t translit_direct_call_ibtc_dynamic_counter(enum translit_direct_call_ibtc_counter kind) {
+    if (!g_prof) return 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     switch (kind) {
     case TL_DIRECT_CALL_IBTC_COUNT_HIT: return (uintptr_t)&translit_direct_call_ibtc_hit;
@@ -10349,7 +10353,9 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     hl_x86_hot_context *context = hl_x86_hot_context_create(
         translit_fall_fixture_fetch, NULL, scenario == 122 ? hl_guest_fetch_authority_source() : NULL);
     if (context == NULL) return 161;
-    if (scenario == 123 || scenario == 124) g_prof = 1;
+    /* These fixtures assert dynamic census deltas, so compile their helper with
+       the same explicit diagnostics authority required by product launches. */
+    g_prof = 1;
     hl_backend_tree_begin(1, effective_host_services());
     uint64_t source = translit_fall_fixture_guest;
     uint64_t target = source + target_offset;
