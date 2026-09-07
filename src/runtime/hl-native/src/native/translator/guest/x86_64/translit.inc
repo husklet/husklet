@@ -11091,11 +11091,11 @@ static int translit_pre_spill_signal_stage_test(void) {
     jit_body_owner_drop_generation(g_cache_gen);
 
     hl_x64_asm a = {arena, arena + arena_size, 0, 0};
+    const uint64_t guest = UINT64_C(0x402380);
     translit_pre_spill_ranges site = translit_emit_pre_spill_save(&a);
     translit_emit_pre_spill_restore(&a, &site);
     uint8_t *end = a.cursor; hl_x64_u8(&a, 0x90);
     translit_emit_exit_const(&a, guest + 1, R_BRANCH);
-    const uint64_t guest = UINT64_C(0x402380);
     const uint32_t rax = 1u << HL_X64_RAX, r11 = 1u << HL_X64_R11, both = rax | r11;
     jit_body_owner_range ranges[7]; uint32_t count = 0, token = 0;
     int exact = jit_body_owner_reserve_n(g_cache_gen, 7, &token) &&
@@ -11113,37 +11113,49 @@ static int translit_pre_spill_signal_stage_test(void) {
         {site.r11_canonical, both, 0}, {site.flags_packed, both, 1},
         {site.flags_live, both, 0}, {site.r11_live, rax, 0}, {site.rax_live, 0, 0},
     };
-    const uint64_t guest_flags = UINT64_C(0x8d7);
-    const uint64_t packed = ((guest_flags & UINT64_C(0xd5)) << 8) | ((guest_flags >> 11) & 1);
+    /* Each arithmetic bit appears alone, then all appear with DF clear/set. Host arithmetic flags are
+       deliberately the complement, so deleting packed ownership cannot accidentally satisfy this fixture. */
+    static const uint64_t patterns[] = {UINT64_C(0x003), UINT64_C(0x006), UINT64_C(0x012),
+        UINT64_C(0x042), UINT64_C(0x082), UINT64_C(0x802), UINT64_C(0x0d7), UINT64_C(0xcd7)};
+    for (unsigned pattern = 0; exact && pattern < sizeof patterns / sizeof patterns[0]; pattern++)
     for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; stage++) {
+        uint64_t guest_flags = patterns[pattern] | UINT64_C(2);
+        uint64_t packed = ((guest_flags & UINT64_C(0xd5)) << 8) | ((guest_flags >> 11) & 1);
+        uint64_t host_flags = UINT64_C(2) | ((~guest_flags) & UINT64_C(0x8d5)) |
+                              (guest_flags & UINT64_C(0x400));
         struct cpu cpu = {0}, expected_flags = {0}; ucontext_t context = {0};
         greg_t *gregs = HL_HOST_UC_GREGS(&context);
         for (unsigned reg = 0; reg < 16; reg++) {
             cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
-        cpu.mmscratch[0] = packed; gregs[HL_HOST_UC_REG_EFL] = (greg_t)guest_flags;
+        cpu.mmscratch[0] = packed; gregs[HL_HOST_UC_REG_EFL] = (greg_t)host_flags;
         HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
         exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;
         for (unsigned reg = 0; exact && reg < 16; reg++)
             exact = cpu.r[reg] == ((stages[stage].mask & (1u << reg))
                 ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg);
-        translit_flags_out(&expected_flags, guest_flags);
+        uint64_t recovered = stages[stage].packed ? translit_pre_spill_unpack_flags(packed, host_flags)
+                                                  : host_flags;
+        translit_flags_out(&expected_flags, recovered);
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags) &&
-                (!stages[stage].packed || translit_pre_spill_unpack_flags(packed, guest_flags) == guest_flags);
+                (!stages[stage].packed || recovered == guest_flags);
     }
-    // Execute the same bytes, including DF=1, to cover the emitter rather than only its owner ledger.
-    struct cpu executed = {0};
-    for (unsigned reg = 0; reg < 16; reg++) executed.r[reg] = UINT64_C(0xb000000000000000) + reg;
-    executed.r[HL_X64_RSP] = (uint64_t)(uintptr_t)(arena + arena_size - 32);
-    translit_flags_out(&executed, guest_flags);
-    uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
-    executed.mmscratch[0] = translit_flags_in(&executed);
-    hl_x86_translit_enter(&executed, arena);
-    translit_flags_out(&executed, executed.mmscratch[0]);
-    exact = exact && executed.rip == guest + 1 && executed.reason == R_BRANCH &&
-            translit_flags_in(&executed) == guest_flags;
-    for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
+    /* Execute every pattern, including both DF states, through the actual LAHF/SETO/ADD/SAHF bytes. */
+    for (unsigned pattern = 0; exact && pattern < sizeof patterns / sizeof patterns[0]; pattern++) {
+        uint64_t guest_flags = patterns[pattern] | UINT64_C(2);
+        struct cpu executed = {0};
+        for (unsigned reg = 0; reg < 16; reg++) executed.r[reg] = UINT64_C(0xb000000000000000) + reg;
+        executed.r[HL_X64_RSP] = (uint64_t)(uintptr_t)(arena + arena_size - 32);
+        translit_flags_out(&executed, guest_flags);
+        uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
+        executed.mmscratch[0] = translit_flags_in(&executed);
+        hl_x86_translit_enter(&executed, arena);
+        translit_flags_out(&executed, executed.mmscratch[0]);
+        exact = exact && executed.rip == guest + 1 && executed.reason == R_BRANCH &&
+                translit_flags_in(&executed) == guest_flags;
+        for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
+    }
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
     munmap(arena, arena_size);
