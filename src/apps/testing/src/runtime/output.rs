@@ -597,6 +597,13 @@ const BACKEND_SHAPE_FIELDS: &[&str] = &[
     "direct_call_ibtc_fills",
     "direct_call_ibtc_invalid_refusals",
     "direct_call_ibtc_fast_redispatch",
+    "direct_call_guard_candidate_enabled",
+    "direct_call_guard_attempts",
+    "direct_call_guard_fast_hits",
+    "direct_call_guard_key_misses",
+    "direct_call_guard_null_misses",
+    "direct_call_guard_irq",
+    "direct_call_guard_slow_entries",
 ];
 
 pub(super) fn validate_profile(stderr: &str) -> Result<(), Error> {
@@ -823,11 +830,13 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
     let records = stderr
         .lines()
         .filter_map(|line| {
-            line.strip_prefix(BACKEND_SHAPE_DETAIL_PREFIX).or_else(|| {
-                /* Legacy unit fixtures predate the wire-prefix split. */
-                line.strip_prefix(BACKEND_SHAPE_PREFIX)
-                    .filter(|record| record.starts_with("version=1 "))
-            })
+            if let Some(record) = line.strip_prefix(BACKEND_SHAPE_DETAIL_PREFIX) {
+                return Some((record, 2));
+            }
+            /* Legacy unit fixtures predate the wire-prefix split. */
+            line.strip_prefix(BACKEND_SHAPE_PREFIX)
+                .filter(|record| record.starts_with("version=1 "))
+                .map(|record| (record, 1))
         })
         .collect::<Vec<_>>();
     if records.len() != 1 {
@@ -838,7 +847,8 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
         .into());
     }
     let mut fields = BTreeMap::new();
-    for field in records[0].split_whitespace() {
+    let (record, expected_version) = records[0];
+    for field in record.split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
             return Err(format!("backend-shape diagnostic has malformed field {field:?}").into());
         };
@@ -857,7 +867,7 @@ fn backend_shape(stderr: &str) -> Result<BTreeMap<&str, u64>, Error> {
             return Err(format!("backend-shape diagnostic omitted field {name:?}").into());
         }
     }
-    if fields["version"] != 1 {
+    if fields["version"] != expected_version {
         return Err("backend-shape diagnostic has invalid version".into());
     }
     let sum = |names: &[&str]| {
@@ -1995,7 +2005,9 @@ mod tests {
 
     #[test]
     fn detailed_and_product_shape_records_have_independent_cardinality() {
-        let detail = SHAPE.replacen(BACKEND_SHAPE_PREFIX, BACKEND_SHAPE_DETAIL_PREFIX, 1);
+        let detail = SHAPE
+            .replacen(BACKEND_SHAPE_PREFIX, BACKEND_SHAPE_DETAIL_PREFIX, 1)
+            .replacen("version=1 ", "version=2 ", 1);
         let product = product_v13();
         for combined in [format!("{detail}{product}"), format!("{product}{detail}")] {
             assert_eq!(backend_shape(&combined).unwrap()["translated_entries"], 2);
@@ -2019,8 +2031,10 @@ mod tests {
             .map(|(body, _)| body)
             .expect("native backend-shape formatter");
         let format = formatter
-            .split_once("\"[diag] backend-shape ")
-            .and_then(|(_, tail)| tail.split_once("\n        (unsigned long long)summary.translated_entries"))
+            .split_once("\"[diag] backend-shape-detail ")
+            .and_then(|(_, tail)| {
+                tail.split_once("\\n\",\n        (unsigned long long)summary.translated_entries")
+            })
             .map(|(format, _)| format)
             .expect("native backend-shape format string");
         let fields = format
@@ -2040,7 +2054,7 @@ mod tests {
             "{BACKEND_SHAPE_DETAIL_PREFIX}{}\n",
             fields
                 .iter()
-                .map(|name| format!("{name}={}", u8::from(*name == "version")))
+                .map(|name| format!("{name}={}", if *name == "version" { 2 } else { 0 }))
                 .collect::<Vec<_>>()
                 .join(" ")
         );

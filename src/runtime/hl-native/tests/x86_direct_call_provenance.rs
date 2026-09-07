@@ -17,3 +17,12 @@ fn direct_call_pre_spill_guard_hit_is_typed_and_relocation_safe() {
         "hook-local guard must miss through the typed shared path, then hit with a cleared marker"
     );
 }
+
+#[test]
+fn direct_call_pre_spill_guard_off_emits_no_guard_accounting() {
+    assert_eq!(
+        hl_native::x86_64_translit_displaced_test(235),
+        0,
+        "disabled guard must leave every guard counter at zero despite an eligible direct call"
+    );
+}
