@@ -440,24 +440,40 @@ static int hl_a64_x86_is_scalar_single_memory(uint32_t instruction) {
     return !(opc == 3u && size >= 2u);
 }
 
+/* Scalar integer pair transfers owned by interp_exec_load_store_literal_pair:
+ * STNP/LDNP and STP/LDP in signed-offset, pre-index and post-index forms,
+ * including 32-bit, 64-bit and LDPSW.  Keep SIMD pairs and the allocated
+ * memory-tagging STGP spelling interpreter-owned. */
+static int hl_a64_x86_is_scalar_pair_memory(uint32_t instruction) {
+    if ((instruction & 0x3A000000u) != 0x28000000u || (instruction & (1u << 26))) return 0;
+    unsigned opc = instruction >> 30;
+    unsigned load = (instruction >> 22) & 1u;
+    return opc != 3u && !(opc == 1u && !load);
+}
+
+static void hl_a64_x86_emit_memory_helper(hl_x64_asm *assembler, uint32_t instruction,
+                                          uint64_t guest_pc, uintptr_t helper) {
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_pc);
+    hl_x64_mov_reg(assembler, 7, HL_A64_X86_CPU_REG); /* cpu -> %rdi */
+    hl_x64_mov_imm64(assembler, 6, instruction);      /* insn -> %rsi */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xEC); hl_x64_u8(assembler, 8); /* align stack */
+    hl_x64_mov_imm64(assembler, 11, helper);
+    hl_x64_u8(assembler, 0x41); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xD3); /* call *%r11 */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xC4); hl_x64_u8(assembler, 8);
+}
+
 static void hl_a64_x86_emit_scalar_single_memory(hl_x64_asm *assembler, uint32_t instruction,
                                                   uint64_t guest_pc) {
     /* The canonical interpreter accessor owns address projection, unaligned
      * little-endian transfers, BUS accounting and SP/ZR/writeback semantics.
      * One run_block landing pad below owns synchronous-fault recovery for all
      * helper calls in this generated block. */
-    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_pc);
-    hl_x64_mov_reg(assembler, 7, HL_A64_X86_CPU_REG); /* cpu -> %rdi */
-    hl_x64_mov_imm64(assembler, 6, instruction);      /* insn -> %rsi */
-    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
-    hl_x64_u8(assembler, 0xEC); hl_x64_u8(assembler, 8); /* align stack */
     uintptr_t helper = hl_a64_x86_is_ldrb_post(instruction)
                            ? (uintptr_t)hl_a64_x86_exec_ldrb_post
                            : (uintptr_t)interp_exec_load_store_single;
-    hl_x64_mov_imm64(assembler, 11, helper);
-    hl_x64_u8(assembler, 0x41); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xD3); /* call *%r11 */
-    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
-    hl_x64_u8(assembler, 0xC4); hl_x64_u8(assembler, 8);
+    hl_a64_x86_emit_memory_helper(assembler, instruction, guest_pc, helper);
 }
 
 static void hl_a64_x86_emit_cpu_u64(hl_x64_asm *assembler, int offset, uint64_t value) {
@@ -650,6 +666,12 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_three_source(&assembler, instruction)) continue;
         if (hl_a64_x86_is_scalar_single_memory(instruction)) {
             hl_a64_x86_emit_scalar_single_memory(&assembler, instruction, cursor);
+            has_memory = 1;
+            continue;
+        }
+        if (hl_a64_x86_is_scalar_pair_memory(instruction)) {
+            hl_a64_x86_emit_memory_helper(&assembler, instruction, cursor,
+                                           (uintptr_t)interp_exec_load_store_literal_pair);
             has_memory = 1;
             continue;
         }

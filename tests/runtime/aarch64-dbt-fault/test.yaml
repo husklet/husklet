@@ -13,3 +13,10 @@ cases:
     artifact: { destination: /opt/husklet/scalar-memory-fault }
     run: []
     expect: { exit: 0, stdout: golden/fault.out }
+  - id: runtime/aarch64-dbt-fault/scalar-pair-memory
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pair_fault.c, output: scalar-pair-memory-fault, flags: [-static, -no-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/scalar-pair-memory-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/pair_fault.out }

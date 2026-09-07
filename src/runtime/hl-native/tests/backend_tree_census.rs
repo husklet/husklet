@@ -395,6 +395,35 @@ fn aarch64_x86_three_source_lowering_covers_the_complete_allocated_family() {
 }
 
 #[test]
+fn aarch64_x86_scalar_pair_memory_uses_the_complete_interpreter_owned_family() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "static int hl_a64_x86_is_scalar_pair_memory",
+        "(instruction & 0x3A000000u) != 0x28000000u",
+        "instruction & (1u << 26)",
+        "opc != 3u && !(opc == 1u && !load)",
+        "(uintptr_t)interp_exec_load_store_literal_pair",
+        "if (hl_a64_x86_is_scalar_pair_memory(instruction))",
+    ] {
+        assert!(source.contains(contract), "missing scalar-pair contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/pair_memory.c");
+    for instruction in [
+        "stp x2,x3,[x1,#32]",
+        "ldp x4,x5,[x1,#32]",
+        "stnp w8,w9,[x1,#64]",
+        "ldnp w10,w11,[x1,#64]",
+        "stp x2,x3,[x12,#-16]!",
+        "ldp x14,x15,[x12],#16",
+        "ldpsw x16,x17,[x1,#16]",
+        "ldp x4,x5,[sp]",
+        "ldp x19,x21,[x19]",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [
