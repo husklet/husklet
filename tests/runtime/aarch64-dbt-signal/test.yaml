@@ -13,4 +13,9 @@ cases:
     compat: { class: compatibility }
     run: []
     timeout: 3
-    expect: { exit: 42, stdout_empty: true, stderr: [" r0=*", " fall_total=*"] }
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: translated_steps, greater-than: 0 }
+        - { counter: irq_pending, greater-than: 0 }
