@@ -37,14 +37,14 @@ static int interp_step(struct cpu *cpu) {
     return interp_step_decoded(cpu, insn);
 }
 
-static int interp_step_census(struct cpu *cpu, unsigned *major_out) {
+static int interp_step_census(struct cpu *cpu, uint32_t *instruction_out) {
     uint32_t insn = 0;
     if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
         cpu->fault_addr = cpu->pc;
         cpu->reason = R_FETCHFAULT;
         return INTERP_END;
     }
-    *major_out = (insn >> 25) & 0xF;
+    *instruction_out = insn;
     return interp_step_decoded(cpu, insn);
 }
 
@@ -204,10 +204,10 @@ static void run_block(struct cpu *cpu, void *code) {
                 cpu->reason = R_BRANCH;
                 break;
             }
-            unsigned major = 0;
-            int outcome = interp_step_census(cpu, &major);
+            uint32_t instruction = 0;
+            int outcome = interp_step_census(cpu, &instruction);
             if (outcome != INTERP_END) {
-                hl_backend_tree_a64_body_retired(major);
+                hl_backend_tree_a64_body_retired(instruction);
                 executed++;
             }
             if (outcome != INTERP_NEXT) break;

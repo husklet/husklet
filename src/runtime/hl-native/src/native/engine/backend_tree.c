@@ -1047,12 +1047,13 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->interpreted_steps, steps, memory_order_relaxed);
 }
-static inline void hl_backend_tree_a64_body_retired(unsigned major) {
+static inline void hl_backend_tree_a64_body_retired(uint32_t instruction) {
 #if defined(HL_BACKEND_A64_OPCODE_CENSUS)
+    unsigned major = (instruction >> 25) & 15u;
     if (g_backend_tree != NULL && major < HL_BACKEND_A64_MAJOR_COUNT)
         atomic_fetch_add_explicit(&g_backend_tree->a64_major[major], 1, memory_order_relaxed);
 #else
-    (void)major;
+    (void)instruction;
 #endif
 }
 static inline void hl_backend_tree_a64_unsupported(uint32_t instruction) { (void)instruction; }
@@ -2749,6 +2750,7 @@ enum hl_backend_mixed_sse_lifecycle {
 #define HL_BACKEND_MIXED_SSE_SLOTS 4096u
 #define HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT 2048u
 #define HL_BACKEND_A64_UNSUPPORTED_TOP 16u
+#define HL_BACKEND_A64_RETIRED_FORM_TOP 32u
 
 struct hl_backend_tree_slot {
     _Atomic int pid;
@@ -2779,6 +2781,7 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t translated_steps;
     _Atomic uint64_t interpreted_steps;
     _Atomic uint64_t a64_major[HL_BACKEND_A64_MAJOR_COUNT];
+    _Atomic uint64_t a64_retired_form[HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT];
     _Atomic uint64_t a64_unsupported_total;
     _Atomic uint64_t a64_unsupported_form[HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT];
     _Atomic uint64_t map_misses;
@@ -3600,6 +3603,45 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
         HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
     formatted += a64_added;
+    uint64_t retired_top_count[HL_BACKEND_A64_RETIRED_FORM_TOP] = {0};
+    unsigned retired_top_form[HL_BACKEND_A64_RETIRED_FORM_TOP] = {0};
+    uint64_t retired_keyed = 0;
+    for (unsigned form = 0; form < HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT; ++form) {
+        uint64_t count = atomic_load_explicit(&census->a64_retired_form[form], memory_order_relaxed);
+        retired_keyed += count;
+        for (unsigned rank = 0; count != 0 && rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank) {
+            if (count > retired_top_count[rank] ||
+                (count == retired_top_count[rank] && form < retired_top_form[rank])) {
+                for (unsigned move = HL_BACKEND_A64_RETIRED_FORM_TOP - 1; move > rank; --move) {
+                    retired_top_count[move] = retired_top_count[move - 1];
+                    retired_top_form[move] = retired_top_form[move - 1];
+                }
+                retired_top_count[rank] = count;
+                retired_top_form[rank] = form;
+                break;
+            }
+        }
+    }
+    uint64_t retired_selected = 0;
+    for (unsigned rank = 0; rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank)
+        retired_selected += retired_top_count[rank];
+    a64_added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                         "\n[diag] aarch64-interpreted-form version=1 total=%llu keyed=%llu selected=%llu other=%llu reconcile=%u top_n=%u",
+                         (unsigned long long)body_retired, (unsigned long long)retired_keyed,
+                         (unsigned long long)retired_selected,
+                         (unsigned long long)(retired_keyed - retired_selected),
+                         retired_keyed == body_retired, HL_BACKEND_A64_RETIRED_FORM_TOP);
+    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
+        HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
+    formatted += a64_added;
+    for (unsigned rank = 0; rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank) {
+        a64_added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             " form%u_key=%03x form%u_count=%llu", rank, retired_top_form[rank], rank,
+                             (unsigned long long)retired_top_count[rank]);
+        if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
+            HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
+        formatted += a64_added;
+    }
     if (census->x86_jcc_route_enabled) {
         uint64_t top_count[HL_BACKEND_A64_UNSUPPORTED_TOP] = {0};
         unsigned top_form[HL_BACKEND_A64_UNSUPPORTED_TOP] = {0};
@@ -3749,10 +3791,12 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
     if (census != NULL) atomic_fetch_add_explicit(&census->interpreted_steps, steps, memory_order_relaxed);
 }
-static inline void hl_backend_tree_a64_body_retired(unsigned major) {
+static inline void hl_backend_tree_a64_body_retired(uint32_t instruction) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
-    if (census == NULL || major >= HL_BACKEND_A64_MAJOR_COUNT) return;
+    unsigned major = (instruction >> 25) & 15u;
+    if (census == NULL) return;
     atomic_fetch_add_explicit(&census->a64_major[major], 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&census->a64_retired_form[instruction >> 21], 1, memory_order_relaxed);
 }
 /* The protocol's stable mask is 0xffe00000: it preserves the decoder-facing
    prefix and discards the low 21 bits. The fixed array is exhaustive. */
