@@ -653,6 +653,8 @@ pub struct ExtensionCandidate {
     #[serde(default)]
     pub requested_containers: crate::ContainerGrant,
     #[serde(default)]
+    pub requested_filesystem: crate::FilesystemGrant,
+    #[serde(default)]
     pub installed_image_digest: Option<String>,
 }
 
@@ -711,6 +713,7 @@ pub trait ExtensionStore {
         _revision: u64,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _filesystem: &crate::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension installation is unavailable".into()))
     }
@@ -720,6 +723,7 @@ pub trait ExtensionStore {
         _revision: u64,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _filesystem: &crate::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension update is unavailable".into()))
     }

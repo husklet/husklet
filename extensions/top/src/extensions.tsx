@@ -23,6 +23,7 @@ import {
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
+  type FilesystemGrant,
   type WorkspaceApi,
 } from '@husklet/react';
 
@@ -44,6 +45,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   });
+  const [grantedFilesystem, setGrantedFilesystem] = React.useState<FilesystemGrant>({ read: [], write: [] });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -118,6 +120,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             // including during an update where a manifest may have widened.
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
+            setGrantedFilesystem({ read: [], write: [] });
           }
         }
         if (
@@ -159,6 +162,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.revision,
         granted,
         grantedContainers,
+        grantedFilesystem,
       );
       setAcquisition(null);
       setReference('');
@@ -234,6 +238,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
+  const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? { read: [], write: [] };
 
   return (
     <Scroll grow height="fill">
@@ -398,6 +403,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               )}
               {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
                 <Text label="No container resources requested." color="text-dim" />
+              )}
+              <Text label="Workspace files" color="text-dim" />
+              {(['read', 'write'] as const).flatMap((verb) =>
+                requestedFilesystem[verb].map((path) => (
+                  <FormControlLabel key={`${verb}:${path}`} label={`${verb === 'read' ? 'Read' : 'Modify'} ${path}`} gap={2}>
+                    <Switch
+                      checked={grantedFilesystem[verb].includes(path)}
+                      onToggle={(event: Change) =>
+                        setGrantedFilesystem((current) => ({
+                          ...current,
+                          [verb]: event.value
+                            ? [...new Set([...current[verb], path])]
+                            : current[verb].filter((candidate) => candidate !== path),
+                        }))
+                      }
+                    />
+                  </FormControlLabel>
+                )),
+              )}
+              {requestedFilesystem.read.length === 0 && requestedFilesystem.write.length === 0 && (
+                <Text label="No workspace paths requested." color="text-dim" />
               )}
               <Button
                 label={

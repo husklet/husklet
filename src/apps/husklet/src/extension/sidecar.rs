@@ -545,7 +545,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources,
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 

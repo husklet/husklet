@@ -34,6 +34,10 @@ impl Ledger {
     fn reached(&self) -> Vec<&'static str> {
         self.reached.borrow().clone()
     }
+
+    fn clear(&self) {
+        self.reached.borrow_mut().clear();
+    }
 }
 
 struct Host {
@@ -800,6 +804,7 @@ impl ExtensionStore for Host {
         _revision: u64,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.install");
         ExtensionStore::inspect(self, job)
@@ -810,6 +815,7 @@ impl ExtensionStore for Host {
         _revision: u64,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.update");
         ExtensionStore::inspect(self, job)
@@ -837,17 +843,22 @@ fn services(host: &Host) -> Services<'_> {
 }
 
 fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
+    let roots: Vec<_> = roots
+        .iter()
+        .map(|root| RelativePath::new(*root).expect("root"))
+        .collect();
     Session::new(Authority::new(
         ExtensionName::new("sample").expect("name"),
         Grant::new(capabilities.iter().copied()),
-        roots
-            .iter()
-            .map(|root| RelativePath::new(*root).expect("root"))
-            .collect(),
+        roots.clone(),
     ))
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::All { all: true }],
         create: true,
+    })
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: roots.clone(),
+        write: roots,
     })
 }
 
@@ -982,6 +993,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -991,6 +1003,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1051,39 +1064,59 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerStart { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerStart {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerStop { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerStop {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRemove { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerRemove {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerPause { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerPause {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerUnpause { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerUnpause {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRestart { id: "c".repeat(64) , generation: 4,},
+            Request::ContainerRestart {
+                id: "c".repeat(64),
+                generation: 4,
+            },
             Capability::ContainerControl,
         ),
         (
             Request::ContainerRename {
-                id: "c".repeat(64), generation: 4,
+                id: "c".repeat(64),
+                generation: 4,
                 name: "worker-2".into(),
             },
             Capability::ContainerControl,
         ),
         (
             Request::ContainerKill {
-                id: "c".repeat(64), generation: 4,
+                id: "c".repeat(64),
+                generation: 4,
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
@@ -1101,7 +1134,8 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ContainerExec {
-                id: "c".repeat(64), generation: 4,
+                id: "c".repeat(64),
+                generation: 4,
                 command: vec!["worker".into()],
                 user: None,
                 working_directory: None,
@@ -2011,27 +2045,42 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
         Request::ContainerStart {
-            id: "friendly-name".into(), generation: 4,
+            id: "friendly-name".into(),
+            generation: 4,
         },
-        Request::ContainerPause { id: "a".repeat(12) , generation: 4,},
+        Request::ContainerPause {
+            id: "a".repeat(12),
+            generation: 4,
+        },
         Request::ContainerUnpause {
-            id: "friendly-name".into(), generation: 4,
+            id: "friendly-name".into(),
+            generation: 4,
         },
-        Request::ContainerRestart { id: "1".into() , generation: 4,},
+        Request::ContainerRestart {
+            id: "1".into(),
+            generation: 4,
+        },
         Request::ContainerStop {
-            id: "friendly-name".into(), generation: 4,
+            id: "friendly-name".into(),
+            generation: 4,
         },
-        Request::ContainerRemove { id: "a".repeat(12) , generation: 4,},
+        Request::ContainerRemove {
+            id: "a".repeat(12),
+            generation: 4,
+        },
         Request::ContainerKill {
-            id: "1".into(), generation: 4,
+            id: "1".into(),
+            generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ContainerKill {
-            id: "friendly-name".into(), generation: 4,
+            id: "friendly-name".into(),
+            generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ContainerKill {
-            id: "a".repeat(12), generation: 4,
+            id: "a".repeat(12),
+            generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ExecutionKill {
@@ -2051,15 +2100,28 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     assert!(host.ledger.reached().is_empty());
 
     session
-        .dispatch(&Request::ContainerStop { id: "a".repeat(64) , generation: 4,}, &services(&host))
+        .dispatch(
+            &Request::ContainerStop {
+                id: "a".repeat(64),
+                generation: 4,
+            },
+            &services(&host),
+        )
         .unwrap();
     session
-        .dispatch(&Request::ContainerRemove { id: "a".repeat(64) , generation: 4,}, &services(&host))
+        .dispatch(
+            &Request::ContainerRemove {
+                id: "a".repeat(64),
+                generation: 4,
+            },
+            &services(&host),
+        )
         .unwrap();
     session
         .dispatch(
             &Request::ContainerKill {
-                id: "a".repeat(64), generation: 4,
+                id: "a".repeat(64),
+                generation: 4,
                 signal: "SIGTERM".into(),
             },
             &services(&host),
@@ -2096,23 +2158,28 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
         Request::ContainerRename {
-            id: "friendly-name".into(), generation: 4,
+            id: "friendly-name".into(),
+            generation: 4,
             name: "worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(12), generation: 4,
+            id: "a".repeat(12),
+            generation: 4,
             name: "worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64), generation: 4,
+            id: "a".repeat(64),
+            generation: 4,
             name: ".worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64), generation: 4,
+            id: "a".repeat(64),
+            generation: 4,
             name: "worker/name".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64), generation: 4,
+            id: "a".repeat(64),
+            generation: 4,
             name: "x".repeat(129),
         },
     ] {
@@ -2125,7 +2192,8 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     session
         .dispatch(
             &Request::ContainerRename {
-                id: "a".repeat(64), generation: 4,
+                id: "a".repeat(64),
+                generation: 4,
                 name: "worker_2.prod".into(),
             },
             &services(&host),
@@ -2297,7 +2365,13 @@ fn container_capabilities_without_resource_consent_expose_nothing() {
         Reply::Containers(Vec::new())
     );
     let failure = session
-        .dispatch(&Request::ContainerStop { id: "a".repeat(64) , generation: 4,}, &services(&host))
+        .dispatch(
+            &Request::ContainerStop {
+                id: "a".repeat(64),
+                generation: 4,
+            },
+            &services(&host),
+        )
         .expect_err("an unselected container is denied");
     assert!(matches!(failure, Failure::Denied { .. }));
     assert!(!host.ledger.reached().contains(&"containers.stop"));
@@ -2347,7 +2421,8 @@ fn exact_name_scope_filters_inventory_and_create_is_independent() {
     assert!(matches!(
         session.dispatch(
             &Request::ContainerStop {
-                id: "c".repeat(64), generation: 4,
+                id: "c".repeat(64),
+                generation: 4,
             },
             &services(&host),
         ),
@@ -2409,12 +2484,19 @@ fn holding_read_never_permits_the_matching_write() {
         )
         .is_err());
     assert!(session
-        .dispatch(&Request::ContainerStop { id: "c1".into() , generation: 4,}, &services(&host))
+        .dispatch(
+            &Request::ContainerStop {
+                id: "c1".into(),
+                generation: 4,
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(session
         .dispatch(
             &Request::ContainerKill {
-                id: "c1".into(), generation: 4,
+                id: "c1".into(),
+                generation: 4,
                 signal: "SIGKILL".into(),
             },
             &services(&host),
@@ -2423,7 +2505,8 @@ fn holding_read_never_permits_the_matching_write() {
     assert!(session
         .dispatch(
             &Request::ContainerExec {
-                id: "c1".into(), generation: 4,
+                id: "c1".into(),
+                generation: 4,
                 command: vec!["sh".into()],
                 user: None,
                 working_directory: None,
@@ -2432,6 +2515,63 @@ fn holding_read_never_permits_the_matching_write() {
         )
         .is_err());
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service() {
+    let host = Host::new();
+    let all = vec![path("src"), path("workspace.toml")];
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::FilesystemRead, Capability::FilesystemWrite]),
+        all,
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![path("src")],
+        write: vec![path("workspace.toml")],
+    });
+
+    assert!(session
+        .dispatch(
+            &Request::FilesystemRead {
+                path: path("src/lib.rs")
+            },
+            &services(&host)
+        )
+        .is_ok());
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: path("workspace.toml"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        )
+        .is_ok());
+    host.ledger.clear();
+    assert!(matches!(
+        session.dispatch(
+            &Request::FilesystemWrite {
+                path: path("src/lib.rs"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        ),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(matches!(
+        session.dispatch(
+            &Request::FilesystemRead {
+                path: path("workspace.toml")
+            },
+            &services(&host)
+        ),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(
+        host.ledger.reached().is_empty(),
+        "wrong-verb roots must fail before the filesystem port"
+    );
 }
 
 #[test]
@@ -2555,7 +2695,8 @@ fn container_exec_returns_the_real_execution_identity() {
     let immutable = "c".repeat(64);
     let refused = session.dispatch(
         &Request::ContainerExec {
-            id: "worker".into(), generation: 4,
+            id: "worker".into(),
+            generation: 4,
             command: vec!["worker".into()],
             user: None,
             working_directory: None,
@@ -2570,7 +2711,8 @@ fn container_exec_returns_the_real_execution_identity() {
     let reply = session
         .dispatch(
             &Request::ContainerExec {
-                id: immutable, generation: 4,
+                id: immutable,
+                generation: 4,
                 command: vec!["worker".into()],
                 user: Some("1000".into()),
                 working_directory: Some("/work".into()),

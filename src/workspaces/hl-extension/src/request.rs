@@ -88,12 +88,14 @@ pub enum Request {
         revision: u64,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        filesystem: crate::FilesystemGrant,
     },
     ExtensionUpdate {
         job: String,
         revision: u64,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        filesystem: crate::FilesystemGrant,
     },
     ContainerList,
     ContainerInspect {
@@ -735,7 +737,11 @@ mod tests {
         );
         assert_eq!(Request::ContainerList.capability(), Capability::ContainerRead);
         assert_eq!(
-            Request::ContainerStop { id: "a".into(), generation: 4 }.capability(),
+            Request::ContainerStop {
+                id: "a".into(),
+                generation: 4
+            }
+            .capability(),
             Capability::ContainerControl
         );
         assert_eq!(
@@ -909,8 +915,15 @@ mod tests {
         );
 
         let accepted: Request =
-            serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\",\"generation\":4}}").expect("valid");
-        assert_eq!(accepted, Request::ContainerStop { id: "c1".into(), generation: 4 });
+            serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\",\"generation\":4}}")
+                .expect("valid");
+        assert_eq!(
+            accepted,
+            Request::ContainerStop {
+                id: "c1".into(),
+                generation: 4
+            }
+        );
 
         let rename = Request::ContainerRename {
             id: "a".repeat(64),

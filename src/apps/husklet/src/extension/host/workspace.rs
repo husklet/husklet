@@ -406,7 +406,7 @@ impl Supply for Workspace {
 
 #[cfg(test)]
 mod halt_tests {
-    use hl_extension::{Capability, ExtensionName, Grant, Manifest, PROTOCOL, Record, Resources};
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Record, Resources, PROTOCOL};
 
     use super::{Image, Plan, SidecarSpec, Supply as _, Workspace};
 
@@ -423,10 +423,11 @@ mod halt_tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         };
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:offline-checkpoint".to_owned(),
             version: manifest.version.clone(),
@@ -754,8 +755,8 @@ impl WorkspaceControl for Store {
 
 #[cfg(test)]
 mod workspace_control_tests {
-    use hl_extension::ExtensionName;
     use hl_extension::port::WorkspaceControl as _;
+    use hl_extension::ExtensionName;
 
     use super::{Store, Workspace};
 

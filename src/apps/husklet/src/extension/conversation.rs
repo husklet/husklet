@@ -219,6 +219,7 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
     ) -> io::Result<Self> {
+        let roots = authority.roots().to_vec();
         Self::new_scoped(
             stream,
             authority,
@@ -227,6 +228,10 @@ impl Conversation {
             hl_extension::ContainerGrant {
                 selectors: vec![hl_extension::ContainerSelector::All { all: true }],
                 create: true,
+            },
+            hl_extension::FilesystemGrant {
+                read: roots.clone(),
+                write: roots,
             },
         )
     }
@@ -238,6 +243,7 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
+        filesystem: hl_extension::FilesystemGrant,
     ) -> io::Result<Self> {
         let control = stream.try_clone()?;
         Ok(Self {
@@ -246,7 +252,10 @@ impl Conversation {
             // The workspace overview exists before the sidecar connects. Its
             // empty slot is the extension's primary surface; extra tab/split
             // surfaces are acquired explicitly through the terminal port.
-            session: Session::new(authority).with_containers(containers).with_surface(""),
+            session: Session::new(authority)
+                .with_containers(containers)
+                .with_filesystem(filesystem)
+                .with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
             channels: Channels::new(),
@@ -461,7 +470,7 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::Filesystem) {
-            if let Ok(inventory) = services.files.inventory(self.session.authority().roots()) {
+            if let Ok(inventory) = services.files.inventory(self.session.filesystem_read_roots()) {
                 snapshots.push(Snapshot::Filesystem(inventory));
             }
         }
@@ -1464,6 +1473,36 @@ mod tests {
         (theirs, served)
     }
 
+    fn filesystem_scoped_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let roots = vec![
+                RelativePath::new("src").unwrap(),
+                RelativePath::new("workspace.toml").unwrap(),
+            ];
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::FilesystemRead, Capability::FilesystemWrite]),
+                roots,
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::FilesystemGrant {
+                    read: vec![RelativePath::new("src").unwrap()],
+                    write: vec![RelativePath::new("workspace.toml").unwrap()],
+                },
+            )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
     #[test]
     fn conversation_drains_the_composed_native_extension_source() {
         let (_theirs, ours) = UnixStream::pair().expect("socket pair");
@@ -1632,6 +1671,39 @@ mod tests {
         assert_eq!(ledger.reached(), vec!["containers.list"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()), "a hangup is not a fault");
+    }
+
+    #[test]
+    fn filesystem_verb_scopes_fail_closed_over_the_extension_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = filesystem_scoped_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemWrite {
+                path: RelativePath::new("src/lib.rs").unwrap(),
+                contents: b"no".to_vec(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemRead {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        assert!(
+            ledger.reached().is_empty(),
+            "denied calls must not reach the filesystem service"
+        );
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]
@@ -1810,6 +1882,7 @@ mod tests {
                 selectors: vec![hl_extension::ContainerSelector::Name { name: "other".into() }],
                 create: false,
             },
+            hl_extension::FilesystemGrant::default(),
         )
         .expect("conversation");
         let host = Host { ledger };
@@ -2581,7 +2654,13 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned(), generation: 4 });
+        let answer = ask(
+            &mut wire,
+            &Request::ContainerStop {
+                id: "c1".to_owned(),
+                generation: 4,
+            },
+        );
 
         assert!(codec::is_failure(&answer), "a refusal is reported as one");
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {
