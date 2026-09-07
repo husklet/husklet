@@ -49,4 +49,4 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { counter: translated_steps, greater-than: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "13" } }
