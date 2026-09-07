@@ -44,7 +44,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   });
-  const [grantedFilesystem, setGrantedFilesystem] = React.useState<FilesystemGrant>({ read: [], write: [] });
+  const [grantedFilesystem, setGrantedFilesystem] = React.useState<FilesystemGrant>({
+    read: [],
+    write: [],
+  });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -237,7 +240,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
-  const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? { read: [], write: [] };
+  const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
+    read: [],
+    write: [],
+  };
 
   return (
     <Scroll grow height="fill">
@@ -406,7 +412,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Text label="Workspace files" color="text-dim" />
               {(['read', 'write'] as const).flatMap((verb) =>
                 requestedFilesystem[verb].map((path) => (
-                  <FormControlLabel key={`${verb}:${path}`} label={`${verb === 'read' ? 'Read' : 'Modify'} ${path}`} gap={2}>
+                  <FormControlLabel
+                    key={`${verb}:${path}`}
+                    label={`${verb === 'read' ? 'Read' : 'Modify'} ${path}`}
+                    gap={2}
+                  >
                     <Switch
                       checked={grantedFilesystem[verb].includes(path)}
                       onToggle={(event: Change) =>
