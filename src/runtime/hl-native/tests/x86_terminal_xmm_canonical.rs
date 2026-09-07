@@ -1,3 +1,5 @@
+#![cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+
 #[test]
 fn xmm_destination_is_canonical_before_every_indirect_terminal() {
     let families = [
