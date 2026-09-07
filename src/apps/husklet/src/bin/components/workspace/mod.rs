@@ -101,11 +101,13 @@ impl Form {
                 glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
                     match received.try_recv() {
                         Ok(Ok(())) => {
+                            write_creation_receipt(Ok(()));
                             on_created();
                             w.close();
                             glib::ControlFlow::Break
                         }
                         Ok(Err(error)) => {
+                            write_creation_receipt(Err(&error));
                             status.add_css_class("err");
                             status.set_text(&format!("Could not finish workspace setup: {error}"));
                             create.set_sensitive(true);
@@ -113,6 +115,7 @@ impl Form {
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            write_creation_receipt(Err("Workspace setup stopped unexpectedly."));
                             status.add_css_class("err");
                             status.set_text("Workspace setup stopped unexpectedly.");
                             create.set_sensitive(true);
@@ -130,6 +133,14 @@ impl Form {
 
         window.set_child(Some(&view.widget));
         window.present();
+        if let Some(name) = AppConfig::get().create_workspace.as_deref() {
+            form.name.set_text(name);
+            if let Some(image) = AppConfig::get().create_image.as_deref() {
+                form.image.set_text(image);
+            }
+            let create = view.create.clone();
+            glib::idle_add_local_once(move || create.emit_clicked());
+        }
         if AppConfig::get().open_color_picker {
             let picker = form.background.widget().clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
@@ -162,6 +173,23 @@ impl Form {
             self.name.connect_changed(move |_| update());
         }
         self.image.connect_changed(move |_| update());
+    }
+}
+
+fn write_creation_receipt(result: std::result::Result<(), &str>) {
+    let Some(path) = AppConfig::get().create_receipt.as_deref() else {
+        return;
+    };
+    let text = creation_receipt_text(result);
+    if let Err(error) = std::fs::write(path, text) {
+        hl_log::hl_warn!(hl_log::tag::UI, "could not write creation receipt: {error}");
+    }
+}
+
+fn creation_receipt_text(result: std::result::Result<(), &str>) -> String {
+    match result {
+        Ok(()) => "ok\n".to_owned(),
+        Err(error) => format!("error: {}\n", error.chars().take(500).collect::<String>()),
     }
 }
 
@@ -646,5 +674,12 @@ mod create_tests {
         if !ran {
             eprintln!("skipped: no display connection, so creation sensitivity cannot be rendered");
         }
+    }
+
+    #[test]
+    fn automated_creation_receipts_are_bounded_and_machine_readable() {
+        assert_eq!(creation_receipt_text(Ok(())), "ok\n");
+        let receipt = creation_receipt_text(Err(&"x".repeat(700)));
+        assert_eq!(receipt, format!("error: {}\n", "x".repeat(500)));
     }
 }
