@@ -9,16 +9,19 @@ if (!configuration || typeof configuration.path !== 'string'
 
 const session = await connect({ path: configuration.path });
 let started = false;
+let generation;
 try {
   const host = workspace(session);
   const workspaceInfo = await host.info();
   const container = await host.containers.inspect(configuration.containerId);
+  generation = container.generation;
   if (container.state !== 'running') {
-    const result = await host.containers.startAndWait(container.id, { timeoutMs: 1_000 });
+    const result = await host.containers.startAndWait(container.id, generation, { timeoutMs: 1_000 });
     if (!result.changed) throw new Error(`container ${container.id} did not become observably running`);
     started = true;
+    generation = result.container.generation;
   }
-  const { execution, output } = await host.containers.execAndWait(container.id, {
+  const { execution, output } = await host.containers.execAndWait(container.id, generation, {
     command: configuration.command, timeoutMs: 1_000, stdout: true, stderr: true,
   });
   await host.containers.removeExecution(execution.id);
@@ -27,7 +30,7 @@ try {
   try {
     if (started) {
       const host = workspace(session);
-      const result = await host.containers.stopAndWait(configuration.containerId, { timeoutMs: 1_000 });
+      const result = await host.containers.stopAndWait(configuration.containerId, generation, { timeoutMs: 1_000 });
       if (!result.changed) throw new Error(`container ${configuration.containerId} did not return to its initial stopped state`);
     }
   } finally {

@@ -1,35 +1,31 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Page {
-    General,
+    Basics,
     Terminal,
-    Resources,
-    Environment,
-    Mounts,
-    Docker,
-    Network,
+    Integrations,
+    Advanced,
 }
 
 impl Page {
-    pub const ALL: [Self; 7] = [
-        Self::General,
-        Self::Terminal,
-        Self::Resources,
-        Self::Environment,
-        Self::Mounts,
-        Self::Docker,
-        Self::Network,
-    ];
+    pub const ALL: [Self; 4] = [Self::Basics, Self::Terminal, Self::Integrations, Self::Advanced];
 
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
-            Self::General => "General",
+            Self::Basics => "Basics",
             Self::Terminal => "Terminal",
-            Self::Resources => "Resources",
-            Self::Environment => "Environment",
-            Self::Mounts => "Mounts",
-            Self::Docker => "Docker",
-            Self::Network => "Network",
+            Self::Integrations => "Integrations",
+            Self::Advanced => "Advanced",
+        }
+    }
+
+    #[must_use]
+    fn group_name(name: &str) -> &str {
+        match name {
+            "General" | "Resources" => "Basics",
+            "Environment" | "Mounts" => "Integrations",
+            "Docker" | "Network" => "Advanced",
+            name => name,
         }
     }
 }
@@ -46,7 +42,7 @@ pub struct View {
 
 impl View {
     #[must_use]
-    pub fn new(content: [(Page, gtk::Box); 7]) -> Self {
+    pub fn new(content: [(Page, gtk::Box); 4]) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         split.set_vexpand(true);
@@ -127,8 +123,9 @@ impl View {
     }
 
     pub fn select_name(&self, name: &str) {
-        self.pages.set_visible_child_name(name);
-        Self::select_navigation(&self.navigation.borrow(), name);
+        let grouped = Page::group_name(name);
+        self.pages.set_visible_child_name(grouped);
+        Self::select_navigation(&self.navigation.borrow(), grouped);
     }
 
     fn select_navigation(navigation: &[gtk::Button], selected: &str) {
@@ -153,15 +150,22 @@ mod tests {
     fn navigation_contains_only_supported_workspace_settings() {
         assert_eq!(
             Page::ALL.map(Page::title),
-            [
-                "General",
-                "Terminal",
-                "Resources",
-                "Environment",
-                "Mounts",
-                "Docker",
-                "Network"
-            ]
+            ["Basics", "Terminal", "Integrations", "Advanced"]
         );
+    }
+
+    #[test]
+    fn old_debug_page_names_select_their_task_group() {
+        for (name, group) in [
+            ("General", "Basics"),
+            ("Resources", "Basics"),
+            ("Environment", "Integrations"),
+            ("Mounts", "Integrations"),
+            ("Docker", "Advanced"),
+            ("Network", "Advanced"),
+            ("Terminal", "Terminal"),
+        ] {
+            assert_eq!(Page::group_name(name), group);
+        }
     }
 }

@@ -93,7 +93,7 @@ impl Service {
             .collect::<Vec<_>>();
         let mut failure = None;
         for (id, result) in removals {
-            if let Err(error) = self.remove(&id.to_string(), false, true, Some(result)).await {
+            if let Err(error) = self.remove(&id.to_string(), false, true, Some(result), None, None).await {
                 failure.get_or_insert(error);
             }
         }
@@ -186,7 +186,7 @@ impl Service {
         } else if container.spec.removal == crate::RemovalPolicy::Automatic {
             let reference = id.to_string();
             drop(guard);
-            if let Err(error) = self.remove(&reference, false, true, Some(result)).await {
+            if let Err(error) = self.remove(&reference, false, true, Some(result), None, None).await {
                 self.failures
                     .lock()
                     .await

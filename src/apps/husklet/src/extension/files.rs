@@ -1014,7 +1014,9 @@ mod tests {
         assert_eq!(inventory.coalesced, 0);
         assert_eq!(inventory.entries.iter().map(|entry| entry.path.to_string()).collect::<Vec<_>>(), ["source", "source/main.ts", "source/nested", "source/nested/lib.ts"]);
         assert!(inventory.entries.iter().all(|entry| entry.identity.is_some()));
-        let whole = files.inventory(&[path("")]).expect("workspace-root inventory");
+        let whole = files
+            .inventory(&[path("source"), path("private")])
+            .expect("declared-root inventory");
         assert!(whole.entries.iter().any(|entry| entry.path.to_string() == "private/key"));
         for index in 0..260 { std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file"); }
         let bounded = files.inventory(&[path("source")]).expect("bounded inventory");

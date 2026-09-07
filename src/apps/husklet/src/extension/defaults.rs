@@ -8,12 +8,10 @@ use crate::config::WorkspaceConfig;
 /// Ordered identities and release-matched image references for a new workspace.
 ///
 /// This order is also their default order in the workspace sidebar.
-pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [
-    (
-        "top",
-        concat!("ghcr.io/husklet/husklet/extension-top:", env!("CARGO_PKG_VERSION")),
-    ),
-];
+pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [(
+    "top",
+    concat!("ghcr.io/husklet/husklet/extension-top:", env!("CARGO_PKG_VERSION")),
+)];
 
 /// Acquires, grants, records, and enables the trusted first-party control surface.
 ///
@@ -117,7 +115,7 @@ mod tests {
                     }),
                     pane_providers: Vec::new(),
                     resources: Resources::default(),
-                    filesystem_roots: Vec::new(),
+                    filesystem: hl_extension::FilesystemGrant::default(),
                 },
             })
         })

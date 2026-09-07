@@ -94,7 +94,7 @@ export function ContainerDetail({
       if (command.user.length > 4_096 || command.workingDirectory.length > 4_096) {
         throw new Error('User and working directory must each be at most 4096 characters.');
       }
-      const id = await api.containers.exec(container.id, {
+      const id = await api.containers.exec(container.id, container.generation, {
         command: argv,
         ...(command.user.trim() ? { user: command.user.trim() } : {}),
         ...(command.workingDirectory.trim()

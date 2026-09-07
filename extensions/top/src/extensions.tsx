@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -23,6 +22,7 @@ import {
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
+  type FilesystemGrant,
   type WorkspaceApi,
 } from '@husklet/react';
 
@@ -43,6 +43,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [grantedContainers, setGrantedContainers] = React.useState<ContainerGrant>({
     selectors: [],
     create: false,
+  });
+  const [grantedFilesystem, setGrantedFilesystem] = React.useState<FilesystemGrant>({
+    read: [],
+    write: [],
   });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
@@ -114,11 +118,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           const key = `${status.job}:${status.candidate.image_digest}`;
           if (candidateKey.current !== key) {
             candidateKey.current = key;
-            setGranted(status.candidate.requested);
-            // Resource authority is opt-in. A review, including an update,
-            // starts from no container identities instead of silently widening
-            // authority to every selector in the manifest.
+            // Every authority is opt-in. Inspection must never grant access,
+            // including during an update where a manifest may have widened.
+            setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
+            setGrantedFilesystem({ read: [], write: [] });
           }
         }
         if (
@@ -160,6 +164,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.revision,
         granted,
         grantedContainers,
+        grantedFilesystem,
       );
       setAcquisition(null);
       setReference('');
@@ -235,10 +240,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
+  const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
+    read: [],
+    write: [],
+  };
 
   return (
     <Scroll grow height="fill">
-      <Column pad={2} gap={2}>
+      <Column pad={2} gap={1}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
@@ -246,25 +255,37 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           wrap
         />
         <Heading label="Discover" scale="caption" />
-        {!installed.some((extension) => extension.name === 'storybook') && (
-          <Card variant="outline">
-            <CardHeader label="Component playground" detail="First-party · Storybook" />
+        <Column gap={2}>
+          <Card variant="filled">
+            <CardHeader label="Workspace control" detail="First-party · Included" />
             <CardContent gap={1}>
               <Text
-                label="Explore every extension UI component, including large tables, terminals, diffs, metrics, and confirmation flows."
+                label="Settings, runtime resources, and terminal panes in one compact tab."
                 color="text-dim"
                 wrap
               />
             </CardContent>
-            <CardActions>
-              <Button
-                label="Review access"
-                enabled={!busy}
-                onInvoke={() => inspect(STORYBOOK_IMAGE)}
-              />
-            </CardActions>
           </Card>
-        )}
+          {!installed.some((extension) => extension.name === 'storybook') && (
+            <Card variant="filled">
+              <CardHeader label="Component playground" detail="First-party · Storybook" />
+              <CardContent gap={1}>
+                <Text
+                  label="Explore extension components, large tables, terminals, diffs, and metrics."
+                  color="text-dim"
+                  wrap
+                />
+                <Row>
+                  <Button
+                    label="Review access"
+                    enabled={!busy}
+                    onInvoke={() => inspect(STORYBOOK_IMAGE)}
+                  />
+                </Row>
+              </CardContent>
+            </Card>
+          )}
+        </Column>
         <Card variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
@@ -284,14 +305,46 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           </CardContent>
           {acquisition?.candidate && (
             <CardContent gap={1}>
+              <Heading label="Review permissions" scale="caption" />
               <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
               <Text
                 label={compactDigest(acquisition.candidate.image_digest)}
                 tooltip={acquisition.candidate.image_digest}
               />
-              <Text label="Capability access" color="text-dim" />
+              <InlineMessage
+                label="All access is off by default. Enable only what this extension needs."
+                tone="warning"
+              />
+              <Text label="Husklet access" color="text-dim" />
+              {acquisition.candidate.requested.length > 0 && (
+                <Row gap={1} align="center">
+                  <Text
+                    label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
+                    color="text-dim"
+                  />
+                  <Button
+                    label={
+                      granted.length === acquisition.candidate.requested.length
+                        ? 'Clear access'
+                        : 'Allow requested'
+                    }
+                    variant="ghost"
+                    onInvoke={() =>
+                      setGranted(
+                        granted.length === acquisition.candidate!.requested.length
+                          ? []
+                          : acquisition.candidate!.requested,
+                      )
+                    }
+                  />
+                </Row>
+              )}
               {acquisition.candidate.requested.map((capability) => (
-                <Row key={capability} gap={2} align="center">
+                <FormControlLabel
+                  key={capability}
+                  label={`${capabilityLabel(capability)} (${capability})`}
+                  gap={2}
+                >
                   <Switch
                     checked={granted.includes(capability)}
                     onToggle={(event: Change) =>
@@ -302,11 +355,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       )
                     }
                   />
-                  <Column gap={0}>
-                    <Text label={capabilityLabel(capability)} />
-                    <Text label={capability} color="text-dim" />
-                  </Column>
-                </Row>
+                </FormControlLabel>
               ))}
               {acquisition.candidate.requested.length === 0 && (
                 <Text label="This extension requests no capabilities." />
@@ -360,6 +409,31 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
                 <Text label="No container resources requested." color="text-dim" />
               )}
+              <Text label="Workspace files" color="text-dim" />
+              {(['read', 'write'] as const).flatMap((verb) =>
+                requestedFilesystem[verb].map((path) => (
+                  <FormControlLabel
+                    key={`${verb}:${path}`}
+                    label={`${verb === 'read' ? 'Read' : 'Modify'} ${path}`}
+                    gap={2}
+                  >
+                    <Switch
+                      checked={grantedFilesystem[verb].includes(path)}
+                      onToggle={(event: Change) =>
+                        setGrantedFilesystem((current) => ({
+                          ...current,
+                          [verb]: event.value
+                            ? [...new Set([...current[verb], path])]
+                            : current[verb].filter((candidate) => candidate !== path),
+                        }))
+                      }
+                    />
+                  </FormControlLabel>
+                )),
+              )}
+              {requestedFilesystem.read.length === 0 && requestedFilesystem.write.length === 0 && (
+                <Text label="No workspace paths requested." color="text-dim" />
+              )}
               <Button
                 label={
                   busy === 'update'
@@ -377,7 +451,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           )}
           {acquisition && acquisition.state !== 'ready' && (
             <CardContent gap={1}>
-              <Row gap={2}>
+              <Row gap={1} align="center" wrap>
                 {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
                 <Text label={acquisitionLabel(acquisition)} wrap />
                 {!['failed', 'cancelled'].includes(acquisition.state) ? (
@@ -386,6 +460,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     enabled={busy !== 'cancel'}
                     onInvoke={cancel}
                   />
+                ) : acquisition.state === 'failed' ? (
+                  <>
+                    <Button label="Retry inspection" enabled={!busy} onInvoke={() => inspect()} />
+                    <Button
+                      label="Dismiss"
+                      variant="ghost"
+                      enabled={!busy}
+                      onInvoke={() => setAcquisition(null)}
+                    />
+                  </>
                 ) : (
                   <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />
                 )}
@@ -416,49 +500,49 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           onRetry={reload}
         >
           {installed.map((extension) => (
-            <Card key={`${extension.name}:${extension.image_digest}`} variant="outline">
+            <Card key={`${extension.name}:${extension.image_digest}`} variant="filled">
               <CardHeader
                 label={extension.name}
                 detail={extension.version ?? extension.image_digest}
               />
-              <CardContent>
-                <Row gap={2}>
-                  <Badge label={extension.status} />
+              <CardContent gap={1}>
+                <Row gap={1} wrap>
+                  <Badge label={extension.enabled ? extension.status : 'disabled'} />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
                   />
                 </Row>
+                <Row gap={1} wrap>
+                  {extension.status.startsWith('fault:') ? (
+                    <Button
+                      label="Retry"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'retry')}
+                    />
+                  ) : extension.enabled ? (
+                    <Button
+                      label="Disable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'disable')}
+                    />
+                  ) : (
+                    <Button
+                      label="Enable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'enable')}
+                    />
+                  )}
+                  <ConfirmAction
+                    label="Remove"
+                    confirmLabel={`Remove ${extension.name}`}
+                    question={`Remove ${extension.name} from this workspace?`}
+                    authorityKey={extension.image_digest}
+                    enabled={!busy}
+                    onConfirm={() => lifecycle(extension, 'remove')}
+                  />
+                </Row>
               </CardContent>
-              <CardActions gap={1}>
-                {extension.status.startsWith('fault:') ? (
-                  <Button
-                    label="Retry"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'retry')}
-                  />
-                ) : extension.enabled ? (
-                  <Button
-                    label="Disable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'disable')}
-                  />
-                ) : (
-                  <Button
-                    label="Enable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'enable')}
-                  />
-                )}
-                <ConfirmAction
-                  label="Remove"
-                  confirmLabel={`Remove ${extension.name}`}
-                  question={`Remove ${extension.name} from this workspace?`}
-                  authorityKey={extension.image_digest}
-                  enabled={!busy}
-                  onConfirm={() => lifecycle(extension, 'remove')}
-                />
-              </CardActions>
             </Card>
           ))}
         </ResourceState>
@@ -485,13 +569,24 @@ function selectorLabel(selector: ContainerSelector): string {
 
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const progress = acquisition.progress;
-  if (!progress) return acquisition.state;
+  if (!progress) {
+    return acquisition.state === 'failed'
+      ? 'Inspection failed.'
+      : acquisition.state === 'cancelled'
+        ? 'Inspection cancelled.'
+        : acquisition.state === 'queued'
+          ? 'Waiting to inspect image…'
+          : 'Inspecting image…';
+  }
   const amount =
     progress.current === null
       ? ''
       : progress.total === null
         ? ` · ${progress.current} bytes`
-        : ` · ${progress.current}/${progress.total} bytes`;
+        : ` · ${progress.current}/${progress.total} bytes (${Math.min(
+            100,
+            Math.round((progress.current / Math.max(1, progress.total)) * 100),
+          )}%)`;
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
 

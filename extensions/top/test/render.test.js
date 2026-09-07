@@ -66,7 +66,7 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   for (const label of [
-    'Resource overview',
+    'Workspace overview',
     'Workspace',
     'Extensions',
     'Containers',
@@ -83,6 +83,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     true,
   );
   assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
+  for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
+    assert.ok(labels.includes(group), group);
 });
 
 test('Top owns workspace settings and extension management in the same tab', async () => {
@@ -139,9 +141,20 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Workspace control'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
+  assert.deepEqual(ancestorTags(stage, 'Workspace control').slice(0, 3), [
+    'Card',
+    'Column',
+    'Column',
+  ]);
+  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 3), [
+    'Row',
+    'CardContent',
+    'Card',
+  ]);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -178,6 +191,82 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     fieldValue(stage, 'registry.example/extension:version'),
     'ghcr.io/husklet/husklet/extension-storybook:latest',
   );
+});
+
+test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
+  const references = [];
+  let attempt = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            if (reference === 'not a reference') throw new Error('Image reference is invalid.');
+            attempt += 1;
+            return { job: `review-${attempt}` };
+          },
+          acquisition: async (job) =>
+            attempt === 1
+              ? {
+                  job,
+                  revision: 1,
+                  state: 'failed',
+                  progress: null,
+                  candidate: null,
+                  error: 'registry temporarily unavailable',
+                }
+              : {
+                  job,
+                  revision: 2,
+                  state: 'ready',
+                  progress: null,
+                  candidate: {
+                    name: 'reviewed',
+                    version: '1.0.0',
+                    image_digest: `sha256:${'c'.repeat(64)}`,
+                    installed_image_digest: null,
+                    requested: ['containers:read'],
+                  },
+                  error: null,
+                },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  change(stage, 'registry.example/extension:version', 'not a reference');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Image reference is invalid.'));
+  assert.equal(fieldValue(stage, 'registry.example/extension:version'), 'not a reference');
+
+  change(stage, 'registry.example/extension:version', 'registry.example/reviewed:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Inspection failed.'));
+  assert.ok(labelled(stage, 'registry temporarily unavailable'));
+  assert.ok(labelled(stage, 'Retry inspection'));
+  invoke(stage, 'Retry inspection');
+  await settled();
+  await settled();
+  assert.deepEqual(references, [
+    'not a reference',
+    'registry.example/reviewed:1',
+    'registry.example/reviewed:1',
+  ]);
+  assert.ok(labelled(stage, 'Review permissions'));
+  assert.ok(
+    labelled(stage, 'All access is off by default. Enable only what this extension needs.'),
+  );
+  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.deepEqual(latestSwitchValues(stage), [false]);
 });
 
 for (const updating of [false, true]) {
@@ -297,13 +386,16 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
-  assert.ok(labelled(stage, 'View containers and processes'));
-  assert.ok(labelled(stage, 'Read and write terminal text'));
+  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
+  assert.ok(labelled(stage, '0/2 allowed'));
   assert.ok(
-    labelled(stage, 'containers:read'),
+    labelled(stage, 'View containers and processes (containers:read)'),
     'exact authority remains visible beside plain language',
   );
 
+  invoke(stage, 'Allow requested');
+  assert.ok(labelled(stage, '2/2 allowed'));
   invoke(stage, 'Install extension');
   await settled();
   await settled();
@@ -363,6 +455,62 @@ test('installed extension removal requires final consent and a failure remains r
   await settled();
   assert.equal(calls.length, 2);
   assert.ok(labelled(stage, 'assistant removed and verified.'));
+});
+
+test('installed extensions expose truthful enabled, disabled, fault and retry states', async () => {
+  const calls = [];
+  let publish;
+  let extension = {
+    name: 'assistant',
+    image_digest: `sha256:${'d'.repeat(64)}`,
+    version: '1.2.0',
+    enabled: true,
+    status: 'running',
+  };
+  const result = async (action) => {
+    calls.push(action);
+    extension =
+      action === 'disable'
+        ? { ...extension, enabled: false, status: 'stopped' }
+        : { ...extension, enabled: true, status: 'running' };
+    return { changed: true, extension };
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [extension],
+          disableAndWait: async () => result('disable'),
+          enableAndWait: async () => result('enable'),
+          retryAndWait: async () => result('retry'),
+        },
+        watchExtensions: async (listener) => {
+          publish = listener;
+          return () => {};
+        },
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Disable');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
+  invoke(stage, 'Enable');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'running'));
+
+  extension = { ...extension, enabled: true, status: 'fault: socket closed' };
+  publish([extension]);
+  await settled();
+  assert.ok(labelled(stage, 'Retry'));
+  invoke(stage, 'Retry');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, ['disable', 'enable', 'retry']);
+  assert.ok(labelled(stage, 'assistant recovered and verified.'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -1967,7 +2115,7 @@ test('container stop and kill cannot call the API before final confirmation', as
     },
   };
   const resource = {
-    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -1984,18 +2132,22 @@ test('container stop and kill cannot call the API before final confirmation', as
   invoke(stage, 'Stop');
   invoke(stage, 'Confirm stop');
   await settled();
-  assert.deepEqual(calls, [['stop', immutable]]);
+  assert.deepEqual(calls, [['stop', immutable, 7]]);
 
   invoke(stage, 'Details');
   await settled();
   await settled();
   invoke(stage, 'Kill');
-  assert.deepEqual(calls, [['stop', immutable]], 'opening kill confirmation performs no operation');
+  assert.deepEqual(
+    calls,
+    [['stop', immutable, 7]],
+    'opening kill confirmation performs no operation',
+  );
   assert.ok(labelled(stage, `Force-kill api with immutable ID ${immutable}?`));
   assert.equal(isDestructive(stage, 'Confirm kill'), true);
   invoke(stage, 'Confirm kill');
   await settled();
-  assert.deepEqual(calls.at(-1), ['kill', immutable, 'SIGKILL']);
+  assert.deepEqual(calls.at(-1), ['kill', immutable, 7, 'SIGKILL']);
 });
 
 test('container rename validates locally, retries failure, and preserves immutable authority until refresh', async () => {
@@ -2012,7 +2164,7 @@ test('container rename validates locally, retries failure, and preserves immutab
     },
   };
   const resource = {
-    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => calls.push(['reload']),
@@ -2047,8 +2199,8 @@ test('container rename validates locally, retries failure, and preserves immutab
   await settled();
   await settled();
   assert.deepEqual(calls, [
-    ['rename', immutable, 'worker_2.prod'],
-    ['rename', immutable, 'worker_2.prod'],
+    ['rename', immutable, 7, 'worker_2.prod'],
+    ['rename', immutable, 7, 'worker_2.prod'],
     ['reload'],
   ]);
   assert.ok(
@@ -2128,8 +2280,9 @@ test('container creation retains exact identity and retries only start after a p
         calls.push(['create', spec]);
         return 'container-new';
       },
-      start: async (id) => {
-        calls.push(['start', id]);
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => {
+        calls.push(['start', id, generation]);
         starts += 1;
         if (starts === 1) throw new Error('runtime temporarily unavailable');
       },
@@ -2189,12 +2342,41 @@ test('container creation retains exact identity and retries only start after a p
     calls,
     [
       ['create', { image: 'alpine:3.20', name: 'worker' }],
-      ['start', 'container-new'],
-      ['start', 'container-new'],
+      ['start', 'container-new', 0],
+      ['start', 'container-new', 0],
       ['reload'],
     ],
     'retry never creates a duplicate container',
   );
+});
+
+test('container creation refuses to start when inspection returns a different immutable identity', async () => {
+  const calls = [];
+  const created = 'a'.repeat(32);
+  const replacement = 'b'.repeat(32);
+  const controlled = {
+    containers: {
+      create: async () => created,
+      inspect: async () => ({ id: replacement, generation: 0 }),
+      start: async (...args) => calls.push(args),
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api: controlled,
+      resource: { data: [], loading: false, error: null, reload: async () => {} },
+    }),
+  );
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'worker');
+  invoke(stage, 'Create and start');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(stage, `Created container ${created} could not be verified by immutable identity.`),
+  );
+  assert.deepEqual(calls, []);
 });
 
 test('container creation validates exact resource bounds and retains them until success', async () => {
@@ -2208,7 +2390,8 @@ test('container creation validates exact resource bounds and retains them until 
         if (creates === 1) throw new Error('create temporarily unavailable');
         return 'limited-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2268,7 +2451,7 @@ test('container creation validates exact resource bounds and retains them until 
         pids_limit: 1_000_000,
       },
     ],
-    ['start', 'limited-container'],
+    ['start', 'limited-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, 'Memory limit MiB (optional)'), '');
@@ -2287,7 +2470,8 @@ test('container creation accepts only bounded named-volume mounts and retains th
         if (creates === 1) throw new Error('volume attachment temporarily unavailable');
         return 'mounted-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2351,7 +2535,7 @@ test('container creation accepts only bounded named-volume mounts and retains th
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'mounted-container'],
+    ['start', 'mounted-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2368,7 +2552,8 @@ test('container creation validates bounded published ports and retains them unti
         if (creates === 1) throw new Error('port publication temporarily unavailable');
         return 'published-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2435,7 +2620,7 @@ test('container creation validates bounded published ports and retains them unti
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'published-container'],
+    ['start', 'published-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2452,7 +2637,8 @@ test('container creation validates runtime identity and retains it until success
         if (creates === 1) throw new Error('identity temporarily unavailable');
         return 'identity-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2508,7 +2694,7 @@ test('container creation validates runtime identity and retains it until success
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'identity-container'],
+    ['start', 'identity-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, 'Hostname (optional)'), '');
@@ -2526,7 +2712,8 @@ test('container creation validates bounded labels and retains them until success
         if (creates === 1) throw new Error('label persistence temporarily unavailable');
         return 'labelled-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2586,7 +2773,7 @@ test('container creation validates bounded labels and retains them until success
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'labelled-container'],
+    ['start', 'labelled-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2603,7 +2790,8 @@ test('container creation validates entrypoint argv and retains it until success'
         if (creates === 1) throw new Error('entrypoint temporarily unavailable');
         return 'entrypoint-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2678,7 +2866,7 @@ test('container creation validates entrypoint argv and retains it until success'
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'entrypoint-container'],
+    ['start', 'entrypoint-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2695,7 +2883,8 @@ test('container creation validates an initial network reference and retains it u
         if (creates === 1) throw new Error('network attachment temporarily unavailable');
         return 'networked-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2735,7 +2924,7 @@ test('container creation validates an initial network reference and retains it u
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'networked-container'],
+    ['start', 'networked-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2815,7 +3004,7 @@ test('container lifecycle controls report only observation-backed completion', a
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Start completed and was verified.'));
-  assert.deepEqual(calls, [['start', id], ['reload']]);
+  assert.deepEqual(calls, [['start', id, 7], ['reload']]);
 
   render('running');
   invoke(stage, 'Restart');
@@ -2834,7 +3023,7 @@ test('container lifecycle controls report only observation-backed completion', a
       'Stop was sent, but the requested transition was not observed before the deadline.',
     ),
   );
-  assert.deepEqual(calls.slice(-2), [['stop', id], ['reload']]);
+  assert.deepEqual(calls.slice(-2), [['stop', id, 7], ['reload']]);
 
   render('exited', 8);
   invoke(stage, 'Remove');
@@ -2842,7 +3031,7 @@ test('container lifecycle controls report only observation-backed completion', a
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Container removal completed and its absence was verified.'));
-  assert.deepEqual(calls.slice(-2), [['remove', id], ['reload']]);
+  assert.deepEqual(calls.slice(-2), [['remove', id, 8], ['reload']]);
 });
 
 test('restart refuses a container without an observed generation', async () => {
@@ -2863,7 +3052,7 @@ test('restart refuses a container without an observed generation', async () => {
   await settled();
   await settled();
   assert.ok(
-    labelled(stage, 'Container old has no observable generation; refresh before restarting it.'),
+    labelled(stage, 'Container old has no observable generation; refresh before changing it.'),
   );
   assert.deepEqual(calls, []);
 });
@@ -2879,15 +3068,15 @@ test('container execution preserves argv and exposes the exact inspectable ident
         state: 'running',
         created: 0,
       }),
-      exec: async (id, options) => {
-        calls.push(['exec', id, options]);
+      exec: async (id, generation, options) => {
+        calls.push(['exec', id, generation, options]);
         return 'execution-exact-42';
       },
       logs: async () => new Uint8Array(),
     },
   };
   const resource = {
-    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -2920,6 +3109,7 @@ test('container execution preserves argv and exposes the exact inspectable ident
     [
       'exec',
       'container-one',
+      7,
       {
         command: ['sh', '-lc', 'printf hello world'],
         user: '1000:1000',
@@ -3930,6 +4120,25 @@ function fieldValue(stage, placeholder) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
     .at(-1)?.SetProp.value?.Text;
+}
+
+function ancestorTags(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  const found = labelled(stage, label)?.SetProp.id;
+  const ancestors = [];
+  for (let node = found; parents.has(node);) {
+    node = parents.get(node);
+    ancestors.push(tags.get(node));
+  }
+  return ancestors;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

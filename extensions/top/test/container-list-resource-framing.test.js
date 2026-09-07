@@ -58,6 +58,7 @@ test(
                           image: 'alpine:3.20',
                           state: 'exited',
                           created: 0,
+                          generation: 7,
                         },
                       ],
               };
@@ -72,7 +73,14 @@ test(
           ) {
             observation = {
               containers: [
-                { id, name: 'current-worker', image: 'alpine:3.20', state: 'exited', created: 0 },
+                {
+                  id,
+                  name: 'current-worker',
+                  image: 'alpine:3.20',
+                  state: 'exited',
+                  created: 0,
+                  generation: 7,
+                },
               ],
               complete: true,
             };
@@ -168,7 +176,11 @@ test(
       );
       invoke(stage, 'Confirm remove');
       await until(() => removals.length === 1 && labelled(stage, 'No containers'));
-      assert.deepEqual(removals, [{ id }], 'removal uses the exact immutable inventory identity');
+      assert.deepEqual(
+        removals,
+        [{ id, generation: 7 }],
+        'removal uses the exact observed identity and generation',
+      );
       await until(() =>
         labelled(stage, 'Container removal completed and its absence was verified.'),
       );

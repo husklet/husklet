@@ -88,12 +88,14 @@ pub enum Request {
         revision: u64,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        filesystem: crate::FilesystemGrant,
     },
     ExtensionUpdate {
         job: String,
         revision: u64,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        filesystem: crate::FilesystemGrant,
     },
     ContainerList,
     ContainerInspect {
@@ -132,32 +134,41 @@ pub enum Request {
     },
     ContainerStart {
         id: String,
+        generation: u64,
     },
     ContainerStop {
         id: String,
+        generation: u64,
     },
     ContainerRemove {
         id: String,
+        generation: u64,
     },
     ContainerPause {
         id: String,
+        generation: u64,
     },
     ContainerUnpause {
         id: String,
+        generation: u64,
     },
     ContainerRestart {
         id: String,
+        generation: u64,
     },
     ContainerRename {
         id: String,
+        generation: u64,
         name: String,
     },
     ContainerKill {
         id: String,
+        generation: u64,
         signal: String,
     },
     ContainerExec {
         id: String,
+        generation: u64,
         command: Vec<String>,
         user: Option<String>,
         working_directory: Option<String>,
@@ -726,7 +737,11 @@ mod tests {
         );
         assert_eq!(Request::ContainerList.capability(), Capability::ContainerRead);
         assert_eq!(
-            Request::ContainerStop { id: "a".into() }.capability(),
+            Request::ContainerStop {
+                id: "a".into(),
+                generation: 4
+            }
+            .capability(),
             Capability::ContainerControl
         );
         assert_eq!(
@@ -755,6 +770,7 @@ mod tests {
         assert_eq!(
             Request::ContainerExec {
                 id: "a".into(),
+                generation: 4,
                 command: vec!["true".into()],
                 user: None,
                 working_directory: None,
@@ -899,18 +915,26 @@ mod tests {
         );
 
         let accepted: Request =
-            serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\"}}").expect("valid");
-        assert_eq!(accepted, Request::ContainerStop { id: "c1".into() });
+            serde_json::from_str("{\"call\":\"container_stop\",\"with\":{\"id\":\"c1\",\"generation\":4}}")
+                .expect("valid");
+        assert_eq!(
+            accepted,
+            Request::ContainerStop {
+                id: "c1".into(),
+                generation: 4
+            }
+        );
 
         let rename = Request::ContainerRename {
             id: "a".repeat(64),
+            generation: 4,
             name: "worker_2.prod".into(),
         };
         assert_eq!(
             serde_json::to_value(&rename).expect("rename wire request"),
             serde_json::json!({
                 "call": "container_rename",
-                "with": { "id": "a".repeat(64), "name": "worker_2.prod" }
+                "with": { "id": "a".repeat(64), "generation": 4, "name": "worker_2.prod" }
             })
         );
         assert_eq!(

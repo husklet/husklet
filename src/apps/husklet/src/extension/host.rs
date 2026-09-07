@@ -337,11 +337,15 @@ impl Plan {
     /// an image that restates a wider request cannot widen what is running.
     #[must_use]
     pub fn authority(&self) -> Authority {
-        Authority::new(
-            self.record.name.clone(),
-            self.record.granted.clone(),
-            self.manifest.filesystem_roots.clone(),
-        )
+        let roots = self
+            .record
+            .filesystem
+            .read
+            .iter()
+            .chain(&self.record.filesystem.write)
+            .cloned()
+            .collect();
+        Authority::new(self.record.name.clone(), self.record.granted.clone(), roots)
     }
 }
 
@@ -825,6 +829,7 @@ fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voic
         plan.workspace.clone(),
         queue.clone(),
         plan.record.containers.clone(),
+        plan.record.filesystem.clone(),
     );
     let Ok(mut conversation) = opened else {
         return "the extension's socket could not be duplicated".to_owned();
@@ -1041,15 +1046,15 @@ tab_title = "Sample"
             Ok(format!("id-{name}"))
         }
 
-        fn start(&self, _id: &str) -> Result<(), HostError> {
+        fn start(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
 
-        fn stop(&self, _id: &str) -> Result<(), HostError> {
+        fn stop(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
 
-        fn remove(&self, _id: &str) -> Result<(), HostError> {
+        fn remove(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
     }
@@ -1149,7 +1154,7 @@ tab_title = "Sample"
             interface: None,
             pane_providers: Vec::new(),
             resources: Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 
@@ -1157,6 +1162,7 @@ tab_title = "Sample"
         let manifest = manifest();
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
             version: "1.0.0".to_owned(),
@@ -1359,13 +1365,8 @@ tab_title = "Sample"
     fn describe(wire: &mut Wire<UnixStream>, sequence: u64) -> Result<(), Transit> {
         call(
             wire,
-            &Request::InterfaceOpenTab {
-                title: "Sample".to_owned(),
-            },
-        )?;
-        call(
-            wire,
-            &Request::InterfaceRender {
+            &Request::InterfaceRenderAt {
+                slot: String::new(),
                 frame: hl_gui::Frame::new(sequence),
             },
         )

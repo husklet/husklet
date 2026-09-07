@@ -1391,6 +1391,90 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     run_with_arguments(executable, translit, &[], false, false, false, false)
 }
 
+fn run_mulss_benchmark(
+    executable: &Path,
+    iterations: &str,
+    disabled: bool,
+) -> (Vec<u8>, Vec<u8>, i32, std::time::Duration) {
+    let captured = Arc::new(CapturedOutput::default());
+    let mut options = Options::default();
+    options.set("HL_TRANSLIT", "1", true).expect("HL_TRANSLIT");
+    options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
+    if disabled {
+        options
+            .set("HL_TRANSLIT_MULSS_DISABLE", "1", true)
+            .expect("HL_TRANSLIT_MULSS_DISABLE");
+    }
+    let plan = RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            iterations.as_bytes().to_vec(),
+        ]
+        .into(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+        box_policy: Default::default(),
+    };
+    let streams = StandardStreams::default().with_output(captured.clone());
+    let engine = Engine::with_streams(GuestIsa::X86_64, plan, streams).expect("launch");
+    let started = std::time::Instant::now();
+    engine.start().expect("start");
+    let exit = engine.wait().expect("wait");
+    let elapsed = started.elapsed();
+    engine.destroy().expect("destroy");
+    let out = captured.out.lock().unwrap().clone();
+    let err = captured.err.lock().unwrap().clone();
+    (out, err, exit.guest_status, elapsed)
+}
+
+#[test]
+#[ignore = "profile only: run under the exclusive box protocol"]
+fn register_mulss_focused_same_binary_profile() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "mulss_loop");
+    let iterations =
+        std::env::var("HL_MULSS_PROFILE_ITERATIONS").unwrap_or_else(|_| "100000000".into());
+    let native = std::process::Command::new(&executable)
+        .arg(&iterations)
+        .output()
+        .expect("native MULSS loop");
+    assert!(native.status.success());
+    for (index, disabled) in [true, false, false, true].into_iter().enumerate() {
+        let (out, err, status, elapsed) =
+            run_mulss_benchmark(&executable, &iterations, disabled);
+        assert_eq!(status, 0);
+        assert_eq!(out, native.stdout);
+        let report = String::from_utf8(err).expect("profile utf8");
+        let counter = |name: &str| {
+            report
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix(name))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        let translated_entries = counter("entries=");
+        let unsupported_total = counter("total=");
+        let mulss_admitted = counter("sse2_mulss_admitted=");
+        let mulss_runs = counter("sse2_mulss_runs_admitted=");
+        if disabled {
+            assert_eq!(mulss_admitted, 0, "{report}");
+            assert!(unsupported_total > 0, "{report}");
+        } else {
+            assert!(mulss_admitted > 0, "{report}");
+            assert!(mulss_runs > 0, "{report}");
+            assert!(translated_entries > 0, "{report}");
+        }
+        eprintln!(
+            "mulss-profile index={index} disabled={} elapsed_us={} translated_entries={} interpreted_entries={} unsupported_total={} mulss_admitted={} mulss_runs={}",
+            u8::from(disabled), elapsed.as_micros(), translated_entries,
+            counter("interpreted_entries="), unsupported_total, mulss_admitted, mulss_runs,
+        );
+    }
+}
+
 fn run_with_jcc_controls(executable: &Path, disable_link: bool) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();

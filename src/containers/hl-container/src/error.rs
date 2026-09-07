@@ -15,6 +15,10 @@ pub enum Error {
     InvalidNetwork(String),
     #[error("container {0} was not found")]
     NotFound(String),
+    #[error("container {id} generation changed: expected {expected}, found {actual}")]
+    GenerationMismatch { id: ContainerId, expected: u64, actual: u64 },
+    #[error("container reference {reference:?} changed identity: expected {expected}, found {actual}")]
+    IdentityMismatch { reference: String, expected: ContainerId, actual: ContainerId },
     #[error("exec {0} was not found")]
     ExecNotFound(ExecId),
     #[error("container name {0:?} is already in use")]

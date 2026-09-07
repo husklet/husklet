@@ -51,6 +51,20 @@ fn switch() -> gtk::Switch {
 /// GTK4 has no radio widget: a check button becomes a radio by joining another
 /// one's group, so the grouping has to happen where the option is placed.
 pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bool {
+    if super::belongs(parent, Tag::FormControlLabel) {
+        let Some(container) = parent.downcast_ref::<gtk::Box>() else {
+            return false;
+        };
+        slot::field(child);
+        if let Some(caption) = slot::caption(parent) {
+            if child.is_focusable() {
+                caption.set_mnemonic_widget(Some(child));
+            }
+            child.update_relation(&[gtk::accessible::Relation::LabelledBy(&[caption.upcast_ref()])]);
+        }
+        container.prepend(child);
+        return true;
+    }
     if tag != Tag::Radio || !super::belongs(parent, Tag::RadioGroup) {
         return false;
     }

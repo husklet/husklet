@@ -4,7 +4,7 @@ pub(crate) struct Panel(gtk::Box);
 
 impl Panel {
     pub(crate) fn new(title: &str) -> Self {
-        let p = gtk::Box::new(gtk::Orientation::Vertical, 14);
+        let p = gtk::Box::new(gtk::Orientation::Vertical, 8);
         p.add_css_class("pane");
         let t = gtk::Label::new(Some(title));
         t.add_css_class("ptitle");

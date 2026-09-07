@@ -32,13 +32,13 @@ wrong caller.
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, and rendered UI cover administration. Database credentials and SQL transport remain the extension's own concern. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
-| Single-file workspace editor | Strong | An exact file path may be the sole `filesystem_roots` entry. `stat` plus `writeObserved` provides compare-and-swap replacement; ranged reads and observed rename/remove prevent stale agent decisions. |
+| Single-file workspace editor | Strong | `[filesystem]` grants read and write roots independently, so an extension may scan a tree while modifying one exact file. `stat` plus `writeObserved` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
 | Extension catalogue/manager | Partial | Discovery can be rendered from a catalogue owned by the manager extension; acquisition/install/update/enable/disable/remove are complete. The host does not define or trust a global catalogue service. |
 
 Capabilities use `group:verb` wire names. Filesystem authority is additionally
-confined by exact manifest roots, including a single file. Container authority is
+confined by exact consented roots, including a single file. Container authority is
 the intersection of a verb capability and separately consented resource selectors.
 
 ### Per-resource grants
@@ -56,8 +56,9 @@ Creation additionally requires `create = true`. Visibility never implies create.
 Omitting `[containers]` means no container authority, even with a container verb
 capability. Workspace-wide authority is explicit: `selectors = [{ all = true }]`.
 
-Filesystem roots implement the same two-dimensional model: the capability decides
-the verb and exact roots decide the resource. Container enforcement follows that
+Filesystem grants implement the same two-dimensional model: `filesystem:read` and
+`filesystem:write` decide the verb, while independently consented exact roots decide
+the resource. Writable roots are not implicitly readable. Container enforcement follows that
 order; the JavaScript client's checks are never treated as a security boundary.
 
 ## Workspace

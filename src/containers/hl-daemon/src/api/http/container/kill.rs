@@ -1,9 +1,11 @@
 use super::*;
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub(in super::super) struct KillQuery {
     #[serde(default = "default_signal")]
     signal: String,
+    generation: Option<u64>,
+    container_id: Option<String>,
 }
 
 fn default_signal() -> String {
@@ -28,10 +30,10 @@ pub(in super::super) async fn kill(
     Query(query): Query<KillQuery>,
 ) -> ApiResult<StatusCode> {
     let signal = query.signal()?;
-    state
-        .containers
-        .signal(&id, signal)
-        .await
+    let result = if let Some(generation) = query.generation {
+        state.containers.signal_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation, signal).await
+    } else { state.containers.signal(&id, signal).await };
+    result
         .map_err(ApiError::container)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -142,11 +144,12 @@ mod tests {
     #[test]
     fn supported_forms() {
         for (value, expected) in [("9", Signal::KILL), ("sigterm", Signal::TERMINATE)] {
-            let query = KillQuery { signal: value.into() };
+            let query = KillQuery { signal: value.into(), ..KillQuery::default() };
             assert_eq!(query.signal().unwrap(), expected);
         }
         let whitespace = KillQuery {
             signal: " SIGKILL ".into(),
+            ..KillQuery::default()
         };
         assert_eq!(whitespace.signal().unwrap_err().status, StatusCode::BAD_REQUEST);
     }
@@ -154,7 +157,7 @@ mod tests {
     #[test]
     fn invalid_signal() {
         for value in ["SIGBOGUS", "0"] {
-            let query = KillQuery { signal: value.into() };
+            let query = KillQuery { signal: value.into(), ..KillQuery::default() };
             assert_eq!(query.signal().unwrap_err().status, StatusCode::BAD_REQUEST);
         }
     }

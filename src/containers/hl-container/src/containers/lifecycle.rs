@@ -44,6 +44,11 @@ impl Containers {
         Ok(())
     }
 
+    pub async fn start_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        self.service.start_generation(reference, Some(&expected_id), Some(generation)).await
+    }
+
     /// Waits for and returns the durable terminal status. Multiple concurrent waiters are supported.
     ///
     /// # Errors
@@ -73,6 +78,12 @@ impl Containers {
         self.service.signal(reference, signal).await
     }
 
+    pub async fn signal_if_generation(&self, reference: &str, expected_id: &str, generation: u64, signal: Signal) -> Result<()> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        let id = self.service.pin_generation(reference, &expected_id, generation).await?;
+        self.service.signal(id.as_str(), signal).await
+    }
+
     /// Changes the size of a running container's terminal and preserves it for restarts.
     ///
     /// # Errors
@@ -92,6 +103,12 @@ impl Containers {
         Ok(())
     }
 
+    pub async fn pause_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        let id = self.service.pin_generation(reference, &expected_id, generation).await?;
+        self.service.pause(id.as_str()).await
+    }
+
     /// Resumes a container previously suspended by [`Self::pause`].
     ///
     /// # Errors
@@ -101,6 +118,12 @@ impl Containers {
         self.service.unpause(reference).await?;
         hl_log::hl_info!(hl_log::tag::CONTAINER, "resumed reference={reference}");
         Ok(())
+    }
+
+    pub async fn unpause_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        let id = self.service.pin_generation(reference, &expected_id, generation).await?;
+        self.service.unpause(id.as_str()).await
     }
 
     /// Writes the complete process tree to durable native checkpoint storage.
@@ -133,6 +156,17 @@ impl Containers {
             "stopped reference={reference} status={status:?}"
         );
         Ok(status)
+    }
+
+    pub async fn stop_if_generation(
+        &self,
+        reference: &str,
+        expected_id: &str, generation: u64,
+        timeout: std::time::Duration,
+    ) -> Result<ExitStatus> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        let id = self.service.pin_generation(reference, &expected_id, generation).await?;
+        self.service.stop(id.as_str(), timeout).await
     }
 
     /// Stops every active container while preserving the first failure.
@@ -188,7 +222,7 @@ impl Containers {
     /// Returns lookup, invalid-state, or persistence failures.
     pub async fn remove(&self, reference: &str) -> Result<Container> {
         let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "remove");
-        let container = self.service.remove(reference, false, false, None).await?;
+        let container = self.service.remove(reference, false, false, None, None, None).await?;
         hl_log::hl_info!(hl_log::tag::CONTAINER, "removed id={}", container.id);
         Ok(container)
     }
@@ -199,7 +233,7 @@ impl Containers {
     /// Returns lookup, runtime, persistence, or rootfs-release failures.
     pub async fn remove_force(&self, reference: &str) -> Result<Container> {
         let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "remove_force");
-        let container = self.service.remove(reference, true, false, None).await?;
+        let container = self.service.remove(reference, true, false, None, None, None).await?;
         hl_log::hl_info!(hl_log::tag::CONTAINER, "force removed id={}", container.id);
         Ok(container)
     }
@@ -211,6 +245,18 @@ impl Containers {
     /// # Errors
     /// Returns lookup, state, runtime, persistence, or owned-resource cleanup failures.
     pub async fn remove_volumes(&self, reference: &str, force: bool) -> Result<Container> {
-        self.service.remove(reference, force, true, None).await
+        self.service.remove(reference, force, true, None, None, None).await
+    }
+
+
+    pub async fn remove_if_generation(
+        &self,
+        reference: &str,
+        expected_id: &str, generation: u64,
+        force: bool,
+        volumes: bool,
+    ) -> Result<Container> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        self.service.remove(reference, force, volumes, None, Some(&expected_id), Some(generation)).await
     }
 }

@@ -46,14 +46,21 @@ impl Form {
 
         let form = Rc::new(Form::new());
         form.add_environment();
+        let grouped = |children: Vec<gtk::Box>| {
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            for child in children {
+                page.append(&child);
+            }
+            page
+        };
         let view = screens::workspace::create::View::new([
-            (CreatePage::General, form.general()),
+            (CreatePage::Basics, grouped(vec![form.general(), form.resources()])),
             (CreatePage::Terminal, form.terminal()),
-            (CreatePage::Resources, form.resources()),
-            (CreatePage::Environment, form.environment()),
-            (CreatePage::Mounts, form.mounts()),
-            (CreatePage::Docker, form.docker()),
-            (CreatePage::Network, form.network()),
+            (
+                CreatePage::Integrations,
+                grouped(vec![form.environment(), form.mounts()]),
+            ),
+            (CreatePage::Advanced, grouped(vec![form.docker(), form.network()])),
         ]);
         form.bind_creation_requirements(&view.create);
         window.set_default_widget(Some(&view.create));
@@ -77,7 +84,7 @@ impl Form {
                 form.image.remove_css_class("err");
                 if !name_ok || !img_ok {
                     FormValidation::mark_required(&form, name_ok, img_ok);
-                    pages.set_visible_child_name("General");
+                    pages.set_visible_child_name("Basics");
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
@@ -152,6 +159,7 @@ impl Form {
             });
         }
         host::appearance::Appearance::apply();
+        Screenshot::schedule_resize(&window, "newws");
         Screenshot::schedule(&window, "newws");
     }
 

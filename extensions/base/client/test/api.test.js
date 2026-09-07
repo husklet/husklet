@@ -978,8 +978,8 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false } } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [] } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));
@@ -1395,15 +1395,15 @@ test('deep container methods and subscriptions use exact protocol request shapes
   await assert.rejects(api.containers.execution('execution-name'), /complete immutable ID/);
   await assert.rejects(api.containers.executionLogs('abc123'), /complete immutable ID/);
   await assert.rejects(api.containers.waitExecution('7'), /complete immutable ID/);
-  assert.throws(() => api.containers.stop('friendly-name'), /complete immutable ID/);
-  assert.throws(() => api.containers.remove('abc123'), /complete immutable ID/);
-  assert.throws(() => api.containers.kill('friendly-name', 'SIGTERM'), /complete immutable ID/);
-  assert.throws(() => api.containers.rename('friendly-name', 'worker'), /complete immutable ID/);
+  assert.throws(() => api.containers.stop('friendly-name'), /observed nonnegative safe generation/);
+  assert.throws(() => api.containers.remove('abc123'), /observed nonnegative safe generation/);
+  assert.throws(() => api.containers.kill('friendly-name', -1, 'SIGTERM'), /observed nonnegative safe generation/);
+  assert.throws(() => api.containers.rename('friendly-name', -1, 'worker'), /observed nonnegative safe generation/);
   for (const action of ['start', 'pause', 'unpause', 'restart']) {
-    assert.throws(() => api.containers[action]('friendly-name'), /complete immutable ID/);
+    assert.throws(() => api.containers[action]('friendly-name'), /observed nonnegative safe generation/);
   }
-  assert.throws(() => api.containers.rename(containerId, '.worker'), /container name must/);
-  assert.throws(() => api.containers.rename(containerId, 'x'.repeat(129)), /container name must/);
+  assert.throws(() => api.containers.rename(containerId, 7, '.worker'), /container name must/);
+  assert.throws(() => api.containers.rename(containerId, 7, 'x'.repeat(129)), /container name must/);
   const operations = [
     api.containers.processes('c1'),
     api.containers.logs('c1', { stdout: true, stderr: false }),
@@ -1411,17 +1411,17 @@ test('deep container methods and subscriptions use exact protocol request shapes
     api.containers.executions(),
     api.containers.executionLogs(executionId, { stdout: true, stderr: false }),
     api.containers.waitExecution(executionId, { timeoutMs: 250 }),
-    api.containers.start(containerId),
-    api.containers.pause(containerId),
-    api.containers.unpause(containerId),
-    api.containers.restart(containerId),
-    api.containers.rename(containerId, 'worker_2.prod'),
-    api.containers.stop(containerId),
-    api.containers.remove(containerId),
-    api.containers.kill(containerId, 'SIGTERM'),
+    api.containers.start(containerId, 7),
+    api.containers.pause(containerId, 7),
+    api.containers.unpause(containerId, 7),
+    api.containers.restart(containerId, 7),
+    api.containers.rename(containerId, 7, 'worker_2.prod'),
+    api.containers.stop(containerId, 7),
+    api.containers.remove(containerId, 7),
+    api.containers.kill(containerId, 7, 'SIGTERM'),
     api.containers.signalExecution(executionId, 'SIGHUP'),
     api.containers.removeExecution(executionId),
-    api.containers.exec(containerId, {
+    api.containers.exec(containerId, 7, {
       command: ['sh', '-lc', 'true'],
       user: '1000',
       workingDirectory: '/work',
@@ -1438,17 +1438,17 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'execution_list' },
     { call: 'execution_logs', with: { id: executionId, stdout: true, stderr: false } },
     { call: 'execution_wait', with: { id: executionId, timeout_ms: 250 } },
-    { call: 'container_start', with: { id: containerId } },
-    { call: 'container_pause', with: { id: containerId } },
-    { call: 'container_unpause', with: { id: containerId } },
-    { call: 'container_restart', with: { id: containerId } },
-    { call: 'container_rename', with: { id: containerId, name: 'worker_2.prod' } },
-    { call: 'container_stop', with: { id: containerId } },
-    { call: 'container_remove', with: { id: containerId } },
-    { call: 'container_kill', with: { id: containerId, signal: 'SIGTERM' } },
+    { call: 'container_start', with: { id: containerId, generation: 7 } },
+    { call: 'container_pause', with: { id: containerId, generation: 7 } },
+    { call: 'container_unpause', with: { id: containerId, generation: 7 } },
+    { call: 'container_restart', with: { id: containerId, generation: 7 } },
+    { call: 'container_rename', with: { id: containerId, generation: 7, name: 'worker_2.prod' } },
+    { call: 'container_stop', with: { id: containerId, generation: 7 } },
+    { call: 'container_remove', with: { id: containerId, generation: 7 } },
+    { call: 'container_kill', with: { id: containerId, generation: 7, signal: 'SIGTERM' } },
     { call: 'execution_kill', with: { id: executionId, signal: 'SIGHUP' } },
     { call: 'execution_remove', with: { id: executionId } },
-    { call: 'container_exec', with: { id: containerId, command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
+    { call: 'container_exec', with: { id: containerId, generation: 7, command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
   const replies = [

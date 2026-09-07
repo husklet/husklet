@@ -1377,6 +1377,14 @@
           }
         },
         {
+          "name": "requested_filesystem",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "FilesystemGrant"
+          }
+        },
+        {
           "name": "installed_image_digest",
           "optional": true,
           "schema": {
@@ -1551,6 +1559,36 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "FilesystemGrant": {
+      "fields": [
+        {
+          "name": "read",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "write",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
     },
     "Frame": {
       "fields": [
@@ -7985,6 +8023,14 @@
                   "kind": "ref",
                   "name": "ContainerGrant"
                 }
+              },
+              {
+                "name": "filesystem",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "FilesystemGrant"
+                }
               }
             ],
             "kind": "struct"
@@ -8026,6 +8072,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "ContainerGrant"
+                }
+              },
+              {
+                "name": "filesystem",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "FilesystemGrant"
                 }
               }
             ],
@@ -8236,6 +8290,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8250,6 +8315,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -8266,6 +8342,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8280,6 +8367,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -8296,6 +8394,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8311,6 +8420,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8325,6 +8445,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               },
               {
@@ -8350,6 +8481,17 @@
                 }
               },
               {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
                 "name": "signal",
                 "optional": false,
                 "schema": {
@@ -8369,6 +8511,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               },
               {
@@ -10927,7 +11080,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:40793df1806457f1",
+  "source_fingerprint": "fnv1a64:805f214b5013ac95",
   "specification_version": 1,
   "topics": [
     {

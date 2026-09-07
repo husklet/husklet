@@ -77,12 +77,17 @@ export interface ContainerGrant {
   selectors: ContainerSelector[];
   create: boolean;
 }
+export interface FilesystemGrant {
+  read: string[];
+  write: string[];
+}
 export interface ExtensionCandidate {
   name: string;
   version: string;
   image_digest: string;
   requested: ExtensionCapability[];
   requested_containers: ContainerGrant;
+  requested_filesystem: FilesystemGrant;
   installed_image_digest: string | null;
 }
 export interface ExtensionAcquisitionJob {
@@ -146,7 +151,7 @@ export interface ContainerSummary {
   image: string;
   state: string;
   created: number;
-  generation?: number;
+  generation: number;
 }
 export interface ContainerInventory {
   containers: ContainerSummary[];
@@ -579,15 +584,15 @@ export interface WorkspaceApi {
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
+    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
+    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
+    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
+    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
@@ -612,7 +617,7 @@ export interface WorkspaceApi {
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
-    execAndWait(id: string, options: {
+    execAndWait(id: string, generation: number, options: {
       command: string[]; user?: string; workingDirectory?: string; timeoutMs?: number;
       stdout?: boolean; stderr?: boolean;
     }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
@@ -631,32 +636,32 @@ export interface WorkspaceApi {
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */
     create(image: string, name?: string): Promise<string>;
-    start(id: string): Promise<void>;
+    start(id: string, generation: number): Promise<void>;
     /** Arm bounded inventory, start an immutable ID, then accept only a later running snapshot. */
-    startAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+    startAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; state: 'running' }
     >;
-    stop(id: string): Promise<void>;
+    stop(id: string, generation: number): Promise<void>;
     /** Arm bounded inventory, stop an immutable ID, then accept only a later exited snapshot. */
-    stopAndWait(id: string, options?: { timeoutMs?: number }): Promise<
+    stopAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; state: 'exited' }
     >;
-    remove(id: string): Promise<void>;
+    remove(id: string, generation: number): Promise<void>;
     /** Remove an immutable ID and accept absence only from a later complete bounded inventory. */
-    removeAndWait(id: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
-    pause(id: string): Promise<void>;
-    unpause(id: string): Promise<void>;
-    restart(id: string): Promise<void>;
+    removeAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
+    pause(id: string, generation: number): Promise<void>;
+    unpause(id: string, generation: number): Promise<void>;
+    restart(id: string, generation: number): Promise<void>;
     /** Restart only after observing a generation; resolves on the same ID running at a newer generation. */
     restartAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; generation: number }
     >;
-    rename(id: string, name: string): Promise<void>;
-    kill(id: string, signal: string): Promise<void>;
-    exec(id: string, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
+    rename(id: string, generation: number, name: string): Promise<void>;
+    kill(id: string, generation: number, signal: string): Promise<void>;
+    exec(id: string, generation: number, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
   images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>; prune(): Promise<ImagePruneResult> };

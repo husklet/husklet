@@ -14,7 +14,7 @@ use crate::port::{
     PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
-use crate::{ContainerGrant, ContainerSelector};
+use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
 
 /// The host services a session dispatches to.
 ///
@@ -42,6 +42,7 @@ pub struct Session {
     pending: Vec<SurfaceFrame>,
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
+    filesystem: FilesystemGrant,
 }
 
 /// One reconciliation frame and the surface that owns its sequence.
@@ -93,6 +94,7 @@ impl Session {
             pending: Vec::new(),
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
+            filesystem: FilesystemGrant::default(),
         }
     }
 
@@ -101,6 +103,38 @@ impl Session {
     pub fn with_containers(mut self, containers: ContainerGrant) -> Self {
         self.containers = containers;
         self
+    }
+
+    #[must_use]
+    pub fn with_filesystem(mut self, filesystem: FilesystemGrant) -> Self {
+        self.filesystem = filesystem;
+        self
+    }
+
+    #[must_use]
+    pub fn filesystem_read_roots(&self) -> &[hl_rpc::RelativePath] {
+        &self.filesystem.read
+    }
+
+    fn permit_filesystem_path(&self, capability: Capability, path: &hl_rpc::RelativePath) -> Result<(), Failure> {
+        self.peer.authority().permit(capability)?;
+        let roots = match capability {
+            Capability::FilesystemRead => &self.filesystem.read,
+            Capability::FilesystemWrite => &self.filesystem.write,
+            _ => {
+                return Err(Failure::Denied {
+                    capability: capability.as_str().into(),
+                    detail: "non-filesystem capability used for path authority".into(),
+                })
+            }
+        };
+        if roots.iter().any(|root| path.within(root)) {
+            return Ok(());
+        }
+        Err(Failure::Denied {
+            capability: capability.as_str().into(),
+            detail: "path is outside the extension's consented resource scope".into(),
+        })
     }
 
     fn visible_container(&self, container: &crate::port::ContainerSummary) -> bool {
@@ -183,16 +217,6 @@ impl Session {
     ) -> Result<crate::port::ContainerSummary, Failure> {
         immutable_identity(id, &[32, 64], "container")?;
         let container = self.resolve_container(id, port)?;
-        let immutable_scope = self.containers.all()
-            || self.containers.selectors.iter().any(
-                |selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id),
-            );
-        if !immutable_scope {
-            return Err(Failure::Denied {
-                capability: Capability::ContainerControl.as_str().into(),
-                detail: "name-scoped container mutations require generation-bound host support".into(),
-            });
-        }
         Ok(container)
     }
 
@@ -235,11 +259,11 @@ impl Session {
         let capability = request.capability();
         match request {
             Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
-                self.peer.authority().permit_path(capability, from)?;
-                self.peer.authority().permit_path(capability, to)?;
+                self.permit_filesystem_path(capability, from)?;
+                self.permit_filesystem_path(capability, to)?;
             }
             _ => match request.path() {
-                Some(path) => self.peer.authority().permit_path(capability, path)?,
+                Some(path) => self.permit_filesystem_path(capability, path)?,
                 None => self.peer.authority().permit(capability)?,
             },
         }
@@ -278,7 +302,20 @@ impl Session {
             | Request::ExecutionLogs { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerAttachTerminal { id, command } => {
+                immutable_identity(id, &[32, 64], "container")?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
+                let immutable_scope = self.containers.all()
+                    || self
+                        .containers
+                        .selectors
+                        .iter()
+                        .any(|selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id));
+                if !immutable_scope {
+                    return Err(Failure::Denied {
+                        capability: Capability::ContainerAttach.as_str().into(),
+                        detail: "name-scoped terminal attachment is unsupported until its worker handoff is generation-bound".into(),
+                    });
+                }
                 validate_terminal_command(command)?;
                 let port = self
                     .peer
@@ -478,41 +515,53 @@ impl Session {
                 validate_container_create(spec)?;
                 Ok(Reply::Identity(port.create_spec(spec)?))
             }
-            Request::ContainerStart { id } => {
+            Request::ContainerStart { id, generation } => {
                 let target = self.resolve_mutation_container(id, services.containers)?;
-                port.start(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerStop { id } => {
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.stop(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerRemove { id } => {
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.remove(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerPause { id } => {
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.pause(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerUnpause { id } => {
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.unpause(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerRestart { id } => {
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.restart(&target.id).map(|()| Reply::Done).map_err(Failure::from)
-            }
-            Request::ContainerRename { id, name } => {
-                validate_container_name(name)?;
-                let target = self.resolve_mutation_container(id, services.containers)?;
-                port.rename(&target.id, name)
+                port.start(id, &target.id, *generation)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::ContainerKill { id, signal } => {
+            Request::ContainerStop { id, generation } => {
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.stop(id, &target.id, *generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerRemove { id, generation } => {
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.remove(id, &target.id, *generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerPause { id, generation } => {
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.pause(id, &target.id, *generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerUnpause { id, generation } => {
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.unpause(id, &target.id, *generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerRestart { id, generation } => {
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.restart(id, &target.id, *generation)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerRename { id, generation, name } => {
+                validate_container_name(name)?;
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.rename(id, &target.id, *generation, name)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ContainerKill { id, generation, signal } => {
                 bounded_signal(signal)?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
-                port.kill(&target.id, signal)
+                port.kill(id, &target.id, *generation, signal)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
@@ -529,13 +578,16 @@ impl Session {
             }
             Request::ContainerExec {
                 id,
+                generation,
                 command,
                 user,
                 working_directory,
             } => {
                 let target = self.resolve_mutation_container(id, services.containers)?;
                 Ok(Reply::Identity(port.execute(
+                    id,
                     &target.id,
+                    *generation,
                     command,
                     user.as_deref(),
                     working_directory.as_deref(),
@@ -713,18 +765,24 @@ impl Session {
                 revision,
                 granted,
                 containers,
+                filesystem,
             } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.install(job, *revision, granted, containers)?))
+                Ok(Reply::Extension(
+                    port.install(job, *revision, granted, containers, filesystem)?,
+                ))
             }
             Request::ExtensionUpdate {
                 job,
                 revision,
                 granted,
                 containers,
+                filesystem,
             } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.update(job, *revision, granted, containers)?))
+                Ok(Reply::Extension(
+                    port.update(job, *revision, granted, containers, filesystem)?,
+                ))
             }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),

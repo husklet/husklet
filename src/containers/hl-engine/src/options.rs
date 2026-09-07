@@ -177,6 +177,11 @@ const DEFINITIONS: &[Definition] = &[
         "disable mixed normal/SSE same-ISA descriptor admission",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_MULSS_DISABLE",
+        "disable legacy register MULSS same-ISA descriptor admission",
+        Flag
+    ),
     internal!(
         "HL_TRANSLIT_JCC_LINK_DISABLE",
         "test-only disable already-published same-page JCC links",

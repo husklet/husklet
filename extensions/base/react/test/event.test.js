@@ -87,6 +87,8 @@ test('two roots keep independent slots, sequences, sources, and events over one 
     split: { slot: 'surface-1', division: 'beside' },
   });
   assert.deepEqual(await Promise.all([first.ready, second.ready]), ['surface-1', 'surface-2']);
+  assert.equal(first.slot, 'surface-1');
+  assert.equal(second.slot, 'surface-2');
   assert.deepEqual(stage.calls[1], {
     call: 'interface_split',
     with: { slot: 'surface-1', division: 'beside' },
@@ -102,6 +104,11 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   assert.deepEqual(stage.calls.at(-1), {
     call: 'source_resize_at',
     with: { slot: 'surface-2', mutation: { Length: { source: 7, version: 2, rows: 100_000 } } },
+  });
+  await second.source({ Open: { source: 7, columns: [{ key: 'pid', title: 'PID', width: { chars: 8 }, sortable: true }] } });
+  assert.deepEqual(stage.calls.at(-1), {
+    call: 'source_resize_at',
+    with: { slot: 'surface-2', mutation: { Open: { source: 7, columns: [{ key: 'pid', title: 'PID', width: { Chars: 8 }, align: 'Start', sortable: true, editable: false }] } } },
   });
   await stage.push({ interaction: 'invoke', trigger: 'Invoke', slot: 'surface-2', id: '1:Invoke', node: 1 });
   await until(() => secondInvoked === 1);

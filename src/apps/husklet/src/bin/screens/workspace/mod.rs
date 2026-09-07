@@ -73,6 +73,7 @@ impl View {
         if let Some(first) = items.borrow().first().and_then(gtk::Button::label) {
             semantics.select(&Self::semantic_path(&first));
         }
+        sidebar.set_visible(items.borrow().len() > 1);
 
         let split = gtk::Paned::new(gtk::Orientation::Horizontal);
         split.set_hexpand(true);
@@ -145,6 +146,7 @@ impl View {
             self.pages.set_visible_child_name(name);
             self.semantics.select(&Self::semantic_path(name));
         }
+        self.update_sidebar_visibility();
     }
 
     /// Removes one extension-owned overview page and its navigation authority.
@@ -166,6 +168,8 @@ impl View {
                 self.semantics.select(&Self::semantic_path(&id));
             }
         }
+        drop(items);
+        self.update_sidebar_visibility();
     }
 
     /// One sidebar entry and the page it selects, which is the whole of what a
@@ -259,6 +263,13 @@ impl View {
     fn names(item: &gtk::Button, name: &str) -> bool {
         item.widget_name().as_str() == name
     }
+
+    /// A single extension already owns the whole overview surface, so naming
+    /// it in a dedicated rail spends space without offering a choice. The
+    /// rail appears as soon as a second extension makes navigation necessary.
+    fn update_sidebar_visibility(&self) {
+        self.sidebar.set_visible(self.items.borrow().len() > 1);
+    }
 }
 
 #[cfg(test)]
@@ -322,7 +333,9 @@ mod semantic_tests {
             let workspace = gtk::Label::new(Some("workspace one"));
             let extensions = gtk::Label::new(Some("extensions"));
             view.attach("workspace", "Workspace", workspace.upcast_ref());
+            assert!(!view.sidebar.is_visible(), "one page needs no navigation rail");
             view.attach("extensions", "Extensions", extensions.upcast_ref());
+            assert!(view.sidebar.is_visible(), "two pages expose the page chooser");
             assert_eq!(view.entries(), ["Workspace", "Extensions"]);
             assert_eq!(view.shown().as_deref(), Some("workspace"));
 
@@ -334,6 +347,7 @@ mod semantic_tests {
             view.detach("extensions");
             assert_eq!(view.entries(), ["Workspace"]);
             assert!(view.page("extensions").is_none());
+            assert!(!view.sidebar.is_visible(), "removing the second page returns its space");
         }) {
             eprintln!("skipped: no display connection");
         }

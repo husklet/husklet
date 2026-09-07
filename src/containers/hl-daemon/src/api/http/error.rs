@@ -86,7 +86,9 @@ impl ApiError {
             | ContainerError::InvalidExecState { .. }
             | ContainerError::NonCheckpointableExec { .. }
             | ContainerError::NoTerminal(_)
-            | ContainerError::AlreadyRunning(_) => StatusCode::CONFLICT,
+            | ContainerError::AlreadyRunning(_)
+            | ContainerError::GenerationMismatch { .. } => StatusCode::CONFLICT,
+            ContainerError::IdentityMismatch { .. } => StatusCode::CONFLICT,
             ContainerError::InvalidSpec(_) | ContainerError::InvalidVolume(_) | ContainerError::InvalidNetwork(_) => {
                 StatusCode::BAD_REQUEST
             }

@@ -299,7 +299,7 @@ try {
     void attachmentGrant;
     void table;
     void cancellable.info();
-    void api.containers.exec('container', { command: ['sh'], workingDirectory: '/work' });
+    void api.containers.exec('container', 4, { command: ['sh'], workingDirectory: '/work' });
     void api.containers.create({ image: 'alpine:3.20', name: 'worker', command: ['sleep', '10'], environment: [['MODE', 'test']], mounts: [{ volume: 'cache', target: '/cache', read_only: true }], ports: [{ container: 8080, host: null, protocol: 'tcp' }], memory_mb: 256, cpus: 2, pids_limit: 128 });
     void api.containers.executions();
     void api.containers.executionLogs('a'.repeat(32), { stderr: false });
@@ -310,7 +310,7 @@ try {
     void api.images.pullStatus('pull-1');
     void api.images.cancelPull('pull-1');
     void api.files.stat('project/package.json');
-    void api.containers.rename('a'.repeat(64), 'worker_2.prod');
+    void api.containers.rename('a'.repeat(64), 4, 'worker_2.prod');
     void api.terminal.retitle('pane-1', 'Build 🧪');
     const transcriptProps: TerminalTranscriptProps = { lines: [{ text: 'ready', stream: 'stdout' }], cursor: { line: 1, column: 5 } };
     void TerminalTranscript; void transcriptProps;

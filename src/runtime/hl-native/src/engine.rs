@@ -657,6 +657,18 @@ mod tests {
         assert_eq!(unsafe { hook(301) }, 0);
     }
 
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn register_mulss_matches_native_and_is_checkpoint_atomic() {
+        let _serial = engine_test_lock();
+        let hook = crate::loader::tests()
+            .expect("native test bridge")
+            .x86_64_translit_displaced;
+        // SAFETY: scenario 302 owns bounded executable mappings, restores MXCSR and global test state,
+        // and executes its native/interpreter/translated comparisons in a disposable child process.
+        assert_eq!(unsafe { hook(302) }, 0);
+    }
+
     #[test]
     fn transliteration_exported_selectors_do_not_overlap() {
         let _serial = engine_test_lock();
