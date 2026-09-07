@@ -556,11 +556,11 @@ for (const updating of [false, true]) {
         create: true,
       },
       requested_filesystem: {
-        read: ['src', 'docs'],
-        write: ['src/config.json'],
-        create: ['generated'],
-        delete: ['cache'],
-        rename: ['migrations'],
+        read: [{ subtree: 'src' }, { exact: 'README.md' }],
+        write: [{ exact: 'src/config.json' }],
+        create: [{ subtree: 'generated' }],
+        delete: [{ subtree: 'cache' }],
+        rename: [{ subtree: 'migrations' }],
       },
       installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
     };
@@ -624,12 +624,12 @@ for (const updating of [false, true]) {
       ),
     );
     for (const label of [
-      'View contents · src (read)',
-      'View contents · docs (read)',
-      'Modify existing contents · src/config.json (write)',
-      'Create new entries · generated (create)',
-      'Delete entries · cache (delete)',
-      'Rename or move entries · migrations (rename)',
+      'View contents · src/ (subtree) (read)',
+      'View contents · README.md (exact file) (read)',
+      'Modify existing contents · src/config.json (exact file) (write)',
+      'Create new entries · generated/ (subtree) (create)',
+      'Delete entries · cache/ (subtree) (delete)',
+      'Rename or move entries · migrations/ (subtree) (rename)',
     ])
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
@@ -654,11 +654,11 @@ for (const updating of [false, true]) {
       create: true,
     });
     assert.deepEqual(calls[0][4], {
-      read: ['docs'],
+      read: [{ exact: 'README.md' }],
       write: [],
-      create: ['generated'],
+      create: [{ subtree: 'generated' }],
       delete: [],
-      rename: ['migrations'],
+      rename: [{ subtree: 'migrations' }],
     });
   });
 }
