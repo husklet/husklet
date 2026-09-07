@@ -174,9 +174,10 @@ function type(schemaNode) {
   }
 }
 function enumType(node) {
-  const { tag, content } = node.serde ?? {};
+  const { tag, content, untagged } = node.serde ?? {};
   return node.variants.map((variant) => {
     const payload = type(variant.payload);
+    if (untagged) return payload;
     if (tag && content) return variant.payload.kind === 'unit' ? `{ ${tag}: ${JSON.stringify(variant.name)} }` : `{ ${tag}: ${JSON.stringify(variant.name)}; ${content}: ${payload} }`;
     if (tag) return variant.payload.kind === 'unit' ? `{ ${tag}: ${JSON.stringify(variant.name)} }` : `{ ${tag}: ${JSON.stringify(variant.name)} } & ${payload}`;
     return variant.payload.kind === 'unit' ? JSON.stringify(variant.name) : `{ ${JSON.stringify(variant.name)}: ${payload} }`;

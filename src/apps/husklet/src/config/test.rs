@@ -94,7 +94,7 @@ fn workspace_generation_survives_updates_and_changes_after_recreation() {
 #[test]
 fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
     let path = tmp_path("legacy-generation");
-    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
     let mut store = WorkspaceStore::load(&path).unwrap();
     assert_eq!(store.get("legacy").unwrap().generation, "");
     assert_eq!(
@@ -105,7 +105,7 @@ fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
 
     std::fs::write(
         &path,
-        "[workspace]\nname = bad\ngeneration = NOT-A-GENERATION\nimage = alpine\narch = arm64\n",
+        "[workspace]\nname = bad\ngeneration = NOT-A-GENERATION\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n",
     )
     .unwrap();
     assert!(WorkspaceStore::load(&path).is_err());
@@ -117,7 +117,7 @@ fn legacy_workspace_requires_resave_before_generation_bound_mutation() {
 fn legacy_adoption_is_single_winner_and_exact_snapshot_bound() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("workspaces.conf");
-    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
     let expected = WorkspaceStore::load(&path).unwrap().get("legacy").unwrap().clone();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
     let mut threads = Vec::new();
@@ -231,7 +231,7 @@ fn rich_config_roundtrips() {
 #[test]
 fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
     let path = tmp_path("legacy-scrollback-default");
-    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n").unwrap();
 
     let loaded = WorkspaceStore::load(&path).unwrap();
     assert_eq!(loaded.get("legacy").unwrap().scrollback, Some(DEFAULT_SCROLLBACK_LINES));
@@ -241,7 +241,7 @@ fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
 #[test]
 fn execution_lifetime_is_backward_compatible_and_nondefault_modes_round_trip_explicitly() {
     let path = tmp_path("execution-lifetime");
-    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = amd64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = amd64\n").unwrap();
     assert_eq!(
         WorkspaceStore::load(&path)
             .unwrap()
@@ -331,7 +331,7 @@ fn legacy_mount_records_remain_readable() {
     std::fs::write(
         &path,
         concat!(
-            "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n",
+            "[workspace]\nname = legacy\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = arm64\n",
             "mount = /host/path:/guest/path:ro\n",
             "mount = v2:/guest:rw\n",
         ),
@@ -505,8 +505,8 @@ fn incomplete_workspace_is_not_mistaken_for_an_empty_store() {
 fn duplicate_workspace_names_are_rejected() {
     let path = tmp_path("duplicate-name");
     let original = concat!(
-        "[workspace]\nname = runtime\nimage = ubuntu:24.04\narch = arm64\n",
-        "[workspace]\nname = runtime\nimage = debian:bookworm\narch = arm64\n",
+        "[workspace]\nname = runtime\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu:24.04\narch = arm64\n",
+        "[workspace]\nname = runtime\nconfiguration_revision = fedcba9876543210fedcba9876543210\nimage = debian:bookworm\narch = arm64\n",
     );
     std::fs::write(&path, original).unwrap();
 
@@ -521,7 +521,7 @@ fn duplicate_workspace_names_are_rejected() {
 #[test]
 fn empty_workspace_identity_is_rejected() {
     let path = tmp_path("empty-identity");
-    std::fs::write(&path, "[workspace]\nname = \nimage = ubuntu\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = \nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu\narch = arm64\n").unwrap();
 
     let error = WorkspaceStore::load(&path).unwrap_err();
 
@@ -547,4 +547,93 @@ fn unsupported_control_characters_never_mutate_persisted_values() {
     assert_eq!(store.all(), [original]);
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let _ = std::fs::remove_file(path);
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn configuration_revision_serializes_mutations_and_persists() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    let mut creator = WorkspaceStore::load(&path).unwrap();
+    creator
+        .upsert(WorkspaceConfig::new("dev", "alpine", Arch::Amd64))
+        .unwrap();
+    let observed = creator.get("dev").unwrap().clone();
+
+    let mut first = WorkspaceStore::load(&path).unwrap();
+    let mut second = WorkspaceStore::load(&path).unwrap();
+    let mut changed = observed.clone();
+    changed.shell = Some("/bin/bash".into());
+    let persisted = first
+        .upsert_if_revision(&observed.generation, &observed.configuration_revision, changed)
+        .unwrap();
+    assert_ne!(persisted.configuration_revision, observed.configuration_revision);
+    assert_eq!(
+        second
+            .upsert_if_revision(&observed.generation, &observed.configuration_revision, observed.clone(),)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(
+        WorkspaceStore::load(&path)
+            .unwrap()
+            .patch_environment(
+                "dev",
+                &observed.generation,
+                &observed.configuration_revision,
+                &[("STALE".into(), "no".into())],
+                &[],
+            )
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+
+    let (after_first_patch, changed) = WorkspaceStore::load(&path)
+        .unwrap()
+        .patch_environment(
+            "dev",
+            &persisted.generation,
+            &persisted.configuration_revision,
+            &[("ONE".into(), "1".into())],
+            &[],
+        )
+        .unwrap();
+    assert!(changed);
+    let (after_second_patch, changed) = WorkspaceStore::load(&path)
+        .unwrap()
+        .patch_environment(
+            "dev",
+            &after_first_patch.generation,
+            &after_first_patch.configuration_revision,
+            &[("TWO".into(), "2".into())],
+            &[],
+        )
+        .unwrap();
+    assert!(changed);
+    assert_eq!(
+        after_second_patch.env,
+        [("ONE".into(), "1".into()), ("TWO".into(), "2".into())]
+    );
+    let (no_op, changed) = WorkspaceStore::load(&path)
+        .unwrap()
+        .patch_environment(
+            "dev",
+            &after_second_patch.generation,
+            &after_second_patch.configuration_revision,
+            &[("TWO".into(), "2".into())],
+            &[],
+        )
+        .unwrap();
+    assert!(!changed);
+    assert_eq!(no_op.configuration_revision, after_second_patch.configuration_revision);
+    assert_eq!(
+        WorkspaceStore::load(&path)
+            .unwrap()
+            .get("dev")
+            .unwrap()
+            .configuration_revision,
+        after_second_patch.configuration_revision
+    );
 }

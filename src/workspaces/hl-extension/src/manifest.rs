@@ -24,7 +24,9 @@ pub struct FilesystemGrant {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceEnvironmentGrant {
     #[serde(default)]
-    pub selectors: Vec<WorkspaceEnvironmentSelector>,
+    pub read: Vec<WorkspaceEnvironmentSelector>,
+    #[serde(default)]
+    pub write: Vec<WorkspaceEnvironmentSelector>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -39,42 +41,82 @@ impl WorkspaceEnvironmentGrant {
     pub const BYTES: usize = 16 * 1024;
 
     #[must_use]
-    pub fn permits(&self, workspace: &str, name: &str) -> bool {
-        self.selectors.iter().any(|selector| match selector {
-            WorkspaceEnvironmentSelector::Exact { workspace: selected, name: selected_name } =>
-                selected == workspace && selected_name == name,
-            WorkspaceEnvironmentSelector::All { all } => *all,
-        })
+    pub fn permits_read(&self, workspace: &str, name: &str) -> bool {
+        permits(&self.read, workspace, name)
+    }
+
+    #[must_use]
+    pub fn permits_write(&self, workspace: &str, name: &str) -> bool {
+        permits(&self.write, workspace, name)
     }
 
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
-        let all = consented.selectors.contains(&WorkspaceEnvironmentSelector::All { all: true });
-        Self { selectors: self.selectors.iter().filter(|item| all || consented.selectors.contains(item)).cloned().collect() }
+        Self {
+            read: environment_intersection(&self.read, &consented.read),
+            write: environment_intersection(&self.write, &consented.write),
+        }
     }
 
     fn validate(&self, built_in_top: bool) -> Result<(), Invalid> {
-        let mut bytes = 0usize;
-        for selector in &self.selectors {
-            match selector {
-                WorkspaceEnvironmentSelector::Exact { workspace, name } => {
-                    let valid_name = name.bytes().enumerate().all(|(index, byte)|
-                        byte == b'_' || byte.is_ascii_alphabetic() || index > 0 && byte.is_ascii_digit());
-                    if workspace.is_empty() || workspace.chars().any(char::is_control) || name.is_empty() || !valid_name {
-                        return Err(Invalid::WorkspaceEnvironment);
-                    }
-                    bytes = bytes.checked_add(workspace.len() + name.len()).ok_or(Invalid::WorkspaceEnvironment)?;
-                }
-                WorkspaceEnvironmentSelector::All { all: true } if built_in_top => {}
-                WorkspaceEnvironmentSelector::All { .. } => return Err(Invalid::WorkspaceEnvironment),
-            }
-        }
-        if self.selectors.len() > Self::LIMIT || bytes > Self::BYTES
-            || self.selectors.iter().collect::<std::collections::BTreeSet<_>>().len() != self.selectors.len() {
+        let bytes = validate_environment_selectors(&self.read, built_in_top)?
+            .checked_add(validate_environment_selectors(&self.write, built_in_top)?)
+            .ok_or(Invalid::WorkspaceEnvironment)?;
+        if self.read.len() + self.write.len() > Self::LIMIT || bytes > Self::BYTES {
             return Err(Invalid::WorkspaceEnvironment);
         }
         Ok(())
     }
+}
+
+fn permits(selectors: &[WorkspaceEnvironmentSelector], workspace: &str, name: &str) -> bool {
+    selectors.iter().any(|selector| match selector {
+        WorkspaceEnvironmentSelector::Exact {
+            workspace: selected,
+            name: selected_name,
+        } => selected == workspace && selected_name == name,
+        WorkspaceEnvironmentSelector::All { all } => *all,
+    })
+}
+
+fn environment_intersection(
+    requested: &[WorkspaceEnvironmentSelector],
+    consented: &[WorkspaceEnvironmentSelector],
+) -> Vec<WorkspaceEnvironmentSelector> {
+    let all = consented.contains(&WorkspaceEnvironmentSelector::All { all: true });
+    requested
+        .iter()
+        .filter(|item| all || consented.contains(item))
+        .cloned()
+        .collect()
+}
+
+fn validate_environment_selectors(
+    selectors: &[WorkspaceEnvironmentSelector],
+    built_in_top: bool,
+) -> Result<usize, Invalid> {
+    let mut bytes = 0usize;
+    for selector in selectors {
+        match selector {
+            WorkspaceEnvironmentSelector::Exact { workspace, name } => {
+                let valid_name = name.bytes().enumerate().all(|(index, byte)| {
+                    byte == b'_' || byte.is_ascii_alphabetic() || index > 0 && byte.is_ascii_digit()
+                });
+                if workspace.is_empty() || workspace.chars().any(char::is_control) || name.is_empty() || !valid_name {
+                    return Err(Invalid::WorkspaceEnvironment);
+                }
+                bytes = bytes
+                    .checked_add(workspace.len() + name.len())
+                    .ok_or(Invalid::WorkspaceEnvironment)?;
+            }
+            WorkspaceEnvironmentSelector::All { all: true } if built_in_top => {}
+            WorkspaceEnvironmentSelector::All { .. } => return Err(Invalid::WorkspaceEnvironment),
+        }
+    }
+    if selectors.iter().collect::<std::collections::BTreeSet<_>>().len() != selectors.len() {
+        return Err(Invalid::WorkspaceEnvironment);
+    }
+    Ok(bytes)
 }
 
 impl FilesystemGrant {
@@ -426,12 +468,19 @@ impl Manifest {
             return Err(Invalid::Undeclared(Capability::FilesystemWrite));
         }
         manifest.filesystem.validate()?;
-        if !manifest.workspace_environment.selectors.is_empty()
+        if !manifest.workspace_environment.read.is_empty()
             && !manifest.capabilities.holds(Capability::WorkspaceEnvironmentRead)
         {
             return Err(Invalid::Undeclared(Capability::WorkspaceEnvironmentRead));
         }
-        manifest.workspace_environment.validate(manifest.name.to_string() == "top")?;
+        if !manifest.workspace_environment.write.is_empty()
+            && !manifest.capabilities.holds(Capability::WorkspaceEnvironmentWrite)
+        {
+            return Err(Invalid::Undeclared(Capability::WorkspaceEnvironmentWrite));
+        }
+        manifest
+            .workspace_environment
+            .validate(manifest.name.to_string() == "top")?;
         manifest.containers.validate()?;
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)

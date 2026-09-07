@@ -38,6 +38,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   },
   {
     "executes": false,
+    "mutates": true,
+    "wire": "workspace-environment:write"
+  },
+  {
+    "executes": false,
     "mutates": false,
     "wire": "containers:read"
   },
@@ -226,6 +231,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "workspace_create": "workspace_configuration",
   "workspace_adopt": "workspace_configuration",
   "workspace_update": "workspace_configuration",
+  "workspace_environment_patch": "workspace_environment_patch",
   "workspace_delete": "done",
   "workspace_start": "done",
   "workspace_stop": "done",
@@ -337,6 +343,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "workspace_create": "workspaces:control",
   "workspace_adopt": "workspaces:control",
   "workspace_update": "workspaces:control",
+  "workspace_environment_patch": "workspace-environment:write",
   "workspace_delete": "workspaces:control",
   "workspace_start": "workspaces:control",
   "workspace_stop": "workspaces:control",
@@ -524,6 +531,12 @@ const definitions = {
       },
       {
         "name": "workspace-environment:read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "workspace-environment:write",
         "payload": {
           "kind": "unit"
         }
@@ -6223,6 +6236,13 @@ const definitions = {
         }
       },
       {
+        "name": "configuration_revision",
+        "optional": true,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
         "name": "name",
         "optional": false,
         "schema": {
@@ -6380,7 +6400,18 @@ const definitions = {
   "WorkspaceEnvironmentGrant": {
     "fields": [
       {
-        "name": "selectors",
+        "name": "read",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "WorkspaceEnvironmentSelector"
+          }
+        }
+      },
+      {
+        "name": "write",
         "optional": true,
         "schema": {
           "kind": "array",
@@ -6395,6 +6426,67 @@ const definitions = {
     "serde": {
       "deny_unknown_fields": true
     }
+  },
+  "WorkspaceEnvironmentPatch": {
+    "fields": [
+      {
+        "name": "set",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "items": [
+              {
+                "kind": "string"
+              },
+              {
+                "kind": "string"
+              }
+            ],
+            "kind": "tuple"
+          }
+        }
+      },
+      {
+        "name": "remove",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "WorkspaceEnvironmentPatchResult": {
+    "fields": [
+      {
+        "name": "generation",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "configuration_revision",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "changed",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
   },
   "WorkspaceEnvironmentSelector": {
     "kind": "enum",
@@ -7043,6 +7135,16 @@ const roots = {
         }
       },
       {
+        "name": "workspace_environment_patch",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "WorkspaceEnvironmentPatchResult"
+          }
+        }
+      },
+      {
         "name": "workspaces",
         "payload": {
           "kind": "newtype",
@@ -7487,11 +7589,55 @@ const roots = {
               }
             },
             {
+              "name": "configuration_revision",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "configuration",
               "optional": false,
               "schema": {
                 "kind": "ref",
                 "name": "WorkspaceConfiguration"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "workspace_environment_patch",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "configuration_revision",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "patch",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "WorkspaceEnvironmentPatch"
               }
             }
           ],

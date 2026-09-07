@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
+    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -136,7 +136,11 @@ impl Queue {
 impl hl_extension::NotificationSink for Queue {
     fn publish(&self, notification: &hl_extension::Notification) -> Result<(), hl_extension::HostError> {
         let mut held = self.hold();
-        if let Some(current) = held.notifications.iter_mut().find(|current| current.id == notification.id) {
+        if let Some(current) = held
+            .notifications
+            .iter_mut()
+            .find(|current| current.id == notification.id)
+        {
             current.clone_from(notification);
             return Ok(());
         }
@@ -1089,8 +1093,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1413,6 +1417,7 @@ mod tests {
             self.ledger.note("workspace.inspect");
             Ok(hl_extension::WorkspaceConfiguration {
                 generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
                 name: name.into(),
                 image: "alpine:3.20".into(),
                 architecture: "arm64".into(),
@@ -1647,10 +1652,11 @@ mod tests {
                 Vec::new(),
             );
             let grant = hl_extension::WorkspaceEnvironmentGrant {
-                selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
                     workspace: "dev".into(),
                     name: "DATABASE_PASSWORD".into(),
                 }],
+                write: Vec::new(),
             };
             let mut conversation = Conversation::new_scoped(
                 ours,
@@ -1980,13 +1986,16 @@ mod tests {
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
-        let answer = ask(&mut wire, &Request::NotificationPublish {
-            notification: hl_extension::Notification {
-                id: "index".into(),
-                title: "Index ready".into(),
-                body: "One million rows indexed".into(),
+        let answer = ask(
+            &mut wire,
+            &Request::NotificationPublish {
+                notification: hl_extension::Notification {
+                    id: "index".into(),
+                    title: "Index ready".into(),
+                    body: "One million rows indexed".into(),
+                },
             },
-        });
+        );
         assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
         assert_eq!(ledger.reached(), vec!["notifications.publish"]);
         drop(wire);
@@ -2096,7 +2105,10 @@ mod tests {
         let Reply::WorkspaceConfiguration(configuration) = codec::read_reply(&answer).unwrap() else {
             panic!("unexpected reply")
         };
-        assert_eq!(configuration.environment, vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())]);
+        assert_eq!(
+            configuration.environment,
+            vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())]
+        );
         assert!(!configuration.environment_redacted);
         drop(wire);
         assert_eq!(served.join().unwrap(), Ok(()));

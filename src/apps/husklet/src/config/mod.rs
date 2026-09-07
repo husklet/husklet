@@ -189,6 +189,8 @@ pub struct WorkspaceConfig {
     pub ws: Workspace,
     /// Immutable identity of this persisted workspace incarnation.
     pub generation: String,
+    /// Opaque CAS token rotated after every persisted configuration mutation.
+    pub configuration_revision: String,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = explicitly unlimited. A
@@ -233,6 +235,7 @@ impl WorkspaceConfig {
         WorkspaceConfig {
             ws,
             generation: uuid::Uuid::new_v4().simple().to_string(),
+            configuration_revision: uuid::Uuid::new_v4().simple().to_string(),
             docker_sock: true,
             scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
@@ -412,7 +415,12 @@ impl WorkspaceStore {
     }
 
     /// Replace a workspace only while it is still the generation the caller inspected.
-    pub fn upsert_if_generation(&mut self, expected: &str, mut ws: WorkspaceConfig) -> io::Result<()> {
+    pub fn upsert_if_revision(
+        &mut self,
+        expected_generation: &str,
+        expected_revision: &str,
+        mut ws: WorkspaceConfig,
+    ) -> io::Result<WorkspaceConfig> {
         #[cfg(feature = "runtime")]
         let _lock = self.lock_and_reload()?;
         let current = self.get(&ws.name).ok_or_else(|| {
@@ -421,26 +429,80 @@ impl WorkspaceStore {
                 format!("Workspace {:?} no longer exists.", ws.name),
             )
         })?;
-        if expected.is_empty() || current.generation != expected {
+        if expected_generation.is_empty()
+            || current.generation != expected_generation
+            || expected_revision.is_empty()
+            || current.configuration_revision != expected_revision
+        {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "workspace changed; inspect and consent again",
             ));
         }
         ws.generation.clone_from(&current.generation);
-        self.upsert_unlocked(ws)
+        // Environment values are never replaced through the generic configuration
+        // operation.  Only the independently-authorized patch transaction may
+        // mutate them.
+        ws.env.clone_from(&current.env);
+        ws.configuration_revision = uuid::Uuid::new_v4().simple().to_string();
+        self.upsert_unlocked(ws.clone())?;
+        Ok(ws)
+    }
+
+    /// Atomically changes only selected environment entries on one existing workspace.
+    #[cfg(feature = "runtime")]
+    pub fn patch_environment(
+        &mut self,
+        name: &str,
+        expected_generation: &str,
+        expected_revision: &str,
+        set: &[(String, String)],
+        remove: &[String],
+    ) -> io::Result<(WorkspaceConfig, bool)> {
+        let _lock = self.lock_and_reload()?;
+        let current = self
+            .get(name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace no longer exists"))?;
+        if expected_generation.is_empty()
+            || current.generation != expected_generation
+            || expected_revision.is_empty()
+            || current.configuration_revision != expected_revision
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect and consent again",
+            ));
+        }
+        let mut updated = current.clone();
+        let before = updated.env.clone();
+        updated.env.retain(|(variable, _)| {
+            !remove.contains(variable) && !set.iter().any(|(selected, _)| selected == variable)
+        });
+        updated.env.extend(set.iter().cloned());
+        let changed = updated.env != before;
+        if changed {
+            updated.configuration_revision = uuid::Uuid::new_v4().simple().to_string();
+            self.upsert_unlocked(updated.clone())?;
+        }
+        Ok((updated, changed))
     }
 
     /// Assign identity to one exact legacy record without changing its configuration.
     #[cfg(feature = "runtime")]
     pub fn adopt_generation(&mut self, expected: &WorkspaceConfig) -> io::Result<WorkspaceConfig> {
         let _lock = self.lock_and_reload()?;
-        let current = self.get(&expected.name).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace no longer exists"))?;
+        let current = self
+            .get(&expected.name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace no longer exists"))?;
         if !expected.generation.is_empty() || current != expected {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "workspace changed; inspect again"));
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "workspace changed; inspect again",
+            ));
         }
         let mut adopted = current.clone();
         adopted.generation = uuid::Uuid::new_v4().simple().to_string();
+        adopted.configuration_revision = uuid::Uuid::new_v4().simple().to_string();
         let mut items = self.items.clone();
         let position = items
             .iter()
@@ -499,6 +561,7 @@ impl WorkspaceStore {
             out.section();
             out.field("name", &w.name);
             out.field("generation", &w.generation);
+            out.field("configuration_revision", &w.configuration_revision);
             out.field("image", &w.image);
             out.field("arch", w.arch.as_str());
             if let Some(s) = &w.storage {

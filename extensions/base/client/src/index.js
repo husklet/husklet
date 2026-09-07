@@ -398,7 +398,8 @@ export function workspace(session, { signal } = {}) {
     inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
     create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
     adopt: async (configuration) => expect(await session.call('workspace_adopt', { configuration }), 'workspace_configuration'),
-    update: async (name, generation, configuration) => expect(await session.call('workspace_update', { name, generation: immutableIdentity(generation, [32], 'workspace generation'), configuration }), 'workspace_configuration'),
+    update: async (name, generation, configurationRevision, configuration) => expect(await session.call('workspace_update', { name, generation: immutableIdentity(generation, [32], 'workspace generation'), configuration_revision: immutableIdentity(configurationRevision, [32], 'workspace configuration revision'), configuration }), 'workspace_configuration'),
+    patchEnvironment: async (name, generation, configurationRevision, patch) => expect(await session.call('workspace_environment_patch', { name, generation: immutableIdentity(generation, [32], 'workspace generation'), configuration_revision: immutableIdentity(configurationRevision, [32], 'workspace configuration revision'), patch }), 'workspace_environment_patch'),
     delete: (name, generation) => done('workspace_delete', { name, generation: immutableIdentity(generation, [32], 'workspace generation') }),
     start: (name) => done('workspace_start', { name }),
     stop: (name) => done('workspace_stop', { name }),
@@ -427,10 +428,10 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { selectors: [] }) => expect(
+      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(
         await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem, workspace_environment: workspaceEnvironment }), 'extension',
       ),
-      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { selectors: [] }) => expect(
+      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(
         await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem, workspace_environment: workspaceEnvironment }), 'extension',
       ),
     },
@@ -1962,7 +1963,7 @@ export function workspace(session, { signal } = {}) {
     granted,
     containers = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
-    { timeoutMs = 30_000, workspaceEnvironment = { selectors: [] } } = {},
+    { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
   ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
       throw new TypeError(
@@ -2113,6 +2114,7 @@ export function requestCapability(call) {
 
 const camel = (value) => value.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 const facadeOverrides = Object.freeze({
+  workspace_environment_patch: 'patchEnvironment',
   extension_acquisition_start: 'extensions.startAcquisition',
   extension_acquisition_status: 'extensions.acquisition',
   extension_acquisition_cancel: 'extensions.cancelAcquisition',
@@ -2173,7 +2175,7 @@ export const protocolSurface = Object.freeze({
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
-    workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
+    workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'patchEnvironment', 'delete', 'start', 'stop', 'restart'],
     containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'executionOutput', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
     images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait'],
     volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],

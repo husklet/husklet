@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
+use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -50,6 +50,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("workspace_create", "workspace_configuration"),
     ("workspace_adopt", "workspace_configuration"),
     ("workspace_update", "workspace_configuration"),
+    ("workspace_environment_patch", "workspace_environment_patch"),
     ("workspace_delete", "done"),
     ("workspace_start", "done"),
     ("workspace_stop", "done"),
@@ -162,6 +163,7 @@ fn request_capability(request: &str) -> Capability {
         "workspace_info" | "workspace_list" | "workspace_inspect" => Capability::WorkspaceRead,
         "workspace_create" | "workspace_adopt" | "workspace_update" | "workspace_delete" | "workspace_start"
         | "workspace_stop" | "workspace_restart" => Capability::WorkspaceControl,
+        "workspace_environment_patch" => Capability::WorkspaceEnvironmentWrite,
         "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
         "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {
             Capability::ExtensionControl

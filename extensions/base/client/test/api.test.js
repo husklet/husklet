@@ -512,6 +512,7 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   await next();
   const api = workspace(stage.session);
   const configuration = {
+    configuration_revision: 'fedcba9876543210fedcba9876543210',
     name: 'other',
     image: 'alpine:3.20',
     architecture: 'arm64',
@@ -538,7 +539,7 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     api.inspect('other'),
     api.create(configuration),
     api.adopt({ ...configuration, generation: '' }),
-    api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.update('other', '0123456789abcdef0123456789abcdef', configuration.configuration_revision, configuration),
     api.delete('other', '0123456789abcdef0123456789abcdef'),
     api.start('other'),
     api.stop('other'),
@@ -577,6 +578,28 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   stage.server.close();
 });
 
+test('workspace environment patch preserves exact CAS framing without returning values', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const api = workspace(stage.session);
+  const generation = '0123456789abcdef0123456789abcdef';
+  const revision = 'fedcba9876543210fedcba9876543210';
+  const pending = api.patchEnvironment('dev', generation, revision, {
+    set: [['PGPASSWORD', 'rotated']], remove: ['OLD_PASSWORD'],
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'workspace_environment_patch',
+    with: { name: 'dev', generation, configuration_revision: revision,
+      patch: { set: [['PGPASSWORD', 'rotated']], remove: ['OLD_PASSWORD'] } },
+  });
+  const nextRevision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'workspace_environment_patch',
+    with: { generation, configuration_revision: nextRevision, changed: true },
+  } }));
+  assert.deepEqual(await pending, { generation, configuration_revision: nextRevision, changed: true });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('coverage names delivered snapshots and leaves unsupported topics unavailable', () => {
   assert.deepEqual(protocolCoverage.available.workspace, [
     'info',
@@ -585,6 +608,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
     'create',
     'adopt',
     'update',
+    'patchEnvironment',
     'delete',
     'start',
     'stop',
@@ -982,7 +1006,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, undefined, { selectors: [{ workspace: 'dev', name: 'PGPASSWORD' }] }),
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, undefined, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
     api.extensions.update('job-2', 8, digest, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -990,8 +1014,8 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { selectors: [{ workspace: 'dev', name: 'PGPASSWORD' }] } } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { selectors: [] } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [], write: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));

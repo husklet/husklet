@@ -31,6 +31,7 @@ const CONTROL_WIDTH = { chars: 60 } as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
   const [configuration, setConfiguration] = React.useState<WorkspaceConfiguration | null>(null);
+  const [observed, setObserved] = React.useState<WorkspaceConfiguration | null>(null);
   const [numbers, setNumbers] = React.useState<Numbers>({
     cpus: '',
     memory: '',
@@ -47,6 +48,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       const current = await api.info();
       const inspected = await api.inspect(current.name);
       setConfiguration(inspected);
+      setObserved(inspected);
       setNumbers(numberDraft(inspected));
       setError('');
       setSaved('');
@@ -83,17 +85,60 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
     changed();
   };
   const save = async () => {
-    if (!configuration || saving) return;
-    if (!configuration.generation) {
-      setError('The host did not provide a workspace generation; reload before saving.');
+    if (!configuration || !observed || saving) return;
+    if (!configuration.generation || !configuration.configuration_revision) {
+      setError('The host did not provide workspace revision identity; reload before saving.');
       return;
     }
     setSaving(true);
     try {
       const candidate = withNumbers(configuration, numbers);
       validate(candidate);
-      const updated = await api.update(configuration.name, configuration.generation, candidate);
+      const environmentPatch = diffEnvironment(observed.environment, candidate.environment);
+      const settings = { ...candidate, environment: observed.environment };
+      let updated = await api.update(
+        configuration.name,
+        configuration.generation,
+        configuration.configuration_revision,
+        settings,
+      );
+      if (environmentPatch.set.length || environmentPatch.remove.length) {
+        if (!updated.configuration_revision) {
+          throw new Error(
+            'The host did not return the saved workspace revision; reload before changing environment values.',
+          );
+        }
+        try {
+          const result = await api.patchEnvironment(
+            updated.name,
+            updated.generation ?? configuration.generation,
+            updated.configuration_revision,
+            environmentPatch,
+          );
+          updated = { ...updated, ...result, environment: candidate.environment };
+        } catch (cause) {
+          const patchError = message(cause);
+          try {
+            const current = await api.info();
+            const inspected = await api.inspect(current.name);
+            setConfiguration(inspected);
+            setObserved(inspected);
+            setNumbers(numberDraft(inspected));
+            setDirty(false);
+            setSaved('');
+            setError(
+              `Settings were saved, but environment changes were not. Reloaded workspace: ${patchError}`,
+            );
+          } catch (reloadCause) {
+            setError(
+              `Settings were saved, but environment changes were not (${patchError}); reload also failed: ${message(reloadCause)}`,
+            );
+          }
+          return;
+        }
+      }
       setConfiguration(updated);
+      setObserved(updated);
       setNumbers(numberDraft(updated));
       setDirty(false);
       setError('');
@@ -290,6 +335,15 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       </Column>
     </Scroll>
   );
+}
+
+function diffEnvironment(before: [string, string][], after: [string, string][]) {
+  const previous = new Map(before);
+  const next = new Map(after);
+  return {
+    set: after.filter(([name, value]) => previous.get(name) !== value),
+    remove: before.map(([name]) => name).filter((name) => !next.has(name)),
+  };
 }
 
 function SettingsGroup({

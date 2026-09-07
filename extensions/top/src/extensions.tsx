@@ -128,7 +128,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [grantedFilesystem, setGrantedFilesystem] =
     React.useState<FilesystemGrant>(emptyFilesystemGrant);
   const [grantedWorkspaceEnvironment, setGrantedWorkspaceEnvironment] =
-    React.useState<WorkspaceEnvironmentGrant>({ selectors: [] });
+    React.useState<WorkspaceEnvironmentGrant>({ read: [], write: [] });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -221,7 +221,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
-            setGrantedWorkspaceEnvironment({ selectors: [] });
+            setGrantedWorkspaceEnvironment({ read: [], write: [] });
           }
         }
         if (
@@ -349,7 +349,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       (entry) => !installed.some((extension) => extension.name === entry.id),
     ) ?? [];
   const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
-    selectors: [],
+    read: [],
+    write: [],
   };
 
   return (
@@ -551,38 +552,44 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 granted={grantedFilesystem}
                 onChange={setGrantedFilesystem}
               />
-              <Text label="Workspace environment values" color="text-dim" />
-              {requestedWorkspaceEnvironment.selectors.map((selector) => {
-                const key = 'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`;
-                const checked = grantedWorkspaceEnvironment.selectors.some(
-                  (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
-                );
-                return (
-                  <FormControlLabel
-                    key={key}
-                    label={
-                      'all' in selector
-                        ? 'All workspace environment values'
-                        : `${selector.name} in workspace ${selector.workspace}`
-                    }
-                    gap={2}
-                  >
-                    <Switch
-                      checked={checked}
-                      onToggle={(event: Change) =>
-                        setGrantedWorkspaceEnvironment((current) => ({
-                          selectors: event.value
-                            ? [...current.selectors, selector]
-                            : current.selectors.filter(
-                                (candidate) =>
-                                  JSON.stringify(candidate) !== JSON.stringify(selector),
-                              ),
-                        }))
+              {(requestedWorkspaceEnvironment.read.length > 0 ||
+                requestedWorkspaceEnvironment.write.length > 0) && (
+                <Text label="Workspace environment values" color="text-dim" />
+              )}
+              {(['read', 'write'] as const).flatMap((verb) =>
+                requestedWorkspaceEnvironment[verb].map((selector) => {
+                  const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                  const checked = grantedWorkspaceEnvironment[verb].some(
+                    (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                  );
+                  return (
+                    <FormControlLabel
+                      key={key}
+                      label={
+                        'all' in selector
+                          ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                          : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
                       }
-                    />
-                  </FormControlLabel>
-                );
-              })}
+                      gap={2}
+                    >
+                      <Switch
+                        checked={checked}
+                        onToggle={(event: Change) =>
+                          setGrantedWorkspaceEnvironment((current) => ({
+                            ...current,
+                            [verb]: event.value
+                              ? [...current[verb], selector]
+                              : current[verb].filter(
+                                  (candidate) =>
+                                    JSON.stringify(candidate) !== JSON.stringify(selector),
+                                ),
+                          }))
+                        }
+                      />
+                    </FormControlLabel>
+                  );
+                }),
+              )}
               <Button
                 label={
                   busy === 'update'

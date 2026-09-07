@@ -36,6 +36,11 @@
     },
     {
       "executes": false,
+      "mutates": true,
+      "wire": "workspace-environment:write"
+    },
+    {
+      "executes": false,
       "mutates": false,
       "wire": "containers:read"
     },
@@ -228,6 +233,12 @@
         },
         {
           "name": "workspace-environment:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace-environment:write",
           "payload": {
             "kind": "unit"
           }
@@ -5927,6 +5938,13 @@
           }
         },
         {
+          "name": "configuration_revision",
+          "optional": true,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "name",
           "optional": false,
           "schema": {
@@ -6084,7 +6102,18 @@
     "WorkspaceEnvironmentGrant": {
       "fields": [
         {
-          "name": "selectors",
+          "name": "read",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEnvironmentSelector"
+            }
+          }
+        },
+        {
+          "name": "write",
           "optional": true,
           "schema": {
             "kind": "array",
@@ -6099,6 +6128,67 @@
       "serde": {
         "deny_unknown_fields": true
       }
+    },
+    "WorkspaceEnvironmentPatch": {
+      "fields": [
+        {
+          "name": "set",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "string"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        },
+        {
+          "name": "remove",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceEnvironmentPatchResult": {
+      "fields": [
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "configuration_revision",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "changed",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "WorkspaceEnvironmentSelector": {
       "kind": "enum",
@@ -6712,6 +6802,10 @@
       "request": "workspace_update"
     },
     {
+      "capability": "workspace-environment:write",
+      "request": "workspace_environment_patch"
+    },
+    {
       "capability": "workspaces:control",
       "request": "workspace_delete"
     },
@@ -7148,6 +7242,10 @@
     {
       "reply": "workspace_configuration",
       "request": "workspace_update"
+    },
+    {
+      "reply": "workspace_environment_patch",
+      "request": "workspace_environment_patch"
     },
     {
       "reply": "done",
@@ -7683,6 +7781,16 @@
           }
         },
         {
+          "name": "workspace_environment_patch",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEnvironmentPatchResult"
+            }
+          }
+        },
+        {
           "name": "workspaces",
           "payload": {
             "kind": "newtype",
@@ -8127,11 +8235,55 @@
                 }
               },
               {
+                "name": "configuration_revision",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "configuration",
                 "optional": false,
                 "schema": {
                   "kind": "ref",
                   "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_environment_patch",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "configuration_revision",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "patch",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceEnvironmentPatch"
                 }
               }
             ],
@@ -11572,7 +11724,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:366f294d94c49889",
+  "source_fingerprint": "fnv1a64:68ec15e7eb6822ce",
   "specification_version": 1,
   "topics": [
     {

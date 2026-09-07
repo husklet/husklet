@@ -223,7 +223,15 @@ impl<S: Storage> Roster<S> {
         let previous = self.installation.clone();
         let record = self
             .installation
-            .install_resource_scoped(manifest, digest, consented, containers, filesystem, workspace_environment, at)?
+            .install_resource_scoped(
+                manifest,
+                digest,
+                consented,
+                containers,
+                filesystem,
+                workspace_environment,
+                at,
+            )?
             .clone();
         if let Err(fault) = self.records.save(&record) {
             self.installation = previous;
@@ -286,9 +294,15 @@ impl<S: Storage> Roster<S> {
     ) -> Result<(), UpdateRefusal> {
         let records = &self.records;
         self.installation
-            .commit_update_resource_scoped(update, consented, containers, filesystem, workspace_environment, at, |_, next| {
-                records.save(next)
-            })
+            .commit_update_resource_scoped(
+                update,
+                consented,
+                containers,
+                filesystem,
+                workspace_environment,
+                at,
+                |_, next| records.save(next),
+            )
             .map(|_| ())
             .map_err(|failure| match failure {
                 UpdateFailure::Refused(objection) => UpdateRefusal::Policy(objection),
@@ -574,10 +588,11 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let mut asked = manifest("sample", &[Capability::WorkspaceEnvironmentRead]);
         let exact = hl_extension::WorkspaceEnvironmentGrant {
-            selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+            read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
                 workspace: "dev".into(),
                 name: "PGPASSWORD".into(),
             }],
+            write: Vec::new(),
         };
         asked.workspace_environment = exact.clone();
         let mut roster = opened(temporary.path());

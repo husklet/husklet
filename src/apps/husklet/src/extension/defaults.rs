@@ -121,7 +121,8 @@ mod tests {
                     resources: Resources::default(),
                     filesystem: hl_extension::FilesystemGrant::default(),
                     workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
-                        selectors: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+                        read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+                        write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
                     },
                 },
             })
@@ -135,7 +136,11 @@ mod tests {
         assert_eq!(entries[0].name.as_str(), "top");
         assert_eq!(entries[0].image_digest, "sha256:top");
         assert_eq!(
-            entries[0].workspace_environment.selectors,
+            entries[0].workspace_environment.read,
+            vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }]
+        );
+        assert_eq!(
+            entries[0].workspace_environment.write,
             vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }]
         );
         assert_eq!(entries[0].stage, Stage::Duty);

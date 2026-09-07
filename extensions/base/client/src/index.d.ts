@@ -52,6 +52,7 @@ export type ExtensionCapability =
   | 'workspaces:control'
   | 'workspaces:events'
   | 'workspace-environment:read'
+  | 'workspace-environment:write'
   | 'containers:read'
   | 'containers:control'
   | 'containers:attach'
@@ -87,7 +88,8 @@ export interface FilesystemGrant {
   rename: string[];
 }
 export interface WorkspaceEnvironmentGrant {
-  selectors: ({ workspace: string; name: string } | { all: true })[];
+  read: ({ workspace: string; name: string } | { all: true })[];
+  write: ({ workspace: string; name: string } | { all: true })[];
 }
 export interface ExtensionCandidate {
   name: string;
@@ -154,6 +156,7 @@ export interface WorkspaceTerminal {
 }
 export interface WorkspaceConfiguration extends WorkspaceInfo {
   generation?: string;
+  configuration_revision?: string;
   storage: string | null;
   shell: string | null;
   cpus: number | null;
@@ -579,8 +582,15 @@ export interface WorkspaceApi {
   update(
     name: string,
     generation: string,
+    configurationRevision: string,
     configuration: WorkspaceConfiguration,
   ): Promise<WorkspaceConfiguration>;
+  patchEnvironment(
+    name: string,
+    generation: string,
+    configurationRevision: string,
+    patch: { set: [string, string][]; remove: string[] },
+  ): Promise<{ generation: string; configuration_revision: string; changed: boolean }>;
   delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;

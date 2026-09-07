@@ -10,8 +10,8 @@ use hl_rpc::Authority;
 use crate::capability::Capability;
 use crate::port::{
     pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    NotificationSink, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
-    PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles,
+    WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -71,6 +71,53 @@ pub struct SurfaceMutation {
 pub struct SurfaceEvent {
     pub slot: String,
     pub event: hl_gui::Event,
+}
+
+fn workspace_environment_patch(patch: &crate::port::WorkspaceEnvironmentPatch) -> Result<(), Failure> {
+    let names = patch
+        .set
+        .iter()
+        .map(|(name, _)| name)
+        .chain(patch.remove.iter())
+        .collect::<Vec<_>>();
+    let bytes = patch
+        .set
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            total.checked_add(name.len() + value.len())
+        })
+        .and_then(|total| {
+            patch
+                .remove
+                .iter()
+                .try_fold(total, |sum, name| sum.checked_add(name.len()))
+        })
+        .ok_or_else(|| Failure::Conflict {
+            detail: "workspace environment patch is too large".into(),
+        })?;
+    let valid_name = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 256
+            && name
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| byte == b'_' || byte.is_ascii_alphabetic() || index > 0 && byte.is_ascii_digit())
+    };
+    if names.len() > 128
+        || bytes > 32 * 1024
+        || patch
+            .set
+            .iter()
+            .any(|(_, value)| value.len() > 4096 || value.contains('\0'))
+        || names.iter().any(|name| !valid_name(name))
+        || names.iter().collect::<std::collections::BTreeSet<_>>().len() != names.len()
+    {
+        return Err(Failure::Conflict {
+            detail: "workspace environment patch must contain at most 128 unique, disjoint, bounded names and values"
+                .into(),
+        });
+    }
+    Ok(())
 }
 
 impl std::ops::Deref for Session {
@@ -300,6 +347,7 @@ impl Session {
             | Request::WorkspaceCreate { .. }
             | Request::WorkspaceAdopt { .. }
             | Request::WorkspaceUpdate { .. }
+            | Request::WorkspaceEnvironmentPatch { .. }
             | Request::WorkspaceDelete { .. }
             | Request::WorkspaceStart { .. }
             | Request::WorkspaceStop { .. }
@@ -768,43 +816,56 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.workspace_control)?;
         match request {
-            Request::WorkspaceInspect { name } => {
-                let mut configuration = port.inspect(name)?;
-                let permitted = self.peer.authority().granted::<Capability>().holds(Capability::WorkspaceEnvironmentRead);
-                let original = configuration.environment.len();
-                configuration.environment.retain(|(variable, _)| permitted && self.workspace_environment.permits(name, variable));
-                configuration.environment_redacted = configuration.environment.len() != original;
-                Ok(Reply::WorkspaceConfiguration(configuration))
-            }
-            Request::WorkspaceCreate { configuration } => {
-                Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
-            }
-            Request::WorkspaceAdopt { configuration } => Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?)),
+            Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(
+                self.visible_workspace_for(name, port.inspect(name)?),
+            )),
+            Request::WorkspaceCreate { configuration } => Ok(Reply::WorkspaceConfiguration(
+                self.visible_workspace(port.create(configuration)?),
+            )),
+            Request::WorkspaceAdopt { configuration } => Ok(Reply::WorkspaceConfiguration(
+                self.visible_workspace(port.adopt(configuration)?),
+            )),
             Request::WorkspaceUpdate {
                 name,
                 generation,
+                configuration_revision,
                 configuration,
             } => {
                 immutable_identity(generation, &[32], "workspace generation")?;
-                if configuration.environment_redacted
-                    && configuration.environment.iter().any(|(variable, _)| {
-                        !self.workspace_environment.permits(name, variable)
-                            || !self
-                                .peer
-                                .authority()
-                                .granted::<Capability>()
-                                .holds(Capability::WorkspaceEnvironmentRead)
-                    })
-                {
-                    return Err(Failure::Denied {
-                        capability: Capability::WorkspaceEnvironmentRead.as_str().into(),
-                        detail: "redacted workspace updates may only include explicitly consented environment names".into(),
-                    });
-                }
-                Ok(Reply::WorkspaceConfiguration(port.update(
+                immutable_identity(configuration_revision, &[32], "workspace configuration revision")?;
+                Ok(Reply::WorkspaceConfiguration(self.visible_workspace(port.update(
                     name,
                     generation,
+                    configuration_revision,
                     configuration,
+                )?)))
+            }
+            Request::WorkspaceEnvironmentPatch {
+                name,
+                generation,
+                configuration_revision,
+                patch,
+            } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                immutable_identity(configuration_revision, &[32], "workspace configuration revision")?;
+                workspace_environment_patch(patch)?;
+                if patch
+                    .set
+                    .iter()
+                    .map(|(variable, _)| variable)
+                    .chain(patch.remove.iter())
+                    .any(|variable| !self.workspace_environment.permits_write(name, variable))
+                {
+                    return Err(Failure::Denied {
+                        capability: Capability::WorkspaceEnvironmentWrite.as_str().into(),
+                        detail: "workspace environment name is outside the consented write scope".into(),
+                    });
+                }
+                Ok(Reply::WorkspaceEnvironmentPatch(port.patch_environment(
+                    name,
+                    generation,
+                    configuration_revision,
+                    patch,
                 )?))
             }
             Request::WorkspaceDelete { name, generation } => {
@@ -820,6 +881,29 @@ impl Session {
                 call: "workspace control".into(),
             }),
         }
+    }
+
+    fn visible_workspace(&self, configuration: WorkspaceConfiguration) -> WorkspaceConfiguration {
+        let name = configuration.name.clone();
+        self.visible_workspace_for(&name, configuration)
+    }
+
+    fn visible_workspace_for(
+        &self,
+        workspace: &str,
+        mut configuration: WorkspaceConfiguration,
+    ) -> WorkspaceConfiguration {
+        let permitted = self
+            .peer
+            .authority()
+            .granted::<Capability>()
+            .holds(Capability::WorkspaceEnvironmentRead);
+        let original = configuration.environment.len();
+        configuration
+            .environment
+            .retain(|(variable, _)| permitted && self.workspace_environment.permits_read(workspace, variable));
+        configuration.environment_redacted = configuration.environment.len() != original;
+        configuration
     }
 
     fn extensions(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {

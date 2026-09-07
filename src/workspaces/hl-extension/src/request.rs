@@ -62,7 +62,14 @@ pub enum Request {
     WorkspaceUpdate {
         name: String,
         generation: String,
+        configuration_revision: String,
         configuration: WorkspaceConfiguration,
+    },
+    WorkspaceEnvironmentPatch {
+        name: String,
+        generation: String,
+        configuration_revision: String,
+        patch: crate::port::WorkspaceEnvironmentPatch,
     },
     WorkspaceDelete {
         name: String,
@@ -471,6 +478,7 @@ impl Request {
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
+            Self::WorkspaceEnvironmentPatch { .. } => Capability::WorkspaceEnvironmentWrite,
             Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
             Self::ExtensionEnable { .. }
             | Self::ExtensionDisable { .. }
@@ -673,6 +681,7 @@ pub struct WorkspaceInfo {
 pub enum Reply {
     Workspace(WorkspaceInfo),
     WorkspaceConfiguration(WorkspaceConfiguration),
+    WorkspaceEnvironmentPatch(crate::port::WorkspaceEnvironmentPatchResult),
     Workspaces(Vec<WorkspaceState>),
     Extensions(Vec<crate::port::ExtensionSummary>),
     ExtensionCatalogue(crate::port::ExtensionCatalogue),

@@ -11,6 +11,7 @@ import {
   Processes,
   Terminals,
   Volumes,
+  Workspace,
   Top,
 } from '../dist/app.js';
 import {
@@ -212,6 +213,154 @@ test('Top owns workspace settings and extension management in the same tab', asy
     ancestorProperty(stage, 'Install from image', 'Card', 'Width') !== undefined,
     true,
     'the acquisition card uses the same compact geometry',
+  );
+});
+
+test('workspace save rotates environment through the explicit revision-bound patch', async () => {
+  const calls = [];
+  const generation = 'a'.repeat(32);
+  const revision = 'b'.repeat(32);
+  const nextRevision = 'c'.repeat(32);
+  const configuration = {
+    generation,
+    configuration_revision: revision,
+    name: 'daily',
+    architecture: 'amd64',
+    image: 'alpine:3.20',
+    storage: null,
+    shell: '/bin/sh',
+    cpus: 2,
+    memory_mb: 1024,
+    environment: [['TOKEN', 'old']],
+    mounts: [],
+    docker_socket: false,
+    scrollback: 10000,
+    vpn: null,
+    execution_lifetime: 'live',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: false,
+    },
+  };
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => configuration,
+    update: async (...args) => {
+      calls.push(['update', ...args]);
+      return { ...args[3], generation, configuration_revision: nextRevision };
+    },
+    patchEnvironment: async (...args) => {
+      calls.push(['patch', ...args]);
+      return { generation, configuration_revision: 'd'.repeat(32), changed: true };
+    },
+  };
+  const stage = host();
+  stage.render(h(Workspace, { api: managed }));
+  await settled();
+  await settled();
+  const environment = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Environment variables',
+    )
+    .map((patch) => patch.SetProp.id)
+    .find((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
+    );
+  assert.notEqual(environment, undefined);
+  await settled();
+  change(stage, 'value', 'new');
+  invoke(stage, 'Save workspace');
+  await settled();
+  await settled();
+  assert.equal(calls[0][0], 'update');
+  assert.deepEqual(calls[0][4].environment, [['TOKEN', 'old']]);
+  assert.deepEqual(calls[1], [
+    'patch',
+    'daily',
+    generation,
+    nextRevision,
+    { set: [['TOKEN', 'new']], remove: [] },
+  ]);
+});
+
+test('workspace patch conflict reloads authority and keeps the partial-save warning visible', async () => {
+  const generation = 'a'.repeat(32);
+  const revision = 'b'.repeat(32);
+  const nextRevision = 'c'.repeat(32);
+  const configuration = {
+    generation,
+    configuration_revision: revision,
+    name: 'daily',
+    architecture: 'amd64',
+    image: 'alpine:3.20',
+    storage: null,
+    shell: '/bin/sh',
+    cpus: 2,
+    memory_mb: 1024,
+    environment: [['TOKEN', 'old']],
+    mounts: [],
+    docker_socket: false,
+    scrollback: 10000,
+    vpn: null,
+    execution_lifetime: 'live',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: false,
+    },
+  };
+  let inspections = 0;
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => {
+      inspections += 1;
+      return configuration;
+    },
+    update: async (...args) => ({ ...args[3], generation, configuration_revision: nextRevision }),
+    patchEnvironment: async () => {
+      throw new Error('workspace changed');
+    },
+  };
+  const stage = host();
+  stage.render(h(Workspace, { api: managed }));
+  await settled();
+  await settled();
+  const environment = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Environment variables',
+    )
+    .map((patch) => patch.SetProp.id)
+    .find((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
+    );
+  assert.notEqual(environment, undefined);
+  change(stage, 'value', 'new');
+  invoke(stage, 'Save workspace');
+  await settled();
+  await settled();
+  await settled();
+  assert.equal(inspections, 2, 'conflict performs an authoritative reload');
+  const labels = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text ?? '');
+  assert.ok(
+    labels.some((label) =>
+      label.includes('Settings were saved, but environment changes were not. Reloaded workspace'),
+    ),
   );
 });
 

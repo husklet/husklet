@@ -669,10 +669,25 @@ impl hl_extension::port::WorkspaceControl for Host {
         &self,
         _name: &str,
         _generation: &str,
+        _configuration_revision: &str,
         configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         self.ledger.note("workspace.update");
         Ok(configuration.clone())
+    }
+    fn patch_environment(
+        &self,
+        _name: &str,
+        generation: &str,
+        configuration_revision: &str,
+        _patch: &hl_extension::port::WorkspaceEnvironmentPatch,
+    ) -> Result<hl_extension::port::WorkspaceEnvironmentPatchResult, HostError> {
+        self.ledger.note("workspace.environment_patch");
+        Ok(hl_extension::port::WorkspaceEnvironmentPatchResult {
+            generation: generation.into(),
+            configuration_revision: configuration_revision.into(),
+            changed: true,
+        })
     }
     fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("workspace.delete");
@@ -919,6 +934,7 @@ fn path(value: &str) -> RelativePath {
 fn workspace_configuration() -> WorkspaceConfiguration {
     WorkspaceConfiguration {
         generation: "0123456789abcdef0123456789abcdef".into(),
+        configuration_revision: "abcdef0123456789abcdef0123456789".into(),
         name: "other".into(),
         image: "alpine:3.20".into(),
         architecture: "arm64".into(),
@@ -977,22 +993,30 @@ fn workspace_environment_grant_filters_by_exact_workspace_and_name() {
         Vec::new(),
     );
     let mut scoped = Session::new(authority).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
-        selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+        read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
             workspace: "other".into(),
             name: "DATABASE_PASSWORD".into(),
         }],
+        write: Vec::new(),
     });
     let reply = scoped
         .dispatch(&Request::WorkspaceInspect { name: "other".into() }, &services(&host))
         .expect("exact grant");
-    let Reply::WorkspaceConfiguration(configuration) = reply else { panic!("unexpected reply") };
-    assert_eq!(configuration.environment, vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())]);
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(
+        configuration.environment,
+        vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())]
+    );
     assert!(!configuration.environment_redacted);
 
     let reply = scoped
         .dispatch(&Request::WorkspaceInspect { name: "sibling".into() }, &services(&host))
         .expect("wrong workspace remains inspectable but secret-free");
-    let Reply::WorkspaceConfiguration(configuration) = reply else { panic!("unexpected reply") };
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
     assert!(configuration.environment.is_empty());
     assert!(configuration.environment_redacted);
 }
@@ -1025,9 +1049,22 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::WorkspaceUpdate {
                 name: "other".into(),
                 generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
                 configuration: workspace_configuration(),
             },
             Capability::WorkspaceControl,
+        ),
+        (
+            Request::WorkspaceEnvironmentPatch {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                patch: hl_extension::port::WorkspaceEnvironmentPatch {
+                    set: vec![("TOKEN".into(), "value".into())],
+                    remove: Vec::new(),
+                },
+            },
+            Capability::WorkspaceEnvironmentWrite,
         ),
         (
             Request::WorkspaceDelete {
@@ -1725,7 +1762,11 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
     for (request, capability) in calls() {
         let host = Host::new();
 
-        let mut granted = session(&[capability], &["logs"]);
+        let mut granted =
+            session(&[capability], &["logs"]).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+                read: Vec::new(),
+                write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            });
         assert!(
             granted.dispatch(&request, &services(&host)).is_ok(),
             "{request:?} must be permitted by {capability:?}"
@@ -1762,6 +1803,7 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
         Request::WorkspaceUpdate {
             name: "other".into(),
             generation: "short".into(),
+            configuration_revision: "abcdef0123456789abcdef0123456789".into(),
             configuration: workspace_configuration(),
         },
         Request::WorkspaceDelete {

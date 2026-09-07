@@ -568,6 +568,8 @@ pub struct WorkspaceState {
 pub struct WorkspaceConfiguration {
     #[serde(default)]
     pub generation: String,
+    #[serde(default)]
+    pub configuration_revision: String,
     pub name: String,
     pub image: String,
     pub architecture: String,
@@ -585,6 +587,19 @@ pub struct WorkspaceConfiguration {
     pub vpn: Option<String>,
     pub execution_lifetime: String,
     pub terminal: WorkspaceTerminal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceEnvironmentPatch {
+    pub set: Vec<(String, String)>,
+    pub remove: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceEnvironmentPatchResult {
+    pub generation: String,
+    pub configuration_revision: String,
+    pub changed: bool,
 }
 
 /// One host path exposed inside a workspace.
@@ -1225,8 +1240,18 @@ pub trait WorkspaceControl {
         &self,
         _name: &str,
         _generation: &str,
+        _configuration_revision: &str,
         _configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn patch_environment(
+        &self,
+        _name: &str,
+        _generation: &str,
+        _configuration_revision: &str,
+        _patch: &WorkspaceEnvironmentPatch,
+    ) -> Result<WorkspaceEnvironmentPatchResult, HostError> {
         Err(workspace_control_unavailable())
     }
     fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
@@ -1322,8 +1347,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
-        bounded_pane_text, pane_lines,
+        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
     };
 
     #[test]
@@ -1443,32 +1468,26 @@ mod tests {
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
         };
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_ok()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone(), entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![super::ExtensionCatalogueEntry {
-                    description: "unsafe\nmetadata".into(),
-                    ..entry
-                }],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_ok());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone(), entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                description: "unsafe\nmetadata".into(),
+                ..entry
+            }],
+            complete: true,
+        }
+        .validate()
+        .is_err());
     }
 }

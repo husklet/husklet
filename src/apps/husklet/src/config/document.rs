@@ -76,6 +76,7 @@ impl WorkspaceDocument {
 struct WsBuilder {
     name: Option<String>,
     generation: Option<String>,
+    configuration_revision: Option<String>,
     image: Option<String>,
     arch: Option<Arch>,
     storage: Option<PathBuf>,
@@ -108,6 +109,7 @@ impl WsBuilder {
         match k {
             "name" => self.name = Some(v.to_string()),
             "generation" => self.generation = Some(v.to_string()),
+            "configuration_revision" => self.configuration_revision = Some(v.to_string()),
             "image" => self.image = Some(v.to_string()),
             "arch" => self.arch = Some(Arch::parse(v).ok_or_else(|| Value::new("architecture", v).invalid())?),
             "storage" if !v.is_empty() => self.storage = Some(PathBuf::from(v)),
@@ -216,6 +218,16 @@ impl WsBuilder {
         {
             return Err(Value::new("generation", &generation).invalid());
         }
+        let configuration_revision = self
+            .configuration_revision
+            .ok_or_else(|| Self::missing("configuration_revision"))?;
+        if configuration_revision.len() != 32
+            || !configuration_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(Value::new("configuration_revision", &configuration_revision).invalid());
+        }
         Ok(WorkspaceConfig {
             ws: Workspace {
                 name,
@@ -229,6 +241,7 @@ impl WsBuilder {
                 mounts: self.mounts,
             },
             generation,
+            configuration_revision,
             docker_sock: self.docker_sock.unwrap_or(true),
             scrollback: match self.scrollback {
                 ScrollbackValue::Missing => Some(super::DEFAULT_SCROLLBACK_LINES),

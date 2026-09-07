@@ -88,6 +88,10 @@ test('generated declarations correlate every authoritative request with its exac
   }
   assert.match(declarations, /WireRequestParameters<C extends WireCall>/);
   assert.match(declarations, /WireReplyFor<C extends WireCall> = WireReplyByCall\[C\]/);
+  assert.match(
+    declarations,
+    /WorkspaceEnvironmentSelector = \{ "workspace": string; "name": string \} \| \{ "all": boolean \}/,
+  );
 });
 
 test('integer widths and the cross-language lossless boundary are enforced before framing', () => {
@@ -153,7 +157,8 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
         rename: [],
       },
       workspace_environment: {
-        selectors: [{ workspace: 'dev', name: 'PGPASSWORD' }],
+        read: [{ workspace: 'dev', name: 'PGPASSWORD' }],
+        write: [],
       },
     },
   };

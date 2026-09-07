@@ -365,7 +365,14 @@ impl ExtensionAcquisitions {
                 .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
-                .commit_update_resource_scoped(update, consented, containers, filesystem, workspace_environment, moment())
+                .commit_update_resource_scoped(
+                    update,
+                    consented,
+                    containers,
+                    filesystem,
+                    workspace_environment,
+                    moment(),
+                )
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
@@ -485,8 +492,9 @@ fn moment() -> i64 {
 fn external_workspace_environment(manifest: &hl_extension::Manifest) -> Result<(), HostError> {
     if manifest
         .workspace_environment
-        .selectors
+        .read
         .iter()
+        .chain(manifest.workspace_environment.write.iter())
         .any(|selector| matches!(selector, hl_extension::WorkspaceEnvironmentSelector::All { .. }))
     {
         return Err(HostError::Failed(
@@ -527,7 +535,8 @@ mod tests {
         let mut candidate = manifest("1", &[Capability::WorkspaceEnvironmentRead]);
         candidate.name = ExtensionName::new("top").unwrap();
         candidate.workspace_environment = hl_extension::WorkspaceEnvironmentGrant {
-            selectors: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
         };
 
         assert!(external_workspace_environment(&candidate).is_err(), "install boundary");

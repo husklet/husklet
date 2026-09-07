@@ -516,26 +516,6 @@ struct Store {
 }
 
 impl Store {
-    fn preserve_redacted_environment(
-        old: &crate::config::WorkspaceConfig,
-        configuration: &WorkspaceConfiguration,
-        workspace: &mut crate::config::WorkspaceConfig,
-    ) {
-        if configuration.environment_redacted {
-            let replacements = configuration
-                .environment
-                .iter()
-                .cloned()
-                .collect::<std::collections::BTreeMap<_, _>>();
-            workspace.env = old
-                .env
-                .iter()
-                .map(|(name, value)| {
-                    (name.clone(), replacements.get(name).cloned().unwrap_or_else(|| value.clone()))
-                })
-                .collect();
-        }
-    }
     /// Whether one workspace's execution domain is accepting connections.
     ///
     /// Connecting is the only honest test: a socket file outlives the process
@@ -574,6 +554,7 @@ impl Store {
     fn configuration(workspace: &WorkspaceConfig) -> WorkspaceConfiguration {
         WorkspaceConfiguration {
             generation: workspace.generation.clone(),
+            configuration_revision: workspace.configuration_revision.clone(),
             name: workspace.name.clone(),
             image: workspace.image.clone(),
             architecture: workspace.arch.as_str().to_owned(),
@@ -617,6 +598,12 @@ impl Store {
         let arch = hl_ws::Arch::parse(&value.architecture)
             .ok_or_else(|| HostError::Conflict(format!("unsupported architecture {}", value.architecture)))?;
         let mut workspace = WorkspaceConfig::new(&value.name, &value.image, arch);
+        workspace.generation.clone_from(&value.generation);
+        if !value.configuration_revision.is_empty() {
+            workspace
+                .configuration_revision
+                .clone_from(&value.configuration_revision);
+        }
         workspace.storage = value.storage.as_ref().map(PathBuf::from);
         workspace.shell.clone_from(&value.shell);
         workspace.cpus = value.cpus;
@@ -713,10 +700,12 @@ impl WorkspaceControl for Store {
         &self,
         name: &str,
         generation: &str,
+        configuration_revision: &str,
         configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         let old = self.find(name)?;
-        if generation.is_empty() || old.generation != generation {
+        if generation.is_empty() || old.generation != generation || old.configuration_revision != configuration_revision
+        {
             return Err(HostError::Conflict(format!(
                 "workspace {name} changed; inspect and consent again"
             )));
@@ -725,17 +714,35 @@ impl WorkspaceControl for Store {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
         let mut workspace = Self::configured(configuration)?;
-        Self::preserve_redacted_environment(&old, configuration, &mut workspace);
         if Self::running(&old) && workspace.storage != old.storage {
             return Err(HostError::Conflict(
                 "workspace storage cannot change while the workspace is running".into(),
             ));
         }
         workspace.generation.clone_from(&old.generation);
-        crate::config::WorkspaceStore::load(Self::path())
-            .and_then(|mut store| store.upsert_if_generation(generation, workspace.clone()))
-            .map_err(|error| HostError::Failed(error.to_string()))?;
-        Ok(Self::configuration(&workspace))
+        let persisted = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| store.upsert_if_revision(generation, configuration_revision, workspace))
+            .map_err(workspace_io_error)?;
+        Ok(Self::configuration(&persisted))
+    }
+
+    fn patch_environment(
+        &self,
+        name: &str,
+        generation: &str,
+        configuration_revision: &str,
+        patch: &hl_extension::port::WorkspaceEnvironmentPatch,
+    ) -> Result<hl_extension::port::WorkspaceEnvironmentPatchResult, HostError> {
+        let (updated, changed) = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| {
+                store.patch_environment(name, generation, configuration_revision, &patch.set, &patch.remove)
+            })
+            .map_err(workspace_io_error)?;
+        Ok(hl_extension::port::WorkspaceEnvironmentPatchResult {
+            generation: updated.generation,
+            configuration_revision: updated.configuration_revision,
+            changed,
+        })
     }
 
     fn delete(&self, name: &str, generation: &str) -> Result<(), HostError> {
@@ -780,6 +787,14 @@ impl WorkspaceControl for Store {
             .restart(&workspace)
             .map(|_| ())
             .map_err(|error| HostError::Failed(error.to_string()))
+    }
+}
+
+fn workspace_io_error(error: std::io::Error) -> HostError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => HostError::Absent(error.to_string()),
+        std::io::ErrorKind::AlreadyExists => HostError::Conflict(error.to_string()),
+        _ => HostError::Failed(error.to_string()),
     }
 }
 
@@ -844,26 +859,6 @@ mod workspace_control_tests {
         carried.architecture = "arm64".into();
         carried.vpn = Some("not a proxy".into());
         assert!(Store::configured(&carried).is_err());
-    }
-
-    #[test]
-    fn redacted_update_preserves_the_environment_it_could_not_observe() {
-        let mut old = crate::config::WorkspaceConfig::new("other", "alpine", hl_ws::Arch::Arm64);
-        old.env = vec![
-            ("DATABASE_PASSWORD".into(), "cycle19-preserved-secret".into()),
-            ("MODE".into(), "old".into()),
-        ];
-        let mut carried = Store::configuration(&old);
-        carried.environment = vec![("MODE".into(), "rotated".into())];
-        carried.environment_redacted = true;
-        carried.shell = Some("/bin/bash".into());
-        let mut replacement = Store::configured(&carried).expect("otherwise valid update");
-
-        Store::preserve_redacted_environment(&old, &carried, &mut replacement);
-
-        assert_eq!(replacement.env[0], old.env[0]);
-        assert_eq!(replacement.env[1], ("MODE".into(), "rotated".into()));
-        assert_eq!(replacement.shell.as_deref(), Some("/bin/bash"));
     }
 
     #[test]
