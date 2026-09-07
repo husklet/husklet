@@ -645,6 +645,20 @@ static int hl_a64_x86_emit_indirect_terminal(hl_x64_asm *assembler, uint32_t ins
     return 1;
 }
 
+/* BL immediate.  The branch target stays in the translated high mapping,
+ * while x30 is the guest-visible link address and therefore follows the same
+ * non-PIE projection rule as the interpreter and the same-ISA translator. */
+static int hl_a64_x86_emit_direct_call_terminal(hl_x64_asm *assembler, uint32_t instruction,
+                                                 uint64_t guest_pc, uint64_t *exit_kind) {
+    if ((instruction & 0xFC000000u) != 0x94000000u) return 0;
+    int64_t displacement = interp_sext(instruction & 0x3FFFFFFu, 26) * 4;
+    hl_a64_x86_emit_cpu_u64(assembler, 30 * (int)sizeof(uint64_t), pcrel_base(guest_pc) + 4);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_pc + (uint64_t)displacement);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    *exit_kind = HL_BACKEND_SHAPE_T_DIRECT_CALL;
+    return 1;
+}
+
 static void *translate_block(uint64_t guest_pc) {
     /* map_put/txpg_mark describe one non-wrapping source interval. AArch64
      * address arithmetic wraps, but a block spanning UINT64_MAX cannot be
@@ -757,6 +771,8 @@ static void *translate_block(uint64_t guest_pc) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
             exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
+        } else if (hl_a64_x86_emit_direct_call_terminal(&assembler, instruction, cursor, &exit_kind)) {
+            /* Complete terminal and typed exit were emitted together. */
         } else if (hl_a64_x86_emit_indirect_terminal(&assembler, instruction, cursor, &exit_kind)) {
             /* Complete terminal and typed exit were emitted together. */
         } else if ((instruction & 0xFC000000u) == 0x14000000u) {

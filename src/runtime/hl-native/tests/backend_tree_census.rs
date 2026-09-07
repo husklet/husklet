@@ -219,6 +219,25 @@ fn aarch64_x86_dbt_records_one_typed_exit_per_generated_return() {
 }
 
 #[test]
+fn aarch64_x86_direct_call_preserves_link_target_and_typed_exit() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "static int hl_a64_x86_emit_direct_call_terminal",
+        "(instruction & 0xFC000000u) != 0x94000000u",
+        "pcrel_base(guest_pc) + 4",
+        "guest_pc + (uint64_t)displacement",
+        "*exit_kind = HL_BACKEND_SHAPE_T_DIRECT_CALL",
+        "hl_a64_x86_emit_direct_call_terminal(&assembler, instruction, cursor, &exit_kind)",
+    ] {
+        assert!(source.contains(contract), "missing direct-call contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/indirect_control.c");
+    for instruction in ["bl direct_target", "direct_target:", "ret"] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn aarch64_rejection_census_weights_the_rejecting_form_at_retirement() {
     let dbt = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     let interpreter = include_str!("../src/native/translator/guest/aarch64/interp/dispatch.c");

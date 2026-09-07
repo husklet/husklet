@@ -1,8 +1,11 @@
-/* BR, BLR, default RET and explicit-register RET.  `blr x30` is the aliasing
- * case: the branch target must be read before BLR publishes its return PC. */
+/* BL, BR, BLR, default RET and explicit-register RET.  `blr x30` is the
+ * aliasing case: the branch target must be read before BLR publishes its
+ * return PC. */
 __asm__(".global _start\n"
         ".type _start,%function\n"
         "_start:\n"
+        "bl direct_target\n"
+        "after_direct:\n"
         "adr x1,br_target\n"
         "br x1\n"
         "br_target:\n"
@@ -15,6 +18,8 @@ __asm__(".global _start\n"
         "adr x5,explicit_ret_target\n"
         "ret x5\n"
         "blr_target:\n"
+        "ret\n"
+        "direct_target:\n"
         "ret\n"
         "explicit_ret_target:\n"
         "movz x0,#42\n"
