@@ -9288,6 +9288,7 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = source;
     translit_fall_fixture_length = sizeof guest_bytes;
+    int exact = 0;
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 195;
     struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
@@ -11543,7 +11544,7 @@ static int translit_direct_call_signal_stage_test(void) {
           translit_test_call_site.flags_live < translit_test_call_site.restore_end &&
           translit_test_call_site.save_end < translit_test_call_site.end &&
           translit_test_call_site.end <= translit_test_call_instruction_end))
-        return 0;
+        goto control_mem_done;
     // Frozen independently from the marker fields: direct CALL begins with two imm32 stores and the
     // architectural RSP commit. Any moved marker, changed displacement or reordered operation fails here.
     uint8_t *start = translit_test_call_instruction_start;
@@ -11573,7 +11574,7 @@ static int translit_direct_call_signal_stage_test(void) {
     uint8_t *const committed_at = start + 24;
     int saved_selected = translit_selected;
     translit_selected = 1;
-    int exact = 1;
+    exact = 1;
     for (uint8_t *pc = translit_test_call_instruction_start;
          exact && pc < translit_test_call_instruction_end; ++pc) {
         int committed = pc >= committed_at;
@@ -11780,11 +11781,25 @@ static int translit_control_mem_signal_stage_test(int call) {
     guest_bytes[0] = 0xff;
     guest_bytes[1] = call ? 0x10 : 0x20; /* call/jmp *(%rax) */
     const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
+    uint8_t *saved_cache = g_cache, *saved_cp = g_cp;
+    intptr_t saved_rw2rx = g_rw2rx;
+    int saved_dualmap = g_dualmap;
+    uint64_t saved_generation = g_cache_gen;
+    const uint8_t *saved_fixture_bytes = translit_fall_fixture_bytes;
+    uint64_t saved_fixture_guest = translit_fall_fixture_guest;
+    size_t saved_fixture_length = translit_fall_fixture_length;
+    int saved_selected = translit_selected;
+    int exact = 0;
     g_cache = arena;
     g_cp = arena;
     g_rw2rx = 0;
     g_dualmap = 1;
-    g_cache_gen = UINT64_C(0xf4f4f4f4);
+    g_cache_gen = UINT64_C(0xf4f4f400) + (uint64_t)call;
+    jit_body_owner_drop_generation(g_cache_gen);
+    translit_test_jmp_mem_instruction_start = NULL;
+    translit_test_jmp_mem_borrow_start = NULL;
+    translit_test_jmp_mem_rip_end = NULL;
+    translit_test_jmp_mem_r11_end = NULL;
     map_clear();
     translit_fall_fixture_bytes = guest_bytes;
     translit_fall_fixture_guest = source;
@@ -11793,7 +11808,7 @@ static int translit_control_mem_signal_stage_test(int call) {
     if (context == NULL || translit_jcc_ibtc_test_build(context, source) == NULL ||
         translit_test_jmp_mem_instruction_start == NULL || translit_test_jmp_mem_borrow_start == NULL ||
         translit_test_jmp_mem_rip_end == NULL || translit_test_jmp_mem_r11_end == NULL)
-        return 0;
+        goto control_mem_done;
     const uint64_t target = UINT64_C(0x123456789abcdef0);
     struct { uint8_t *pc; uint32_t preserve; uint64_t cpu_rip; uint64_t expected_rip; } stages[] = {
         {translit_test_jmp_mem_instruction_start, 0, source, source},
@@ -11801,9 +11816,8 @@ static int translit_control_mem_signal_stage_test(int call) {
         {translit_test_jmp_mem_rip_end, 1u << HL_X64_R11, target, target},
         {translit_test_jmp_mem_r11_end, 0, target, target},
     };
-    int saved_selected = translit_selected;
     translit_selected = 1;
-    int exact = 1;
+    exact = 1;
     for (unsigned stage = 0; exact && stage < sizeof stages / sizeof stages[0]; ++stage) {
         struct cpu cpu = {0}, expected_flags = {0};
         ucontext_t native;
@@ -11831,8 +11845,19 @@ static int translit_control_mem_signal_stage_test(int call) {
         exact = exact && cpu.v[0] == UINT64_C(0x0123456789abcdef) &&
                 cpu.v[1] == UINT64_C(0xfedcba9876543210);
     }
+control_mem_done:
     translit_selected = saved_selected;
-    hl_x86_hot_context_destroy(context);
+    if (context != NULL) hl_x86_hot_context_destroy(context);
+    jit_body_owner_drop_generation(g_cache_gen);
+    translit_test_jmp_mem_instruction_start = NULL;
+    translit_test_jmp_mem_borrow_start = NULL;
+    translit_test_jmp_mem_rip_end = NULL;
+    translit_test_jmp_mem_r11_end = NULL;
+    g_cache = saved_cache; g_cp = saved_cp; g_rw2rx = saved_rw2rx; g_dualmap = saved_dualmap;
+    g_cache_gen = saved_generation;
+    translit_fall_fixture_bytes = saved_fixture_bytes;
+    translit_fall_fixture_guest = saved_fixture_guest;
+    translit_fall_fixture_length = saved_fixture_length;
     munmap(arena, arena_size);
     return exact;
 }
