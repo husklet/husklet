@@ -108,6 +108,7 @@ mod tests {
                     capabilities: Grant::new([
                         Capability::WorkspaceRead,
                         Capability::WorkspaceEnvironmentRead,
+                        Capability::WorkspaceEnvironmentWrite,
                         Capability::ExtensionRead,
                         Capability::Interface,
                     ]),
