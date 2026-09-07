@@ -169,6 +169,21 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'CardContent',
     'Card',
   ]);
+  assert.ok(
+    ancestorProperty(stage, 'Workspace control', 'Card', 'Width'),
+    'discovery cards retain a readable bound instead of stretching with the window',
+  );
+  assert.equal(ancestorProperty(stage, 'Workspace control', 'Card', 'Grow')?.Number, 0);
+  assert.equal(
+    ancestorProperty(stage, 'Workspace control', 'Card', 'Justify')?.Align,
+    'Start',
+    'cross-axis alignment lets the declared maximum width govern the GTK card',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Install from image', 'Card', 'Width') !== undefined,
+    true,
+    'the acquisition card uses the same compact geometry',
+  );
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -4196,6 +4211,27 @@ function ancestorTags(stage, label) {
     ancestors.push(tags.get(node));
   }
   return ancestors;
+}
+
+function ancestorProperty(stage, label, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = labelled(stage, label)?.SetProp.id;
+  while (parents.has(node)) {
+    node = parents.get(node);
+    if (tags.get(node) === tag)
+      return patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
+        .at(-1)?.SetProp.value;
+  }
+  return undefined;
 }
 
 function compactDigest(digest) {

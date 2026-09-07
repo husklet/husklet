@@ -29,6 +29,7 @@ import {
 type Change = { value?: unknown };
 
 const STORYBOOK_IMAGE = 'ghcr.io/husklet/husklet/extension-storybook:latest';
+const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
@@ -247,7 +248,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   return (
     <Scroll grow height="fill">
-      <Column pad={2} gap={1}>
+      <Column pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
@@ -256,7 +257,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         />
         <Heading label="Discover" scale="caption" />
         <Column gap={2}>
-          <Card variant="filled">
+          <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
             <CardHeader label="Workspace control" detail="First-party · Included" />
             <CardContent gap={1}>
               <Text
@@ -267,7 +268,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </CardContent>
           </Card>
           {!installed.some((extension) => extension.name === 'storybook') && (
-            <Card variant="filled">
+            <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
               <CardHeader label="Component playground" detail="First-party · Storybook" />
               <CardContent gap={1}>
                 <Text
@@ -286,7 +287,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </Card>
           )}
         </Column>
-        <Card variant="outline">
+        <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
             <Row gap={1}>
@@ -498,7 +499,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         {notice && (
           <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />
         )}
-        <Row gap={2} align="center">
+        <Row gap={2}>
           <Heading label="Installed" scale="title" />
           <Button
             label="Refresh"
@@ -516,7 +517,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           onRetry={reload}
         >
           {installed.map((extension) => (
-            <Card key={`${extension.name}:${extension.image_digest}`} variant="filled">
+            <Card
+              key={`${extension.name}:${extension.image_digest}`}
+              grow={false}
+              justify="start"
+              width={CONTENT_WIDTH}
+              variant="filled"
+            >
               <CardHeader
                 label={extension.name}
                 detail={extension.version ?? extension.image_digest}
