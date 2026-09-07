@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../../../persist.h"
+#include "../../../owner.h"
 
 #define X64_PC_MAGIC UINT64_C(0x3143535034364c48)
 #define X64_PC_VERSION UINT64_C(9)
@@ -21,18 +22,6 @@
 #define X64_PC_LIB_SPAN (UINT64_C(1) << 38)
 #define X64_PC_LIB_MAX 512u
 #define X64_PC_LIB_HASH_MAX (UINT64_C(512) << 20)
-
-/* Serialized owner-preserve ABI, shared by the live owner ledger and its validator. */
-#define JIT_BODY_OWNER_PRESERVE_RET_RAX (UINT32_C(1) << 16)
-#define JIT_BODY_OWNER_FLAGS_FROM_CPU (UINT32_C(1) << 17)
-#define JIT_BODY_OWNER_FLAGS_FROM_PACKED (UINT32_C(1) << 18)
-_Static_assert((JIT_BODY_OWNER_PRESERVE_RET_RAX & UINT16_MAX) == 0 &&
-                   (JIT_BODY_OWNER_FLAGS_FROM_CPU &
-                    (UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX)) == 0 &&
-                   (JIT_BODY_OWNER_FLAGS_FROM_PACKED &
-                    (UINT16_MAX | JIT_BODY_OWNER_PRESERVE_RET_RAX |
-                     JIT_BODY_OWNER_FLAGS_FROM_CPU)) == 0,
-               "body owner metadata must not collide with the GPR preserve mask");
 
 void x64_pc_put16(uint8_t **cursor, uint16_t value);
 void x64_pc_put32(uint8_t **cursor, uint32_t value);

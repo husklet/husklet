@@ -13,6 +13,7 @@
 #include "arena.h"
 #include "emit.h"
 #include "guest_fetch.h"
+#include "owner.h"
 
 #include <stddef.h>
 #if defined(__linux__)
