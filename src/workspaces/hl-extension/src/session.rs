@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    NotificationSink, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles,
-    WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles,
+    WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -44,6 +44,7 @@ pub struct Session {
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
     filesystem: FilesystemGrant,
+    workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
 }
 
@@ -72,6 +73,53 @@ pub struct SurfaceEvent {
     pub event: hl_gui::Event,
 }
 
+fn workspace_environment_patch(patch: &crate::port::WorkspaceEnvironmentPatch) -> Result<(), Failure> {
+    let names = patch
+        .set
+        .iter()
+        .map(|(name, _)| name)
+        .chain(patch.remove.iter())
+        .collect::<Vec<_>>();
+    let bytes = patch
+        .set
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            total.checked_add(name.len() + value.len())
+        })
+        .and_then(|total| {
+            patch
+                .remove
+                .iter()
+                .try_fold(total, |sum, name| sum.checked_add(name.len()))
+        })
+        .ok_or_else(|| Failure::Conflict {
+            detail: "workspace environment patch is too large".into(),
+        })?;
+    let valid_name = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 256
+            && name
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| byte == b'_' || byte.is_ascii_alphabetic() || index > 0 && byte.is_ascii_digit())
+    };
+    if names.len() > 128
+        || bytes > 32 * 1024
+        || patch
+            .set
+            .iter()
+            .any(|(_, value)| value.len() > 4096 || value.contains('\0'))
+        || names.iter().any(|name| !valid_name(name))
+        || names.iter().collect::<std::collections::BTreeSet<_>>().len() != names.len()
+    {
+        return Err(Failure::Conflict {
+            detail: "workspace environment patch must contain at most 128 unique, disjoint, bounded names and values"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
 impl std::ops::Deref for Session {
     type Target = hl_rpc::Session<Topic>;
 
@@ -97,6 +145,7 @@ impl Session {
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
             filesystem: FilesystemGrant::default(),
+            workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
         }
     }
@@ -111,6 +160,12 @@ impl Session {
     #[must_use]
     pub fn with_filesystem(mut self, filesystem: FilesystemGrant) -> Self {
         self.filesystem = filesystem;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_environment(mut self, grant: crate::WorkspaceEnvironmentGrant) -> Self {
+        self.workspace_environment = grant;
         self
     }
 
@@ -290,8 +345,8 @@ impl Session {
             Request::WorkspaceList => self.workspaces(services),
             Request::WorkspaceInspect { .. }
             | Request::WorkspaceCreate { .. }
-            | Request::WorkspaceAdopt { .. }
             | Request::WorkspaceUpdate { .. }
+            | Request::WorkspaceEnvironmentPatch { .. }
             | Request::WorkspaceDelete { .. }
             | Request::WorkspaceStart { .. }
             | Request::WorkspaceStop { .. }
@@ -434,6 +489,7 @@ impl Session {
                     .map_err(Failure::from)
             }
             Request::FilesystemList { .. }
+            | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
             | Request::FilesystemReadRange { .. }
             | Request::FilesystemStat { .. }
@@ -760,21 +816,53 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.workspace_control)?;
         match request {
-            Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(port.inspect(name)?)),
-            Request::WorkspaceCreate { configuration } => {
-                Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
-            }
-            Request::WorkspaceAdopt { configuration } => Ok(Reply::WorkspaceConfiguration(port.adopt(configuration)?)),
+            Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(
+                self.visible_workspace_for(name, port.inspect(name)?),
+            )),
+            Request::WorkspaceCreate { configuration } => Ok(Reply::WorkspaceConfiguration(
+                self.visible_workspace(port.create(configuration)?),
+            )),
             Request::WorkspaceUpdate {
                 name,
                 generation,
+                configuration_revision,
                 configuration,
             } => {
                 immutable_identity(generation, &[32], "workspace generation")?;
-                Ok(Reply::WorkspaceConfiguration(port.update(
+                immutable_identity(configuration_revision, &[32], "workspace configuration revision")?;
+                Ok(Reply::WorkspaceConfiguration(self.visible_workspace(port.update(
                     name,
                     generation,
+                    configuration_revision,
                     configuration,
+                )?)))
+            }
+            Request::WorkspaceEnvironmentPatch {
+                name,
+                generation,
+                configuration_revision,
+                patch,
+            } => {
+                immutable_identity(generation, &[32], "workspace generation")?;
+                immutable_identity(configuration_revision, &[32], "workspace configuration revision")?;
+                workspace_environment_patch(patch)?;
+                if patch
+                    .set
+                    .iter()
+                    .map(|(variable, _)| variable)
+                    .chain(patch.remove.iter())
+                    .any(|variable| !self.workspace_environment.permits_write(name, variable))
+                {
+                    return Err(Failure::Denied {
+                        capability: Capability::WorkspaceEnvironmentWrite.as_str().into(),
+                        detail: "workspace environment name is outside the consented write scope".into(),
+                    });
+                }
+                Ok(Reply::WorkspaceEnvironmentPatch(port.patch_environment(
+                    name,
+                    generation,
+                    configuration_revision,
+                    patch,
                 )?))
             }
             Request::WorkspaceDelete { name, generation } => {
@@ -790,6 +878,29 @@ impl Session {
                 call: "workspace control".into(),
             }),
         }
+    }
+
+    fn visible_workspace(&self, configuration: WorkspaceConfiguration) -> WorkspaceConfiguration {
+        let name = configuration.name.clone();
+        self.visible_workspace_for(&name, configuration)
+    }
+
+    fn visible_workspace_for(
+        &self,
+        workspace: &str,
+        mut configuration: WorkspaceConfiguration,
+    ) -> WorkspaceConfiguration {
+        let permitted = self
+            .peer
+            .authority()
+            .granted::<Capability>()
+            .holds(Capability::WorkspaceEnvironmentRead);
+        let original = configuration.environment.len();
+        configuration
+            .environment
+            .retain(|(variable, _)| permitted && self.workspace_environment.permits_read(workspace, variable));
+        configuration.environment_redacted = configuration.environment.len() != original;
+        configuration
     }
 
     fn extensions(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
@@ -847,6 +958,7 @@ impl Session {
                 granted,
                 containers,
                 filesystem,
+                workspace_environment,
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
@@ -857,6 +969,7 @@ impl Session {
                     granted,
                     containers,
                     filesystem,
+                    workspace_environment,
                 )?))
             }
             Request::ExtensionUpdate {
@@ -866,6 +979,7 @@ impl Session {
                 granted,
                 containers,
                 filesystem,
+                workspace_environment,
             } => {
                 acquisition_job(job)?;
                 immutable_digest(image_digest, "extension candidate image")?;
@@ -876,6 +990,7 @@ impl Session {
                     granted,
                     containers,
                     filesystem,
+                    workspace_environment,
                 )?))
             }
             _ => Err(Failure::Unsupported {
@@ -1023,6 +1138,44 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entries(port.list(path)?))
             }
+            Request::FilesystemListPage {
+                path,
+                after,
+                observed,
+                limit,
+            } => {
+                if *limit == 0 || *limit > 256 || observed.as_ref().is_some_and(|value| value.len() > 256) {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory page limit or observed identity exceeds bounds".into(),
+                    });
+                }
+                if after.is_some() != observed.is_some() {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory continuation requires both cursor and observed identity".into(),
+                    });
+                }
+                if after.as_ref().is_some_and(|cursor| {
+                    let directory = path.as_str();
+                    let value = cursor.as_str();
+                    let child = if directory.is_empty() {
+                        Some(value)
+                    } else {
+                        value.strip_prefix(directory).and_then(|rest| rest.strip_prefix('/'))
+                    };
+                    child.is_none_or(|name| name.is_empty() || name.contains('/'))
+                }) {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory cursor must name a child after the directory".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::DirectoryPage(port.list_page(
+                    path,
+                    after.as_ref(),
+                    observed.as_deref(),
+                    *limit,
+                )?))
+            }
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
@@ -1033,11 +1186,7 @@ impl Session {
                 limit,
                 observed,
             } => {
-                if *limit == 0
-                    || *limit > 64 * 1024
-                    || *offset > 1_040_384
-                    || observed.as_ref().is_some_and(|value| value.len() > 256)
-                {
+                if *limit == 0 || *limit > 64 * 1024 || observed.as_ref().is_some_and(|value| value.len() > 256) {
                     return Err(Failure::Failed {
                         detail: "filesystem range exceeds protocol bounds".into(),
                     });
@@ -1257,9 +1406,8 @@ impl Session {
 }
 
 fn validate_notification(notification: &crate::port::Notification) -> Result<(), Failure> {
-    let valid = |value: &str, max: usize| {
-        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
-    };
+    let valid =
+        |value: &str, max: usize| !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control);
     if !valid(&notification.id, 128) || !valid(&notification.title, 256) || !valid(&notification.body, 4096) {
         return Err(Failure::Conflict {
             detail: "notification id, title, or body is empty, oversized, or contains control characters".into(),

@@ -56,10 +56,11 @@ impl super::Host {
         terminal: Arc<dyn TerminalSurface + Send + Sync>,
         events: super::Events,
         entrypoint: impl Into<PathBuf>,
+        initial_section: Option<&str>,
         audience: super::Audience,
     ) -> Self {
         Self::open(
-            LocalWorkspace::new(workspace, name, entrypoint.into())
+            LocalWorkspace::new(workspace, name, entrypoint.into(), initial_section)
                 .through(terminal)
                 .observing(events),
             audience,
@@ -71,15 +72,22 @@ impl super::Host {
 struct LocalWorkspace {
     workspace: Workspace,
     entrypoint: PathBuf,
+    initial_section: Option<String>,
     child: Mutex<Option<std::process::Child>>,
 }
 
 #[cfg(debug_assertions)]
 impl LocalWorkspace {
-    fn new(workspace: &WorkspaceConfig, name: &ExtensionName, entrypoint: PathBuf) -> Self {
+    fn new(
+        workspace: &WorkspaceConfig,
+        name: &ExtensionName,
+        entrypoint: PathBuf,
+        initial_section: Option<&str>,
+    ) -> Self {
         Self {
             workspace: Workspace::extension(workspace, name),
             entrypoint,
+            initial_section: initial_section.map(str::to_owned),
             child: Mutex::new(None),
         }
     }
@@ -120,9 +128,14 @@ impl Supply for LocalWorkspace {
     }
 
     fn ensure(&self, plan: &Plan) -> Result<(), String> {
-        let child = std::process::Command::new("node")
+        let mut command = std::process::Command::new("node");
+        command
             .arg(&self.entrypoint)
-            .env("HUSKLET_EXTENSION_SOCKET", plan.spec.socket())
+            .env("HUSKLET_EXTENSION_SOCKET", plan.spec.socket());
+        if let Some(section) = &self.initial_section {
+            command.env("HUSKLET_TOP_SECTION", section);
+        }
+        let child = command
             .spawn()
             .map_err(|error| format!("start local extension {}: {error}", self.entrypoint.display()))?;
         *self.child.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);
@@ -426,10 +439,12 @@ mod halt_tests {
             pane_providers: Vec::new(),
             resources: Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         };
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:offline-checkpoint".to_owned(),
             version: manifest.version.clone(),
@@ -552,6 +567,7 @@ impl Store {
     fn configuration(workspace: &WorkspaceConfig) -> WorkspaceConfiguration {
         WorkspaceConfiguration {
             generation: workspace.generation.clone(),
+            configuration_revision: workspace.configuration_revision.clone(),
             name: workspace.name.clone(),
             image: workspace.image.clone(),
             architecture: workspace.arch.as_str().to_owned(),
@@ -563,6 +579,7 @@ impl Store {
             cpus: workspace.cpus,
             memory_mb: workspace.memory_mb,
             environment: workspace.env.clone(),
+            environment_redacted: false,
             mounts: workspace
                 .mounts
                 .iter()
@@ -594,6 +611,12 @@ impl Store {
         let arch = hl_ws::Arch::parse(&value.architecture)
             .ok_or_else(|| HostError::Conflict(format!("unsupported architecture {}", value.architecture)))?;
         let mut workspace = WorkspaceConfig::new(&value.name, &value.image, arch);
+        workspace.generation.clone_from(&value.generation);
+        if !value.configuration_revision.is_empty() {
+            workspace
+                .configuration_revision
+                .clone_from(&value.configuration_revision);
+        }
         workspace.storage = value.storage.as_ref().map(PathBuf::from);
         workspace.shell.clone_from(&value.shell);
         workspace.cpus = value.cpus;
@@ -672,28 +695,16 @@ impl WorkspaceControl for Store {
         Ok(Self::configuration(&workspace))
     }
 
-    fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
-        if !configuration.generation.is_empty() {
-            return Err(HostError::Conflict(
-                "only a generation-less legacy workspace can be adopted".into(),
-            ));
-        }
-        let mut expected = Self::configured(configuration)?;
-        expected.generation.clear();
-        let adopted = crate::config::WorkspaceStore::load(Self::path())
-            .and_then(|mut store| store.adopt_generation(&expected))
-            .map_err(|error| HostError::Conflict(error.to_string()))?;
-        Ok(Self::configuration(&adopted))
-    }
-
     fn update(
         &self,
         name: &str,
         generation: &str,
+        configuration_revision: &str,
         configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         let old = self.find(name)?;
-        if generation.is_empty() || old.generation != generation {
+        if generation.is_empty() || old.generation != generation || old.configuration_revision != configuration_revision
+        {
             return Err(HostError::Conflict(format!(
                 "workspace {name} changed; inspect and consent again"
             )));
@@ -708,10 +719,29 @@ impl WorkspaceControl for Store {
             ));
         }
         workspace.generation.clone_from(&old.generation);
-        crate::config::WorkspaceStore::load(Self::path())
-            .and_then(|mut store| store.upsert_if_generation(generation, workspace.clone()))
-            .map_err(|error| HostError::Failed(error.to_string()))?;
-        Ok(Self::configuration(&workspace))
+        let persisted = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| store.upsert_if_revision(generation, configuration_revision, workspace))
+            .map_err(workspace_io_error)?;
+        Ok(Self::configuration(&persisted))
+    }
+
+    fn patch_environment(
+        &self,
+        name: &str,
+        generation: &str,
+        configuration_revision: &str,
+        patch: &hl_extension::port::WorkspaceEnvironmentPatch,
+    ) -> Result<hl_extension::port::WorkspaceEnvironmentPatchResult, HostError> {
+        let (updated, changed) = crate::config::WorkspaceStore::load(Self::path())
+            .and_then(|mut store| {
+                store.patch_environment(name, generation, configuration_revision, &patch.set, &patch.remove)
+            })
+            .map_err(workspace_io_error)?;
+        Ok(hl_extension::port::WorkspaceEnvironmentPatchResult {
+            generation: updated.generation,
+            configuration_revision: updated.configuration_revision,
+            changed,
+        })
     }
 
     fn delete(&self, name: &str, generation: &str) -> Result<(), HostError> {
@@ -756,6 +786,14 @@ impl WorkspaceControl for Store {
             .restart(&workspace)
             .map(|_| ())
             .map_err(|error| HostError::Failed(error.to_string()))
+    }
+}
+
+fn workspace_io_error(error: std::io::Error) -> HostError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => HostError::Absent(error.to_string()),
+        std::io::ErrorKind::AlreadyExists => HostError::Conflict(error.to_string()),
+        _ => HostError::Failed(error.to_string()),
     }
 }
 
@@ -844,8 +882,14 @@ mod workspace_control_tests {
         assert_eq!(changes[0].workspace, created);
         assert_eq!(changes[1].workspace, started);
         assert!(changes[0].revision < changes[1].revision);
-        let third = Store { current: "three".into() };
-        assert_eq!(selected(&third), changes, "store instances observe the same exact revisions");
+        let third = Store {
+            current: "three".into(),
+        };
+        assert_eq!(
+            selected(&third),
+            changes,
+            "store instances observe the same exact revisions"
+        );
     }
 }
 

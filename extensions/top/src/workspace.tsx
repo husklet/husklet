@@ -10,6 +10,7 @@ import {
   ColorPicker,
   Column,
   Entry,
+  FormControlLabel,
   Heading,
   InlineMessage,
   Row,
@@ -30,6 +31,7 @@ const CONTROL_WIDTH = { chars: 60 } as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
   const [configuration, setConfiguration] = React.useState<WorkspaceConfiguration | null>(null);
+  const [observed, setObserved] = React.useState<WorkspaceConfiguration | null>(null);
   const [numbers, setNumbers] = React.useState<Numbers>({
     cpus: '',
     memory: '',
@@ -46,6 +48,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       const current = await api.info();
       const inspected = await api.inspect(current.name);
       setConfiguration(inspected);
+      setObserved(inspected);
       setNumbers(numberDraft(inspected));
       setError('');
       setSaved('');
@@ -82,17 +85,60 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
     changed();
   };
   const save = async () => {
-    if (!configuration || saving) return;
-    if (!configuration.generation) {
-      setError('The host did not provide a workspace generation; reload before saving.');
+    if (!configuration || !observed || saving) return;
+    if (!configuration.generation || !configuration.configuration_revision) {
+      setError('The host did not provide workspace revision identity; reload before saving.');
       return;
     }
     setSaving(true);
     try {
       const candidate = withNumbers(configuration, numbers);
       validate(candidate);
-      const updated = await api.update(configuration.name, configuration.generation, candidate);
+      const environmentPatch = diffEnvironment(observed.environment, candidate.environment);
+      const settings = { ...candidate, environment: observed.environment };
+      let updated = await api.update(
+        configuration.name,
+        configuration.generation,
+        configuration.configuration_revision,
+        settings,
+      );
+      if (environmentPatch.set.length || environmentPatch.remove.length) {
+        if (!updated.configuration_revision) {
+          throw new Error(
+            'The host did not return the saved workspace revision; reload before changing environment values.',
+          );
+        }
+        try {
+          const result = await api.patchEnvironment(
+            updated.name,
+            updated.generation ?? configuration.generation,
+            updated.configuration_revision,
+            environmentPatch,
+          );
+          updated = { ...updated, ...result, environment: candidate.environment };
+        } catch (cause) {
+          const patchError = message(cause);
+          try {
+            const current = await api.info();
+            const inspected = await api.inspect(current.name);
+            setConfiguration({ ...inspected, environment: candidate.environment });
+            setObserved(inspected);
+            setNumbers(numberDraft(inspected));
+            setDirty(true);
+            setSaved('');
+            setError(
+              `Settings were saved, but environment changes were not. Reloaded the latest workspace and retained your concealed environment edits for review and retry: ${patchError}`,
+            );
+          } catch (reloadCause) {
+            setError(
+              `Settings were saved, but environment changes were not (${patchError}); reload also failed: ${message(reloadCause)}`,
+            );
+          }
+          return;
+        }
+      }
       setConfiguration(updated);
+      setObserved(updated);
       setNumbers(numberDraft(updated));
       setDirty(false);
       setError('');
@@ -260,6 +306,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               onExpand={setExpanded}
             >
               <Environment
+                key={configuration.configuration_revision}
                 values={configuration.environment}
                 onChange={(value) => change('environment', value)}
               />
@@ -289,6 +336,15 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       </Column>
     </Scroll>
   );
+}
+
+function diffEnvironment(before: [string, string][], after: [string, string][]) {
+  const previous = new Map(before);
+  const next = new Map(after);
+  return {
+    set: after.filter(([name, value]) => previous.get(name) !== value),
+    remove: before.map(([name]) => name).filter((name) => !next.has(name)),
+  };
 }
 
 function SettingsGroup({
@@ -328,6 +384,7 @@ function Environment({
   values: [string, string][];
   onChange: (value: [string, string][]) => void;
 }) {
+  const [revealed, setRevealed] = React.useState(false);
   const replace = (index: number, part: 0 | 1, value: unknown) =>
     onChange(
       values.map((row, at) =>
@@ -338,6 +395,14 @@ function Environment({
     );
   return (
     <Column gap={2}>
+      {values.length > 0 && (
+        <FormControlLabel label="Show environment values" gap={2}>
+          <Switch
+            checked={revealed}
+            onToggle={(event: Change) => setRevealed(Boolean(event.value))}
+          />
+        </FormControlLabel>
+      )}
       {values.map((row, index) => (
         <Row key={`${index}:${row[0]}`} gap={1}>
           <Entry
@@ -348,6 +413,7 @@ function Environment({
           <Entry
             value={row[1]}
             placeholder="value"
+            secret={!revealed}
             grow
             onChange={(event: Change) => replace(index, 1, event.value)}
           />

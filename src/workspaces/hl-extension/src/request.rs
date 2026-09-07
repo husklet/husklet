@@ -56,13 +56,17 @@ pub enum Request {
     WorkspaceCreate {
         configuration: WorkspaceConfiguration,
     },
-    WorkspaceAdopt {
-        configuration: WorkspaceConfiguration,
-    },
     WorkspaceUpdate {
         name: String,
         generation: String,
+        configuration_revision: String,
         configuration: WorkspaceConfiguration,
+    },
+    WorkspaceEnvironmentPatch {
+        name: String,
+        generation: String,
+        configuration_revision: String,
+        patch: crate::port::WorkspaceEnvironmentPatch,
     },
     WorkspaceDelete {
         name: String,
@@ -118,6 +122,7 @@ pub enum Request {
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,
+        workspace_environment: crate::WorkspaceEnvironmentGrant,
     },
     ExtensionUpdate {
         job: String,
@@ -126,6 +131,7 @@ pub enum Request {
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,
+        workspace_environment: crate::WorkspaceEnvironmentGrant,
     },
     ContainerList,
     ContainerInspect {
@@ -378,6 +384,12 @@ pub enum Request {
     FilesystemList {
         path: RelativePath,
     },
+    FilesystemListPage {
+        path: RelativePath,
+        after: Option<RelativePath>,
+        observed: Option<String>,
+        limit: usize,
+    },
     FilesystemRead {
         path: RelativePath,
     },
@@ -463,12 +475,12 @@ impl Request {
         match self {
             Self::WorkspaceInfo | Self::WorkspaceList | Self::WorkspaceInspect { .. } => Capability::WorkspaceRead,
             Self::WorkspaceCreate { .. }
-            | Self::WorkspaceAdopt { .. }
             | Self::WorkspaceUpdate { .. }
             | Self::WorkspaceDelete { .. }
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
+            Self::WorkspaceEnvironmentPatch { .. } => Capability::WorkspaceEnvironmentWrite,
             Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
             Self::ExtensionEnable { .. }
             | Self::ExtensionDisable { .. }
@@ -543,6 +555,7 @@ impl Request {
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemList { .. }
+            | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
             | Self::FilesystemReadRange { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
@@ -572,6 +585,7 @@ impl Request {
     pub const fn path(&self) -> Option<&RelativePath> {
         match self {
             Self::FilesystemList { path }
+            | Self::FilesystemListPage { path, .. }
             | Self::FilesystemRead { path }
             | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
@@ -671,6 +685,7 @@ pub struct WorkspaceInfo {
 pub enum Reply {
     Workspace(WorkspaceInfo),
     WorkspaceConfiguration(WorkspaceConfiguration),
+    WorkspaceEnvironmentPatch(crate::port::WorkspaceEnvironmentPatchResult),
     Workspaces(Vec<WorkspaceState>),
     Extensions(Vec<crate::port::ExtensionSummary>),
     ExtensionCatalogue(crate::port::ExtensionCatalogue),
@@ -700,6 +715,7 @@ pub enum Reply {
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
+    DirectoryPage(crate::port::DirectoryPage),
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),

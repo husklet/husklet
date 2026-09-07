@@ -8,9 +8,9 @@
 use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
-    ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange, GridSize,
-    HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
+    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange,
+    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
     PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
     TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
@@ -49,7 +49,11 @@ struct Host {
 impl hl_extension::NotificationSink for Host {
     fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
         self.ledger.note("notifications.publish");
-        if self.fail_notification.get() { Err(HostError::Failed("desktop unavailable".into())) } else { Ok(()) }
+        if self.fail_notification.get() {
+            Err(HostError::Failed("desktop unavailable".into()))
+        } else {
+            Ok(())
+        }
     }
 }
 impl hl_extension::port::VolumeStore for Host {
@@ -655,20 +659,29 @@ impl hl_extension::port::WorkspaceControl for Host {
         self.ledger.note("workspace.create");
         Ok(configuration.clone())
     }
-    fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
-        self.ledger.note("workspace.adopt");
-        let mut adopted = configuration.clone();
-        adopted.generation = "0123456789abcdef0123456789abcdef".into();
-        Ok(adopted)
-    }
     fn update(
         &self,
         _name: &str,
         _generation: &str,
+        _configuration_revision: &str,
         configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
         self.ledger.note("workspace.update");
         Ok(configuration.clone())
+    }
+    fn patch_environment(
+        &self,
+        _name: &str,
+        generation: &str,
+        configuration_revision: &str,
+        _patch: &hl_extension::port::WorkspaceEnvironmentPatch,
+    ) -> Result<hl_extension::port::WorkspaceEnvironmentPatchResult, HostError> {
+        self.ledger.note("workspace.environment_patch");
+        Ok(hl_extension::port::WorkspaceEnvironmentPatchResult {
+            generation: generation.into(),
+            configuration_revision: configuration_revision.into(),
+            changed: true,
+        })
     }
     fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
         self.ledger.note("workspace.delete");
@@ -697,6 +710,22 @@ impl WorkspaceFiles for Host {
             size: 0,
             identity: None,
         }])
+    }
+
+    fn list_page(
+        &self,
+        path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _observed: Option<&str>,
+        _limit: usize,
+    ) -> Result<DirectoryPage, HostError> {
+        self.ledger.note("files.list_page");
+        Ok(DirectoryPage {
+            entries: Vec::new(),
+            identity: format!("directory:{}", path.as_str()),
+            next: None,
+            more: false,
+        })
     }
 
     fn read(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
@@ -844,6 +873,7 @@ impl ExtensionStore for Host {
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
+        _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.install");
         ExtensionStore::inspect(self, job)
@@ -856,6 +886,7 @@ impl ExtensionStore for Host {
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
+        _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         self.ledger.note("extensions.update");
         ExtensionStore::inspect(self, job)
@@ -913,6 +944,7 @@ fn path(value: &str) -> RelativePath {
 fn workspace_configuration() -> WorkspaceConfiguration {
     WorkspaceConfiguration {
         generation: "0123456789abcdef0123456789abcdef".into(),
+        configuration_revision: "abcdef0123456789abcdef0123456789".into(),
         name: "other".into(),
         image: "alpine:3.20".into(),
         architecture: "arm64".into(),
@@ -920,7 +952,8 @@ fn workspace_configuration() -> WorkspaceConfiguration {
         shell: None,
         cpus: None,
         memory_mb: None,
-        environment: Vec::new(),
+        environment: vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())],
+        environment_redacted: false,
         mounts: Vec::new(),
         docker_socket: true,
         scrollback: Some(100_000),
@@ -928,6 +961,74 @@ fn workspace_configuration() -> WorkspaceConfiguration {
         execution_lifetime: "persisted".into(),
         terminal: WorkspaceTerminal::default(),
     }
+}
+
+#[test]
+fn workspace_inspection_always_redacts_environment_values() {
+    let host = Host::new();
+    let request = Request::WorkspaceInspect { name: "other".into() };
+
+    let failure = session(&[], &[])
+        .dispatch(&request, &services(&host))
+        .expect_err("inspection requires authority");
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(host.ledger.reached().is_empty(), "denial must precede host inspection");
+
+    let reply = session(&[Capability::WorkspaceRead], &[])
+        .dispatch(&request, &services(&host))
+        .expect("read-only inspection");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
+    assert!(!format!("{configuration:?}").contains("cycle19-secret"));
+
+    let reply = session(&[Capability::WorkspaceRead, Capability::WorkspaceControl], &[])
+        .dispatch(&request, &services(&host))
+        .expect("explicit control authority");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
+}
+
+#[test]
+fn workspace_environment_grant_filters_by_exact_workspace_and_name() {
+    let host = Host::new();
+    let authority = Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::WorkspaceRead, Capability::WorkspaceEnvironmentRead]),
+        Vec::new(),
+    );
+    let mut scoped = Session::new(authority).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+        read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+            workspace: "other".into(),
+            name: "DATABASE_PASSWORD".into(),
+        }],
+        write: Vec::new(),
+    });
+    let reply = scoped
+        .dispatch(&Request::WorkspaceInspect { name: "other".into() }, &services(&host))
+        .expect("exact grant");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(
+        configuration.environment,
+        vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())]
+    );
+    assert!(!configuration.environment_redacted);
+
+    let reply = scoped
+        .dispatch(&Request::WorkspaceInspect { name: "sibling".into() }, &services(&host))
+        .expect("wrong workspace remains inspectable but secret-free");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
 }
 
 /// Every call, paired with the capability that must permit it.
@@ -946,21 +1047,25 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::WorkspaceControl,
         ),
         (
-            Request::WorkspaceAdopt {
-                configuration: WorkspaceConfiguration {
-                    generation: String::new(),
-                    ..workspace_configuration()
-                },
+            Request::WorkspaceUpdate {
+                name: "other".into(),
+                generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                configuration: workspace_configuration(),
             },
             Capability::WorkspaceControl,
         ),
         (
-            Request::WorkspaceUpdate {
+            Request::WorkspaceEnvironmentPatch {
                 name: "other".into(),
                 generation: "0123456789abcdef0123456789abcdef".into(),
-                configuration: workspace_configuration(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                patch: hl_extension::port::WorkspaceEnvironmentPatch {
+                    set: vec![("TOKEN".into(), "value".into())],
+                    remove: Vec::new(),
+                },
             },
-            Capability::WorkspaceControl,
+            Capability::WorkspaceEnvironmentWrite,
         ),
         (
             Request::WorkspaceDelete {
@@ -1050,6 +1155,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1061,6 +1167,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             Capability::ExtensionInstall,
         ),
@@ -1320,6 +1427,15 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::FilesystemList { path: path("logs") },
+            Capability::FilesystemRead,
+        ),
+        (
+            Request::FilesystemListPage {
+                path: path("logs"),
+                after: None,
+                observed: None,
+                limit: 2,
+            },
             Capability::FilesystemRead,
         ),
         (
@@ -1656,7 +1772,11 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
     for (request, capability) in calls() {
         let host = Host::new();
 
-        let mut granted = session(&[capability], &["logs"]);
+        let mut granted =
+            session(&[capability], &["logs"]).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+                read: Vec::new(),
+                write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            });
         assert!(
             granted.dispatch(&request, &services(&host)).is_ok(),
             "{request:?} must be permitted by {capability:?}"
@@ -1693,6 +1813,7 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
         Request::WorkspaceUpdate {
             name: "other".into(),
             generation: "short".into(),
+            configuration_revision: "abcdef0123456789abcdef0123456789".into(),
             configuration: workspace_configuration(),
         },
         Request::WorkspaceDelete {
@@ -1740,6 +1861,7 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
                 granted: Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
             &services(&host),
         ),
@@ -2874,10 +2996,20 @@ fn notification_failure_is_structured_and_the_session_remains_usable() {
     host.fail_notification.set(true);
     let mut allowed = session(&[Capability::NotificationPublish, Capability::WorkspaceRead], &[]);
     let request = Request::NotificationPublish {
-        notification: hl_extension::Notification { id: "monitor".into(), title: "Database".into(), body: "offline".into() },
+        notification: hl_extension::Notification {
+            id: "monitor".into(),
+            title: "Database".into(),
+            body: "offline".into(),
+        },
     };
-    assert!(matches!(allowed.dispatch(&request, &services(&host)), Err(Failure::Failed { .. })));
-    assert!(matches!(allowed.dispatch(&Request::WorkspaceInfo, &services(&host)), Ok(Reply::Workspace(_))));
+    assert!(matches!(
+        allowed.dispatch(&request, &services(&host)),
+        Err(Failure::Failed { .. })
+    ));
+    assert!(matches!(
+        allowed.dispatch(&Request::WorkspaceInfo, &services(&host)),
+        Ok(Reply::Workspace(_))
+    ));
 }
 
 #[test]
@@ -2886,14 +3018,25 @@ fn one_session_cannot_multiply_unbounded_notification_identities() {
     let mut allowed = session(&[Capability::NotificationPublish], &[]);
     for index in 0..32 {
         let request = Request::NotificationPublish {
-            notification: hl_extension::Notification { id: format!("job-{index}"), title: "Job".into(), body: "done".into() },
+            notification: hl_extension::Notification {
+                id: format!("job-{index}"),
+                title: "Job".into(),
+                body: "done".into(),
+            },
         };
         assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
     }
     let overflow = Request::NotificationPublish {
-        notification: hl_extension::Notification { id: "job-32".into(), title: "Job".into(), body: "done".into() },
+        notification: hl_extension::Notification {
+            id: "job-32".into(),
+            title: "Job".into(),
+            body: "done".into(),
+        },
     };
-    assert!(matches!(allowed.dispatch(&overflow, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        allowed.dispatch(&overflow, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
 }
 
 #[test]

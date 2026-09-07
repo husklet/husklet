@@ -11,6 +11,24 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   {
+    files: ['**/*.js'],
+    languageOptions: {
+      globals: Object.fromEntries(
+        [
+          'AbortController',
+          'Buffer',
+          'TextDecoder',
+          'TextEncoder',
+          'URL',
+          'clearTimeout',
+          'process',
+          'setImmediate',
+          'setTimeout',
+        ].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
     files: ['*/src/**/*.{ts,tsx}', '*/examples/**/*.{ts,tsx}', '*/vite.config.ts'],
     rules: {
       curly: ['error', 'all'],

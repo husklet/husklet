@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
+import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples');
 const reactExamples = path.resolve(examples, '../../react/examples');
@@ -64,14 +64,18 @@ async function scenario(name, configuration, reply) {
   child.stderr.on('data', (part) => {
     stderr += part;
   });
+  let timeout;
   try {
     const code = await Promise.race([
       new Promise((resolve) => child.once('exit', resolve)),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('scenario timed out')), 5_000)),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('scenario timed out')), 5_000);
+      }),
     ]);
     assert.equal(code, 0, stderr);
     return { result: JSON.parse(stdout), calls };
   } finally {
+    clearTimeout(timeout);
     if (child.exitCode === null) child.kill('SIGKILL');
     for (const peer of peers) peer.destroy();
     await new Promise((resolve) => server.close(resolve));

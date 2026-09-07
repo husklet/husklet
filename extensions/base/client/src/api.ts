@@ -1,5 +1,10 @@
 import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
 
+/** Environment variable naming the extension's authenticated Unix socket. */
+export declare const SOCKET: 'HUSKLET_EXTENSION_SOCKET';
+/** Current extension protocol version spoken by Session. */
+export declare const PROTOCOL: number;
+
 export type Topic =
   | 'containers'
   | 'container-inventory'
@@ -51,6 +56,8 @@ export type ExtensionCapability =
   | 'workspaces:read'
   | 'workspaces:control'
   | 'workspaces:events'
+  | 'workspace-environment:read'
+  | 'workspace-environment:write'
   | 'containers:read'
   | 'containers:control'
   | 'containers:attach'
@@ -85,6 +92,10 @@ export interface FilesystemGrant {
   delete: string[];
   rename: string[];
 }
+export interface WorkspaceEnvironmentGrant {
+  read: ({ workspace: string; name: string } | { all: true })[];
+  write: ({ workspace: string; name: string } | { all: true })[];
+}
 export interface ExtensionCandidate {
   name: string;
   version: string;
@@ -92,6 +103,7 @@ export interface ExtensionCandidate {
   requested: ExtensionCapability[];
   requested_containers: ContainerGrant;
   requested_filesystem: FilesystemGrant;
+  requested_workspace_environment: WorkspaceEnvironmentGrant;
   installed_image_digest: string | null;
 }
 export interface ExtensionCatalogueEntry {
@@ -149,11 +161,14 @@ export interface WorkspaceTerminal {
 }
 export interface WorkspaceConfiguration extends WorkspaceInfo {
   generation?: string;
+  configuration_revision?: string;
   storage: string | null;
   shell: string | null;
   cpus: number | null;
   memory_mb: number | null;
   environment: [string, string][];
+  /** True when workspace environment values were withheld by the host. */
+  environment_redacted: boolean;
   mounts: WorkspaceMount[];
   docker_socket: boolean;
   scrollback: number | null;
@@ -411,6 +426,12 @@ export interface FileEntry {
   size: number;
   identity?: string | null;
 }
+export interface DirectoryPage {
+  entries: FileEntry[];
+  identity: string;
+  next: string | null;
+  more: boolean;
+}
 export interface FileInventory {
   entries: FileEntry[];
   complete: boolean;
@@ -484,14 +505,14 @@ export type SnapshotEvent =
   | { snapshot: 'workspace_events'; of: WorkspaceEventBatch }
   | { snapshot: 'filesystem'; of: FileInventory };
 export type HostEvent = SnapshotEvent | PaneSelection | InterfaceEvent;
-export function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
+export declare function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
-export class ExtensionError extends Error {
+export declare class ExtensionError extends Error {
   readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
   readonly capability?: string;
 }
 
-export class ExecutionOperationError extends Error {
+export declare class ExecutionOperationError extends Error {
   readonly executionId: string;
   readonly phase: 'wait' | 'logs';
   readonly cause: unknown;
@@ -499,7 +520,7 @@ export class ExecutionOperationError extends Error {
   readonly execution?: ExecutionSummary;
 }
 
-export class TerminalOperationError extends Error {
+export declare class TerminalOperationError extends Error {
   readonly operation: 'open-tab';
   readonly result: Readonly<{ tab: string; title: string }>;
   readonly cause: unknown;
@@ -525,7 +546,7 @@ export interface CallOptions {
   signal?: AbortSignal;
 }
 
-export class Session {
+export declare class Session {
   static connect(path?: string, handlers?: ConnectOptions): Promise<Session>;
   readonly ready: Promise<void>;
   readonly granted: readonly string[];
@@ -543,7 +564,7 @@ export class Session {
   close(): Promise<void>;
 }
 
-export function connect(options?: ConnectOptions): Promise<Session>;
+export declare function connect(options?: ConnectOptions): Promise<Session>;
 
 /** A first frame rendered without loading a UI framework. */
 export interface SurfaceBootstrap {
@@ -553,7 +574,7 @@ export interface SurfaceBootstrap {
   readonly bootstrapNode: 1;
 }
 
-export function bootstrapSurface(
+export declare function bootstrapSurface(
   session: Session,
   options?: { title?: string; label?: string; primary?: boolean },
 ): Promise<SurfaceBootstrap>;
@@ -567,13 +588,18 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
-  /** Assign identity to an imported generation-less workspace record. */
-  adopt(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
   update(
     name: string,
     generation: string,
+    configurationRevision: string,
     configuration: WorkspaceConfiguration,
   ): Promise<WorkspaceConfiguration>;
+  patchEnvironment(
+    name: string,
+    generation: string,
+    configurationRevision: string,
+    patch: { set: [string, string][]; remove: string[] },
+  ): Promise<{ generation: string; configuration_revision: string; changed: boolean }>;
   delete(name: string, generation: string): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
@@ -588,58 +614,130 @@ export interface WorkspaceApi {
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */
-    enableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+    enableAndWait(
+      name: string,
+      imageDigest: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string }
     >;
     disable(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory observation, disable this exact digest, then verify its durable standby state. */
-    disableAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+    disableAndWait(
+      name: string,
+      imageDigest: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string }
     >;
     retry(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory, retry this exact faulted digest, then verify durable duty. */
-    retryAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
+    retryAndWait(
+      name: string,
+      imageDigest: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string }
     >;
     remove(name: string, generation: string): Promise<void>;
     /** Arm inventory, remove this exact digest, then prove that digest is durably absent. */
-    removeAndWait(name: string, imageDigest: string, options?: { timeoutMs?: number }): Promise<
-      | { changed: true; removed: { name: string; image_digest: string }; replacement: ExtensionSummary | null }
+    removeAndWait(
+      name: string,
+      imageDigest: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | {
+          changed: true;
+          removed: { name: string; image_digest: string };
+          replacement: ExtensionSummary | null;
+        }
       | { changed: false; name: string; image_digest: string }
     >;
     startAcquisition(reference: string): Promise<ExtensionAcquisitionJob>;
     acquisition(job: string): Promise<ExtensionAcquisitionStatus>;
     /** Wait for this exact acquisition job revision to advance, then return its authoritative status. */
-    waitForAcquisition(job: string, afterRevision: number, options?: { timeoutMs?: number }): Promise<
+    waitForAcquisition(
+      job: string,
+      afterRevision: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; status: ExtensionAcquisitionStatus }
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    install(
+      job: string,
+      revision: number,
+      imageDigest: string,
+      granted: ExtensionCapability[],
+      containers?: ContainerGrant,
+      filesystem?: FilesystemGrant,
+      workspaceEnvironment?: WorkspaceEnvironmentGrant,
+    ): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
+    installAndWait(
+      job: string,
+      revision: number,
+      granted: ExtensionCapability[],
+      containers?: ContainerGrant,
+      filesystem?: FilesystemGrant,
+      options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
+    ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    update(
+      job: string,
+      revision: number,
+      imageDigest: string,
+      granted: ExtensionCapability[],
+      containers?: ContainerGrant,
+      filesystem?: FilesystemGrant,
+      workspaceEnvironment?: WorkspaceEnvironmentGrant,
+    ): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
+    updateAndWait(
+      job: string,
+      revision: number,
+      granted: ExtensionCapability[],
+      containers?: ContainerGrant,
+      filesystem?: FilesystemGrant,
+      options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
+    ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
     /** Enabled manifest declarations, independent of whether a provider currently occupies a pane. */
     providers(): Promise<ExtensionProviderCatalogue>;
     /** Wait for the extension lifecycle cursor to change, then return its enabled provider catalogue. */
-    waitForProviders(after: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'>, options?: { timeoutMs?: number }): Promise<{ changed: boolean; extension?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'> | null; catalogue?: ExtensionProviderCatalogue; after?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'> }>;
+    waitForProviders(
+      after: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'>,
+      options?: { timeoutMs?: number },
+    ): Promise<{
+      changed: boolean;
+      extension?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'> | null;
+      catalogue?: ExtensionProviderCatalogue;
+      after?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'>;
+    }>;
     /** Wait for an actually mounted provider occupant, or its removal, using an exact prior pane cursor. */
-    waitForProviderMount(extension: string, provider: string, options?: {
-      state?: 'mounted' | 'unmounted';
+    waitForProviderMount(
+      extension: string,
+      provider: string,
+      options?: {
+        state?: 'mounted' | 'unmounted';
+        after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null;
+        timeoutMs?: number;
+      },
+    ): Promise<{
+      changed: boolean;
+      state: 'mounted' | 'unmounted';
+      pane?: InspectablePane | null;
+      truncated?: false;
       after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null;
-      timeoutMs?: number;
-    }): Promise<{ changed: boolean; state: 'mounted' | 'unmounted'; pane?: InspectablePane | null; truncated?: false; after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null }>;
+    }>;
   };
   containers: {
     list(): Promise<ContainerSummary[]>;
@@ -648,65 +746,134 @@ export interface WorkspaceApi {
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
     executions(): Promise<ExecutionList>;
-    executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
-    executionOutput(id: string, options?: { after?: number; limit?: number }): Promise<ExecutionOutputPage>;
+    executionLogs(
+      id: string,
+      streams?: { stdout?: boolean; stderr?: boolean },
+    ): Promise<ContainerOutput>;
+    executionOutput(
+      id: string,
+      options?: { after?: number; limit?: number },
+    ): Promise<ExecutionOutputPage>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
-    execAndWait(id: string, generation: number, options: {
-      command: string[]; environment?: [string, string][]; user?: string; workingDirectory?: string; timeoutMs?: number;
-      stdout?: boolean; stderr?: boolean;
-    }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
+    execAndWait(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        user?: string;
+        workingDirectory?: string;
+        timeoutMs?: number;
+        stdout?: boolean;
+        stderr?: boolean;
+      },
+    ): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
     /** Arm and verify the exact execution cursor before signaling, then await its requested transition. */
-    signalExecutionAndWait(id: string, signal: string,
+    signalExecutionAndWait(
+      id: string,
+      signal: string,
       after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
-      options?: { state?: 'changed' | 'exited'; timeoutMs?: number }): Promise<
-        | { changed: true; execution: ExecutionSummary }
-        | { changed: false; id: string; state: 'changed' | 'exited'; after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'> }
-      >;
+      options?: { state?: 'changed' | 'exited'; timeoutMs?: number },
+    ): Promise<
+      | { changed: true; execution: ExecutionSummary }
+      | {
+          changed: false;
+          id: string;
+          state: 'changed' | 'exited';
+          after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>;
+        }
+    >;
     removeExecution(id: string): Promise<void>;
     /** Inspect the exact finished cursor, remove it, then prove absence from a later complete execution catalogue. */
-    removeExecutionAndWait(id: string, after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
-      options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
+    removeExecutionAndWait(
+      id: string,
+      after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>,
+      options?: { timeoutMs?: number },
+    ): Promise<{ changed: boolean; id: string }>;
     create(configuration: ContainerCreateSpec): Promise<string>;
     /** Backwards-compatible shorthand for an image and optional container name. */
     create(image: string, name?: string): Promise<string>;
     start(id: string, generation: number): Promise<void>;
     /** Arm bounded inventory, start an immutable ID, then accept only a later running snapshot. */
-    startAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
+    startAndWait(
+      id: string,
+      generation: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; state: 'running' }
     >;
     stop(id: string, generation: number): Promise<void>;
     /** Arm bounded inventory, stop an immutable ID, then accept only a later exited snapshot. */
-    stopAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
+    stopAndWait(
+      id: string,
+      generation: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; state: 'exited' }
     >;
     remove(id: string, generation: number): Promise<void>;
     /** Remove an immutable ID and accept absence only from a later complete bounded inventory. */
-    removeAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>;
+    removeAndWait(
+      id: string,
+      generation: number,
+      options?: { timeoutMs?: number },
+    ): Promise<{ changed: boolean; id: string }>;
     pause(id: string, generation: number): Promise<void>;
     unpause(id: string, generation: number): Promise<void>;
     restart(id: string, generation: number): Promise<void>;
     /** Restart only after observing a generation; resolves on the same ID running at a newer generation. */
-    restartAndWait(id: string, generation: number, options?: { timeoutMs?: number }): Promise<
+    restartAndWait(
+      id: string,
+      generation: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; container: ContainerSummary }
       | { changed: false; id: string; generation: number }
     >;
     rename(id: string, generation: number, name: string): Promise<void>;
     kill(id: string, generation: number, signal: string): Promise<void>;
-    exec(id: string, generation: number, options: { command: string[]; environment?: [string, string][]; user?: string; workingDirectory?: string }): Promise<string>;
+    exec(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        user?: string;
+        workingDirectory?: string;
+      },
+    ): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
-  images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>; prune(): Promise<ImagePruneResult> };
+  images: {
+    inventory(): Promise<ImageInventory>;
+    list(): Promise<ImageSummary[]>;
+    pull(reference: string): Promise<ImageSummary>;
+    inspect(reference: string): Promise<ImageDetails>;
+    startPull(reference: string): Promise<ImagePullJob>;
+    pullStatus(job: string): Promise<ImagePullStatus>;
+    cancelPull(job: string): Promise<void>;
+    remove(reference: string): Promise<void>;
+    removeAndWait(
+      reference: string,
+      options?: { timeoutMs?: number },
+    ): Promise<{ changed: boolean; id: string }>;
+    prune(): Promise<ImagePruneResult>;
+  };
   volumes: {
     inventory(): Promise<VolumeInventory>;
     list(): Promise<VolumeSummary[]>;
     inspect(name: string): Promise<VolumeSummary>;
     create(name: string): Promise<VolumeSummary>;
     remove(name: string, imageDigest: string): Promise<void>;
-    removeAndWait(name: string, generation: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; name: string; generation: string }>;
+    removeAndWait(
+      name: string,
+      generation: string,
+      options?: { timeoutMs?: number },
+    ): Promise<{ changed: boolean; name: string; generation: string }>;
   };
   networks: {
     inventory(): Promise<NetworkInventory>;
@@ -732,109 +899,221 @@ export interface WorkspaceApi {
     openTab(title: string): Promise<string>;
     pinTab(tab: string, pinned?: boolean): Promise<void>;
     /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. Observation failures retain the created tab in TerminalOperationError. */
-    openTabAndWait(title: string, options?: { timeoutMs?: number }): Promise<
+    openTabAndWait(
+      title: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
       | { changed: true; tab: string; pane: InspectablePane }
       | { changed: false; tab: string; title: string }
     >;
     split(slot: string, division: Division): Promise<string>;
-    splitObserved(slot: string, generation: number, revision: number, division: Division): Promise<string>;
+    splitObserved(
+      slot: string,
+      generation: number,
+      revision: number,
+      division: Division,
+    ): Promise<string>;
     /** Arm pane changes before a CAS split, then verify the returned child slot in bounded inventory. */
-    splitAndWait(slot: string, generation: number, revision: number, division: Division,
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; pane: InspectablePane }
-        | { changed: false; slot: string; after: { generation: number; revision: number } }
-      >;
+    splitAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      division: Division,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; pane: InspectablePane }
+      | { changed: false; slot: string; after: { generation: number; revision: number } }
+    >;
     spawn(slot: string, command: string[]): Promise<void>;
-    spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
+    spawnObserved(
+      slot: string,
+      generation: number,
+      revision: number,
+      command: string[],
+    ): Promise<void>;
     /** Arm and read before CAS spawn, then return a later bounded terminal screen revision. */
-    spawnAndWait(slot: string, generation: number, revision: number, command: string[],
-      options?: { lines?: number; timeoutMs?: number }): Promise<
-        | { changed: true; command: string[]; before: PaneText; after: PaneText }
-        | { changed: false; command: string[]; before: PaneText }
-      >;
+    spawnAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      command: string[],
+      options?: { lines?: number; timeoutMs?: number },
+    ): Promise<
+      | { changed: true; command: string[]; before: PaneText; after: PaneText }
+      | { changed: false; command: string[]; before: PaneText }
+    >;
     read(slot: string, lines?: number): Promise<PaneText>;
     semantics(slot: string): Promise<PaneSemanticTree>;
     /** Discover the pane kind and return terminal screen text or bounded semantic XML. */
     toText(slot: string, options?: { lines?: number }): Promise<ReadablePane>;
     /** Wait for a pane cursor to change, then return a fresh bounded text projection. */
-    waitForText(slot: string, after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>, options?: {
-      lines?: number;
-      timeoutMs?: number;
-    }): Promise<{ changed: true; readable: ReadablePane } | { changed: false; after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'> }>;
+    waitForText(
+      slot: string,
+      after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>,
+      options?: {
+        lines?: number;
+        timeoutMs?: number;
+      },
+    ): Promise<
+      | { changed: true; readable: ReadablePane }
+      | { changed: false; after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'> }
+    >;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
     /** Arm pane observation, perform one revision-bound semantic action, then read its changed projection. */
-    actAndWait(slot: string, action: PaneSemanticAction, options?: { lines?: number; timeoutMs?: number }): Promise<
+    actAndWait(
+      slot: string,
+      action: PaneSemanticAction,
+      options?: { lines?: number; timeoutMs?: number },
+    ): Promise<
       | { changed: true; readable: ReadablePane }
       | { changed: false; after: { generation: number; revision: number } }
     >;
     /** Inspect and validate an enabled advertised action, then invoke it with that exact semantic cursor. */
-    inspectAndAct(slot: string, proposal: { node: number; action: SemanticActionKind; value?: string | null },
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; before: { snapshot: PaneSemanticTree; text: string }; after: { snapshot: PaneSemanticTree; text: string } }
-        | { changed: false; before: { snapshot: PaneSemanticTree; text: string } }
-      >;
-    writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
+    inspectAndAct(
+      slot: string,
+      proposal: { node: number; action: SemanticActionKind; value?: string | null },
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | {
+          changed: true;
+          before: { snapshot: PaneSemanticTree; text: string };
+          after: { snapshot: PaneSemanticTree; text: string };
+        }
+      | { changed: false; before: { snapshot: PaneSemanticTree; text: string } }
+    >;
+    writeInput(
+      slot: string,
+      generation: number,
+      revision: number,
+      input: string | Iterable<number>,
+    ): Promise<void>;
     /** Arm and read before CAS input, then return a later bounded terminal screen revision. */
-    writeAndWait(slot: string, generation: number, revision: number, input: string | Iterable<number>,
-      options?: { lines?: number; timeoutMs?: number }): Promise<
-        | { changed: true; before: PaneText; after: PaneText }
-        | { changed: false; before: PaneText }
-      >;
+    writeAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      input: string | Iterable<number>,
+      options?: { lines?: number; timeoutMs?: number },
+    ): Promise<
+      { changed: true; before: PaneText; after: PaneText } | { changed: false; before: PaneText }
+    >;
     resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
-    resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
+    resizeGridObserved(
+      slot: string,
+      generation: number,
+      revision: number,
+      columns: number,
+      rows: number,
+    ): Promise<void>;
     /** Arm and read before CAS resize, then verify the exact terminal grid on a later screen revision. */
-    resizeGridAndWait(slot: string, generation: number, revision: number, columns: number, rows: number,
-      options?: { lines?: number; timeoutMs?: number }): Promise<
-        | { changed: true; columns: number; rows: number; before: PaneText; after: PaneText }
-        | { changed: false; columns: number; rows: number; before: PaneText }
-      >;
+    resizeGridAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      columns: number,
+      rows: number,
+      options?: { lines?: number; timeoutMs?: number },
+    ): Promise<
+      | { changed: true; columns: number; rows: number; before: PaneText; after: PaneText }
+      | { changed: false; columns: number; rows: number; before: PaneText }
+    >;
     close(slot: string): Promise<void>;
     closeObserved(slot: string, generation: number, revision: number): Promise<void>;
     /** Arm pane changes before CAS close and prove absence only from a complete inventory. */
-    closeAndWait(slot: string, generation: number, revision: number,
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; slot: string }
-        | { changed: false; slot: string; after: { generation: number; revision: number } }
-      >;
+    closeAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; slot: string }
+      | { changed: false; slot: string; after: { generation: number; revision: number } }
+    >;
     focus(slot: string): Promise<void>;
     focusObserved(slot: string, generation: number, revision: number): Promise<void>;
     /** Arm pane changes before CAS focus and verify the same pane is focused at an advanced revision. */
-    focusAndWait(slot: string, generation: number, revision: number,
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; pane: InspectablePane }
-        | { changed: false; slot: string; after: { generation: number; revision: number } }
-      >;
+    focusAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; pane: InspectablePane }
+      | { changed: false; slot: string; after: { generation: number; revision: number } }
+    >;
     retitle(slot: string, title: string): Promise<void>;
-    retitleObserved(slot: string, generation: number, revision: number, title: string): Promise<void>;
+    retitleObserved(
+      slot: string,
+      generation: number,
+      revision: number,
+      title: string,
+    ): Promise<void>;
     /** Arm pane changes before CAS retitle and verify the exact title and advanced revision. */
-    retitleAndWait(slot: string, generation: number, revision: number, title: string,
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; pane: InspectablePane }
-        | { changed: false; title: string; after: { generation: number; revision: number } }
-      >;
+    retitleAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      title: string,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; pane: InspectablePane }
+      | { changed: false; title: string; after: { generation: number; revision: number } }
+    >;
     ratio(slot: string, ratio: number): Promise<void>;
     ratioObserved(slot: string, generation: number, revision: number, ratio: number): Promise<void>;
     /** Arm pane observation before a CAS ratio change, then verify its advanced pane and resulting topology. */
-    ratioAndWait(slot: string, generation: number, revision: number, ratio: number,
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; ratio: number; actual: number; pane: InspectablePane }
-        | { changed: false; ratio: number; after: { generation: number; revision: number } }
-      >;
-    switchOccupant(slot: string, generation: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
-    switchOccupantObserved(slot: string, generation: number, revision: number, target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }): Promise<void>;
-    /** Arm observation, perform an observed switch, and verify the exact resulting occupant. */
-    switchOccupantAndWait(slot: string, generation: number, revision: number,
+    ratioAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      ratio: number,
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; ratio: number; actual: number; pane: InspectablePane }
+      | { changed: false; ratio: number; after: { generation: number; revision: number } }
+    >;
+    switchOccupant(
+      slot: string,
+      generation: number,
       target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string },
-      options?: { timeoutMs?: number }): Promise<
-        | { changed: true; pane: InspectablePane }
-        | { changed: false; target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string }; after: { generation: number; revision: number } }
-      >;
+    ): Promise<void>;
+    switchOccupantObserved(
+      slot: string,
+      generation: number,
+      revision: number,
+      target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string },
+    ): Promise<void>;
+    /** Arm observation, perform an observed switch, and verify the exact resulting occupant. */
+    switchOccupantAndWait(
+      slot: string,
+      generation: number,
+      revision: number,
+      target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string },
+      options?: { timeoutMs?: number },
+    ): Promise<
+      | { changed: true; pane: InspectablePane }
+      | {
+          changed: false;
+          target: { kind: 'terminal' } | { kind: 'surface'; extension: string; provider: string };
+          after: { generation: number; revision: number };
+        }
+    >;
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
+    /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
+    listPage(
+      path: string,
+      options?: { after?: string | null; observed?: string | null; limit?: number },
+    ): Promise<DirectoryPage>;
     stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
-    readRange(path: string, offset?: number, limit?: number, observed?: string | null): Promise<FileRange>;
+    readRange(
+      path: string,
+      offset?: number,
+      limit?: number,
+      observed?: string | null,
+    ): Promise<FileRange>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     /** Atomically replace exactly the file identity returned by stat/readRange. */
     writeObserved(path: string, observed: string, contents: Iterable<number>): Promise<string>;
@@ -878,18 +1157,22 @@ export interface WorkspaceApi {
   watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
 
-export function requestCapability(call: string): string;
+export declare function requestCapability(call: string): string;
 
-export function workspace(session: Session, options?: CallOptions): WorkspaceApi;
-export const protocolSurface: Readonly<{
-  requests: Readonly<Record<string,
-    | Readonly<{ kind: 'facade' | 'subscription'; api: string }>
-    | Readonly<{ kind: 'internal'; rationale: string }>>>;
+export declare function workspace(session: Session, options?: CallOptions): WorkspaceApi;
+export declare const protocolSurface: Readonly<{
+  requests: Readonly<
+    Record<
+      string,
+      | Readonly<{ kind: 'facade' | 'subscription'; api: string }>
+      | Readonly<{ kind: 'internal'; rationale: string }>
+    >
+  >;
   topics: Readonly<Record<Topic, Readonly<{ subscribe: 'subscribe'; unsubscribe: 'unsubscribe' }>>>;
 }>;
-export const protocolCoverage: Readonly<{
+export declare const protocolCoverage: Readonly<{
   available: Readonly<Record<string, readonly string[]>>;
   unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
-export function semanticXml(tree: PaneSemanticTree): string;
+export declare function semanticXml(tree: PaneSemanticTree): string;
 export * from './generated-protocol.js';

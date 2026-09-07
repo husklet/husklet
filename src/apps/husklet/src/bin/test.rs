@@ -116,28 +116,6 @@ fn removal_refuses_a_recreated_workspace_before_runtime_teardown() {
 }
 
 #[test]
-fn removal_atomically_adopts_an_unchanged_legacy_workspace() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("workspaces.conf");
-    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
-    let mut store = WorkspaceStore::load(&path).unwrap();
-    let teardown_generation = std::cell::RefCell::new(String::new());
-    remove_workspace(
-        &mut store,
-        "legacy",
-        "",
-        |workspace| {
-            teardown_generation.replace(workspace.generation.clone());
-            Ok(())
-        },
-        |_| Ok(()),
-    )
-    .unwrap();
-    assert_eq!(teardown_generation.borrow().len(), 32);
-    assert!(WorkspaceStore::load(path).unwrap().get("legacy").is_none());
-}
-
-#[test]
 fn workspace_terminal_preferences_are_isolated() {
     let mut workspace = WorkspaceConfig::new("design", "ubuntu:24.04", Arch::Arm64);
     workspace.scrollback = Some(2_000);

@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
+use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -48,8 +48,8 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("workspace_list", "workspaces"),
     ("workspace_inspect", "workspace_configuration"),
     ("workspace_create", "workspace_configuration"),
-    ("workspace_adopt", "workspace_configuration"),
     ("workspace_update", "workspace_configuration"),
+    ("workspace_environment_patch", "workspace_environment_patch"),
     ("workspace_delete", "done"),
     ("workspace_start", "done"),
     ("workspace_stop", "done"),
@@ -133,6 +133,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("terminal_switch_occupant", "done"),
     ("terminal_switch_occupant_observed", "done"),
     ("filesystem_list", "entries"),
+    ("filesystem_list_page", "directory_page"),
     ("filesystem_read", "contents"),
     ("filesystem_read_range", "file_range"),
     ("filesystem_stat", "entry"),
@@ -160,8 +161,9 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
 fn request_capability(request: &str) -> Capability {
     match request {
         "workspace_info" | "workspace_list" | "workspace_inspect" => Capability::WorkspaceRead,
-        "workspace_create" | "workspace_adopt" | "workspace_update" | "workspace_delete" | "workspace_start"
-        | "workspace_stop" | "workspace_restart" => Capability::WorkspaceControl,
+        "workspace_create" | "workspace_update" | "workspace_delete" | "workspace_start" | "workspace_stop"
+        | "workspace_restart" => Capability::WorkspaceControl,
+        "workspace_environment_patch" => Capability::WorkspaceEnvironmentWrite,
         "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
         "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {
             Capability::ExtensionControl
@@ -215,9 +217,11 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_ratio_observed"
         | "terminal_switch_occupant"
         | "terminal_switch_occupant_observed" => Capability::TerminalControl,
-        "filesystem_list" | "filesystem_read" | "filesystem_read_range" | "filesystem_stat" => {
-            Capability::FilesystemRead
-        }
+        "filesystem_list"
+        | "filesystem_list_page"
+        | "filesystem_read"
+        | "filesystem_read_range"
+        | "filesystem_stat" => Capability::FilesystemRead,
         "filesystem_write"
         | "filesystem_write_observed"
         | "filesystem_create_observed"

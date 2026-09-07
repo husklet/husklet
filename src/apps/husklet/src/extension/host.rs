@@ -831,6 +831,7 @@ fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voic
         queue.clone(),
         plan.record.containers.clone(),
         plan.record.filesystem.clone(),
+        plan.record.workspace_environment.clone(),
     );
     let Ok(mut conversation) = opened else {
         return "the extension's socket could not be duplicated".to_owned();
@@ -1162,6 +1163,7 @@ tab_title = "Sample"
             pane_providers: Vec::new(),
             resources: Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }
     }
 
@@ -1170,6 +1172,7 @@ tab_title = "Sample"
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             name: manifest.name.clone(),
             image_digest: "sha256:aaaa".to_owned(),
             version: "1.0.0".to_owned(),

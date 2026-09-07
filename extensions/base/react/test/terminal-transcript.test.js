@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 
-import { Surface, reconciler } from '../src/reconciler.js';
-import { TerminalTranscript, TERMINAL_TRANSCRIPT_LINE_LIMIT } from '../src/index.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
+import { TerminalTranscript, TERMINAL_TRANSCRIPT_LINE_LIMIT } from '../dist/index.js';
 
 function stage() {
   const frames = [];

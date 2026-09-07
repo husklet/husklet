@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const root = require.resolve('@husklet/react').replace(/src[/\\]index\.js$/, '');
-const { Surface, reconciler } = await import(new URL('src/reconciler.js', `file://${root}`));
+const root = require.resolve('@husklet/react').replace(/dist[/\\]index\.js$/, '');
+const { Surface, reconciler } = await import(new URL('dist/reconciler.js', `file://${root}`));
 
 export function host() {
   const frames = [];

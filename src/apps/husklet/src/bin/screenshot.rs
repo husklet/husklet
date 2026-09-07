@@ -24,7 +24,17 @@ impl Screenshot {
         if AppConfig::get().view.as_deref().unwrap_or("manager") != tag {
             return;
         }
-        let ms = AppConfig::get().screenshot_ms;
+        // Leave one toolkit turn after a requested resize. When both hooks had
+        // the same timestamp, capture could run before the remapped toplevel had
+        // received its first allocation and produce an empty texture.
+        let resize_ms = AppConfig::get()
+            .resize
+            .as_deref()
+            .and_then(|request| request.split_once(':'))
+            .and_then(|(offset, _)| offset.parse::<u64>().ok());
+        let ms = resize_ms
+            .map(|offset| AppConfig::get().screenshot_ms.max(offset.saturating_add(100)))
+            .unwrap_or(AppConfig::get().screenshot_ms);
         let win = window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
             Self::write_pane_text(&win);
@@ -65,7 +75,14 @@ impl Screenshot {
         };
         let window = window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(offset), move || {
+            // GTK 4 deliberately has no imperative resize API for a mapped toplevel.
+            // `set_default_size` updates only the next natural size, so calling it on
+            // the visible window reports success while leaving its allocation intact.
+            // Remapping makes that default authoritative without imposing a permanent
+            // minimum size on the application's contents.
+            window.set_visible(false);
             window.set_default_size(width, height);
+            window.present();
             let mut panes = Vec::new();
             crate::screens::workspace::terminal::PaneView::all(window.upcast_ref::<gtk::Widget>(), &mut panes);
             eprintln!(
@@ -120,6 +137,48 @@ impl Screenshot {
         match texture.save_to_png(path) {
             Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({width}x{height})"),
             Err(error) => eprintln!("[husklet] screenshot write failed for {path}: {error}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_remap_changes_the_mapped_window_allocation() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            fn settle() {
+                let loop_ = glib::MainLoop::new(None, false);
+                let done = loop_.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || done.quit());
+                loop_.run();
+            }
+
+            let application = gtk::Application::builder()
+                .application_id("com.husklet.resize-test")
+                .build();
+            application
+                .register(None::<&gtk::gio::Cancellable>)
+                .expect("registered");
+            let window = gtk::ApplicationWindow::builder()
+                .application(&application)
+                .default_width(1040)
+                .default_height(680)
+                .build();
+            window.present();
+            settle();
+
+            window.set_visible(false);
+            window.set_default_size(760, 520);
+            window.present();
+            settle();
+
+            assert_eq!((window.width(), window.height()), (760, 520));
+            window.close();
+        });
+        if !ran {
+            eprintln!("skipped: no display connection");
         }
     }
 }

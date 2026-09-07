@@ -6,7 +6,7 @@ export const CONFIRM_ACTION_TEXT_BYTE_LIMIT = 1024;
 const LABEL_BYTE_LIMIT = 256;
 const encoder = new TextEncoder();
 
-function bounded(value, limit) {
+function bounded(value: unknown, limit: number): string {
   let output = '';
   for (const character of String(value ?? '')) {
     if (encoder.encode(output + character).byteLength > limit) break;
@@ -15,19 +15,36 @@ function bounded(value, limit) {
   return output;
 }
 
-function authority(value) {
-  if (typeof value !== 'string' || value.trim() === '' || encoder.encode(value).byteLength > LABEL_BYTE_LIMIT) {
-    throw new TypeError('ConfirmAction authorityKey must be a nonblank string of at most 256 UTF-8 bytes');
+function authority(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.trim() === '' ||
+    encoder.encode(value).byteLength > LABEL_BYTE_LIMIT
+  ) {
+    throw new TypeError(
+      'ConfirmAction authorityKey must be a nonblank string of at most 256 UTF-8 bytes',
+    );
   }
   return value;
 }
 
-function failure(cause) {
+function failure(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause ?? 'The operation failed.');
   return bounded(message || 'The operation failed.', CONFIRM_ACTION_TEXT_BYTE_LIMIT);
 }
 
 /** A two-stage async destructive action whose confirmation belongs to one stable authority. */
+interface ConfirmActionProps extends Record<string, unknown> {
+  authorityKey: string;
+  label: string;
+  confirmLabel: string;
+  question: string;
+  onConfirm: (authorityKey: string) => void | Promise<void>;
+  enabled?: boolean;
+  cancelLabel?: string;
+  pendingLabel?: string;
+  onCancel?: (authorityKey: string) => void;
+}
 export function ConfirmAction({
   authorityKey,
   label,
@@ -39,9 +56,10 @@ export function ConfirmAction({
   pendingLabel = 'Working…',
   onCancel,
   ...props
-}) {
+}: ConfirmActionProps) {
   const currentAuthority = authority(authorityKey);
-  if (typeof onConfirm !== 'function') throw new TypeError('ConfirmAction onConfirm must be a function');
+  if (typeof onConfirm !== 'function')
+    throw new TypeError('ConfirmAction onConfirm must be a function');
   const epoch = useRef(0);
   const observed = useRef(currentAuthority);
   const [state, setState] = useState({ authority: '', phase: 'idle', error: '' });
@@ -87,19 +105,33 @@ export function ConfirmAction({
       onInvoke: open,
     });
   }
-  return React.createElement(Column, { ...props, gap: 1 },
-    React.createElement(Text, { label: bounded(question, CONFIRM_ACTION_TEXT_BYTE_LIMIT), color: 'warning', wrap: true }),
-    React.createElement(Row, { gap: 1, align: 'center' },
+  return React.createElement(
+    Column,
+    { ...props, gap: 1 },
+    React.createElement(Text, {
+      label: bounded(question, CONFIRM_ACTION_TEXT_BYTE_LIMIT),
+      color: 'warning',
+      wrap: true,
+    }),
+    React.createElement(
+      Row,
+      { gap: 1, align: 'center' },
       pending ? React.createElement(Spinner, { busy: true }) : null,
       React.createElement(Button, {
-        label: pending ? bounded(pendingLabel, LABEL_BYTE_LIMIT) : bounded(confirmLabel, LABEL_BYTE_LIMIT),
+        label: pending
+          ? bounded(pendingLabel, LABEL_BYTE_LIMIT)
+          : bounded(confirmLabel, LABEL_BYTE_LIMIT),
         enabled: !pending,
         tone: 'danger',
         destructive: true,
         onInvoke: confirm,
       }),
       React.createElement(Button, {
-        label: bounded(cancelLabel, LABEL_BYTE_LIMIT), enabled: !pending, onInvoke: cancel,
-      })),
-    state.error ? React.createElement(InlineMessage, { label: state.error, tone: 'danger' }) : null);
+        label: bounded(cancelLabel, LABEL_BYTE_LIMIT),
+        enabled: !pending,
+        onInvoke: cancel,
+      }),
+    ),
+    state.error ? React.createElement(InlineMessage, { label: state.error, tone: 'danger' }) : null,
+  );
 }

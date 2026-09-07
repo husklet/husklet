@@ -24,6 +24,7 @@ import {
   type ContainerGrant,
   type ContainerSelector,
   type FilesystemGrant,
+  type WorkspaceEnvironmentGrant,
   type WorkspaceApi,
 } from '@husklet/react';
 
@@ -108,6 +109,9 @@ function FilesystemConsent({
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
+  const [catalogueState, setCatalogueState] = React.useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
   const [catalogueError, setCatalogueError] = React.useState('');
   const [inventoryState, setInventoryState] = React.useState<
     'loading' | 'empty' | 'error' | 'ready'
@@ -123,6 +127,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   });
   const [grantedFilesystem, setGrantedFilesystem] =
     React.useState<FilesystemGrant>(emptyFilesystemGrant);
+  const [grantedWorkspaceEnvironment, setGrantedWorkspaceEnvironment] =
+    React.useState<WorkspaceEnvironmentGrant>({ read: [], write: [] });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -150,19 +156,24 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   React.useEffect(() => {
     void reload();
   }, [reload]);
-  React.useEffect(() => {
-    const catalogue = api.extensions.catalogue;
-    if (!catalogue) return;
-    void catalogue()
-      .then((value) => {
-        setCatalogue(value);
-        setCatalogueError('');
-      })
-      .catch((cause) => {
-        setCatalogue(null);
-        setCatalogueError(message(cause));
-      });
+  const loadCatalogue = React.useCallback(async () => {
+    const readCatalogue = api.extensions.catalogue;
+    if (!readCatalogue) return;
+    setCatalogueState('loading');
+    setCatalogueError('');
+    try {
+      const value = await readCatalogue();
+      setCatalogue(value);
+      setCatalogueState('ready');
+    } catch (cause) {
+      setCatalogue(null);
+      setCatalogueError(message(cause));
+      setCatalogueState('error');
+    }
   }, [api]);
+  React.useEffect(() => {
+    void loadCatalogue();
+  }, [loadCatalogue]);
   React.useEffect(() => {
     let dispose: (() => Promise<void>) | undefined;
     void api
@@ -213,6 +224,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
+            setGrantedWorkspaceEnvironment({ read: [], write: [] });
           }
         }
         if (
@@ -256,6 +268,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         granted,
         grantedContainers,
         grantedFilesystem,
+        { workspaceEnvironment: grantedWorkspaceEnvironment },
       );
       setAcquisition(null);
       setReference('');
@@ -276,6 +289,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     } finally {
       setBusy('');
     }
+  };
+  const dismissReview = () => {
+    setAcquisition(null);
+    setGranted([]);
+    setGrantedContainers({ selectors: [], create: false });
+    setGrantedFilesystem(emptyFilesystemGrant());
+    setGrantedWorkspaceEnvironment({ read: [], write: [] });
+    candidateKey.current = '';
+    setError('');
   };
   const cancel = async () => {
     if (
@@ -334,6 +356,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
+  const availableCatalogue =
+    catalogue?.entries.filter(
+      (entry) => !installed.some((extension) => extension.name === entry.id),
+    ) ?? [];
+  const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
+    read: [],
+    write: [],
+  };
 
   return (
     <Scroll grow height="fill">
@@ -357,35 +387,50 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 />
               </CardContent>
             </Card>
-            {catalogue?.entries
-              .filter((entry) => !installed.some((extension) => extension.name === entry.id))
-              .map((entry) => (
-                <Card
-                  key={entry.id}
-                  grow={false}
-                  justify="start"
-                  width={CONTENT_WIDTH}
-                  variant="filled"
-                >
-                  <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
-                  <CardContent gap={1}>
-                    <Text label={entry.description} color="text-dim" wrap />
-                    <Text label={`Source ${entry.source}`} color="text-dim" wrap />
-                    <Row>
-                      <Button
-                        label={`Review ${entry.title}`}
-                        enabled={!busy}
-                        onInvoke={() => inspect(entry.reference)}
-                      />
-                    </Row>
-                  </CardContent>
-                </Card>
-              ))}
+            {catalogueState === 'loading' && (
+              <Row gap={1} align="center">
+                <Spinner />
+                <Text label="Loading extension catalogue…" color="text-dim" />
+              </Row>
+            )}
+            {catalogueState === 'ready' && availableCatalogue.length === 0 && (
+              <InlineMessage
+                label="No additional extensions are available in the built-in catalogue."
+                tone="neutral"
+              />
+            )}
+            {availableCatalogue.map((entry) => (
+              <Card
+                key={entry.id}
+                grow={false}
+                justify="start"
+                width={CONTENT_WIDTH}
+                variant="filled"
+              >
+                <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                <CardContent gap={1}>
+                  <Text label={entry.description} color="text-dim" wrap />
+                  <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                  <Row>
+                    <Button
+                      label={`Review ${entry.title}`}
+                      enabled={!busy}
+                      onInvoke={() => inspect(entry.reference)}
+                    />
+                  </Row>
+                </CardContent>
+              </Card>
+            ))}
             {catalogue && !catalogue.complete && (
               <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
             )}
-            {catalogueError && (
-              <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
+            {catalogueState === 'error' && (
+              <Column gap={1}>
+                <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
+                <Row>
+                  <Button label="Retry catalogue" onInvoke={loadCatalogue} />
+                </Row>
+              </Column>
             )}
           </Column>
         )}
@@ -443,21 +488,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
                     color="text-dim"
                   />
-                  <Button
-                    label={
-                      granted.length === acquisition.candidate.requested.length
-                        ? 'Clear access'
-                        : 'Allow requested'
-                    }
-                    variant="ghost"
-                    onInvoke={() =>
-                      setGranted(
-                        granted.length === acquisition.candidate!.requested.length
-                          ? []
-                          : acquisition.candidate!.requested,
-                      )
-                    }
-                  />
+                  {granted.length > 0 && (
+                    <Button
+                      label="Clear Husklet access"
+                      variant="ghost"
+                      onInvoke={() => setGranted([])}
+                    />
+                  )}
                 </Row>
               )}
               {acquisition.candidate.requested.map((capability) => (
@@ -532,19 +569,65 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 granted={grantedFilesystem}
                 onChange={setGrantedFilesystem}
               />
-              <Button
-                label={
-                  busy === 'update'
-                    ? 'Updating…'
-                    : busy === 'install'
-                      ? 'Installing…'
-                      : acquisition.candidate.installed_image_digest
-                        ? 'Update extension'
-                        : 'Install extension'
-                }
-                enabled={!busy && acquisition.state === 'ready'}
-                onInvoke={publish}
-              />
+              {(requestedWorkspaceEnvironment.read.length > 0 ||
+                requestedWorkspaceEnvironment.write.length > 0) && (
+                <Text label="Workspace environment values" color="text-dim" />
+              )}
+              {(['read', 'write'] as const).flatMap((verb) =>
+                requestedWorkspaceEnvironment[verb].map((selector) => {
+                  const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                  const checked = grantedWorkspaceEnvironment[verb].some(
+                    (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                  );
+                  return (
+                    <FormControlLabel
+                      key={key}
+                      label={
+                        'all' in selector
+                          ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                          : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
+                      }
+                      gap={2}
+                    >
+                      <Switch
+                        checked={checked}
+                        onToggle={(event: Change) =>
+                          setGrantedWorkspaceEnvironment((current) => ({
+                            ...current,
+                            [verb]: event.value
+                              ? [...current[verb], selector]
+                              : current[verb].filter(
+                                  (candidate) =>
+                                    JSON.stringify(candidate) !== JSON.stringify(selector),
+                                ),
+                          }))
+                        }
+                      />
+                    </FormControlLabel>
+                  );
+                }),
+              )}
+              <Row gap={1} wrap>
+                <Button
+                  label={
+                    busy === 'update'
+                      ? 'Updating…'
+                      : busy === 'install'
+                        ? 'Installing…'
+                        : acquisition.candidate.installed_image_digest
+                          ? 'Update extension'
+                          : 'Install extension'
+                  }
+                  enabled={!busy && acquisition.state === 'ready'}
+                  onInvoke={publish}
+                />
+                <Button
+                  label="Cancel review"
+                  variant="ghost"
+                  enabled={!busy}
+                  onInvoke={dismissReview}
+                />
+              </Row>
             </CardContent>
           )}
           {acquisition && acquisition.state !== 'ready' && (
@@ -710,7 +793,8 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
 
 function extensionState(extension: ExtensionSummary): string {
   if (!extension.enabled) return 'disabled';
-  return extension.status.startsWith('fault:') ? 'faulted' : extension.status;
+  if (extension.status.startsWith('fault:')) return 'faulted';
+  return extension.status === 'duty' ? 'enabled' : extension.status;
 }
 
 function ExtensionFault({ extension }: { extension: ExtensionSummary }) {

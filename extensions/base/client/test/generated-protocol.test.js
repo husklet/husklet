@@ -12,7 +12,7 @@ import {
   validateReplyFor,
   validateRequest,
   validateSnapshot,
-} from '../src/index.js';
+} from '../dist/index.js';
 
 test('generated validators follow authoritative request/reply/failure/snapshot roots', () => {
   assert.deepEqual(encodeRequest('workspace_info'), { call: 'workspace_info' });
@@ -88,6 +88,10 @@ test('generated declarations correlate every authoritative request with its exac
   }
   assert.match(declarations, /WireRequestParameters<C extends WireCall>/);
   assert.match(declarations, /WireReplyFor<C extends WireCall> = WireReplyByCall\[C\]/);
+  assert.match(
+    declarations,
+    /WorkspaceEnvironmentSelector = \{ "workspace": string; "name": string \} \| \{ "all": boolean \}/,
+  );
 });
 
 test('integer widths and the cross-language lossless boundary are enforced before framing', () => {
@@ -151,6 +155,10 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
         create: [],
         delete: [],
         rename: [],
+      },
+      workspace_environment: {
+        read: [{ workspace: 'dev', name: 'PGPASSWORD' }],
+        write: [],
       },
     },
   };

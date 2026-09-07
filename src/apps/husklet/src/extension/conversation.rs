@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
+    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -136,7 +136,11 @@ impl Queue {
 impl hl_extension::NotificationSink for Queue {
     fn publish(&self, notification: &hl_extension::Notification) -> Result<(), hl_extension::HostError> {
         let mut held = self.hold();
-        if let Some(current) = held.notifications.iter_mut().find(|current| current.id == notification.id) {
+        if let Some(current) = held
+            .notifications
+            .iter_mut()
+            .find(|current| current.id == notification.id)
+        {
             current.clone_from(notification);
             return Ok(());
         }
@@ -253,6 +257,7 @@ impl Conversation {
                 delete: roots.clone(),
                 rename: roots,
             },
+            hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -264,6 +269,7 @@ impl Conversation {
         queue: Queue,
         containers: hl_extension::ContainerGrant,
         filesystem: hl_extension::FilesystemGrant,
+        workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     ) -> io::Result<Self> {
         let control = stream.try_clone()?;
         Ok(Self {
@@ -275,6 +281,7 @@ impl Conversation {
             session: Session::new(authority)
                 .with_containers(containers)
                 .with_filesystem(filesystem)
+                .with_workspace_environment(workspace_environment)
                 .with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
@@ -801,6 +808,7 @@ impl Conversation {
         let mut request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
+        self.session.authority().permit(request.capability())?;
         if let hl_extension::Request::TerminalSwitchOccupant { slot, generation, .. } = &mut request {
             let topology = services.terminal.topology().ok().map(|topology| {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -1085,8 +1093,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1404,7 +1412,30 @@ mod tests {
         }
     }
 
-    impl hl_extension::port::WorkspaceControl for Host {}
+    impl hl_extension::port::WorkspaceControl for Host {
+        fn inspect(&self, name: &str) -> Result<hl_extension::WorkspaceConfiguration, HostError> {
+            self.ledger.note("workspace.inspect");
+            Ok(hl_extension::WorkspaceConfiguration {
+                generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                name: name.into(),
+                image: "alpine:3.20".into(),
+                architecture: "arm64".into(),
+                storage: None,
+                shell: None,
+                cpus: None,
+                memory_mb: None,
+                environment: vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())],
+                environment_redacted: false,
+                mounts: Vec::new(),
+                docker_socket: false,
+                scrollback: None,
+                vpn: None,
+                execution_lifetime: "persisted".into(),
+                terminal: hl_extension::WorkspaceTerminal::default(),
+            })
+        }
+    }
 
     struct LifecycleHost(Vec<hl_extension::WorkspaceLifecycleChange>);
 
@@ -1587,6 +1618,54 @@ mod tests {
                     write: vec![RelativePath::new("workspace.toml").unwrap()],
                     ..hl_extension::FilesystemGrant::default()
                 },
+                hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn workspace_read_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::WorkspaceRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn workspace_environment_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").unwrap(),
+                Grant::new([Capability::WorkspaceRead, Capability::WorkspaceEnvironmentRead]),
+                Vec::new(),
+            );
+            let grant = hl_extension::WorkspaceEnvironmentGrant {
+                read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                    workspace: "dev".into(),
+                    name: "DATABASE_PASSWORD".into(),
+                }],
+                write: Vec::new(),
+            };
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::FilesystemGrant::default(),
+                grant,
             )?;
             conversation.greet()?;
             conversation.serve(&services(&host))
@@ -1907,13 +1986,16 @@ mod tests {
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
-        let answer = ask(&mut wire, &Request::NotificationPublish {
-            notification: hl_extension::Notification {
-                id: "index".into(),
-                title: "Index ready".into(),
-                body: "One million rows indexed".into(),
+        let answer = ask(
+            &mut wire,
+            &Request::NotificationPublish {
+                notification: hl_extension::Notification {
+                    id: "index".into(),
+                    title: "Index ready".into(),
+                    body: "One million rows indexed".into(),
+                },
             },
-        });
+        );
         assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
         assert_eq!(ledger.reached(), vec!["notifications.publish"]);
         drop(wire);
@@ -1984,6 +2066,52 @@ mod tests {
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn read_only_workspace_inspection_never_frames_environment_secrets() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = workspace_read_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::WorkspaceInspect { name: "dev".into() });
+        assert!(
+            !answer
+                .payload
+                .windows(b"cycle19-socket-secret".len())
+                .any(|window| window == b"cycle19-socket-secret"),
+            "the host secret entered the extension-facing frame"
+        );
+        let Reply::WorkspaceConfiguration(configuration) = codec::read_reply(&answer).expect("workspace reply") else {
+            panic!("unexpected reply")
+        };
+        assert!(configuration.environment.is_empty());
+        assert!(configuration.environment_redacted);
+        assert!(!format!("{configuration:?}").contains("cycle19-socket-secret"));
+        assert_eq!(ledger.reached(), vec!["workspace.inspect"]);
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn exact_workspace_environment_consent_crosses_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = workspace_environment_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(&mut wire, &Request::WorkspaceInspect { name: "dev".into() });
+        let Reply::WorkspaceConfiguration(configuration) = codec::read_reply(&answer).unwrap() else {
+            panic!("unexpected reply")
+        };
+        assert_eq!(
+            configuration.environment,
+            vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())]
+        );
+        assert!(!configuration.environment_redacted);
+        drop(wire);
+        assert_eq!(served.join().unwrap(), Ok(()));
     }
 
     #[test]
@@ -2203,6 +2331,7 @@ mod tests {
                 create: false,
             },
             hl_extension::FilesystemGrant::default(),
+            hl_extension::WorkspaceEnvironmentGrant::default(),
         )
         .expect("conversation");
         let host = Host { ledger };
@@ -2993,6 +3122,102 @@ mod tests {
         assert!(ledger.reached().is_empty(), "nothing may be reached before the check");
         drop(wire);
         let _ = served.join().expect("joined");
+    }
+
+    #[test]
+    fn invalid_exec_environment_never_echoes_its_secret_and_the_session_recovers() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let secret = "sentinel-password-never-in-a-socket-reply";
+
+        let failure = ask(
+            &mut wire,
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["psql".into()],
+                environment: vec![
+                    ("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new(secret)),
+                    (
+                        "PGPASSWORD".into(),
+                        hl_extension::ExecEnvironmentValue::new("duplicate"),
+                    ),
+                ],
+                user: None,
+                working_directory: None,
+            },
+        );
+        assert!(codec::is_failure(&failure), "duplicate environment names are refused");
+        assert!(
+            !failure
+                .payload
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "the failure frame echoed an environment secret"
+        );
+        assert!(ledger.reached().is_empty(), "invalid environment reached a service");
+
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn denied_terminal_write_never_inspects_the_pane_or_echoes_input() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let secret = b"sentinel-terminal-input-never-in-a-failure";
+
+        let denied = ask(
+            &mut wire,
+            &Request::TerminalWritePane {
+                slot: "s1".into(),
+                generation: 1,
+                revision: 2,
+                contents: secret.to_vec(),
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&denied),
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalControl.as_str()
+        ));
+        assert!(!denied.payload.windows(secret.len()).any(|window| window == secret));
+        assert!(ledger.reached().is_empty(), "denied input reached terminal inspection");
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]

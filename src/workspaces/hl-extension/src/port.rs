@@ -568,6 +568,8 @@ pub struct WorkspaceState {
 pub struct WorkspaceConfiguration {
     #[serde(default)]
     pub generation: String,
+    #[serde(default)]
+    pub configuration_revision: String,
     pub name: String,
     pub image: String,
     pub architecture: String,
@@ -576,12 +578,28 @@ pub struct WorkspaceConfiguration {
     pub cpus: Option<u32>,
     pub memory_mb: Option<u32>,
     pub environment: Vec<(String, String)>,
+    /// True when environment values were intentionally withheld from this reply.
+    #[serde(default)]
+    pub environment_redacted: bool,
     pub mounts: Vec<WorkspaceMount>,
     pub docker_socket: bool,
     pub scrollback: Option<u64>,
     pub vpn: Option<String>,
     pub execution_lifetime: String,
     pub terminal: WorkspaceTerminal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceEnvironmentPatch {
+    pub set: Vec<(String, String)>,
+    pub remove: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceEnvironmentPatchResult {
+    pub generation: String,
+    pub configuration_revision: String,
+    pub changed: bool,
 }
 
 /// One host path exposed inside a workspace.
@@ -618,6 +636,14 @@ pub struct Entry {
     pub size: u64,
     #[serde(default)]
     pub identity: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DirectoryPage {
+    pub entries: Vec<Entry>,
+    pub identity: String,
+    pub next: Option<RelativePath>,
+    pub more: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -682,6 +708,8 @@ pub struct ExtensionCandidate {
     pub requested_containers: crate::ContainerGrant,
     #[serde(default)]
     pub requested_filesystem: crate::FilesystemGrant,
+    #[serde(default)]
+    pub requested_workspace_environment: crate::WorkspaceEnvironmentGrant,
     #[serde(default)]
     pub installed_image_digest: Option<String>,
 }
@@ -798,6 +826,7 @@ pub trait ExtensionStore {
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
         _filesystem: &crate::FilesystemGrant,
+        _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension installation is unavailable".into()))
     }
@@ -809,6 +838,7 @@ pub trait ExtensionStore {
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
         _filesystem: &crate::FilesystemGrant,
+        _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension update is unavailable".into()))
     }
@@ -1211,15 +1241,22 @@ pub trait WorkspaceControl {
     fn create(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         Err(workspace_control_unavailable())
     }
-    fn adopt(&self, _configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
-        Err(workspace_control_unavailable())
-    }
     fn update(
         &self,
         _name: &str,
         _generation: &str,
+        _configuration_revision: &str,
         _configuration: &WorkspaceConfiguration,
     ) -> Result<WorkspaceConfiguration, HostError> {
+        Err(workspace_control_unavailable())
+    }
+    fn patch_environment(
+        &self,
+        _name: &str,
+        _generation: &str,
+        _configuration_revision: &str,
+        _patch: &WorkspaceEnvironmentPatch,
+    ) -> Result<WorkspaceEnvironmentPatchResult, HostError> {
         Err(workspace_control_unavailable())
     }
     fn delete(&self, _name: &str, _generation: &str) -> Result<(), HostError> {
@@ -1250,6 +1287,18 @@ pub trait WorkspaceFiles {
     /// # Errors
     /// Returns a host failure.
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError>;
+
+    fn list_page(
+        &self,
+        _path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _observed: Option<&str>,
+        _limit: usize,
+    ) -> Result<DirectoryPage, HostError> {
+        Err(HostError::Unsupported(
+            "stable directory pagination is unavailable".into(),
+        ))
+    }
 
     /// # Errors
     /// Returns a host failure.
@@ -1315,8 +1364,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
-        bounded_pane_text, pane_lines,
+        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
     };
 
     #[test]
@@ -1436,32 +1485,26 @@ mod tests {
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
         };
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_ok()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone(), entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![super::ExtensionCatalogueEntry {
-                    description: "unsafe\nmetadata".into(),
-                    ..entry
-                }],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_ok());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone(), entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                description: "unsafe\nmetadata".into(),
+                ..entry
+            }],
+            complete: true,
+        }
+        .validate()
+        .is_err());
     }
 }

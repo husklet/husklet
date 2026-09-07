@@ -11,7 +11,7 @@
 //! parentage against what the extension described, because a test that only
 //! checked for the absence of an error would pass on an empty tree.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerCreateSpec, ContainerInventory, ContainerSummary, ContainerVolumeMount, Division, Entry,
@@ -55,6 +55,32 @@ fn connected_pair() -> (Stream, Stream) {
     }
 }
 
+#[test]
+fn removed_workspace_adopt_call_is_rejected_and_the_socket_remains_decodable() {
+    let (host_end, extension_end) = connected_pair();
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    sender
+        .send(&hl_rpc::Frame::new(
+            codec::CALLS,
+            hl_rpc::Kind::Request,
+            br#"{"call":"workspace_adopt","with":{"configuration":{}}}"#.to_vec(),
+        ))
+        .expect("obsolete call sent");
+    assert!(
+        codec::read_request(&receiver.receive().expect("obsolete frame")).is_err(),
+        "the removed call must not decode into host authority"
+    );
+
+    sender
+        .send(&codec::request(&Request::WorkspaceInfo).expect("current request"))
+        .expect("current request sent");
+    assert!(matches!(
+        codec::read_request(&receiver.receive().expect("current frame")),
+        Ok(Request::WorkspaceInfo)
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // The host's in-memory ports.
 // ---------------------------------------------------------------------------
@@ -64,6 +90,8 @@ fn connected_pair() -> (Stream, Stream) {
 struct Host {
     tabs: RefCell<Vec<String>>,
     network_aliases: RefCell<Vec<String>>,
+    filesystem_pages: Cell<usize>,
+    filesystem_ranges: Cell<usize>,
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
@@ -78,6 +106,8 @@ impl Host {
         Self {
             tabs: RefCell::new(Vec::new()),
             network_aliases: RefCell::new(Vec::new()),
+            filesystem_pages: Cell::new(0),
+            filesystem_ranges: Cell::new(0),
         }
     }
 }
@@ -196,14 +226,159 @@ impl WorkspaceFiles for Host {
         Ok(Vec::new())
     }
 
+    fn read_range(
+        &self,
+        path: &RelativePath,
+        offset: u64,
+        limit: usize,
+        _observed: Option<&str>,
+    ) -> Result<hl_extension::port::FileRange, HostError> {
+        self.filesystem_ranges.set(self.filesystem_ranges.get() + 1);
+        Ok(hl_extension::port::FileRange {
+            path: path.clone(),
+            identity: "large-v1".into(),
+            offset,
+            total: offset + limit as u64,
+            contents: vec![b'x'; limit],
+            eof: true,
+            truncated: false,
+        })
+    }
+
+    fn list_page(
+        &self,
+        _path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _observed: Option<&str>,
+        _limit: usize,
+    ) -> Result<hl_extension::port::DirectoryPage, HostError> {
+        self.filesystem_pages.set(self.filesystem_pages.get() + 1);
+        Ok(hl_extension::port::DirectoryPage {
+            entries: vec![Entry {
+                path: RelativePath::new("src/b.ts").expect("path"),
+                directory: false,
+                size: 7,
+                identity: None,
+            }],
+            identity: "directory-v1".into(),
+            next: Some(RelativePath::new("src/b.ts").expect("path")),
+            more: true,
+        })
+    }
+
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         Ok(())
     }
 }
 
+#[test]
+fn bounded_directory_cursor_crosses_the_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").expect("name"),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![RelativePath::new("src").expect("root")],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemListPage {
+        path: RelativePath::new("src").expect("path"),
+        after: Some(RelativePath::new("src/a.ts").expect("cursor")),
+        observed: Some("directory-v1".into()),
+        limit: 1,
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    let invalid = Request::FilesystemListPage {
+        path: RelativePath::new("src").expect("path"),
+        after: Some(RelativePath::new("src/a.ts").expect("cursor")),
+        observed: None,
+        limit: 1,
+    };
+    sender
+        .send(&codec::request(&invalid).expect("invalid request"))
+        .expect("sent");
+    let frame = receiver.receive().expect("invalid frame");
+    let failure = session
+        .dispatch(
+            &codec::read_request(&frame).expect("invalid request decodes"),
+            &services(&host),
+        )
+        .expect_err("unbound continuation refused");
+    receiver
+        .send(&codec::failure(&failure).expect("failure frame"))
+        .expect("failure sent");
+    assert!(matches!(
+        codec::read_failure(&sender.receive().expect("failure reply")),
+        Ok(Failure::Failed { .. })
+    ));
+    assert_eq!(host.filesystem_pages.get(), 0, "bounds fail before filesystem access");
+    sender.send(&codec::request(&request).expect("request")).expect("sent");
+    let frame = receiver.receive().expect("request frame");
+    let decoded = codec::read_request(&frame).expect("request decodes");
+    let reply = session.dispatch(&decoded, &services(&host)).expect("page allowed");
+    receiver
+        .send(&codec::reply(&reply).expect("reply"))
+        .expect("reply sent");
+    let answer = codec::read_reply(&sender.receive().expect("reply frame")).expect("reply decodes");
+    let Reply::DirectoryPage(page) = answer else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(page.next.expect("cursor").as_str(), "src/b.ts");
+    assert!(page.more);
+    assert_eq!(host.filesystem_pages.get(), 1);
+}
+
+#[test]
+fn large_file_range_beyond_the_old_ceiling_crosses_the_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").expect("name"),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![RelativePath::new("data/embeddings.bin").expect("root")],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemReadRange {
+        path: RelativePath::new("data/embeddings.bin").expect("path"),
+        offset: 8 * 1024 * 1024,
+        limit: 3,
+        observed: Some("large-v1".into()),
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    sender.send(&codec::request(&request).expect("request")).expect("sent");
+    let decoded = codec::read_request(&receiver.receive().expect("request frame")).expect("decoded");
+    let reply = session
+        .dispatch(&decoded, &services(&host))
+        .expect("large offset allowed");
+    receiver
+        .send(&codec::reply(&reply).expect("reply"))
+        .expect("reply sent");
+    let Reply::FileRange(range) = codec::read_reply(&sender.receive().expect("reply frame")).expect("reply decodes")
+    else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(range.offset, 8 * 1024 * 1024);
+    assert_eq!(range.contents, b"xxx");
+    assert_eq!(
+        host.filesystem_ranges.get(),
+        1,
+        "the request reached the filesystem exactly once"
+    );
+}
+
 impl hl_extension::port::ExtensionStore for Host {}
 impl hl_extension::NotificationSink for Host {
-    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {

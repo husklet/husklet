@@ -12,9 +12,9 @@ import {
   requestCapability,
   validateUiEvent,
   workspace,
-} from '../src/index.js';
-import { KIND, Reader, encode } from '../src/wire.js';
-import { PROTOCOL } from '../src/session.js';
+} from '../dist/index.js';
+import { KIND, Reader, encode } from '../dist/wire.js';
+import { PROTOCOL } from '../dist/session.js';
 
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
   const calls = [];
@@ -506,12 +506,18 @@ test('concurrent pane-change waits share their host subscription until the last 
   stage.server.close();
 });
 
-test('workspace lifecycle methods use the typed control calls', async () => {
+test('workspace lifecycle methods use the typed control calls', async (context) => {
   const stage = await pair();
+  context.after(async () => {
+    await stage.session.close();
+    stage.host.destroy();
+    await new Promise((resolve) => stage.server.close(resolve));
+  });
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
   const configuration = {
+    configuration_revision: 'fedcba9876543210fedcba9876543210',
     name: 'other',
     image: 'alpine:3.20',
     architecture: 'arm64',
@@ -537,13 +543,18 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   const operations = [
     api.inspect('other'),
     api.create(configuration),
-    api.adopt({ ...configuration, generation: '' }),
-    api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.update('other', '0123456789abcdef0123456789abcdef', configuration.configuration_revision, configuration),
     api.delete('other', '0123456789abcdef0123456789abcdef'),
     api.start('other'),
     api.stop('other'),
     api.restart('other'),
   ];
+  assert.equal('adopt' in api, false, 'the removed adoption facade is not advertised');
+  assert.equal(
+    'workspace_adopt' in protocolSurface.requests,
+    false,
+    'the generated protocol surface does not advertise the removed call',
+  );
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(
@@ -551,7 +562,6 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     [
       'workspace_inspect',
       'workspace_create',
-      'workspace_adopt',
       'workspace_update',
       'workspace_delete',
       'workspace_start',
@@ -561,20 +571,34 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   );
   for (let index = 0; index < operations.length; index += 1) {
     const payload =
-      index < 4 ? { reply: 'workspace_configuration', with: configuration } : { reply: 'done' };
+      index < 3 ? { reply: 'workspace_configuration', with: configuration } : { reply: 'done' };
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);
-  assert.deepEqual(results.slice(0, 4), [
-    configuration,
-    configuration,
-    configuration,
-    configuration,
-  ]);
-  assert.deepEqual(results.slice(4), [undefined, undefined, undefined, undefined]);
-  stage.session.close();
-  stage.host.destroy();
-  stage.server.close();
+  assert.deepEqual(results.slice(0, 3), [configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(3), [undefined, undefined, undefined, undefined]);
+});
+
+test('workspace environment patch preserves exact CAS framing without returning values', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const api = workspace(stage.session);
+  const generation = '0123456789abcdef0123456789abcdef';
+  const revision = 'fedcba9876543210fedcba9876543210';
+  const pending = api.patchEnvironment('dev', generation, revision, {
+    set: [['PGPASSWORD', 'rotated']], remove: ['OLD_PASSWORD'],
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'workspace_environment_patch',
+    with: { name: 'dev', generation, configuration_revision: revision,
+      patch: { set: [['PGPASSWORD', 'rotated']], remove: ['OLD_PASSWORD'] } },
+  });
+  const nextRevision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'workspace_environment_patch',
+    with: { generation, configuration_revision: nextRevision, changed: true },
+  } }));
+  assert.deepEqual(await pending, { generation, configuration_revision: nextRevision, changed: true });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('coverage names delivered snapshots and leaves unsupported topics unavailable', () => {
@@ -585,6 +609,7 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
     'create',
     'adopt',
     'update',
+    'patchEnvironment',
     'delete',
     'start',
     'stop',
@@ -733,7 +758,7 @@ test('the schema-derived public surface covers every Rust request and topic', ()
 });
 
 test('every fixed public facade request is classified with its Rust host capability', () => {
-  const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
   const calls = new Set(
     [...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]),
   );
@@ -982,7 +1007,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }),
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, undefined, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
     api.extensions.update('job-2', 8, digest, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -990,8 +1015,8 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] } } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [], write: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));
@@ -1876,6 +1901,37 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   stage.session.close();
   stage.host.destroy();
   stage.server.close();
+});
+
+test('directory pagination carries an authoritative bounded cursor over Unix framing', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).files.listPage('src', { after: 'src/a.ts', observed: 'dir-v1', limit: 2 });
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_list_page', with: { path: 'src', after: 'src/a.ts', observed: 'dir-v1', limit: 2 },
+  });
+  const page = { entries: [{ path: 'src/b.ts', directory: false, size: 7 }], identity: 'dir-v1', next: 'src/b.ts', more: true };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'directory_page', with: page } }));
+  assert.deepEqual(await pending, page);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('an inconsistent directory page is rejected without poisoning the ordered session', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const files = workspace(stage.session).files;
+  await assert.rejects(files.listPage('src', { after: 'src/a.ts' }), /requires both after and observed/);
+  const malformed = files.listPage('src', { limit: 1 });
+  assert.equal((await next()).payload.call, 'filesystem_list_page');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'directory_page', with: { entries: [], identity: 'dir-v1', next: null, more: true },
+  } }));
+  await assert.rejects(malformed, /inconsistent filesystem directory page/);
+  const healthy = files.stat('src/a.ts');
+  assert.equal((await next()).payload.call, 'filesystem_stat');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
+    reply: 'entry', with: { path: 'src/a.ts', directory: false, size: 1 },
+  } }));
+  assert.equal((await healthy).size, 1);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('observed filesystem ranges and creation preserve exact identities on the wire', async () => {

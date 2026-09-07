@@ -12,6 +12,7 @@ import {
   validateSnapshot,
   validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
+import type { CallOptions, ConnectOptions, HostEvent } from './api.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
 export const PROTOCOL = PROTOCOL_VERSION;
@@ -28,7 +29,7 @@ const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [sna
 const TOPIC_CAPABILITIES = new Map(
   PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]),
 );
-const CAPABILITIES = new Set(PROTOCOL_CAPABILITIES.map(({ wire }) => wire));
+const CAPABILITIES: ReadonlySet<string> = new Set(PROTOCOL_CAPABILITIES.map(({ wire }) => wire));
 
 class DenoSocket {
   #connection;
@@ -185,6 +186,9 @@ export function validateUiEvent(value) {
 
 /** Refusal returned by the host, with its stable machine-readable category. */
 export class ExtensionError extends Error {
+  readonly kind;
+  readonly capability;
+
   constructor(failure) {
     const kind = failure?.error ?? 'failed';
     super(failure?.detail ?? failure?.call ?? `extension call ${kind}`);
@@ -208,7 +212,7 @@ export class Session {
   #onRows;
   #onEventError;
   #onClose;
-  #events = new Set();
+  #events = new Set<(event: HostEvent, channel: number) => void>();
   #topics = new Set();
   #eventTopics = new Map();
   #pending = [];
@@ -218,7 +222,7 @@ export class Session {
   #timeout;
   #closed = false;
   #closeReason;
-  #granted = [];
+  #granted: readonly string[] = [];
   #greeted;
   #ready;
   #rejectReady;
@@ -251,7 +255,7 @@ export class Session {
       onClose = () => {},
       pendingLimit = 64,
       timeout = 30_000,
-    } = {},
+    }: ConnectOptions = {},
   ) {
     if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1)
       throw new RangeError('pendingLimit must be a positive integer');
@@ -301,7 +305,7 @@ export class Session {
   }
 
   /** Opens the socket the host provided. */
-  static connect(path = extensionSocketPath(), handlers = {}) {
+  static connect(path = extensionSocketPath(), handlers: ConnectOptions = {}) {
     if (!path) throw new Error(`${SOCKET} is not set; an extension runs inside a workspace`);
     const connectTimeout = handlers.connectTimeout ?? 30_000;
     if (!Number.isFinite(connectTimeout) || connectTimeout <= 0)
@@ -348,7 +352,7 @@ export class Session {
   }
 
   /** Sends one call and resolves with the tagged host reply. */
-  call(name, argument, { signal } = {}) {
+  call(name, argument?: unknown, { signal }: CallOptions = {}) {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
     if (!this.#welcomed)
       return Promise.reject(new Error('extension host handshake is not complete'));
@@ -364,7 +368,7 @@ export class Session {
     if (signal?.aborted) return Promise.reject(abortError(signal.reason));
     const capability =
       name === 'event_subscribe' || name === 'event_unsubscribe'
-        ? TOPIC_CAPABILITIES.get(argument?.topic)
+        ? TOPIC_CAPABILITIES.get(requiredObject(argument, 'subscription').topic as string)
         : PROTOCOL_REQUEST_CAPABILITIES[name];
     if (capability === undefined)
       return Promise.reject(new RangeError(`unclassified extension request ${name}`));
@@ -447,7 +451,7 @@ export class Session {
   }
 
   /** Adds a pushed-event observer and returns a synchronous disposer. */
-  onEvent(listener) {
+  onEvent(listener: (event: HostEvent, channel: number) => void) {
     if (typeof listener !== 'function') throw new TypeError('event listener must be a function');
     this.#events.add(listener);
     return () => this.#events.delete(listener);
@@ -456,7 +460,7 @@ export class Session {
   close() {
     if (this.#closing) return this.#closing;
     this.#finish(new Error('extension session closed'));
-    this.#closing = new Promise((resolve) => {
+    this.#closing = new Promise<void>((resolve) => {
       if (this.#socket.destroyed) return resolve();
       const timer = setTimeout(
         () => {
@@ -661,7 +665,11 @@ export class Session {
     ) {
       throw new TypeError('host greeting contains an unknown capability');
     }
-    this.#granted = Object.freeze([...new Set(granted)]);
+    this.#granted = Object.freeze(
+      [...new Set(granted)].filter(
+        (capability): capability is string => typeof capability === 'string',
+      ),
+    );
     this.#write({
       channel: CONTROL,
       kind: KIND.response,

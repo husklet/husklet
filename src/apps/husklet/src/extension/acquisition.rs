@@ -46,6 +46,7 @@ pub(crate) struct AcquisitionCandidate {
     pub requested: Grant,
     pub requested_containers: hl_extension::ContainerGrant,
     pub requested_filesystem: hl_extension::FilesystemGrant,
+    pub requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     pub installed_digest: Option<String>,
 }
 
@@ -290,6 +291,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -300,9 +302,11 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, _) = self.take_ready(job, revision)?;
+        external_workspace_environment(&candidate.manifest)?;
         let result = Roster::workspace(&self.workspace)
             .and_then(|mut roster| {
                 roster.register_resource_scoped(
@@ -311,6 +315,7 @@ impl ExtensionAcquisitions {
                     consented,
                     containers,
                     filesystem,
+                    workspace_environment,
                     moment(),
                 )
             })
@@ -336,6 +341,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
     }
 
@@ -346,9 +352,11 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, installed_digest) = self.take_ready(job, revision)?;
+        external_workspace_environment(&candidate.manifest)?;
         let result = (|| {
             let installed_digest = installed_digest
                 .ok_or_else(|| "the extension was not installed when consent was requested".to_owned())?;
@@ -357,7 +365,14 @@ impl ExtensionAcquisitions {
                 .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
-                .commit_update_resource_scoped(update, consented, containers, filesystem, moment())
+                .commit_update_resource_scoped(
+                    update,
+                    consented,
+                    containers,
+                    filesystem,
+                    workspace_environment,
+                    moment(),
+                )
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
@@ -458,6 +473,7 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 requested: candidate.manifest.capabilities.clone(),
                 requested_containers: candidate.manifest.containers.clone(),
                 requested_filesystem: candidate.manifest.filesystem.clone(),
+                requested_workspace_environment: candidate.manifest.workspace_environment.clone(),
                 installed_digest,
             };
             (AcquisitionState::Ready(visible), Some(candidate))
@@ -471,6 +487,21 @@ fn moment() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+}
+
+fn external_workspace_environment(manifest: &hl_extension::Manifest) -> Result<(), HostError> {
+    if manifest
+        .workspace_environment
+        .read
+        .iter()
+        .chain(manifest.workspace_environment.write.iter())
+        .any(|selector| matches!(selector, hl_extension::WorkspaceEnvironmentSelector::All { .. }))
+    {
+        return Err(HostError::Failed(
+            "external extensions cannot request all workspace environment values".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -495,7 +526,21 @@ mod tests {
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }
+    }
+
+    #[test]
+    fn external_install_and_update_reject_spoofed_top_all_environment_authority() {
+        let mut candidate = manifest("1", &[Capability::WorkspaceEnvironmentRead]);
+        candidate.name = ExtensionName::new("top").unwrap();
+        candidate.workspace_environment = hl_extension::WorkspaceEnvironmentGrant {
+            read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+        };
+
+        assert!(external_workspace_environment(&candidate).is_err(), "install boundary");
+        assert!(external_workspace_environment(&candidate).is_err(), "update boundary");
     }
 
     fn workspace(root: &std::path::Path) -> WorkspaceConfig {

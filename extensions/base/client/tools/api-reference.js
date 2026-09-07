@@ -7,7 +7,7 @@ import {
   PROTOCOL_TOPICS,
   protocolSurface,
   requestCapability,
-} from '../src/index.js';
+} from '../dist/index.js';
 
 const output = fileURLToPath(new URL('../API.md', import.meta.url));
 const execution = new Set([

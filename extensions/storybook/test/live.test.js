@@ -10,7 +10,7 @@ import { PACKAGE } from './host.js';
 import { FLOW_STORIES } from '../dist/app.js';
 import { grouped, tags } from '../dist/catalogue.js';
 
-const { KIND, Reader, encode } = await import(new URL('src/wire.js', `file://${PACKAGE}`));
+const { KIND, Reader, encode } = await import(new URL('dist/wire.js', `file://${PACKAGE}`));
 
 function node(patches, tag, label) {
   let candidate = null;
