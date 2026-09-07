@@ -622,8 +622,10 @@ static void *translate_block(uint64_t guest_pc) {
         .overflow = 0,
     };
     uint64_t cursor = guest_pc;
+    uint64_t source_end = guest_pc;
     int has_memory = 0;
     uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
+    uint64_t guest_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     /* r14 is callee-saved by the entry trampoline and unused by the ALU
      * lowering. It counts only completed direct backedges. */
     hl_x64_u8(&assembler, 0x45); hl_x64_u8(&assembler, 0x31); hl_x64_u8(&assembler, 0xF6); /* xor %r14d,%r14d */
@@ -636,9 +638,11 @@ static void *translate_block(uint64_t guest_pc) {
      * loop. Forward edges remain ordinary dispatcher exits. */
     for (unsigned count = 0; count < HL_A64_X86_MAX_BLOCK_INSNS; ++count, cursor += 4) {
         host_for_instruction[count] = assembler.cursor;
+        guest_for_instruction[count] = cursor;
         int fetch_ok = 0;
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);
         if (!fetch_ok) break;
+        if (cursor + 4 > source_end) source_end = cursor + 4;
         if (hl_a64_x86_emit_mov_wide(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
@@ -649,9 +653,23 @@ static void *translate_block(uint64_t guest_pc) {
             has_memory = 1;
             continue;
         }
-        if ((instruction & 0xFC000000u) == 0x14000000u &&
-            interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4)
-            continue; /* B to the next instruction: retire inside this bounded block. */
+        if ((instruction & 0xFC000000u) == 0x14000000u) {
+            int64_t displacement = interp_sext(instruction & 0x3FFFFFFu, 26) * 4;
+            uint64_t target = cursor + (uint64_t)displacement;
+            if (displacement == 4) continue; /* B to the next instruction. */
+            int seen = 0;
+            for (unsigned index = 0; index <= count; ++index)
+                if (guest_for_instruction[index] == target) seen = 1;
+            /* Follow one-way forward control inside the same source page. The
+             * skipped interval stays in the published source hull, making SMC
+             * invalidation conservative. Backward/repeated targets remain a
+             * terminal and use the bounded backedge path below. */
+            if (target > cursor && (target & ~UINT64_C(0xFFF)) == source_page && !seen &&
+                count + 1 < HL_A64_X86_MAX_BLOCK_INSNS) {
+                cursor = target - 4;
+                continue;
+            }
+        }
         if (hl_a64_x86_conditional_is_next(instruction))
             continue; /* Both conditional outcomes are the next instruction. */
         uint64_t exit_kind;
@@ -664,8 +682,12 @@ static void *translate_block(uint64_t guest_pc) {
             decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4);
         else if ((instruction & 0x7E000000u) == 0x36000000u)
             decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4);
-        if (decoded_target >= guest_pc && decoded_target < cursor && ((decoded_target - guest_pc) & 3u) == 0)
-            direct_target = host_for_instruction[(decoded_target - guest_pc) / 4];
+        if (decoded_target < cursor)
+            for (unsigned index = 0; index < count; ++index)
+                if (guest_for_instruction[index] == decoded_target) {
+                    direct_target = host_for_instruction[index];
+                    break;
+                }
         int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
                                                                 &conditional_target, direct_target);
         if (conditional) {
@@ -697,15 +719,15 @@ static void *translate_block(uint64_t guest_pc) {
         header->loop_steps = direct_target == NULL ? 0 : (cursor - decoded_target) / 4 + 1;
         header->reserved2 = 0;
         g_cp = assembler.cursor;
-        if (map_put(guest_pc, guest_pc, cursor + 4, entry, entry) != MAP_PUT_OK) {
+        if (map_put(guest_pc, guest_pc, source_end, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
             g_cp = begin;
             (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
             return NULL;
         }
-        txpg_mark(guest_pc, cursor + 4);
+        txpg_mark(guest_pc, source_end);
         if (g_txln_active)
-            for (uint64_t line = guest_pc >> 6; line <= cursor >> 6; ++line)
+            for (uint64_t line = guest_pc >> 6; line <= (source_end - 1) >> 6; ++line)
                 txln_put(line);
         return entry;
     }
