@@ -240,7 +240,12 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
     ) -> io::Result<Self> {
-        let roots = authority.roots().to_vec();
+        let roots = authority
+            .roots()
+            .iter()
+            .cloned()
+            .map(|subtree| hl_extension::FilesystemSelector::Subtree { subtree })
+            .collect::<Vec<_>>();
         Self::new_scoped(
             stream,
             authority,

@@ -941,10 +941,14 @@ fn described_at(parent: &RelativePath, directory: &File, entry: &rustix::fs::Dir
 mod tests {
     use super::WorkspaceDirectory;
     use hl_extension::port::{HostError, WorkspaceFiles};
-    use hl_extension::RelativePath;
+    use hl_extension::{FilesystemSelector, RelativePath};
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
+    }
+
+    fn subtree(value: &str) -> FilesystemSelector {
+        FilesystemSelector::Subtree { subtree: path(value) }
     }
 
     #[test]
@@ -1118,7 +1122,7 @@ mod tests {
         std::fs::write(root.join("source/nested/lib.ts"), b"lib").expect("nested file");
         std::fs::write(root.join("private/key"), b"secret").expect("private file");
         let files = WorkspaceDirectory::new(&root).expect("root");
-        let inventory = files.inventory(&[path("source")]).expect("inventory");
+        let inventory = files.inventory(&[subtree("source")]).expect("inventory");
         assert!(inventory.complete);
         assert_eq!(inventory.coalesced, 0);
         assert_eq!(
@@ -1131,7 +1135,7 @@ mod tests {
         );
         assert!(inventory.entries.iter().all(|entry| entry.identity.is_some()));
         let whole = files
-            .inventory(&[path("source"), path("private")])
+            .inventory(&[subtree("source"), subtree("private")])
             .expect("declared-root inventory");
         assert!(whole
             .entries
@@ -1140,7 +1144,7 @@ mod tests {
         for index in 0..260 {
             std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file");
         }
-        let bounded = files.inventory(&[path("source")]).expect("bounded inventory");
+        let bounded = files.inventory(&[subtree("source")]).expect("bounded inventory");
         assert_eq!(bounded.entries.len(), 256);
         assert!(!bounded.complete);
     }
