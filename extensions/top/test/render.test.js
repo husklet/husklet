@@ -295,6 +295,7 @@ for (const updating of [false, true]) {
         selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
         create: true,
       },
+      requested_filesystem: { read: ['src'], write: ['src/config.json'] },
       installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
     };
     const stage = host();
@@ -327,6 +328,18 @@ for (const updating of [false, true]) {
     await settled();
     await settled();
 
+    assert.ok(labelled(stage, updating ? 'Review update' : 'Review install'));
+    assert.ok(labelled(stage, 'Manifest scoped 2.0.0'));
+    assert.ok(labelled(stage, 'Source local/scoped:2'));
+    assert.ok(labelled(stage, `Reviewed image ${compactDigest(candidate.image_digest)}`));
+    if (updating) {
+      assert.ok(
+        labelled(
+          stage,
+          `Replaces installed image ${compactDigest(candidate.installed_image_digest)}. Access below was reset and must be approved again.`,
+        ),
+      );
+    }
     assert.ok(
       labelled(stage, 'Container access starts off. Select only what this extension needs.'),
     );
@@ -337,12 +350,15 @@ for (const updating of [false, true]) {
       'Create new containers',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false]);
+    assert.ok(labelled(stage, 'Read src'));
+    assert.ok(labelled(stage, 'Modify src/config.json'));
+    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false, false, false]);
 
     toggleSwitch(stage, 0, true);
     toggleSwitch(stage, 2, true);
     toggleSwitch(stage, 3, true);
     toggleSwitch(stage, 2, false);
+    toggleSwitch(stage, 4, true);
     invoke(stage, updating ? 'Update extension' : 'Install extension');
     await settled();
     await settled();
@@ -353,6 +369,7 @@ for (const updating of [false, true]) {
       selectors: [{ name: 'database' }],
       create: true,
     });
+    assert.deepEqual(calls[0][4], { read: ['src'], write: [] });
   });
 }
 
@@ -4170,6 +4187,10 @@ function ancestorTags(stage, label) {
     ancestors.push(tags.get(node));
   }
   return ancestors;
+}
+
+function compactDigest(digest) {
+  return digest.length > 32 ? `${digest.slice(0, 19)}…${digest.slice(-8)}` : digest;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

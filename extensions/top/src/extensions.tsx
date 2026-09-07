@@ -305,12 +305,28 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           </CardContent>
           {acquisition?.candidate && (
             <CardContent gap={1}>
-              <Heading label="Review permissions" scale="caption" />
-              <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
-              <Text
-                label={compactDigest(acquisition.candidate.image_digest)}
-                tooltip={acquisition.candidate.image_digest}
+              <Heading
+                label={
+                  acquisition.candidate.installed_image_digest ? 'Review update' : 'Review install'
+                }
+                scale="caption"
               />
+              <Text
+                label={`Manifest ${acquisition.candidate.name} ${acquisition.candidate.version}`}
+              />
+              <Text label={`Source ${reference}`} color="text-dim" wrap />
+              <Text
+                label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
+                tooltip={acquisition.candidate.image_digest}
+                wrap
+              />
+              {acquisition.candidate.installed_image_digest ? (
+                <InlineMessage
+                  label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                  tone="warning"
+                />
+              ) : null}
+              <Heading label="Review permissions" scale="caption" />
               <InlineMessage
                 label="All access is off by default. Enable only what this extension needs."
                 tone="warning"
