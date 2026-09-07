@@ -20,6 +20,10 @@ pub enum Capability {
     /// Observing keyboard, focus, and pointer activity across the workspace window.
     #[serde(rename = "workspaces:events")]
     WorkspaceEvents,
+    #[serde(rename = "workspace-environment:read")]
+    WorkspaceEnvironmentRead,
+    #[serde(rename = "workspace-environment:write")]
+    WorkspaceEnvironmentWrite,
     #[serde(rename = "containers:read")]
     ContainerRead,
     #[serde(rename = "containers:control")]
@@ -85,6 +89,8 @@ impl Capability {
             Self::WorkspaceRead => "workspaces:read",
             Self::WorkspaceControl => "workspaces:control",
             Self::WorkspaceEvents => "workspaces:events",
+            Self::WorkspaceEnvironmentRead => "workspace-environment:read",
+            Self::WorkspaceEnvironmentWrite => "workspace-environment:write",
             Self::ContainerRead => "containers:read",
             Self::ContainerControl => "containers:control",
             Self::ContainerAttach => "containers:attach",
@@ -117,6 +123,7 @@ impl Capability {
         matches!(
             self,
             Self::WorkspaceControl
+                | Self::WorkspaceEnvironmentWrite
                 | Self::ContainerControl
                 | Self::ContainerAttach
                 | Self::ImageWrite
@@ -146,6 +153,8 @@ impl Capability {
         Self::WorkspaceRead,
         Self::WorkspaceControl,
         Self::WorkspaceEvents,
+        Self::WorkspaceEnvironmentRead,
+        Self::WorkspaceEnvironmentWrite,
         Self::ContainerRead,
         Self::ContainerControl,
         Self::ContainerAttach,

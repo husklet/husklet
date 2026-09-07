@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CATALOGUE = process.env.HUSKLET_CATALOGUE ?? path.resolve(here, '../catalogue.json');
-const DECLARATIONS = process.env.HUSKLET_DECLARATIONS ?? path.resolve(here, '../src/index.d.ts');
+const DECLARATIONS = process.env.HUSKLET_DECLARATIONS ?? path.resolve(here, '../dist/index.d.ts');
 
 /** The value shapes a property accepts, as the TypeScript that describes them. */
 const SHAPES = {

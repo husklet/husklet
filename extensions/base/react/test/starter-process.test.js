@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { KIND, Reader, encode } from '../src/wire.js';
+import { KIND, Reader, encode } from '../dist/wire.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const starter = path.join(root, 'examples/starter');

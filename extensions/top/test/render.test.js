@@ -11,6 +11,7 @@ import {
   Processes,
   Terminals,
   Volumes,
+  Workspace,
   Top,
 } from '../dist/app.js';
 import {
@@ -126,7 +127,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
       shell: '/bin/sh',
       cpus: 2,
       memory_mb: 1024,
-      environment: [],
+      environment: [['TOKEN', 'hunter2']],
       mounts: [],
       docker_socket: false,
       scrollback: 10000,
@@ -174,6 +175,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Start',
     'cross-axis alignment lets the settings width govern native layout',
   );
+  expand(stage, 'Environment variables');
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  toggleLatestSwitch(stage, true);
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
   invoke(stage, 'Extensions');
   await settled();
   await settled();
@@ -207,6 +214,167 @@ test('Top owns workspace settings and extension management in the same tab', asy
     true,
     'the acquisition card uses the same compact geometry',
   );
+});
+
+test('workspace save rotates environment through the explicit revision-bound patch', async () => {
+  const calls = [];
+  const generation = 'a'.repeat(32);
+  const revision = 'b'.repeat(32);
+  const nextRevision = 'c'.repeat(32);
+  const configuration = {
+    generation,
+    configuration_revision: revision,
+    name: 'daily',
+    architecture: 'amd64',
+    image: 'alpine:3.20',
+    storage: null,
+    shell: '/bin/sh',
+    cpus: 2,
+    memory_mb: 1024,
+    environment: [['TOKEN', 'old']],
+    mounts: [],
+    docker_socket: false,
+    scrollback: 10000,
+    vpn: null,
+    execution_lifetime: 'live',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: false,
+    },
+  };
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => configuration,
+    update: async (...args) => {
+      calls.push(['update', ...args]);
+      return { ...args[3], generation, configuration_revision: nextRevision };
+    },
+    patchEnvironment: async (...args) => {
+      calls.push(['patch', ...args]);
+      return { generation, configuration_revision: 'd'.repeat(32), changed: true };
+    },
+  };
+  const stage = host();
+  stage.render(h(Workspace, { api: managed }));
+  await settled();
+  await settled();
+  const environment = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Environment variables',
+    )
+    .map((patch) => patch.SetProp.id)
+    .find((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
+    );
+  assert.notEqual(environment, undefined);
+  await settled();
+  toggleLatestSwitch(stage, true);
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
+  change(stage, 'value', 'new');
+  invoke(stage, 'Save workspace');
+  await settled();
+  await settled();
+  assert.equal(calls[0][0], 'update');
+  assert.deepEqual(calls[0][4].environment, [['TOKEN', 'old']]);
+  assert.deepEqual(calls[1], [
+    'patch',
+    'daily',
+    generation,
+    nextRevision,
+    { set: [['TOKEN', 'new']], remove: [] },
+  ]);
+  assert.equal(
+    placeholderProperty(stage, 'value', 'Secret')?.Flag,
+    true,
+    'a saved revision returns authoritative environment values to concealed state',
+  );
+});
+
+test('workspace patch conflict reloads authority and keeps the partial-save warning visible', async () => {
+  const generation = 'a'.repeat(32);
+  const revision = 'b'.repeat(32);
+  const nextRevision = 'c'.repeat(32);
+  const configuration = {
+    generation,
+    configuration_revision: revision,
+    name: 'daily',
+    architecture: 'amd64',
+    image: 'alpine:3.20',
+    storage: null,
+    shell: '/bin/sh',
+    cpus: 2,
+    memory_mb: 1024,
+    environment: [['TOKEN', 'old']],
+    mounts: [],
+    docker_socket: false,
+    scrollback: 10000,
+    vpn: null,
+    execution_lifetime: 'live',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: false,
+    },
+  };
+  let inspections = 0;
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => {
+      inspections += 1;
+      return configuration;
+    },
+    update: async (...args) => ({ ...args[3], generation, configuration_revision: nextRevision }),
+    patchEnvironment: async () => {
+      throw new Error('workspace changed');
+    },
+  };
+  const stage = host();
+  stage.render(h(Workspace, { api: managed }));
+  await settled();
+  await settled();
+  const environment = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Environment variables',
+    )
+    .map((patch) => patch.SetProp.id)
+    .find((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
+    );
+  assert.notEqual(environment, undefined);
+  change(stage, 'value', 'new');
+  invoke(stage, 'Save workspace');
+  await settled();
+  await settled();
+  await settled();
+  assert.equal(inspections, 2, 'conflict performs an authoritative reload');
+  const labels = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text ?? '');
+  assert.ok(
+    labels.some((label) =>
+      label.includes(
+        'Settings were saved, but environment changes were not. Reloaded the latest workspace and retained your concealed environment edits for review and retry',
+      ),
+    ),
+  );
+  assert.equal(fieldValue(stage, 'value'), 'new');
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  assert.equal(isEnabled(stage, 'Save workspace'), true);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -245,6 +413,60 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     fieldValue(stage, 'registry.example/extension:version'),
     'ghcr.io/husklet/husklet/extension-storybook:latest',
   );
+});
+
+test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
+  let resolveCatalogue;
+  const catalogue = new Promise((resolve) => {
+    resolveCatalogue = resolve;
+  });
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: { list: async () => [], catalogue: () => catalogue },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Loading extension catalogue…'));
+  assert.equal(
+    labelled(stage, 'No additional extensions are available in the built-in catalogue.'),
+    undefined,
+  );
+
+  resolveCatalogue({ entries: [], complete: true });
+  await settled();
+  assert.ok(labelled(stage, 'No additional extensions are available in the built-in catalogue.'));
+});
+
+test('extension discovery can retry a failed catalogue without leaving the page', async () => {
+  let attempts = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          catalogue: async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error('catalogue service is offline');
+            return firstPartyCatalogue();
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Catalogue unavailable: catalogue service is offline'));
+  assert.ok(labelled(stage, 'Retry catalogue'));
+
+  invoke(stage, 'Retry catalogue');
+  await settled();
+  assert.equal(attempts, 2);
+  assert.ok(labelled(stage, 'Review Component playground'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
@@ -497,13 +719,20 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
   assert.ok(labelled(stage, '0/2 allowed'));
+  assert.equal(
+    labelled(stage, 'Allow requested'),
+    undefined,
+    'each capability requires its own consent gesture',
+  );
   assert.ok(
     labelled(stage, 'View containers and processes (containers:read)'),
     'exact authority remains visible beside plain language',
   );
 
-  invoke(stage, 'Allow requested');
+  toggleSwitch(stage, 0, true);
+  toggleSwitch(stage, 1, true);
   assert.ok(labelled(stage, '2/2 allowed'));
+  assert.ok(labelled(stage, 'Clear Husklet access'));
   invoke(stage, 'Install extension');
   await settled();
   await settled();
@@ -519,6 +748,53 @@ test('extension image entry submits from the keyboard and consent explains reque
     ['containers:read', 'terminals:output'],
   ]);
   assert.ok(labelled(stage, 'assistant installed and verified.'));
+});
+
+test('a ready extension review can be abandoned without granting authority', async () => {
+  const calls = [];
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'candidate' }),
+          acquisition: async () => ({
+            job: 'candidate',
+            reference: 'registry.example/assistant:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'assistant',
+              version: '1.0.0',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['containers:read'],
+            },
+            error: null,
+          }),
+          installAndWait: async (...args) => calls.push(args),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/assistant:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  toggleSwitch(stage, 0, true);
+  assert.ok(labelled(stage, 'Cancel review'));
+  invoke(stage, 'Cancel review');
+  await settled();
+  assert.deepEqual(calls, []);
+  assert.equal(
+    fieldValue(stage, 'registry.example/extension:version'),
+    'registry.example/assistant:1',
+    'the reference remains available for a later reinspection',
+  );
 });
 
 test('installed extension removal requires final consent and a failure remains retryable', async () => {
@@ -626,6 +902,30 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   await settled();
   assert.deepEqual(calls, ['disable', 'enable', 'retry']);
   assert.ok(labelled(stage, 'assistant recovered and verified.'));
+});
+
+test('installed extensions translate the host duty stage into a developer-facing state', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'top',
+              image_digest: 'sha256:top',
+              version: '0.4.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'enabled'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -801,8 +1101,19 @@ test('terminal management exposes exact pin state and acts through immutable tab
       resource,
     }),
   );
+  assert.equal(placeholderProperty(stage, 'New tab title', 'Grow')?.Number, 0);
+  assert.ok(
+    placeholderProperty(stage, 'New tab title', 'Width'),
+    'tab creation stays compact instead of consuming the page height',
+  );
   assert.ok(labelled(stage, 'Unpinned'));
   assert.ok(labelled(stage, 's4 · terminal'));
+  assert.equal(ancestorProperty(stage, 's4 · terminal', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(stage, 's4 · terminal', 'Card', 'Justify')?.Align, 'Start');
+  assert.ok(
+    ancestorProperty(stage, 's4 · terminal', 'Card', 'Width'),
+    'terminal inventory cards retain a compact readable bound',
+  );
   invoke(stage, 'Pin Build');
   await settled();
   await settled();
@@ -4124,6 +4435,15 @@ function toggleSwitch(stage, index, value) {
   );
 }
 
+function toggleLatestSwitch(stage, value) {
+  const node = switchNodes(stage).at(-1);
+  assert.notEqual(node, undefined, 'a switch is visible');
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Toggle', node, id: `${node}:Toggle`, value }),
+    'the latest switch toggles',
+  );
+}
+
 function invoke(stage, label) {
   const nodes = stage.frames
     .flatMap((frame) => frame.patches)
@@ -4139,6 +4459,20 @@ function invoke(stage, label) {
       stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
     ),
     `${label} invokes`,
+  );
+}
+
+function expand(stage, label) {
+  const nodes = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id)
+    .reverse();
+  assert.ok(
+    nodes.some((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, value: true }),
+    ),
+    `${label} expands`,
   );
 }
 
@@ -4257,6 +4591,17 @@ function fieldValue(stage, placeholder) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
     .at(-1)?.SetProp.value?.Text;
+}
+
+function placeholderProperty(stage, placeholder, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const node = patches
+    .filter(
+      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+    )
+    .at(-1)?.SetProp.id;
+  return patches.filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop).at(-1)
+    ?.SetProp.value;
 }
 
 function ancestorTags(stage, label) {

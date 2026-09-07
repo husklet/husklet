@@ -15,8 +15,15 @@ RUN test -n "${HUSKLET_REACT_VERSION}"
 RUN node -e "if (process.version !== 'v${NODE_VERSION}') process.exit(1); if (require('/usr/local/lib/node_modules/npm/package.json').version !== '${NPM_VERSION}') process.exit(1)"
 RUN npm --prefix client pkg set "version=${HUSKLET_REACT_VERSION}" \
     && npm --prefix react pkg set "version=${HUSKLET_REACT_VERSION}" \
-    && npm --prefix react pkg set "dependencies.@husklet/client=${HUSKLET_REACT_VERSION}" \
     && sed -i "s/^version = .*/version = \"${HUSKLET_REACT_VERSION}\"/" react/examples/starter/extension.toml
+RUN npm install --prefix client --ignore-scripts --no-audit --no-fund --package-lock=false --no-save \
+      typescript@5.9.2 @types/node@22.20.1 \
+    && npm run build --prefix client \
+    && npm --prefix react pkg set "dependencies.@husklet/client=file:../client" \
+    && npm install --prefix react --ignore-scripts --no-audit --no-fund --package-lock=false \
+    && npm run build --prefix react \
+    && npm --prefix react pkg set "dependencies.@husklet/client=${HUSKLET_REACT_VERSION}" \
+    && rm -rf client/node_modules react/node_modules
 RUN mkdir -p /out/client /out/react \
     && (cd client && npm pack --ignore-scripts --pack-destination /out/client) \
     && (cd react && npm pack --ignore-scripts --pack-destination /out/react)
@@ -43,7 +50,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
        /opt/husklet-sdk/client/husklet-client-*.tgz \
        /opt/husklet-sdk/react/husklet-react-*.tgz \
        react@18.3.1 react-reconciler@0.29.2 \
-       typescript@5.9.2 vite@7.1.4 @types/node@22.20.1 @types/react@18.3.3 \
+       typescript@5.9.2 vite@7.3.6 @types/node@22.20.1 @types/react@18.3.3 \
        eslint@10.10.0 @eslint/js@10.0.1 typescript-eslint@8.69.0 \
        eslint-plugin-react-hooks@7.1.1 eslint-config-prettier@10.1.8 prettier@3.9.6 \
     && mkdir -p node_modules/@husklet node_modules/@types \

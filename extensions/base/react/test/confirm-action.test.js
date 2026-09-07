@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 
-import { CONFIRM_ACTION_TEXT_BYTE_LIMIT, ConfirmAction } from '../src/index.js';
-import { Surface, reconciler } from '../src/reconciler.js';
+import { CONFIRM_ACTION_TEXT_BYTE_LIMIT, ConfirmAction } from '../dist/index.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
 
 const h = React.createElement;
 

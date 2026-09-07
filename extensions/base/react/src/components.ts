@@ -9,13 +9,32 @@ import catalogue from '../catalogue.json' with { type: 'json' };
  * The element type is the tag's wire spelling, so there is no lookup table
  * between what someone writes and what the host receives.
  */
-export const components = Object.fromEntries(catalogue.tags.map((entry) => [entry.name, entry.name]));
+type InternalComponentName =
+  | 'Badge'
+  | 'Button'
+  | 'Column'
+  | 'CommandPalette'
+  | 'EmptyState'
+  | 'InlineMessage'
+  | 'List'
+  | 'ListItemButton'
+  | 'ListSubheader'
+  | 'Progress'
+  | 'Row'
+  | 'Scroll'
+  | 'Search'
+  | 'Spinner'
+  | 'Text';
+
+export const components = Object.fromEntries(
+  catalogue.tags.map((entry) => [entry.name, entry.name]),
+) as Record<string, string> & Record<InternalComponentName, string>;
 
 /** Every tag name, in catalogue order. */
 export const tags = catalogue.tags.map((entry) => entry.name);
 
 /** Whether a tag accepts child nodes. Leaf tags reject `Insert` on the host. */
-export function acceptsChildren(tag) {
+export function acceptsChildren(tag: string): boolean {
   return catalogue.tags.some((entry) => entry.name === tag && entry.acceptsChildren);
 }
 

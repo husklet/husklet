@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use hl_extension::port::{Entry, FileInventory, FileRange, HostError, WorkspaceFiles};
+use hl_extension::port::{DirectoryPage, Entry, FileInventory, FileRange, HostError, WorkspaceFiles};
 use hl_extension::RelativePath;
 
 /// The workspace file port, rooted at one directory.
@@ -258,6 +258,67 @@ impl WorkspaceFiles for WorkspaceDirectory {
         }
         entries.sort_by(|first, second| first.path.cmp(&second.path));
         Ok(entries)
+    }
+
+    fn list_page(
+        &self,
+        path: &RelativePath,
+        after: Option<&RelativePath>,
+        observed: Option<&str>,
+        limit: usize,
+    ) -> Result<DirectoryPage, HostError> {
+        let directory = self.directory(path)?;
+        let identity = file_identity(&directory.metadata().map_err(|error| absence(path, &error))?);
+        if observed.is_some_and(|value| value != identity) {
+            return Err(HostError::Conflict(format!("{path}: directory changed between pages")));
+        }
+        let reading = rustix::fs::Dir::read_from(&directory)
+            .map_err(io::Error::from)
+            .map_err(|error| absence(path, &error))?;
+        let mut entries = Vec::with_capacity(limit + 1);
+        for entry in reading {
+            let entry = entry.map_err(io::Error::from).map_err(|error| absence(path, &error))?;
+            if matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                continue;
+            }
+            let described = described_at(path, &directory, &entry)?;
+            if after.is_some_and(|cursor| described.path <= *cursor) {
+                continue;
+            }
+            let at = entries.partition_point(|candidate: &Entry| candidate.path < described.path);
+            entries.insert(at, described);
+            if entries.len() > limit + 1 {
+                entries.pop();
+            }
+        }
+        let mut more = entries.len() > limit;
+        entries.truncate(limit);
+        let mut bytes = 0usize;
+        let fits = entries
+            .iter()
+            .take_while(|entry| {
+                bytes = bytes.saturating_add(entry.path.as_str().len());
+                bytes <= LIST_PATH_BYTES_LIMIT
+            })
+            .count();
+        if fits == 0 && !entries.is_empty() {
+            return Err(HostError::Failed(format!(
+                "{path}: first directory entry exceeds the page byte limit"
+            )));
+        }
+        more |= fits < entries.len();
+        entries.truncate(fits);
+        let next = entries.last().map(|entry| entry.path.clone());
+        let finished = file_identity(&directory.metadata().map_err(|error| absence(path, &error))?);
+        if finished != identity {
+            return Err(HostError::Conflict(format!("{path}: directory changed while listing")));
+        }
+        Ok(DirectoryPage {
+            entries,
+            identity,
+            next,
+            more,
+        })
     }
 
     /// # Errors
@@ -1488,6 +1549,24 @@ mod tests {
         let files = WorkspaceDirectory::new(&root).expect("root");
 
         assert!(matches!(files.list(&path("listing")), Err(HostError::Failed(_))));
+        let first = files
+            .list_page(&path("listing"), None, None, 3)
+            .expect("first bounded page");
+        assert_eq!(first.entries.len(), 3);
+        assert!(first.more);
+        std::fs::write(listing.join("inserted-after-first-page"), []).expect("concurrent insert");
+        assert!(matches!(
+            files.list_page(&path("listing"), first.next.as_ref(), Some(&first.identity), 3),
+            Err(HostError::Conflict(_))
+        ));
+        let refreshed = files
+            .list_page(&path("listing"), None, None, 3)
+            .expect("restart after mutation");
+        let second = files
+            .list_page(&path("listing"), refreshed.next.as_ref(), Some(&refreshed.identity), 3)
+            .expect("following bounded page");
+        assert_eq!(second.entries.len(), 3);
+        assert!(second.entries[0].path > refreshed.entries[2].path);
     }
 
     #[test]

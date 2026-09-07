@@ -8,6 +8,30 @@ import Reconciler from 'react-reconciler';
 import { DefaultEventPriority } from 'react-reconciler/constants.js';
 import catalogue from '../catalogue.json' with { type: 'json' };
 import { ROOT, children, partition, same } from './protocol.js';
+type Patch = Record<string, unknown>;
+type Frame = { sequence: number; patches: Patch[] };
+
+type Handler = (...arguments_: unknown[]) => unknown;
+type SplitProps = ReturnType<typeof partition>;
+type HostProps = Record<string, unknown>;
+interface HostInstance {
+  id: number;
+  tag: string;
+  detached: boolean;
+  parent: number | null;
+  surface: Surface;
+  props: SplitProps;
+  pending?: SplitProps;
+}
+interface HostEvent {
+  id: string;
+  [key: string]: unknown;
+}
+interface SurfaceSeed {
+  sequence?: number;
+  next?: number;
+  patches?: Patch[];
+}
 
 const TAGS = new Map(catalogue.tags.map((entry) => [entry.name, entry]));
 
@@ -20,11 +44,14 @@ const TAGS = new Map(catalogue.tags.map((entry) => [entry.name, entry]));
 export class Surface {
   #next = 1;
   #sequence = 0;
-  #queue = [];
-  #handlers = new Map();
-  #send;
+  #queue: Patch[] = [];
+  #handlers = new Map<string, Handler>();
+  #send: (frame: Frame) => void;
 
-  constructor(send, { sequence = 0, next = 1, patches = [] } = {}) {
+  constructor(
+    send: (frame: Frame) => void,
+    { sequence = 0, next = 1, patches = [] }: SurfaceSeed = {},
+  ) {
     this.#send = send;
     this.#sequence = sequence;
     this.#next = next;
@@ -42,21 +69,21 @@ export class Surface {
     return this.#next++;
   }
 
-  push(patch) {
+  push(patch: Patch): void {
     this.#queue.push(patch);
   }
 
   /** Binds a callback to the identity the host will echo back. */
-  bind(id, trigger, callback) {
+  bind(id: number, trigger: string, callback: Handler): void {
     this.#handlers.set(`${id}:${trigger}`, callback);
   }
 
-  unbind(id, trigger) {
+  unbind(id: number, trigger: string): void {
     this.#handlers.delete(`${id}:${trigger}`);
   }
 
   /** Runs whatever the host reports against an identity this surface issued. */
-  dispatch(event) {
+  dispatch(event: HostEvent): boolean {
     const callback = this.#handlers.get(event.id);
     if (!callback) return false;
     callback(event);
@@ -73,7 +100,7 @@ export class Surface {
   }
 }
 
-function describe(tag) {
+function describe(tag: string) {
   const entry = TAGS.get(tag);
   if (entry === undefined) {
     throw new Error(`<${tag}> is not a component; import the ones that exist from @husklet/react`);
@@ -82,17 +109,21 @@ function describe(tag) {
 }
 
 /** Where a node actually attaches: a detached surface always sits at the root. */
-function anchor(parent, child) {
+function anchor(parent: HostInstance, child: HostInstance): number {
   return child.detached ? ROOT : parent.id;
 }
 
-function setProps(surface, instance, values) {
+function setProps(surface: Surface, instance: HostInstance, values: SplitProps['values']): void {
   for (const [prop, value] of values) {
     surface.push({ SetProp: { id: instance.id, prop, value } });
   }
 }
 
-function setHandlers(surface, instance, handlers) {
+function setHandlers(
+  surface: Surface,
+  instance: HostInstance,
+  handlers: SplitProps['handlers'],
+): void {
   for (const [trigger, callback] of handlers) {
     const id = `${instance.id}:${trigger}`;
     surface.push({ SetHandler: { id: instance.id, handler: { trigger, id } } });
@@ -107,8 +138,13 @@ function setHandlers(surface, instance, handlers) {
  * with a fresh closure rebinds locally and sends nothing: the common case of a
  * component re-rendering unchanged costs an empty frame, which is no frame.
  */
-function difference(surface, instance, before, after) {
-  const patches = [];
+function difference(
+  surface: Surface,
+  instance: HostInstance,
+  before: SplitProps,
+  after: SplitProps,
+): Patch[] {
+  const patches: Patch[] = [];
   for (const [prop, value] of after.values) {
     if (before.values.has(prop) && same(before.values.get(prop), value)) continue;
     patches.push({ SetProp: { id: instance.id, prop, value } });
@@ -119,7 +155,9 @@ function difference(surface, instance, before, after) {
   for (const [trigger, callback] of after.handlers) {
     surface.bind(instance.id, trigger, callback);
     if (before.handlers.has(trigger)) continue;
-    patches.push({ SetHandler: { id: instance.id, handler: { trigger, id: `${instance.id}:${trigger}` } } });
+    patches.push({
+      SetHandler: { id: instance.id, handler: { trigger, id: `${instance.id}:${trigger}` } },
+    });
   }
   for (const trigger of before.handlers.keys()) {
     if (after.handlers.has(trigger)) continue;
@@ -141,8 +179,8 @@ const config = {
   cancelTimeout: clearTimeout,
 
   getRootHostContext: () => null,
-  getChildHostContext: (parent) => parent,
-  getPublicInstance: (instance) => instance,
+  getChildHostContext: (parent: null) => parent,
+  getPublicInstance: (instance: HostInstance) => instance,
   getCurrentEventPriority: () => DefaultEventPriority,
   getInstanceFromNode: () => null,
   getInstanceFromScope: () => null,
@@ -152,18 +190,24 @@ const config = {
   preparePortalMount() {},
   detachDeletedInstance() {},
 
-  createInstance(type, props, surface) {
+  createInstance(type: string, props: HostProps, surface: Surface): HostInstance {
     const entry = describe(type);
-    const instance = { id: surface.allocate(), tag: type, detached: entry.detached, parent: null, surface };
-    surface.push({ Create: { id: instance.id, tag: type } });
     const split = partition(type, props);
-    instance.props = split;
+    const instance = {
+      id: surface.allocate(),
+      tag: type,
+      detached: entry.detached,
+      parent: null,
+      surface,
+      props: split,
+    };
+    surface.push({ Create: { id: instance.id, tag: type } });
     setProps(surface, instance, split.values);
     setHandlers(surface, instance, split.handlers);
     return instance;
   },
 
-  createTextInstance(text, surface, context, fiber) {
+  createTextInstance(text: string, surface: Surface, context: null, fiber: unknown): never {
     void surface;
     void context;
     void fiber;
@@ -174,58 +218,65 @@ const config = {
 
   // Text children are the node's label, not a child node, so React must not
   // reconcile them as one.
-  shouldSetTextContent: (type, props) => children(props) !== null,
+  shouldSetTextContent: (_type: string, props: HostProps) => children(props) !== null,
   resetTextContent() {},
   commitTextUpdate() {},
 
-  appendInitialChild(parent, child) {
-    parent.surface.push({ Insert: { parent: anchor(parent, child), child: child.id, before: null } });
+  appendInitialChild(parent: HostInstance, child: HostInstance): void {
+    parent.surface.push({
+      Insert: { parent: anchor(parent, child), child: child.id, before: null },
+    });
     child.parent = anchor(parent, child);
   },
 
   finalizeInitialChildren: () => false,
 
-  appendChild(parent, child) {
+  appendChild(parent: HostInstance, child: HostInstance): void {
     attach(parent.surface, anchor(parent, child), child, null);
   },
 
-  appendChildToContainer(surface, child) {
+  appendChildToContainer(surface: Surface, child: HostInstance): void {
     attach(surface, ROOT, child, null);
   },
 
-  insertBefore(parent, child, before) {
+  insertBefore(parent: HostInstance, child: HostInstance, before: HostInstance): void {
     attach(parent.surface, anchor(parent, child), child, before.id);
   },
 
-  insertInContainerBefore(surface, child, before) {
+  insertInContainerBefore(surface: Surface, child: HostInstance, before: HostInstance): void {
     attach(surface, ROOT, child, before.id);
   },
 
-  removeChild(parent, child) {
+  removeChild(parent: HostInstance, child: HostInstance): void {
     parent.surface.push({ Remove: { id: child.id } });
   },
 
-  removeChildFromContainer(surface, child) {
+  removeChildFromContainer(surface: Surface, child: HostInstance): void {
     surface.push({ Remove: { id: child.id } });
   },
 
   clearContainer() {},
 
-  prepareUpdate(instance, type, before, after) {
+  prepareUpdate(
+    instance: HostInstance,
+    type: string,
+    _before: HostProps,
+    after: HostProps,
+  ): Patch[] | null {
     const split = partition(type, after);
     const patches = difference(instance.surface, instance, instance.props, split);
     instance.pending = split;
     return patches.length === 0 ? null : patches;
   },
 
-  commitUpdate(instance, patches) {
+  commitUpdate(instance: HostInstance, patches: Patch[]): void {
     instance.props = instance.pending ?? instance.props;
     for (const patch of patches) instance.surface.push(patch);
   },
 
   prepareForCommit: () => null,
 
-  resetAfterCommit(surface) {
+  resetAfterCommit(surface: Surface): void {
     surface.flush();
   },
 };
@@ -236,7 +287,12 @@ const config = {
  * React calls the same hook to place a new child and to move an existing one;
  * only the renderer knows which, because only it knows where the node is now.
  */
-function attach(surface, parent, child, before) {
+function attach(
+  surface: Surface,
+  parent: number,
+  child: HostInstance,
+  before: number | null,
+): void {
   const patch = { parent, child: child.id, before };
   surface.push(child.parent === parent ? { Move: patch } : { Insert: patch });
   child.parent = parent;

@@ -45,10 +45,13 @@ fn install_defaults_with(
             ));
         }
         roster
-            .register(
+            .register_resource_scoped(
                 &candidate.manifest,
                 &candidate.digest,
                 &candidate.manifest.capabilities,
+                &candidate.manifest.containers,
+                &candidate.manifest.filesystem,
+                &candidate.manifest.workspace_environment,
                 moment(),
             )
             .map_err(|error| error.to_string())?;
@@ -104,6 +107,8 @@ mod tests {
                     protocol: hl_extension::PROTOCOL,
                     capabilities: Grant::new([
                         Capability::WorkspaceRead,
+                        Capability::WorkspaceEnvironmentRead,
+                        Capability::WorkspaceEnvironmentWrite,
                         Capability::ExtensionRead,
                         Capability::Interface,
                     ]),
@@ -116,6 +121,10 @@ mod tests {
                     pane_providers: Vec::new(),
                     resources: Resources::default(),
                     filesystem: hl_extension::FilesystemGrant::default(),
+                    workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
+                        read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+                        write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+                    },
                 },
             })
         })
@@ -127,6 +136,14 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name.as_str(), "top");
         assert_eq!(entries[0].image_digest, "sha256:top");
+        assert_eq!(
+            entries[0].workspace_environment.read,
+            vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }]
+        );
+        assert_eq!(
+            entries[0].workspace_environment.write,
+            vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }]
+        );
         assert_eq!(entries[0].stage, Stage::Duty);
         assert!(entries[0].granted.holds(Capability::ExtensionRead));
         assert!(entries[0].granted.holds(Capability::WorkspaceRead));

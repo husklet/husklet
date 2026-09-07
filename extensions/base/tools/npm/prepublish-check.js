@@ -28,6 +28,36 @@ assert.equal(react.dependencies['@husklet/client'], expected);
 assert.equal(clientStarter.dependencies['@husklet/client'], expected);
 assert.equal(starter.dependencies['@husklet/client'], expected);
 assert.equal(starter.dependencies['@husklet/react'], expected);
+
+const directoryContents = (directory) => {
+  const files = new Map();
+  const visit = (current, prefix = '') => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const relative = path.join(prefix, entry.name);
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(absolute, relative);
+      else if (entry.isFile()) files.set(relative, fs.readFileSync(absolute));
+    }
+  };
+  visit(directory);
+  return files;
+};
+
+// The client dist is committed because the base image packs with lifecycle
+// scripts disabled. Rebuilding must reproduce it exactly rather than silently
+// repairing a stale release artifact. React dist is intentionally untracked,
+// so build it before the same script-disabled pack.
+const clientDist = path.join(packageRoot('client'), 'dist');
+assert(fs.existsSync(clientDist), 'the committed client dist is missing');
+const expectedClientDist = directoryContents(clientDist);
+execFileSync('npm', ['run', 'build', '--prefix', packageRoot('client')], { stdio: 'pipe' });
+assert.deepEqual(
+  directoryContents(clientDist),
+  expectedClientDist,
+  'the committed client dist is stale; run npm build in extensions/base/client',
+);
+execFileSync('npm', ['run', 'build', '--prefix', packageRoot('react')], { stdio: 'pipe' });
+
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-pack-'));
 try {
   const pack = (name) => {

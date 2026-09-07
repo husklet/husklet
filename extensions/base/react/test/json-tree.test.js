@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { JsonTree, ObjectInspector, inspectJson, visibleJsonRows } from '../src/json-tree.js';
-import { Surface, reconciler } from '../src/reconciler.js';
+import { JsonTree, ObjectInspector, inspectJson, visibleJsonRows } from '../dist/json-tree.js';
+import { Surface, reconciler } from '../dist/reconciler.js';
 
 function host() {
   const frames = [];

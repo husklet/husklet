@@ -39,6 +39,8 @@ pub struct Record {
     /// Exact per-verb workspace path consent paired with this image digest.
     #[serde(default)]
     pub filesystem: FilesystemGrant,
+    #[serde(default)]
+    pub workspace_environment: crate::WorkspaceEnvironmentGrant,
     /// Whether the sidecar should be running.
     pub enabled: bool,
     /// When the record was first written, in milliseconds since the epoch,
@@ -282,6 +284,7 @@ impl Installation {
             consented,
             consented_containers,
             &FilesystemGrant::default(),
+            &crate::WorkspaceEnvironmentGrant::default(),
             at,
         )
     }
@@ -293,6 +296,7 @@ impl Installation {
         consented: &Grant,
         consented_containers: &ContainerGrant,
         consented_filesystem: &FilesystemGrant,
+        consented_environment: &crate::WorkspaceEnvironmentGrant,
         at: i64,
     ) -> Result<&Record, Objection> {
         if digest.is_empty() {
@@ -304,6 +308,7 @@ impl Installation {
         let granted = manifest.capabilities.intersect(consented);
         let containers = manifest.containers.intersect(consented_containers);
         let filesystem = manifest.filesystem.intersect(consented_filesystem);
+        let workspace_environment = manifest.workspace_environment.intersect(consented_environment);
         // The name is vacant, checked above, so this always inserts.
         let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| Entry {
             record: Record {
@@ -313,6 +318,7 @@ impl Installation {
                 granted,
                 containers,
                 filesystem,
+                workspace_environment,
                 enabled: false,
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
@@ -388,6 +394,7 @@ impl Installation {
             consented,
             consented_containers,
             &FilesystemGrant::default(),
+            &crate::WorkspaceEnvironmentGrant::default(),
             at,
             replace,
         )
@@ -399,6 +406,7 @@ impl Installation {
         consented: &Grant,
         consented_containers: &ContainerGrant,
         consented_filesystem: &FilesystemGrant,
+        consented_environment: &crate::WorkspaceEnvironmentGrant,
         at: i64,
         replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
     ) -> Result<&Record, UpdateFailure<E>> {
@@ -426,6 +434,7 @@ impl Installation {
             granted,
             containers: update.manifest.containers.intersect(consented_containers),
             filesystem: update.manifest.filesystem.intersect(consented_filesystem),
+            workspace_environment: update.manifest.workspace_environment.intersect(consented_environment),
             enabled: entry.record.enabled,
             installed_at: at,
             pane_providers: update.manifest.pane_providers.clone(),
@@ -643,6 +652,7 @@ mod tests {
             pane_providers: Vec::new(),
             resources: crate::manifest::Resources::default(),
             filesystem: crate::FilesystemGrant::default(),
+            workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
         }
     }
 

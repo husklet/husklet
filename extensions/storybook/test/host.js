@@ -10,10 +10,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 /** The React package's own directory, wherever npm put it. */
-export const PACKAGE = require.resolve('@husklet/react').replace(/src[/\\]index\.js$/, '');
+export const PACKAGE = require.resolve('@husklet/react').replace(/dist[/\\]index\.js$/, '');
 
-const { Surface, reconciler } = await import(new URL('src/reconciler.js', `file://${PACKAGE}`));
-export const { value, PROPS } = await import(new URL('src/protocol.js', `file://${PACKAGE}`));
+const { Surface, reconciler } = await import(new URL('dist/reconciler.js', `file://${PACKAGE}`));
+export const { value, PROPS } = await import(new URL('dist/protocol.js', `file://${PACKAGE}`));
 
 /** A surface that collects frames, exactly as the React package's own tests do. */
 export function host() {

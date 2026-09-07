@@ -32,6 +32,16 @@
     {
       "executes": false,
       "mutates": false,
+      "wire": "workspace-environment:read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "workspace-environment:write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
       "wire": "containers:read"
     },
     {
@@ -217,6 +227,18 @@
         },
         {
           "name": "workspaces:events",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace-environment:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspace-environment:write",
           "payload": {
             "kind": "unit"
           }
@@ -974,6 +996,48 @@
       "kind": "struct",
       "serde": {}
     },
+    "DirectoryPage": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
+          }
+        },
+        {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "next",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "Division": {
       "kind": "enum",
       "serde": {
@@ -1500,6 +1564,14 @@
           "schema": {
             "kind": "ref",
             "name": "FilesystemGrant"
+          }
+        },
+        {
+          "name": "requested_workspace_environment",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "WorkspaceEnvironmentGrant"
           }
         },
         {
@@ -5908,6 +5980,13 @@
           }
         },
         {
+          "name": "configuration_revision",
+          "optional": true,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "name",
           "optional": false,
           "schema": {
@@ -5995,6 +6074,13 @@
           }
         },
         {
+          "name": "environment_redacted",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "mounts",
           "optional": false,
           "schema": {
@@ -6054,6 +6140,142 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "WorkspaceEnvironmentGrant": {
+      "fields": [
+        {
+          "name": "read",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEnvironmentSelector"
+            }
+          }
+        },
+        {
+          "name": "write",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEnvironmentSelector"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
+    "WorkspaceEnvironmentPatch": {
+      "fields": [
+        {
+          "name": "set",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "string"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        },
+        {
+          "name": "remove",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceEnvironmentPatchResult": {
+      "fields": [
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "configuration_revision",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "changed",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "WorkspaceEnvironmentSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Exact",
+          "payload": {
+            "fields": [
+              {
+                "name": "workspace",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "WorkspaceEvent": {
       "kind": "enum",
@@ -6615,11 +6837,11 @@
     },
     {
       "capability": "workspaces:control",
-      "request": "workspace_adopt"
+      "request": "workspace_update"
     },
     {
-      "capability": "workspaces:control",
-      "request": "workspace_update"
+      "capability": "workspace-environment:write",
+      "request": "workspace_environment_patch"
     },
     {
       "capability": "workspaces:control",
@@ -6955,6 +7177,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_list_page"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_read"
     },
     {
@@ -7053,11 +7279,11 @@
     },
     {
       "reply": "workspace_configuration",
-      "request": "workspace_adopt"
+      "request": "workspace_update"
     },
     {
-      "reply": "workspace_configuration",
-      "request": "workspace_update"
+      "reply": "workspace_environment_patch",
+      "request": "workspace_environment_patch"
     },
     {
       "reply": "done",
@@ -7392,6 +7618,10 @@
       "request": "filesystem_list"
     },
     {
+      "reply": "directory_page",
+      "request": "filesystem_list_page"
+    },
+    {
       "reply": "contents",
       "request": "filesystem_read"
     },
@@ -7589,6 +7819,16 @@
             "of": {
               "kind": "ref",
               "name": "WorkspaceConfiguration"
+            }
+          }
+        },
+        {
+          "name": "workspace_environment_patch",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "WorkspaceEnvironmentPatchResult"
             }
           }
         },
@@ -7898,6 +8138,16 @@
           }
         },
         {
+          "name": "directory_page",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "DirectoryPage"
+            }
+          }
+        },
+        {
           "name": "entry",
           "payload": {
             "kind": "newtype",
@@ -8003,22 +8253,6 @@
           }
         },
         {
-          "name": "workspace_adopt",
-          "payload": {
-            "fields": [
-              {
-                "name": "configuration",
-                "optional": false,
-                "schema": {
-                  "kind": "ref",
-                  "name": "WorkspaceConfiguration"
-                }
-              }
-            ],
-            "kind": "struct"
-          }
-        },
-        {
           "name": "workspace_update",
           "payload": {
             "fields": [
@@ -8037,11 +8271,55 @@
                 }
               },
               {
+                "name": "configuration_revision",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "configuration",
                 "optional": false,
                 "schema": {
                   "kind": "ref",
                   "name": "WorkspaceConfiguration"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "workspace_environment_patch",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "configuration_revision",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "patch",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceEnvironmentPatch"
                 }
               }
             ],
@@ -8354,6 +8632,14 @@
                   "kind": "ref",
                   "name": "FilesystemGrant"
                 }
+              },
+              {
+                "name": "workspace_environment",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceEnvironmentGrant"
+                }
               }
             ],
             "kind": "struct"
@@ -8410,6 +8696,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "FilesystemGrant"
+                }
+              },
+              {
+                "name": "workspace_environment",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "WorkspaceEnvironmentGrant"
                 }
               }
             ],
@@ -9977,6 +10271,54 @@
           }
         },
         {
+          "name": "filesystem_list_page",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "after",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "RelativePath"
+                  }
+                }
+              },
+              {
+                "name": "observed",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_read",
           "payload": {
             "fields": [
@@ -11466,7 +11808,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:4743cd6f407e0187",
+  "source_fingerprint": "fnv1a64:d7c696fb92989470",
   "specification_version": 1,
   "topics": [
     {

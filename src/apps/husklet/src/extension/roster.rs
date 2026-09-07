@@ -85,6 +85,7 @@ pub struct Entry {
     pub version: String,
     /// Exactly what the person agreed to.
     pub granted: Grant,
+    pub workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     /// Where the extension stands under the lifecycle policy.
     pub stage: Stage,
     /// Named views this installed image offers to terminal panes.
@@ -158,6 +159,7 @@ impl<S: Storage> Roster<S> {
                 image_digest: record.image_digest.clone(),
                 version: record.version.clone(),
                 granted: record.granted.clone(),
+                workspace_environment: record.workspace_environment.clone(),
                 stage: self.installation.stage(&record.name),
                 pane_providers: record.pane_providers.clone(),
             })
@@ -203,6 +205,7 @@ impl<S: Storage> Roster<S> {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
         )
     }
@@ -214,12 +217,21 @@ impl<S: Storage> Roster<S> {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
     ) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         let record = self
             .installation
-            .install_resource_scoped(manifest, digest, consented, containers, filesystem, at)?
+            .install_resource_scoped(
+                manifest,
+                digest,
+                consented,
+                containers,
+                filesystem,
+                workspace_environment,
+                at,
+            )?
             .clone();
         if let Err(fault) = self.records.save(&record) {
             self.installation = previous;
@@ -266,6 +278,7 @@ impl<S: Storage> Roster<S> {
             consented,
             containers,
             &hl_extension::FilesystemGrant::default(),
+            &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
         )
     }
@@ -276,13 +289,20 @@ impl<S: Storage> Roster<S> {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
+        workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
     ) -> Result<(), UpdateRefusal> {
         let records = &self.records;
         self.installation
-            .commit_update_resource_scoped(update, consented, containers, filesystem, at, |_, next| {
-                records.save(next)
-            })
+            .commit_update_resource_scoped(
+                update,
+                consented,
+                containers,
+                filesystem,
+                workspace_environment,
+                at,
+                |_, next| records.save(next),
+            )
             .map(|_| ())
             .map_err(|failure| match failure {
                 UpdateFailure::Refused(objection) => UpdateRefusal::Policy(objection),
@@ -440,6 +460,7 @@ pub fn described(record: &Record) -> Manifest {
         pane_providers: record.pane_providers.clone(),
         resources: hl_extension::Resources::default(),
         filesystem: hl_extension::FilesystemGrant::default(),
+        workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
     });
     // These duplicated fields are the durable consent boundary. A nested
     // declaration can describe launch and presentation, never widen authority.
@@ -448,17 +469,21 @@ pub fn described(record: &Record) -> Manifest {
     manifest.protocol = hl_extension::PROTOCOL;
     manifest.capabilities.clone_from(&record.granted);
     manifest.containers.clone_from(&record.containers);
+    manifest.filesystem.clone_from(&record.filesystem);
+    manifest.workspace_environment.clone_from(&record.workspace_environment);
     manifest.pane_providers.clone_from(&record.pane_providers);
     manifest
 }
 
 /// Puts one stored record under the policy, in the state it was stored in.
 fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objection> {
-    installation.install_scoped(
+    installation.install_resource_scoped(
         &described(record),
         &record.image_digest,
         &record.granted,
         &record.containers,
+        &record.filesystem,
+        &record.workspace_environment,
         record.installed_at,
     )?;
     if record.enabled {
@@ -528,6 +553,7 @@ mod tests {
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }
     }
 
@@ -555,6 +581,38 @@ mod tests {
             "only what was consented to is recorded"
         );
         assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
+    }
+
+    #[test]
+    fn exact_workspace_environment_consent_survives_reopen() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut asked = manifest("sample", &[Capability::WorkspaceEnvironmentRead]);
+        let exact = hl_extension::WorkspaceEnvironmentGrant {
+            read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                workspace: "dev".into(),
+                name: "PGPASSWORD".into(),
+            }],
+            write: Vec::new(),
+        };
+        asked.workspace_environment = exact.clone();
+        let mut roster = opened(temporary.path());
+        roster
+            .register_resource_scoped(
+                &asked,
+                "sha256:exact",
+                &asked.capabilities,
+                &asked.containers,
+                &asked.filesystem,
+                &exact,
+                7,
+            )
+            .unwrap();
+        drop(roster);
+
+        let reopened = opened(temporary.path());
+        let record = reopened.installation.records().next().unwrap();
+        assert_eq!(record.workspace_environment, exact);
+        assert_eq!(described(record).workspace_environment, exact);
     }
 
     #[test]

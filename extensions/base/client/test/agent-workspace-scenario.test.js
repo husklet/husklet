@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
+import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const example = fileURLToPath(new URL('../examples/agent-workspace-control.mjs', import.meta.url));
 
@@ -17,6 +17,7 @@ test('packaged external agent arms every workspace lifecycle mutation over Unix 
   let revision = 40; let subscriptions = 0;
   const created = {
     name, image: 'alpine:3.20', architecture: 'amd64', generation,
+    configuration_revision: 'fedcba9876543210fedcba9876543210',
     storage: null, shell: null, cpus: null, memory_mb: null, environment: [], mounts: [], docker_socket: false,
     scrollback: null, vpn: null, execution_lifetime: 'persisted',
     terminal: { font_family: null, font_size: null, foreground: null, background: null, cursor_shape: null, cursor_blink: null },

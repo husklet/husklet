@@ -17,14 +17,35 @@ export {
 import { semanticXml } from './semantic.js';
 export { semanticXml };
 import { Session } from './session.js';
+import type {
+  CallOptions,
+  ContainerSummary,
+  ConnectOptions,
+  ExecutionSummary,
+  ExtensionSummary,
+  Session as ClientSession,
+  WorkspaceApi,
+  WireReply,
+} from './api.js';
 import {
   PROTOCOL_REPLIES,
   PROTOCOL_REQUEST_CAPABILITIES,
   PROTOCOL_TOPICS,
 } from './generated-protocol.js';
 
+type ReplyPayload<K extends WireReply['reply']> =
+  Extract<WireReply, { reply: K }> extends {
+    with: infer Payload;
+  }
+    ? Payload
+    : undefined;
+
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
+  readonly executionId;
+  readonly phase;
+  readonly execution;
+
   constructor(executionId, phase, cause, execution = undefined) {
     super(
       `execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -39,6 +60,9 @@ export class ExecutionOperationError extends Error {
 
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export class TerminalOperationError extends Error {
+  readonly operation;
+  readonly result;
+
   constructor(operation, result, cause) {
     super(
       `terminal ${operation} observation failed: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -74,6 +98,16 @@ function immutableIdentity(id, widths, noun) {
   throw new TypeError(
     `${noun} operation requires the complete immutable ID returned by inspection`,
   );
+}
+
+function exactFileRange(offset: number, limit: number): [number, number] {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new RangeError('filesystem range offset must be a nonnegative safe integer');
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 65_536) {
+    throw new RangeError('filesystem range limit must be an integer between 1 and 65536');
+  }
+  return [offset, limit];
 }
 
 function exactContainerName(name) {
@@ -120,6 +154,7 @@ function exactPaneTitle(title) {
     typeof title === 'string' &&
     title.trim().length > 0 &&
     new TextEncoder().encode(title).byteLength <= 256 &&
+    // eslint-disable-next-line no-control-regex
     !/[\u0000-\u001f\u007f-\u009f]/u.test(title)
   )
     return title;
@@ -209,15 +244,29 @@ function exactExecEnvironment(environment = []) {
   let aggregate = 0;
   const names = new Set();
   for (const pair of environment) {
-    if (!Array.isArray(pair) || pair.length !== 2 || pair.some((value) => typeof value !== 'string')) {
+    if (
+      !Array.isArray(pair) ||
+      pair.length !== 2 ||
+      pair.some((value) => typeof value !== 'string')
+    ) {
       throw new TypeError('environment entries must be [name, value] string pairs');
     }
     const [name, value] = pair;
     const nameBytes = encoder.encode(name).byteLength;
     const valueBytes = encoder.encode(value).byteLength;
     aggregate += nameBytes + valueBytes;
-    if (!name || nameBytes > 256 || name.includes('=') || name.includes('\0') || valueBytes > 8192 || value.includes('\0') || names.has(name)) {
-      throw new TypeError('environment names must be unique, nonempty, NUL-free, exclude =, and fit 256 bytes; values must be NUL-free and fit 8192 bytes');
+    if (
+      !name ||
+      nameBytes > 256 ||
+      name.includes('=') ||
+      name.includes('\0') ||
+      valueBytes > 8192 ||
+      value.includes('\0') ||
+      names.has(name)
+    ) {
+      throw new TypeError(
+        'environment names must be unique, nonempty, NUL-free, exclude =, and fit 256 bytes; values must be NUL-free and fit 8192 bytes',
+      );
     }
     names.add(name);
   }
@@ -226,8 +275,15 @@ function exactExecEnvironment(environment = []) {
 }
 
 function containerMutation(reference, generation) {
-  if (typeof reference !== 'string' || reference.length === 0 || reference.length > 128 || reference.includes('\0')) {
-    throw new TypeError('container mutation requires a nonempty NUL-free reference of at most 128 characters');
+  if (
+    typeof reference !== 'string' ||
+    reference.length === 0 ||
+    reference.length > 128 ||
+    reference.includes('\0')
+  ) {
+    throw new TypeError(
+      'container mutation requires a nonempty NUL-free reference of at most 128 characters',
+    );
   }
   if (!Number.isSafeInteger(generation) || generation < 0) {
     throw new TypeError('container mutation requires an observed nonnegative safe generation');
@@ -235,7 +291,7 @@ function containerMutation(reference, generation) {
   return { id: reference, generation };
 }
 
-function exactPaneInput(input) {
+function exactPaneInput(input: string | Iterable<number>) {
   if (typeof input === 'string') {
     const bytes = new TextEncoder().encode(input);
     if (bytes.byteLength > 64 * 1024)
@@ -271,7 +327,7 @@ function immutableDigest(value, noun) {
   return value;
 }
 
-export async function connect(options = {}) {
+export async function connect(options: ConnectOptions = {}) {
   return Session.connect(options.path, options);
 }
 
@@ -326,7 +382,7 @@ export async function bootstrapSurface(
   return Object.freeze({ slot, sequence: 1, nextNode: 2, bootstrapNode: node });
 }
 
-export function workspace(session, { signal } = {}) {
+export function workspace(session: ClientSession, { signal }: CallOptions = {}): WorkspaceApi {
   const hostSession = session;
   if (signal !== undefined) {
     session = new Proxy(hostSession, {
@@ -337,10 +393,10 @@ export function workspace(session, { signal } = {}) {
       },
     });
   }
-  const expect = (reply, kind) => {
+  const expect = <K extends WireReply['reply']>(reply: WireReply, kind: K): ReplyPayload<K> => {
     if (reply?.reply !== kind)
       throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected ${kind}`);
-    return reply.with;
+    return ('with' in reply ? reply.with : undefined) as ReplyPayload<K>;
   };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
   const subscription = (call, topic) => {
@@ -391,26 +447,74 @@ export function workspace(session, { signal } = {}) {
     await operation;
   };
   const api = {
-    get granted() { return session.grantedCapabilities ?? session.granted; },
-    get grantedCapabilities() { return session.grantedCapabilities ?? session.granted; },
+    get granted() {
+      return session.grantedCapabilities ?? session.granted;
+    },
+    get grantedCapabilities() {
+      return session.grantedCapabilities ?? session.granted;
+    },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => expect(await session.call('workspace_list'), 'workspaces'),
-    inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
-    create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
-    adopt: async (configuration) => expect(await session.call('workspace_adopt', { configuration }), 'workspace_configuration'),
-    update: async (name, generation, configuration) => expect(await session.call('workspace_update', { name, generation: immutableIdentity(generation, [32], 'workspace generation'), configuration }), 'workspace_configuration'),
-    delete: (name, generation) => done('workspace_delete', { name, generation: immutableIdentity(generation, [32], 'workspace generation') }),
+    inspect: async (name) =>
+      expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
+    create: async (configuration) =>
+      expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
+    update: async (name, generation, configurationRevision, configuration) =>
+      expect(
+        await session.call('workspace_update', {
+          name,
+          generation: immutableIdentity(generation, [32], 'workspace generation'),
+          configuration_revision: immutableIdentity(
+            configurationRevision,
+            [32],
+            'workspace configuration revision',
+          ),
+          configuration,
+        }),
+        'workspace_configuration',
+      ),
+    patchEnvironment: async (name, generation, configurationRevision, patch) =>
+      expect(
+        await session.call('workspace_environment_patch', {
+          name,
+          generation: immutableIdentity(generation, [32], 'workspace generation'),
+          configuration_revision: immutableIdentity(
+            configurationRevision,
+            [32],
+            'workspace configuration revision',
+          ),
+          patch,
+        }),
+        'workspace_environment_patch',
+      ),
+    delete: (name, generation) =>
+      done('workspace_delete', {
+        name,
+        generation: immutableIdentity(generation, [32], 'workspace generation'),
+      }),
     start: (name) => done('workspace_start', { name }),
     stop: (name) => done('workspace_stop', { name }),
     restart: (name) => done('workspace_restart', { name }),
     notifications: {
       publish: (notification) => {
-        if (!notification || typeof notification !== 'object') throw new TypeError('notification must be an object');
-        for (const [field, limit] of [['id', 128], ['title', 256], ['body', 4096]]) {
+        if (!notification || typeof notification !== 'object')
+          throw new TypeError('notification must be an object');
+        for (const [field, limit] of [
+          ['id', 128],
+          ['title', 256],
+          ['body', 4096],
+        ] as const) {
           const value = notification[field];
-          if (typeof value !== 'string' || value.length === 0
-            || new TextEncoder().encode(value).byteLength > limit || /[\u0000-\u001f\u007f]/u.test(value)) {
-            throw new TypeError(`notification ${field} must contain 1..${limit} UTF-8 bytes without control characters`);
+          if (
+            typeof value !== 'string' ||
+            value.length === 0 ||
+            new TextEncoder().encode(value).byteLength > limit ||
+            // eslint-disable-next-line no-control-regex
+            /[\u0000-\u001f\u007f]/u.test(value)
+          ) {
+            throw new TypeError(
+              `notification ${field} must contain 1..${limit} UTF-8 bytes without control characters`,
+            );
           }
         }
         return done('notification_publish', { notification });
@@ -418,48 +522,134 @@ export function workspace(session, { signal } = {}) {
     },
     extensions: {
       list: async () => expect(await session.call('extension_list'), 'extensions'),
-      catalogue: async () => expect(await session.call('extension_catalogue'), 'extension_catalogue'),
-      inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
-      enable: (name, imageDigest) => done('extension_enable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
-      disable: (name, imageDigest) => done('extension_disable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
-      retry: (name, imageDigest) => done('extension_retry', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
-      remove: (name, imageDigest) => done('extension_remove', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
-      startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
-      acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
+      catalogue: async () =>
+        expect(await session.call('extension_catalogue'), 'extension_catalogue'),
+      inspect: async (name) =>
+        expect(await session.call('extension_inspect', { name }), 'extension'),
+      enable: (name, imageDigest) =>
+        done('extension_enable', {
+          name,
+          image_digest: immutableDigest(imageDigest, 'extension image'),
+        }),
+      disable: (name, imageDigest) =>
+        done('extension_disable', {
+          name,
+          image_digest: immutableDigest(imageDigest, 'extension image'),
+        }),
+      retry: (name, imageDigest) =>
+        done('extension_retry', {
+          name,
+          image_digest: immutableDigest(imageDigest, 'extension image'),
+        }),
+      remove: (name, imageDigest) =>
+        done('extension_remove', {
+          name,
+          image_digest: immutableDigest(imageDigest, 'extension image'),
+        }),
+      startAcquisition: async (reference) =>
+        expect(
+          await session.call('extension_acquisition_start', { reference }),
+          'extension_acquisition_job',
+        ),
+      acquisition: async (job) =>
+        expect(
+          await session.call('extension_acquisition_status', { job }),
+          'extension_acquisition',
+        ),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
-        await session.call('extension_install', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
-      ),
-      update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }) => expect(
-        await session.call('extension_update', { job, revision, image_digest: immutableDigest(imageDigest, 'extension candidate image'), granted, containers, filesystem }), 'extension',
-      ),
+      install: async (
+        job,
+        revision,
+        imageDigest,
+        granted,
+        containers = { selectors: [], create: false },
+        filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
+        workspaceEnvironment = { read: [], write: [] },
+      ) =>
+        expect(
+          await session.call('extension_install', {
+            job,
+            revision,
+            image_digest: immutableDigest(imageDigest, 'extension candidate image'),
+            granted,
+            containers,
+            filesystem,
+            workspace_environment: workspaceEnvironment,
+          }),
+          'extension',
+        ),
+      update: async (
+        job,
+        revision,
+        imageDigest,
+        granted,
+        containers = { selectors: [], create: false },
+        filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
+        workspaceEnvironment = { read: [], write: [] },
+      ) =>
+        expect(
+          await session.call('extension_update', {
+            job,
+            revision,
+            image_digest: immutableDigest(imageDigest, 'extension candidate image'),
+            granted,
+            containers,
+            filesystem,
+            workspace_environment: workspaceEnvironment,
+          }),
+          'extension',
+        ),
     },
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
-      processes: async (id) => expect(await session.call('container_processes', { id }), 'processes'),
-      logs: async (id, { stdout = true, stderr = true } = {}) => expect(
-        await session.call('container_logs', { id, stdout, stderr }), 'logs',
-      ),
-      execution: async (id) => expect(await session.call('execution_inspect', { id: immutableIdentity(id, [32], 'execution') }), 'execution'),
+      processes: async (id) =>
+        expect(await session.call('container_processes', { id }), 'processes'),
+      logs: async (id, { stdout = true, stderr = true } = {}) =>
+        expect(await session.call('container_logs', { id, stdout, stderr }), 'logs'),
+      execution: async (id) =>
+        expect(
+          await session.call('execution_inspect', { id: immutableIdentity(id, [32], 'execution') }),
+          'execution',
+        ),
       executions: async () => expect(await session.call('execution_list'), 'executions'),
-      executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
-        await session.call('execution_logs', { id: immutableIdentity(id, [32], 'execution'), stdout, stderr }), 'logs',
-      ),
+      executionLogs: async (id, { stdout = true, stderr = true } = {}) =>
+        expect(
+          await session.call('execution_logs', {
+            id: immutableIdentity(id, [32], 'execution'),
+            stdout,
+            stderr,
+          }),
+          'logs',
+        ),
       executionOutput: async (id, { after = 0, limit = 16 } = {}) => {
-        if (!Number.isSafeInteger(after) || after < 0) throw new RangeError('execution output cursor must be a nonnegative safe integer');
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) throw new RangeError('execution output limit must be between 1 and 16');
-        return expect(await session.call('execution_output', {
-          id: immutableIdentity(id, [32], 'execution'), after, limit,
-        }), 'execution_output');
+        if (!Number.isSafeInteger(after) || after < 0)
+          throw new RangeError('execution output cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
+          throw new RangeError('execution output limit must be between 1 and 16');
+        return expect(
+          await session.call('execution_output', {
+            id: immutableIdentity(id, [32], 'execution'),
+            after,
+            limit,
+          }),
+          'execution_output',
+        );
       },
-      waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
-        await session.call('execution_wait', { id: immutableIdentity(id, [32], 'execution'), timeout_ms: timeoutMs }), 'execution',
-      ),
-      signalExecution: (id, signal) => done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
-      removeExecution: (id) => done('execution_remove', {
-        id: immutableIdentity(id, [32], 'execution'),
-      }),
+      waitExecution: async (id, { timeoutMs = 30_000 } = {}) =>
+        expect(
+          await session.call('execution_wait', {
+            id: immutableIdentity(id, [32], 'execution'),
+            timeout_ms: timeoutMs,
+          }),
+          'execution',
+        ),
+      signalExecution: (id, signal) =>
+        done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
+      removeExecution: (id) =>
+        done('execution_remove', {
+          id: immutableIdentity(id, [32], 'execution'),
+        }),
       create: async (configuration) => {
         if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
           throw new TypeError('container creation requires a configuration object');
@@ -492,22 +682,66 @@ export function workspace(session, { signal } = {}) {
       pause: (id, generation) => done('container_pause', containerMutation(id, generation)),
       unpause: (id, generation) => done('container_unpause', containerMutation(id, generation)),
       restart: (id, generation) => done('container_restart', containerMutation(id, generation)),
-      rename: (id, generation, name) => done('container_rename', {
-        ...containerMutation(id, generation), name: exactContainerName(name),
-      }),
-      kill: (id, generation, signal) => done('container_kill', { ...containerMutation(id, generation), signal }),
-      exec: async (id, generation, { command, environment = [], user, workingDirectory } = {}) => expect(
-        await session.call('container_exec', {
-          ...containerMutation(id, generation), command,
-          environment: exactExecEnvironment(environment),
-          user: user ?? null, working_directory: workingDirectory ?? null,
-        }), 'identity',
-      ),
-      execAndWait: async (id, generation, { command, environment = [], user, workingDirectory, ...waitOptions } = {}) => {
+      rename: (id, generation, name) =>
+        done('container_rename', {
+          ...containerMutation(id, generation),
+          name: exactContainerName(name),
+        }),
+      kill: (id, generation, signal) =>
+        done('container_kill', { ...containerMutation(id, generation), signal }),
+      exec: async (
+        id,
+        generation,
+        {
+          command,
+          environment = [],
+          user,
+          workingDirectory,
+        }: {
+          command?: string[];
+          environment?: [string, string][];
+          user?: string;
+          workingDirectory?: string;
+        } = {},
+      ) =>
+        expect(
+          await session.call('container_exec', {
+            ...containerMutation(id, generation),
+            command,
+            environment: exactExecEnvironment(environment),
+            user: user ?? null,
+            working_directory: workingDirectory ?? null,
+          }),
+          'identity',
+        ),
+      execAndWait: async (
+        id,
+        generation,
+        {
+          command,
+          environment = [],
+          user,
+          workingDirectory,
+          ...waitOptions
+        }: {
+          command?: string[];
+          environment?: [string, string][];
+          user?: string;
+          workingDirectory?: string;
+          timeoutMs?: number;
+          stdout?: boolean;
+          stderr?: boolean;
+        } = {},
+      ) => {
         const containerId = immutableIdentity(id, [32, 64], 'container');
         const argv = exactCommand(command);
         const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
-        const executionId = await api.containers.exec(containerId, generation, { command: argv, environment, user, workingDirectory });
+        const executionId = await api.containers.exec(containerId, generation, {
+          command: argv,
+          environment,
+          user,
+          workingDirectory,
+        });
         let phase = 'wait';
         let execution;
         try {
@@ -563,7 +797,7 @@ export function workspace(session, { signal } = {}) {
         done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
       connect: (reference, container, options) => {
         const aliases = endpointAliases(options);
-        const withValue = {
+        const withValue: { reference: string; container: string; aliases?: string[] } = {
           reference: immutableIdentity(reference, [32], 'network'),
           container: immutableIdentity(container, [32, 64], 'container'),
         };
@@ -667,7 +901,7 @@ export function workspace(session, { signal } = {}) {
       semantics: async (slot) =>
         expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
       /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
-      toText: async (slot, { lines } = {}) => {
+      toText: async (slot, { lines }: { lines?: number } = {}) => {
         const inventory = expect(await session.call('pane_list'), 'panes');
         const pane = inventory.panes.find((candidate) => candidate.slot === slot);
         if (!pane) {
@@ -690,150 +924,338 @@ export function workspace(session, { signal } = {}) {
         return done('pane_semantic_action', { slot, action: exactSemanticAction(action) });
       },
       writeInput: (slot, generation, revision, input) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-          throw new TypeError('terminal input requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        ) {
+          throw new TypeError(
+            'terminal input requires nonnegative safe integer generation and revision',
+          );
         }
         const contents = exactPaneInput(input);
         return done('terminal_write_pane', { slot, generation, revision, contents: [...contents] });
       },
       resizeGrid: (slot, columns, rows) => {
-        if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) {
+        if (
+          !Number.isInteger(columns) ||
+          !Number.isInteger(rows) ||
+          columns < 1 ||
+          rows < 1 ||
+          columns > 1000 ||
+          rows > 1000
+        ) {
           throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
         }
         return done('terminal_resize_grid', { slot, columns, rows });
       },
       resizeGridObserved: (slot, generation, revision, columns, rows) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal resize requires nonnegative safe integer generation and revision');
-        if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || columns > 1000 || rows > 1000) throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        )
+          throw new TypeError(
+            'terminal resize requires nonnegative safe integer generation and revision',
+          );
+        if (
+          !Number.isInteger(columns) ||
+          !Number.isInteger(rows) ||
+          columns < 1 ||
+          rows < 1 ||
+          columns > 1000 ||
+          rows > 1000
+        )
+          throw new RangeError('terminal grid rows and columns must be integers within 1..=1000');
         return done('terminal_resize_grid_observed', { slot, generation, revision, columns, rows });
       },
       close: (slot) => done('terminal_close_pane', { slot }),
       pinTab: (tab, pinned = true) => done('terminal_pin_tab', { tab, pinned: Boolean(pinned) }),
       closeObserved: (slot, generation, revision) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-          throw new TypeError('terminal close requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        ) {
+          throw new TypeError(
+            'terminal close requires nonnegative safe integer generation and revision',
+          );
         }
         return done('terminal_close_pane_observed', { slot, generation, revision });
       },
       focus: (slot) => done('terminal_focus_pane', { slot }),
       focusObserved: (slot, generation, revision) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal focus requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        )
+          throw new TypeError(
+            'terminal focus requires nonnegative safe integer generation and revision',
+          );
         return done('terminal_focus_pane_observed', { slot, generation, revision });
       },
-      retitle: (slot, title) => done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
+      retitle: (slot, title) =>
+        done('terminal_retitle_pane', { slot, title: exactPaneTitle(title) }),
       retitleObserved: (slot, generation, revision, title) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('terminal retitle requires nonnegative safe integer generation and revision');
-        return done('terminal_retitle_pane_observed', { slot, generation, revision, title: exactPaneTitle(title) });
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        )
+          throw new TypeError(
+            'terminal retitle requires nonnegative safe integer generation and revision',
+          );
+        return done('terminal_retitle_pane_observed', {
+          slot,
+          generation,
+          revision,
+          title: exactPaneTitle(title),
+        });
       },
       ratio: (slot, ratio) => done('terminal_ratio', { slot, ratio: exactPaneRatio(ratio) }),
       ratioObserved: (slot, generation, revision, ratio) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-          throw new TypeError('terminal ratio requires nonnegative safe integer generation and revision');
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        ) {
+          throw new TypeError(
+            'terminal ratio requires nonnegative safe integer generation and revision',
+          );
         }
-        return done('terminal_ratio_observed', { slot, generation, revision, ratio: exactPaneRatio(ratio) });
+        return done('terminal_ratio_observed', {
+          slot,
+          generation,
+          revision,
+          ratio: exactPaneRatio(ratio),
+        });
       },
       switchOccupant: (slot, generation, target) => {
-        if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError('pane generation must be a nonnegative safe integer');
-        return done('terminal_switch_occupant', { slot, generation, target: exactOccupantTarget(target) });
+        if (!Number.isSafeInteger(generation) || generation < 0)
+          throw new TypeError('pane generation must be a nonnegative safe integer');
+        return done('terminal_switch_occupant', {
+          slot,
+          generation,
+          target: exactOccupantTarget(target),
+        });
       },
       switchOccupantObserved: (slot, generation, revision, target) => {
-        if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
-        return done('terminal_switch_occupant_observed', { slot, generation, revision, target: exactOccupantTarget(target) });
+        if (
+          !Number.isSafeInteger(generation) ||
+          generation < 0 ||
+          !Number.isSafeInteger(revision) ||
+          revision < 0
+        )
+          throw new TypeError(
+            'pane occupant switch requires nonnegative safe integer generation and revision',
+          );
+        return done('terminal_switch_occupant_observed', {
+          slot,
+          generation,
+          revision,
+          target: exactOccupantTarget(target),
+        });
       },
     },
     files: {
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
+      listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
+        if ((after === null) !== (observed === null)) {
+          throw new TypeError('filesystem directory continuation requires both after and observed');
+        }
+        const page = expect(
+          await session.call('filesystem_list_page', { path, after, observed, limit }),
+          'directory_page',
+        );
+        if (
+          !page.identity ||
+          new TextEncoder().encode(page.identity).byteLength > 256 ||
+          page.entries.length > limit ||
+          (page.more && !page.next) ||
+          (page.entries.length > 0 && page.next !== page.entries.at(-1).path)
+        ) {
+          throw new TypeError('host returned an inconsistent filesystem directory page');
+        }
+        return page;
+      },
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
-      readRange: async (path, offset = 0, limit = 65536, observed = null) => expect(
-        await session.call('filesystem_read_range', { path, offset, limit, observed }),
-        'file_range',
-      ),
+      readRange: async (path, offset = 0, limit = 65536, observed = null) => {
+        const [boundedOffset, boundedLimit] = exactFileRange(offset, limit);
+        return expect(
+          await session.call('filesystem_read_range', {
+            path,
+            offset: boundedOffset,
+            limit: boundedLimit,
+            observed,
+          }),
+          'file_range',
+        );
+      },
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
-      writeObserved: async (path, observed, contents) => expect(
-        await session.call('filesystem_write_observed', { path, observed, contents: [...contents] }),
-        'identity',
-      ),
-      createObserved: async (path, contents) => expect(
-        await session.call('filesystem_create_observed', { path, contents: [...contents] }),
-        'identity',
-      ),
+      writeObserved: async (path, observed, contents) =>
+        expect(
+          await session.call('filesystem_write_observed', {
+            path,
+            observed,
+            contents: [...contents],
+          }),
+          'identity',
+        ),
+      createObserved: async (path, contents) =>
+        expect(
+          await session.call('filesystem_create_observed', { path, contents: [...contents] }),
+          'identity',
+        ),
       mkdir: (path) => done('filesystem_mkdir', { path }),
       rename: (from, to) => done('filesystem_rename', { from, to }),
-      renameObserved: async (from, to, observed) => expect(
-        await session.call('filesystem_rename_observed', { from, to, observed }),
-        'identity',
-      ),
+      renameObserved: async (from, to, observed) =>
+        expect(
+          await session.call('filesystem_rename_observed', { from, to, observed }),
+          'identity',
+        ),
       remove: (path) => done('filesystem_remove', { path }),
       removeObserved: (path, observed) => done('filesystem_remove_observed', { path, observed }),
     },
     subscribe,
     unsubscribe,
-  };
+  } as unknown as WorkspaceApi;
   Object.defineProperty(api, 'withSignal', {
     value: (nextSignal) => workspace(hostSession, { signal: nextSignal }),
     enumerable: false,
   });
-  const watch = async (topic, snapshot, listener, label) => {
+  const watch = async <T>(
+    topic: string,
+    snapshot: string,
+    listener: (value: T) => void,
+    label: string,
+  ) => {
     if (typeof listener !== 'function') throw new TypeError(`${label} listener must be a function`);
-    const off = hostSession.onEvent((event) => { if (event?.snapshot === snapshot) listener(event.of); });
-    try { await subscribe(topic); } catch (error) { off(); throw error; }
-    let stopping;
-    const stop = () => stopping ??= (async () => {
-      signal?.removeEventListener('abort', onAbort);
+    const off = hostSession.onEvent((event) => {
+      if ('snapshot' in event && event.snapshot === snapshot) listener(event.of as T);
+    });
+    try {
+      await subscribe(topic);
+    } catch (error) {
       off();
-      await unsubscribe(topic);
-    })();
-    const onAbort = () => { void stop(); };
+      throw error;
+    }
+    let stopping;
+    const stop = () =>
+      (stopping ??= (async () => {
+        signal?.removeEventListener('abort', onAbort);
+        off();
+        await unsubscribe(topic);
+      })());
+    const onAbort = () => {
+      void stop();
+    };
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) await stop();
     return stop;
   };
   const providerCatalogue = (extensions) => {
-    if (!Array.isArray(extensions) || extensions.some((extension) => typeof extension.enabled !== 'boolean' || !Array.isArray(extension.pane_providers))) {
+    if (
+      !Array.isArray(extensions) ||
+      extensions.some(
+        (extension) =>
+          typeof extension.enabled !== 'boolean' || !Array.isArray(extension.pane_providers),
+      )
+    ) {
       throw new Error('host does not expose installed provider declarations');
     }
-    const all = extensions.filter(({ enabled }) => enabled).flatMap((extension) => extension.pane_providers.map((provider) => ({
-      extension: extension.name,
-      image_digest: extension.image_digest,
-      version: extension.version ?? '',
-      status: extension.status,
-      id: provider.id,
-      title: provider.title,
-      icon: provider.icon ?? null,
-    })));
+    const all = extensions
+      .filter(({ enabled }) => enabled)
+      .flatMap((extension) =>
+        extension.pane_providers.map((provider) => ({
+          extension: extension.name,
+          image_digest: extension.image_digest,
+          version: extension.version ?? '',
+          status: extension.status,
+          id: provider.id,
+          title: provider.title,
+          icon: provider.icon ?? null,
+        })),
+      );
     return { providers: all.slice(0, 200), truncated: all.length > 200 };
   };
   api.extensions.providers = async () => providerCatalogue(await api.extensions.list());
   api.extensions.waitForProviders = async (after, { timeoutMs = 30_000 } = {}) => {
-    if (after == null || typeof after.name !== 'string' || typeof after.image_digest !== 'string' || typeof after.status !== 'string') {
-      throw new TypeError('provider catalogue wait requires an exact extension name, image digest, and status cursor');
+    if (
+      after == null ||
+      typeof after.name !== 'string' ||
+      typeof after.image_digest !== 'string' ||
+      typeof after.status !== 'string'
+    ) {
+      throw new TypeError(
+        'provider catalogue wait requires an exact extension name, image digest, and status cursor',
+      );
     }
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('provider catalogue wait timeout must be between 1 and 30000ms');
-    let dispose; let timer; let settled = false;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('provider catalogue wait timeout must be between 1 and 30000ms');
+    let dispose;
+    let timer;
+    let settled = false;
     return new Promise((resolve, reject) => {
-      const finish = (value, error) => {
-        if (settled) return; settled = true; clearTimeout(timer);
-        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      const finish = (value, error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
-      api.watchExtensions((extensions) => {
-        const current = extensions.find(({ name }) => name === after.name);
-        if (current?.image_digest === after.image_digest && current.status === after.status) return;
-        try { finish({ changed: true, extension: current == null ? null : { name: current.name, image_digest: current.image_digest, status: current.status }, catalogue: providerCatalogue(extensions) }); }
-        catch (error) { finish(undefined, error); }
-      }).then((stop) => { dispose = stop; if (settled) void stop(); }, (error) => finish(undefined, error));
+      api
+        .watchExtensions((extensions) => {
+          const current = extensions.find(({ name }) => name === after.name);
+          if (current?.image_digest === after.image_digest && current.status === after.status)
+            return;
+          try {
+            finish({
+              changed: true,
+              extension:
+                current == null
+                  ? null
+                  : {
+                      name: current.name,
+                      image_digest: current.image_digest,
+                      status: current.status,
+                    },
+              catalogue: providerCatalogue(extensions),
+            });
+          } catch (error) {
+            finish(undefined, error);
+          }
+        })
+        .then(
+          (stop) => {
+            dispose = stop;
+            if (settled) void stop();
+          },
+          (error) => finish(undefined, error),
+        );
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
-  api.watchContainerInventory = (listener) => watch('container-inventory', 'container_inventory', listener, 'container inventory');
+  api.watchContainerInventory = (listener) =>
+    watch('container-inventory', 'container_inventory', listener, 'container inventory');
   api.containers.startAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('container start wait timeout must be between 1 and 30000ms');
     }
-    let sequence = 0; let baseline = 0; let started = false; let observed; let timer;
-    const running = new Promise((resolve) => {
+    let sequence = 0;
+    let baseline = 0;
+    let started = false;
+    let observed;
+    let timer;
+    const running = new Promise<ContainerSummary>((resolve) => {
       observed = (containers) => {
         sequence += 1;
         if (!started || sequence <= baseline) return;
@@ -848,7 +1270,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.start(identity, generation);
       const container = await Promise.race([
         running,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -870,7 +1292,7 @@ export function workspace(session, { signal } = {}) {
     let stopped = false;
     let observed;
     let timer;
-    const exited = new Promise((resolve) => {
+    const exited = new Promise<ContainerSummary>((resolve) => {
       observed = (containers) => {
         sequence += 1;
         if (!stopped || sequence <= baseline) return;
@@ -885,7 +1307,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.stop(identity, generation);
       const container = await Promise.race([
         exited,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -906,7 +1328,7 @@ export function workspace(session, { signal } = {}) {
     let removing = false;
     let observed;
     let timer;
-    const absent = new Promise((resolve) => {
+    const absent = new Promise<void>((resolve) => {
       observed = (inventory) => {
         sequence += 1;
         if (!removing || sequence <= baseline || !inventory.complete) return;
@@ -920,7 +1342,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.remove(identity, generation);
       const removed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
       ]);
@@ -940,7 +1362,7 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('container restart wait timeout must be between 1 and 30000ms');
     let observed;
     let timer;
-    const restarted = new Promise((resolve) => {
+    const restarted = new Promise<ContainerSummary>((resolve) => {
       observed = (containers) => {
         const current = containers.find((container) => container.id === identity);
         if (current?.state === 'running' && current.generation > generation) resolve(current);
@@ -951,7 +1373,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.restart(identity, generation);
       const container = await Promise.race([
         restarted,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -981,7 +1403,7 @@ export function workspace(session, { signal } = {}) {
     let removing = false;
     let timer;
     let finish;
-    const absent = new Promise((resolve) => {
+    const absent = new Promise<void>((resolve) => {
       finish = resolve;
     });
     const stopWatching = await api.watchImageInventory((inventory) => {
@@ -997,7 +1419,7 @@ export function workspace(session, { signal } = {}) {
       await api.images.remove(digest);
       const changed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
       ]);
@@ -1014,7 +1436,7 @@ export function workspace(session, { signal } = {}) {
     let removing = false;
     let timer;
     let finish;
-    const absent = new Promise((resolve) => {
+    const absent = new Promise<void>((resolve) => {
       finish = resolve;
     });
     const stopWatching = await api.watchVolumeInventory((inventory) => {
@@ -1030,7 +1452,7 @@ export function workspace(session, { signal } = {}) {
       await api.volumes.remove(name, identity);
       const changed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
       ]);
@@ -1047,7 +1469,7 @@ export function workspace(session, { signal } = {}) {
     let removing = false;
     let timer;
     let finish;
-    const absent = new Promise((resolve) => {
+    const absent = new Promise<void>((resolve) => {
       finish = resolve;
     });
     const stopWatching = await api.watchNetworkInventory((inventory) => {
@@ -1063,7 +1485,7 @@ export function workspace(session, { signal } = {}) {
       await api.networks.remove(identity);
       const changed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
       ]);
@@ -1099,7 +1521,7 @@ export function workspace(session, { signal } = {}) {
     let reading = false;
     let pending;
     return new Promise((resolve, reject) => {
-      const finish = (value, error) => {
+      const finish = (value, error?: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -1121,24 +1543,45 @@ export function workspace(session, { signal } = {}) {
               pending = undefined;
               const readable = await api.terminal.toText(slot, { lines });
               const cursor = readable.snapshot;
-              if (cursor.generation === after.generation && cursor.revision === after.revision) continue;
+              if (cursor.generation === after.generation && cursor.revision === after.revision)
+                continue;
               finish({ changed: true, readable });
             }
-          } catch (error) { finish(undefined, error); }
-          finally { reading = false; }
+          } catch (error) {
+            finish(undefined, error);
+          } finally {
+            reading = false;
+          }
         })();
       };
-      api.watchPaneChanges(observe).then((stop) => {
-        dispose = stop;
-        if (settled) void stop();
-      }, (error) => finish(undefined, error));
+      api.watchPaneChanges(observe).then(
+        (stop) => {
+          dispose = stop;
+          if (settled) void stop();
+        },
+        (error) => finish(undefined, error),
+      );
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
   };
-  api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal input wait requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal input wait requires nonnegative safe integer generation and revision');
+  api.terminal.writeAndWait = async (
+    slot,
+    generation,
+    revision,
+    input,
+    { lines, timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal input wait requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal input wait requires nonnegative safe integer generation and revision',
+      );
     }
     const contents = exactPaneInput(input);
     if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
@@ -1332,14 +1775,19 @@ export function workspace(session, { signal } = {}) {
       tab = await api.terminal.openTab(wanted);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, tab, title: wanted };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.tab === tab);
-      if (!pane) throw new Error(inventory.truncated
-        ? 'opened tab cannot be verified from a truncated pane inventory'
-        : 'opened tab has no observable pane');
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'opened tab cannot be verified from a truncated pane inventory'
+            : 'opened tab has no observable pane',
+        );
       return { changed: true, tab, pane };
     } catch (cause) {
       if (tab === undefined) throw cause;
@@ -1395,85 +1843,149 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.terminal.inspectAndAct = async (slot, proposal, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('inspected semantic action requires a nonempty slot');
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('inspected semantic action requires a nonempty slot');
     const actions = ['invoke', 'change', 'submit', 'toggle', 'expand', 'focus'];
-    if (!Number.isSafeInteger(proposal?.node) || proposal.node < 0 || !actions.includes(proposal?.action)) {
+    if (
+      !Number.isSafeInteger(proposal?.node) ||
+      proposal.node < 0 ||
+      !actions.includes(proposal?.action)
+    ) {
       throw new TypeError('inspected semantic action requires a nonnegative node and known action');
     }
-    if (proposal.value != null && (typeof proposal.value !== 'string'
-      || new TextEncoder().encode(proposal.value).byteLength > 4096)) {
+    if (
+      proposal.value != null &&
+      (typeof proposal.value !== 'string' ||
+        new TextEncoder().encode(proposal.value).byteLength > 4096)
+    ) {
       throw new RangeError('inspected semantic action value exceeds 4096 bytes');
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('inspected semantic action timeout must be between 1 and 30000ms');
     }
-    let changed; let cursor;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    let changed;
+    let cursor;
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (cursor && change.slot === slot
-        && (change.generation !== cursor.generation || change.revision !== cursor.revision)) changed(change);
+      if (
+        cursor &&
+        change.slot === slot &&
+        (change.generation !== cursor.generation || change.revision !== cursor.revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       const snapshot = await api.terminal.semantics(slot);
       cursor = { generation: snapshot.generation, revision: snapshot.revision };
-      const pending = [snapshot.root]; let node;
+      const pending = [snapshot.root];
+      let node;
       while (pending.length > 0) {
         const candidate = pending.pop();
-        if (candidate.id === proposal.node) { node = candidate; break; }
+        if (candidate.id === proposal.node) {
+          node = candidate;
+          break;
+        }
         pending.push(...candidate.children);
       }
-      if (!node) throw new Error(snapshot.truncated
-        ? 'semantic node cannot be resolved from a truncated tree'
-        : 'semantic node does not exist');
+      if (!node)
+        throw new Error(
+          snapshot.truncated
+            ? 'semantic node cannot be resolved from a truncated tree'
+            : 'semantic node does not exist',
+        );
       if (node.disabled) throw new Error('semantic node is disabled');
-      if (!node.actions.includes(proposal.action)) throw new Error('semantic node does not advertise the requested action');
+      if (!node.actions.includes(proposal.action))
+        throw new Error('semantic node does not advertise the requested action');
       const before = { snapshot, text: semanticXml(snapshot) };
-      await api.terminal.act(slot, { ...cursor, node: proposal.node, action: proposal.action, value: proposal.value ?? null });
+      await api.terminal.act(slot, {
+        ...cursor,
+        node: proposal.node,
+        action: proposal.action,
+        value: proposal.value ?? null,
+      });
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, before };
       const afterSnapshot = await api.terminal.semantics(slot);
-      if (afterSnapshot.generation === cursor.generation && afterSnapshot.revision === cursor.revision) {
+      if (
+        afterSnapshot.generation === cursor.generation &&
+        afterSnapshot.revision === cursor.revision
+      ) {
         throw new Error('pane change did not advance the semantic tree cursor');
       }
-      return { changed: true, before, after: { snapshot: afterSnapshot, text: semanticXml(afterSnapshot) } };
+      return {
+        changed: true,
+        before,
+        after: { snapshot: afterSnapshot, text: semanticXml(afterSnapshot) },
+      };
     } finally {
       clearTimeout(timer);
       await stop();
     }
   };
-  api.terminal.splitAndWait = async (slot, generation, revision, division, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal split requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal split requires nonnegative safe integer generation and revision');
+  api.terminal.splitAndWait = async (
+    slot,
+    generation,
+    revision,
+    division,
+    { timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal split requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal split requires nonnegative safe integer generation and revision',
+      );
     }
-    if (division !== 'beside' && division !== 'below') throw new TypeError('terminal split division must be beside or below');
+    if (division !== 'beside' && division !== 'below')
+      throw new TypeError('terminal split division must be beside or below');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('terminal split wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     let createdSlot;
     const stop = await api.watchPaneChanges((change) => {
-      if ((change.slot === slot && (change.generation !== generation || change.revision !== revision))
-        || (createdSlot !== undefined && change.slot === createdSlot)) changed(change);
+      if (
+        (change.slot === slot &&
+          (change.generation !== generation || change.revision !== revision)) ||
+        (createdSlot !== undefined && change.slot === createdSlot)
+      )
+        changed(change);
     });
     let timer;
     try {
       createdSlot = await api.terminal.splitObserved(slot, generation, revision, division);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      if (change === null) return { changed: false, slot: createdSlot, after: { generation, revision } };
+      if (change === null)
+        return { changed: false, slot: createdSlot, after: { generation, revision } };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.slot === createdSlot);
-      if (!pane) throw new Error(inventory.truncated
-        ? 'created split cannot be verified from a truncated inventory'
-        : 'created split is absent from pane inventory');
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'created split cannot be verified from a truncated inventory'
+            : 'created split is absent from pane inventory',
+        );
       return { changed: true, pane };
     } finally {
       clearTimeout(timer);
@@ -1541,35 +2053,61 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.terminal.retitleAndWait = async (slot, generation, revision, title, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal retitle requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal retitle requires nonnegative safe integer generation and revision');
+  api.terminal.retitleAndWait = async (
+    slot,
+    generation,
+    revision,
+    title,
+    { timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal retitle requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal retitle requires nonnegative safe integer generation and revision',
+      );
     }
     const wanted = exactPaneTitle(title);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('terminal retitle wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot
-        && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       await api.terminal.retitleObserved(slot, generation, revision, wanted);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      if (change === null) return { changed: false, title: wanted, after: { generation, revision } };
+      if (change === null)
+        return { changed: false, title: wanted, after: { generation, revision } };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.slot === slot);
-      if (!pane) throw new Error(inventory.truncated
-        ? 'retitled pane cannot be verified from a truncated inventory'
-        : 'retitled pane disappeared');
-      if (pane.generation !== generation) throw new Error('retitled pane slot was replaced before verification');
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'retitled pane cannot be verified from a truncated inventory'
+            : 'retitled pane disappeared',
+        );
+      if (pane.generation !== generation)
+        throw new Error('retitled pane slot was replaced before verification');
       if (pane.revision === revision || pane.title !== wanted) {
         throw new Error('pane changed without applying the requested title');
       }
@@ -1580,105 +2118,189 @@ export function workspace(session, { signal } = {}) {
     }
   };
   api.terminal.focusAndWait = async (slot, generation, revision, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal focus requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal focus requires nonnegative safe integer generation and revision');
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal focus requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal focus requires nonnegative safe integer generation and revision',
+      );
     }
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('terminal focus wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot
-        && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       await api.terminal.focusObserved(slot, generation, revision);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
       if (change === null) return { changed: false, slot, after: { generation, revision } };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.slot === slot);
-      if (!pane) throw new Error(inventory.truncated
-        ? 'focused pane cannot be verified from a truncated inventory'
-        : 'focused pane disappeared');
-      if (pane.generation !== generation) throw new Error('focused pane slot was replaced before verification');
-      if (pane.revision === revision || !pane.focused) throw new Error('pane changed without receiving focus');
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'focused pane cannot be verified from a truncated inventory'
+            : 'focused pane disappeared',
+        );
+      if (pane.generation !== generation)
+        throw new Error('focused pane slot was replaced before verification');
+      if (pane.revision === revision || !pane.focused)
+        throw new Error('pane changed without receiving focus');
       return { changed: true, pane };
     } finally {
       clearTimeout(timer);
       await stop();
     }
   };
-  api.terminal.ratioAndWait = async (slot, generation, revision, ratio, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('terminal ratio requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('terminal ratio requires nonnegative safe integer generation and revision');
+  api.terminal.ratioAndWait = async (
+    slot,
+    generation,
+    revision,
+    ratio,
+    { timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('terminal ratio requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'terminal ratio requires nonnegative safe integer generation and revision',
+      );
     }
     const wanted = exactPaneRatio(ratio);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('terminal ratio wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       await api.terminal.ratioObserved(slot, generation, revision, wanted);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      if (change === null) return { changed: false, ratio: wanted, after: { generation, revision } };
+      if (change === null)
+        return { changed: false, ratio: wanted, after: { generation, revision } };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.slot === slot);
-      if (!pane) throw new Error(inventory.truncated ? 'resized split pane cannot be verified from a truncated inventory' : 'resized split pane disappeared');
-      if (pane.generation !== generation) throw new Error('resized split pane slot was replaced before verification');
-      if (pane.revision === revision) throw new Error('pane ratio event did not advance the inspected cursor');
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'resized split pane cannot be verified from a truncated inventory'
+            : 'resized split pane disappeared',
+        );
+      if (pane.generation !== generation)
+        throw new Error('resized split pane slot was replaced before verification');
+      if (pane.revision === revision)
+        throw new Error('pane ratio event did not advance the inspected cursor');
       const topology = await api.terminal.topology();
-      const actual = topology.tabs.map((tab) => paneRatio(tab.root, slot)).find((value) => value !== null);
+      const actual = topology.tabs
+        .map((tab) => paneRatio(tab.root, slot))
+        .find((value) => value !== null);
       if (actual == null) throw new Error('resized pane is not inside an observable split');
-      if (Math.abs(actual - wanted) > 0.05) throw new Error('pane changed without applying the requested split ratio');
+      if (Math.abs(actual - wanted) > 0.05)
+        throw new Error('pane changed without applying the requested split ratio');
       return { changed: true, ratio: wanted, actual, pane };
     } finally {
       clearTimeout(timer);
       await stop();
     }
   };
-  api.terminal.switchOccupantAndWait = async (slot, generation, revision, target, { timeoutMs = 30_000 } = {}) => {
-    if (typeof slot !== 'string' || slot.length === 0) throw new TypeError('pane occupant switch requires a nonempty slot');
-    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-      throw new TypeError('pane occupant switch requires nonnegative safe integer generation and revision');
+  api.terminal.switchOccupantAndWait = async (
+    slot,
+    generation,
+    revision,
+    target,
+    { timeoutMs = 30_000 } = {},
+  ) => {
+    if (typeof slot !== 'string' || slot.length === 0)
+      throw new TypeError('pane occupant switch requires a nonempty slot');
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    ) {
+      throw new TypeError(
+        'pane occupant switch requires nonnegative safe integer generation and revision',
+      );
     }
     const wanted = exactOccupantTarget(target);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('pane occupant switch wait timeout must be between 1 and 30000ms');
     }
     let changed;
-    const observed = new Promise((resolve) => { changed = resolve; });
+    const observed = new Promise((resolve) => {
+      changed = resolve;
+    });
     const stop = await api.watchPaneChanges((change) => {
-      if (change.slot === slot && (change.generation !== generation || change.revision !== revision)) changed(change);
+      if (
+        change.slot === slot &&
+        (change.generation !== generation || change.revision !== revision)
+      )
+        changed(change);
     });
     let timer;
     try {
       await api.terminal.switchOccupantObserved(slot, generation, revision, wanted);
       const change = await Promise.race([
         observed,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
       ]);
-      if (change === null) return { changed: false, target: wanted, after: { generation, revision } };
+      if (change === null)
+        return { changed: false, target: wanted, after: { generation, revision } };
       const inventory = await api.terminal.panes();
       const pane = inventory.panes.find((candidate) => candidate.slot === slot);
-      if (!pane) throw new Error(inventory.truncated ? 'switched pane cannot be verified from a truncated inventory' : 'switched pane disappeared');
-      const matches = wanted.kind === 'terminal'
-        ? pane.kind === 'terminal'
-        : pane.kind === 'surface' && pane.provider?.extension === wanted.extension && pane.provider?.provider === wanted.provider;
+      if (!pane)
+        throw new Error(
+          inventory.truncated
+            ? 'switched pane cannot be verified from a truncated inventory'
+            : 'switched pane disappeared',
+        );
+      const matches =
+        wanted.kind === 'terminal'
+          ? pane.kind === 'terminal'
+          : pane.kind === 'surface' &&
+            pane.provider?.extension === wanted.extension &&
+            pane.provider?.provider === wanted.provider;
       if (!matches) throw new Error('pane changed without installing the requested occupant');
       return { changed: true, pane };
     } finally {
@@ -1686,67 +2308,135 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.extensions.waitForProviderMount = async (extension, provider, { state = 'mounted', after = null, timeoutMs = 30_000 } = {}) => {
-    const providerName = (value) => typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
-    if (!providerName(extension) || !providerName(provider)) throw new TypeError('provider wait requires exact bounded extension and provider names');
-    if (!['mounted', 'unmounted'].includes(state)) throw new TypeError('provider wait state must be mounted or unmounted');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new RangeError('provider wait timeout must be between 1 and 30000ms');
-    if (after != null && (typeof after.slot !== 'string' || after.slot.length === 0
-      || !Number.isSafeInteger(after.generation) || after.generation < 0
-      || !Number.isSafeInteger(after.revision) || after.revision < 0)) throw new TypeError('provider wait cursor requires slot, generation, and revision');
-    let dispose; let timer; let settled = false; let checking = false; let pending = false;
+  api.extensions.waitForProviderMount = async (
+    extension,
+    provider,
+    { state = 'mounted', after = null, timeoutMs = 30_000 } = {},
+  ) => {
+    const providerName = (value) =>
+      typeof value === 'string' &&
+      value.length <= 128 &&
+      /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+    if (!providerName(extension) || !providerName(provider))
+      throw new TypeError('provider wait requires exact bounded extension and provider names');
+    if (!['mounted', 'unmounted'].includes(state))
+      throw new TypeError('provider wait state must be mounted or unmounted');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError('provider wait timeout must be between 1 and 30000ms');
+    if (
+      after != null &&
+      (typeof after.slot !== 'string' ||
+        after.slot.length === 0 ||
+        !Number.isSafeInteger(after.generation) ||
+        after.generation < 0 ||
+        !Number.isSafeInteger(after.revision) ||
+        after.revision < 0)
+    )
+      throw new TypeError('provider wait cursor requires slot, generation, and revision');
+    let dispose;
+    let timer;
+    let settled = false;
+    let checking = false;
+    let pending = false;
     return new Promise((resolve, reject) => {
-      const finish = (value, error) => {
-        if (settled) return; settled = true; clearTimeout(timer);
-        Promise.resolve(dispose?.()).then(() => error ? reject(error) : resolve(value), reject);
+      const finish = (value, error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
       const check = async () => {
-        if (checking) { pending = true; return; }
+        if (checking) {
+          pending = true;
+          return;
+        }
         checking = true;
         try {
           do {
             pending = false;
             const inventory = await api.terminal.panes();
-            const pane = inventory.panes.find((item) => item.kind === 'surface'
-              && item.provider?.extension === extension && item.provider?.provider === provider);
-            if (!pane && inventory.truncated) throw new Error('provider mount cannot be resolved from a truncated pane inventory');
-            const unchanged = pane != null && after != null && pane.slot === after.slot
-              && pane.generation === after.generation && pane.revision === after.revision;
+            const pane = inventory.panes.find(
+              (item) =>
+                item.kind === 'surface' &&
+                item.provider?.extension === extension &&
+                item.provider?.provider === provider,
+            );
+            if (!pane && inventory.truncated)
+              throw new Error('provider mount cannot be resolved from a truncated pane inventory');
+            const unchanged =
+              pane != null &&
+              after != null &&
+              pane.slot === after.slot &&
+              pane.generation === after.generation &&
+              pane.revision === after.revision;
             if ((state === 'mounted' && pane && !unchanged) || (state === 'unmounted' && !pane)) {
-              finish({ changed: true, state, pane: pane ?? null, truncated: false }); return;
+              finish({ changed: true, state, pane: pane ?? null, truncated: false });
+              return;
             }
           } while (pending && !settled);
-        } catch (error) { finish(undefined, error); } finally { checking = false; }
+        } catch (error) {
+          finish(undefined, error);
+        } finally {
+          checking = false;
+        }
       };
-      api.watchPaneChanges(() => { void check(); }).then((stop) => {
-        dispose = stop;
-        if (settled) void stop(); else void check();
-      }, (error) => finish(undefined, error));
+      api
+        .watchPaneChanges(() => {
+          void check();
+        })
+        .then(
+          (stop) => {
+            dispose = stop;
+            if (settled) void stop();
+            else void check();
+          },
+          (error) => finish(undefined, error),
+        );
       timer = setTimeout(() => finish({ changed: false, state, after }), timeoutMs);
     });
   };
   api.watchExecutions = (listener) => watch('executions', 'executions', listener, 'execution');
-  api.containers.signalExecutionAndWait = async (id, signal, after, { state = 'exited', timeoutMs = 30_000 } = {}) => {
+  api.containers.signalExecutionAndWait = async (
+    id,
+    signal,
+    after,
+    { state = 'exited', timeoutMs = 30_000 } = {},
+  ) => {
     const executionId = immutableIdentity(id, [32], 'execution');
-    if (typeof signal !== 'string' || signal.length < 1 || signal.length > 32 || !/^[A-Za-z0-9+-]+$/.test(signal)) {
+    if (
+      typeof signal !== 'string' ||
+      signal.length < 1 ||
+      signal.length > 32 ||
+      !/^[A-Za-z0-9+-]+$/.test(signal)
+    ) {
       throw new TypeError('execution signal must be a 1..32 byte ASCII signal name or number');
     }
-    if (after == null || typeof after.running !== 'boolean'
-      || !Number.isSafeInteger(after.exit_code) || !Number.isSafeInteger(after.pid)) {
-      throw new TypeError('execution signal wait requires the exact running, exit_code, and pid cursor');
+    if (
+      after == null ||
+      typeof after.running !== 'boolean' ||
+      !Number.isSafeInteger(after.exit_code) ||
+      !Number.isSafeInteger(after.pid)
+    ) {
+      throw new TypeError(
+        'execution signal wait requires the exact running, exit_code, and pid cursor',
+      );
     }
-    if (state !== 'changed' && state !== 'exited') throw new TypeError('execution signal wait state must be changed or exited');
+    if (state !== 'changed' && state !== 'exited')
+      throw new TypeError('execution signal wait state must be changed or exited');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('execution signal wait timeout must be between 1 and 30000ms');
     }
-    const differs = (execution) => execution.running !== after.running
-      || execution.exit_code !== after.exit_code || execution.pid !== after.pid;
+    const differs = (execution) =>
+      execution.running !== after.running ||
+      execution.exit_code !== after.exit_code ||
+      execution.pid !== after.pid;
     let observed;
-    const transition = new Promise((resolve, reject) => {
+    const transition = new Promise<ExecutionSummary>((resolve, reject) => {
       observed = (catalogue) => {
         const execution = catalogue.executions.find((candidate) => candidate.id === executionId);
         if (!execution) {
-          if (!catalogue.truncated) reject(new Error('execution disappeared while waiting for its signal transition'));
+          if (!catalogue.truncated)
+            reject(new Error('execution disappeared while waiting for its signal transition'));
           return;
         }
         if (!differs(execution) || (state === 'exited' && execution.running)) return;
@@ -1761,7 +2451,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.signalExecution(executionId, signal);
       const execution = await Promise.race([
         transition,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -1797,7 +2487,7 @@ export function workspace(session, { signal } = {}) {
     let removing = false;
     let observed;
     let timer;
-    const absent = new Promise((resolve) => {
+    const absent = new Promise<void>((resolve) => {
       observed = (catalogue) => {
         if (!removing || catalogue.truncated) return;
         if (!catalogue.executions.some((execution) => execution.id === executionId)) resolve();
@@ -1811,7 +2501,7 @@ export function workspace(session, { signal } = {}) {
       await api.containers.removeExecution(executionId);
       const removed = await Promise.race([
         absent.then(() => true),
-        new Promise((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => resolve(false), timeoutMs);
         }),
       ]);
@@ -1829,7 +2519,7 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('extension enable wait timeout must be between 1 and 30000ms');
     }
     let observed;
-    const inventory = new Promise((resolve, reject) => {
+    const inventory = new Promise<ExtensionSummary>((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (current && current.image_digest !== digest) {
@@ -1845,7 +2535,7 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.enable(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -1863,7 +2553,7 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('extension disable wait timeout must be between 1 and 30000ms');
     }
     let observed;
-    const inventory = new Promise((resolve, reject) => {
+    const inventory = new Promise<ExtensionSummary>((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (!current) reject(new Error(`extension ${name} disappeared while disabling`));
@@ -1878,7 +2568,7 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.disable(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -1896,7 +2586,7 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('extension retry wait timeout must be between 1 and 30000ms');
     }
     let observed;
-    const inventory = new Promise((resolve, reject) => {
+    const inventory = new Promise<ExtensionSummary>((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (!current) reject(new Error(`extension ${name} disappeared while retrying`));
@@ -1911,7 +2601,7 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.retry(name, digest);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -1929,7 +2619,7 @@ export function workspace(session, { signal } = {}) {
       throw new RangeError('extension remove wait timeout must be between 1 and 30000ms');
     }
     let observed;
-    const inventory = new Promise((resolve) => {
+    const inventory = new Promise<ExtensionSummary | null>((resolve) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === name);
         if (!current || current.image_digest !== digest) resolve(current ?? null);
@@ -1941,7 +2631,7 @@ export function workspace(session, { signal } = {}) {
       await api.extensions.remove(name, digest);
       const replacement = await Promise.race([
         inventory,
-        new Promise((resolve) => {
+        new Promise<undefined>((resolve) => {
           timer = setTimeout(() => resolve(undefined), timeoutMs);
         }),
       ]);
@@ -1962,8 +2652,8 @@ export function workspace(session, { signal } = {}) {
     granted,
     containers = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
-    { timeoutMs = 30_000 } = {},
-  ) => {
+    { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
+  ): ReturnType<WorkspaceApi['extensions']['installAndWait']> => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
       throw new TypeError(
         `extension ${operation} wait requires a nonnegative safe integer revision`,
@@ -1989,7 +2679,7 @@ export function workspace(session, { signal } = {}) {
     let observed;
     let authorityReturned = false;
     let latest;
-    const inventory = new Promise((resolve, reject) => {
+    const inventory = new Promise<ExtensionSummary>((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === candidate.name);
         if (!authorityReturned) {
@@ -2006,7 +2696,15 @@ export function workspace(session, { signal } = {}) {
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](job, revision, digest, granted, containers, filesystem);
+      const committed = await api.extensions[operation](
+        job,
+        revision,
+        digest,
+        granted,
+        containers,
+        filesystem,
+        workspaceEnvironment,
+      );
       if (committed.name !== candidate.name || committed.image_digest !== digest) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }
@@ -2014,7 +2712,7 @@ export function workspace(session, { signal } = {}) {
       if (latest !== undefined) observed(latest === null ? [] : [latest]);
       const extension = await Promise.race([
         inventory,
-        new Promise((resolve) => {
+        new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
       ]);
@@ -2052,7 +2750,7 @@ export function workspace(session, { signal } = {}) {
     let reading = false;
     let latest;
     return new Promise((resolve, reject) => {
-      const finish = (value, error) => {
+      const finish = (value, error?: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -2088,17 +2786,23 @@ export function workspace(session, { signal } = {}) {
         latest = change;
         void refresh();
       };
-      api.watchExtensionAcquisitions(observe).then((stop) => {
-        dispose = stop;
-        if (settled) void stop();
-        else void refresh();
-      }, (error) => finish(undefined, error));
+      api.watchExtensionAcquisitions(observe).then(
+        (stop) => {
+          dispose = stop;
+          if (settled) void stop();
+          else void refresh();
+        },
+        (error) => finish(undefined, error),
+      );
       timer = setTimeout(() => finish({ changed: false, job, revision: afterRevision }), timeoutMs);
     });
   };
-  api.watchWorkspaceLifecycle = (listener) => watch('workspace-lifecycle', 'workspace_lifecycle', listener, 'workspace lifecycle');
-  api.watchWorkspaceEvents = (listener) => watch('workspace-events', 'workspace_events', listener, 'workspace event');
-  api.watchFilesystem = (listener) => watch('filesystem', 'filesystem', listener, 'filesystem inventory');
+  api.watchWorkspaceLifecycle = (listener) =>
+    watch('workspace-lifecycle', 'workspace_lifecycle', listener, 'workspace lifecycle');
+  api.watchWorkspaceEvents = (listener) =>
+    watch('workspace-events', 'workspace_events', listener, 'workspace event');
+  api.watchFilesystem = (listener) =>
+    watch('filesystem', 'filesystem', listener, 'filesystem inventory');
   return api;
 }
 
@@ -2113,6 +2817,7 @@ export function requestCapability(call) {
 
 const camel = (value) => value.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 const facadeOverrides = Object.freeze({
+  workspace_environment_patch: 'patchEnvironment',
   extension_acquisition_start: 'extensions.startAcquisition',
   extension_acquisition_status: 'extensions.acquisition',
   extension_acquisition_cancel: 'extensions.cancelAcquisition',
@@ -2151,38 +2856,179 @@ const internalRequests = Object.freeze({
 function facadePath(call) {
   if (facadeOverrides[call]) return facadeOverrides[call];
   for (const [prefix, group] of [
-    ['workspace_', ''], ['extension_', 'extensions.'], ['container_', 'containers.'],
-    ['image_', 'images.'], ['volume_', 'volumes.'], ['network_', 'networks.'],
-    ['terminal_', 'terminal.'], ['filesystem_', 'files.'], ['notification_', 'notifications.'],
-  ]) if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
+    ['workspace_', ''],
+    ['extension_', 'extensions.'],
+    ['container_', 'containers.'],
+    ['image_', 'images.'],
+    ['volume_', 'volumes.'],
+    ['network_', 'networks.'],
+    ['terminal_', 'terminal.'],
+    ['filesystem_', 'files.'],
+    ['notification_', 'notifications.'],
+  ])
+    if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
   return null;
 }
 
 /** Schema-derived inventory connecting every Rust request/topic to its supported public route. */
 export const protocolSurface = Object.freeze({
-  requests: Object.freeze(Object.fromEntries(Object.keys(PROTOCOL_REPLIES).map((call) => {
-    if (internalRequests[call]) return [call, Object.freeze({ kind: 'internal', rationale: internalRequests[call] })];
-    if (call === 'event_subscribe') return [call, Object.freeze({ kind: 'subscription', api: 'subscribe' })];
-    if (call === 'event_unsubscribe') return [call, Object.freeze({ kind: 'subscription', api: 'unsubscribe' })];
-    return [call, Object.freeze({ kind: 'facade', api: facadePath(call) })];
-  }))),
-  topics: Object.freeze(Object.fromEntries(PROTOCOL_TOPICS.map(({ wire }) => [wire,
-    Object.freeze({ subscribe: 'subscribe', unsubscribe: 'unsubscribe' })]))),
+  requests: Object.freeze(
+    Object.fromEntries(
+      Object.keys(PROTOCOL_REPLIES).map((call) => {
+        if (internalRequests[call])
+          return [call, Object.freeze({ kind: 'internal', rationale: internalRequests[call] })];
+        if (call === 'event_subscribe')
+          return [call, Object.freeze({ kind: 'subscription', api: 'subscribe' })];
+        if (call === 'event_unsubscribe')
+          return [call, Object.freeze({ kind: 'subscription', api: 'unsubscribe' })];
+        return [call, Object.freeze({ kind: 'facade', api: facadePath(call) })];
+      }),
+    ),
+  ),
+  topics: Object.freeze(
+    Object.fromEntries(
+      PROTOCOL_TOPICS.map(({ wire }) => [
+        wire,
+        Object.freeze({ subscribe: 'subscribe', unsubscribe: 'unsubscribe' }),
+      ]),
+    ),
+  ),
 });
 
 /** Honest inventory of the current host contract; gaps are not callable APIs. */
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
-    workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'executionOutput', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
-    images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait'],
+    workspace: [
+      'info',
+      'list',
+      'inspect',
+      'create',
+      'adopt',
+      'update',
+      'patchEnvironment',
+      'delete',
+      'start',
+      'stop',
+      'restart',
+    ],
+    containers: [
+      'list',
+      'inspect',
+      'processes',
+      'logs',
+      'execution',
+      'executions',
+      'executionLogs',
+      'executionOutput',
+      'waitExecution',
+      'signalExecution',
+      'removeExecution',
+      'create',
+      'start',
+      'stop',
+      'remove',
+      'pause',
+      'unpause',
+      'restart',
+      'rename',
+      'kill',
+      'exec',
+      'execAndWait',
+      'attachTerminal',
+    ],
+    images: [
+      'inventory',
+      'list',
+      'inspect',
+      'pull',
+      'startPull',
+      'pullStatus',
+      'cancelPull',
+      'remove',
+      'prune',
+      'removeAndWait',
+    ],
     volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],
-    networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait', 'connect', 'disconnect'],
-    terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
-    files: ['list', 'read', 'readRange', 'stat', 'write', 'writeObserved', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
-    extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
+    networks: [
+      'inventory',
+      'list',
+      'inspect',
+      'create',
+      'remove',
+      'removeAndWait',
+      'connect',
+      'disconnect',
+    ],
+    terminal: [
+      'panes',
+      'tabs',
+      'topology',
+      'openTab',
+      'pinTab',
+      'split',
+      'splitObserved',
+      'spawn',
+      'spawnObserved',
+      'read',
+      'semantics',
+      'act',
+      'writeInput',
+      'resizeGrid',
+      'resizeGridObserved',
+      'close',
+      'closeObserved',
+      'focus',
+      'focusObserved',
+      'retitle',
+      'retitleObserved',
+      'ratio',
+      'ratioObserved',
+      'switchOccupant',
+      'switchOccupantObserved',
+    ],
+    files: [
+      'list',
+      'listPage',
+      'read',
+      'readRange',
+      'stat',
+      'write',
+      'writeObserved',
+      'createObserved',
+      'mkdir',
+      'rename',
+      'renameObserved',
+      'remove',
+      'removeObserved',
+    ],
+    extensions: [
+      'list',
+      'inspect',
+      'enable',
+      'disable',
+      'retry',
+      'remove',
+      'startAcquisition',
+      'acquisition',
+      'cancelAcquisition',
+      'install',
+      'update',
+    ],
     notifications: ['publish'],
-    interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
+    interfaceEvents: [
+      'invoke',
+      'submit',
+      'change',
+      'select',
+      'scroll',
+      'close',
+      'context',
+      'key',
+      'focus',
+      'pointer',
+      'drag',
+      'drop',
+    ],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,
   }),
