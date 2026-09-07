@@ -151,7 +151,7 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
       containers: { selectors: [{ name: 'database' }], create: false },
       filesystem: {
         read: [],
-        write: ['settings.json'],
+        write: [{ exact: 'settings.json' }],
         create: [],
         delete: [],
         rename: [],
@@ -163,7 +163,15 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
     },
   };
   assert.deepEqual(validateRequest(base), base);
-  assert.equal(validateRequest(base).with.filesystem.write[0], 'settings.json');
+  assert.deepEqual(validateRequest(base).with.filesystem.write[0], { exact: 'settings.json' });
+  const subtree = structuredClone(base);
+  subtree.with.filesystem.read = [{ subtree: 'src' }];
+  assert.deepEqual(validateRequest(subtree).with.filesystem.read, [{ subtree: 'src' }]);
+  for (const selector of ['settings.json', { exact: 'settings.json', subtree: 'src' }]) {
+    const invalid = structuredClone(base);
+    invalid.with.filesystem.write = [selector];
+    assert.throws(() => validateRequest(invalid), /filesystem|relative|selector|exact|subtree/i);
+  }
   for (const selector of [
     { id: 'a'.repeat(32), name: 'database' },
     { name: 'database', invented: true },

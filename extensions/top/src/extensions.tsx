@@ -24,6 +24,7 @@ import {
   type ContainerGrant,
   type ContainerSelector,
   type FilesystemGrant,
+  type FilesystemSelector,
   type WorkspaceEnvironmentGrant,
   type WorkspaceApi,
 } from '@husklet/react';
@@ -46,8 +47,16 @@ function emptyFilesystemGrant(): Required<FilesystemGrant> {
   return { read: [], write: [], create: [], delete: [], rename: [] };
 }
 
-function filesystemRoots(grant: FilesystemGrant, verb: FilesystemVerb): string[] {
+function filesystemRoots(grant: FilesystemGrant, verb: FilesystemVerb): FilesystemSelector[] {
   return grant[verb] ?? [];
+}
+
+function filesystemSelectorKey(selector: FilesystemSelector): string {
+  return 'exact' in selector ? `exact:${selector.exact}` : `subtree:${selector.subtree}`;
+}
+
+function filesystemSelectorLabel(selector: FilesystemSelector): string {
+  return 'exact' in selector ? `${selector.exact} (exact file)` : `${selector.subtree}/ (subtree)`;
 }
 
 function filesystemGrantCount(grant: FilesystemGrant): number {
@@ -81,22 +90,27 @@ function FilesystemConsent({
         color="text-dim"
       />
       {FILESYSTEM_VERBS.flatMap(({ key, label, meaning }) =>
-        filesystemRoots(requested, key).map((path) => (
+        filesystemRoots(requested, key).map((selector) => (
           <FormControlLabel
-            key={`${key}:${path}`}
-            label={`${label} · ${path} (${meaning})`}
+            key={`${key}:${filesystemSelectorKey(selector)}`}
+            label={`${label} · ${filesystemSelectorLabel(selector)} (${meaning})`}
             gap={2}
           >
             <Switch
-              checked={filesystemRoots(granted, key).includes(path)}
+              checked={filesystemRoots(granted, key).some(
+                (candidate) => filesystemSelectorKey(candidate) === filesystemSelectorKey(selector),
+              )}
               onToggle={(event: Change) =>
                 onChange((current) => {
                   const roots = filesystemRoots(current, key);
                   return {
                     ...current,
                     [key]: event.value
-                      ? [...new Set([...roots, path])]
-                      : roots.filter((candidate) => candidate !== path),
+                      ? [...roots, selector]
+                      : roots.filter(
+                          (candidate) =>
+                            filesystemSelectorKey(candidate) !== filesystemSelectorKey(selector),
+                        ),
                   };
                 })
               }

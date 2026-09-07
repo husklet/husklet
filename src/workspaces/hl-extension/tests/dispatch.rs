@@ -919,6 +919,11 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
         .iter()
         .map(|root| RelativePath::new(*root).expect("root"))
         .collect();
+    let selectors: Vec<_> = roots
+        .iter()
+        .cloned()
+        .map(|subtree| hl_extension::FilesystemSelector::Subtree { subtree })
+        .collect();
     Session::new(Authority::new(
         ExtensionName::new("sample").expect("name"),
         Grant::new(capabilities.iter().copied()),
@@ -929,11 +934,11 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
         create: true,
     })
     .with_filesystem(hl_extension::FilesystemGrant {
-        read: roots.clone(),
-        write: roots.clone(),
-        create: roots.clone(),
-        delete: roots.clone(),
-        rename: roots,
+        read: selectors.clone(),
+        write: selectors.clone(),
+        create: selectors.clone(),
+        delete: selectors.clone(),
+        rename: selectors,
     })
 }
 
@@ -2743,8 +2748,10 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
         all,
     ))
     .with_filesystem(hl_extension::FilesystemGrant {
-        read: vec![path("src")],
-        write: vec![path("workspace.toml")],
+        read: vec![hl_extension::FilesystemSelector::Subtree { subtree: path("src") }],
+        write: vec![hl_extension::FilesystemSelector::Exact {
+            exact: path("workspace.toml"),
+        }],
         ..hl_extension::FilesystemGrant::default()
     });
 
@@ -2801,7 +2808,7 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
         vec![file.clone()],
     ))
     .with_filesystem(hl_extension::FilesystemGrant {
-        write: vec![file.clone()],
+        write: vec![hl_extension::FilesystemSelector::Exact { exact: file.clone() }],
         ..hl_extension::FilesystemGrant::default()
     });
 
@@ -2817,6 +2824,14 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
     host.ledger.clear();
 
     for request in [
+        Request::FilesystemWrite {
+            path: path("sibling.json"),
+            contents: b"{}".to_vec(),
+        },
+        Request::FilesystemWrite {
+            path: path("settings.json/child"),
+            contents: b"{}".to_vec(),
+        },
         Request::FilesystemCreateObserved {
             path: file.clone(),
             contents: b"{}".to_vec(),

@@ -182,15 +182,21 @@ impl WorkspaceDirectory {
 }
 
 impl WorkspaceFiles for WorkspaceDirectory {
-    fn inventory(&self, roots: &[RelativePath]) -> Result<FileInventory, HostError> {
+    fn inventory(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<FileInventory, HostError> {
         const LIMIT: usize = 256;
         const PATH_BYTES_LIMIT: usize = 256 * 1024;
-        let mut pending = roots.to_vec();
+        let mut pending = roots
+            .iter()
+            .map(|selector| match selector {
+                hl_extension::FilesystemSelector::Exact { exact } => (exact.clone(), false),
+                hl_extension::FilesystemSelector::Subtree { subtree } => (subtree.clone(), true),
+            })
+            .collect::<Vec<_>>();
         pending.reverse();
         let mut entries = std::collections::BTreeMap::new();
         let mut path_bytes = 0usize;
         let mut complete = true;
-        while let Some(path) = pending.pop() {
+        while let Some((path, descend)) = pending.pop() {
             let directory = if path.parts().is_empty() {
                 true
             } else {
@@ -211,13 +217,13 @@ impl WorkspaceFiles for WorkspaceDirectory {
                 }
                 directory
             };
-            if !directory {
+            if !directory || !descend {
                 continue;
             }
             let mut children = self.list(&path)?;
             children.sort_by(|left, right| left.path.to_string().cmp(&right.path.to_string()));
             for child in children.into_iter().rev() {
-                pending.push(child.path);
+                pending.push((child.path, true));
             }
         }
         Ok(FileInventory {
