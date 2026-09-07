@@ -154,6 +154,8 @@ export interface WorkspaceConfiguration extends WorkspaceInfo {
   cpus: number | null;
   memory_mb: number | null;
   environment: [string, string][];
+  /** True when workspace environment values were withheld by the host. */
+  environment_redacted: boolean;
   mounts: WorkspaceMount[];
   docker_socket: boolean;
   scrollback: number | null;

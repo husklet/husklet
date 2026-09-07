@@ -6291,6 +6291,13 @@ const definitions = {
         }
       },
       {
+        "name": "environment_redacted",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
         "name": "mounts",
         "optional": false,
         "schema": {

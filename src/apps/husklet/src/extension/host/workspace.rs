@@ -514,6 +514,15 @@ struct Store {
 }
 
 impl Store {
+    fn preserve_redacted_environment(
+        old: &crate::config::WorkspaceConfig,
+        configuration: &WorkspaceConfiguration,
+        workspace: &mut crate::config::WorkspaceConfig,
+    ) {
+        if configuration.environment_redacted {
+            workspace.env.clone_from(&old.env);
+        }
+    }
     /// Whether one workspace's execution domain is accepting connections.
     ///
     /// Connecting is the only honest test: a socket file outlives the process
@@ -563,6 +572,7 @@ impl Store {
             cpus: workspace.cpus,
             memory_mb: workspace.memory_mb,
             environment: workspace.env.clone(),
+            environment_redacted: false,
             mounts: workspace
                 .mounts
                 .iter()
@@ -702,6 +712,7 @@ impl WorkspaceControl for Store {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
         let mut workspace = Self::configured(configuration)?;
+        Self::preserve_redacted_environment(&old, configuration, &mut workspace);
         if Self::running(&old) && workspace.storage != old.storage {
             return Err(HostError::Conflict(
                 "workspace storage cannot change while the workspace is running".into(),
@@ -823,6 +834,22 @@ mod workspace_control_tests {
     }
 
     #[test]
+    fn redacted_update_preserves_the_environment_it_could_not_observe() {
+        let mut old = crate::config::WorkspaceConfig::new("other", "alpine", hl_ws::Arch::Arm64);
+        old.env = vec![("DATABASE_PASSWORD".into(), "cycle19-preserved-secret".into())];
+        let mut carried = Store::configuration(&old);
+        carried.environment.clear();
+        carried.environment_redacted = true;
+        carried.shell = Some("/bin/bash".into());
+        let mut replacement = Store::configured(&carried).expect("otherwise valid update");
+
+        Store::preserve_redacted_environment(&old, &carried, &mut replacement);
+
+        assert_eq!(replacement.env, old.env);
+        assert_eq!(replacement.shell.as_deref(), Some("/bin/bash"));
+    }
+
+    #[test]
     fn lifecycle_revisions_are_stable_across_store_instances() {
         let first = Store { current: "one".into() };
         let before = first.lifecycle_revision();
@@ -844,8 +871,14 @@ mod workspace_control_tests {
         assert_eq!(changes[0].workspace, created);
         assert_eq!(changes[1].workspace, started);
         assert!(changes[0].revision < changes[1].revision);
-        let third = Store { current: "three".into() };
-        assert_eq!(selected(&third), changes, "store instances observe the same exact revisions");
+        let third = Store {
+            current: "three".into(),
+        };
+        assert_eq!(
+            selected(&third),
+            changes,
+            "store instances observe the same exact revisions"
+        );
     }
 }
 

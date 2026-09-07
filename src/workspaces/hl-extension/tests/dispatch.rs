@@ -49,7 +49,11 @@ struct Host {
 impl hl_extension::NotificationSink for Host {
     fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
         self.ledger.note("notifications.publish");
-        if self.fail_notification.get() { Err(HostError::Failed("desktop unavailable".into())) } else { Ok(()) }
+        if self.fail_notification.get() {
+            Err(HostError::Failed("desktop unavailable".into()))
+        } else {
+            Ok(())
+        }
     }
 }
 impl hl_extension::port::VolumeStore for Host {
@@ -920,7 +924,8 @@ fn workspace_configuration() -> WorkspaceConfiguration {
         shell: None,
         cpus: None,
         memory_mb: None,
-        environment: Vec::new(),
+        environment: vec![("DATABASE_PASSWORD".into(), "cycle19-secret".into())],
+        environment_redacted: false,
         mounts: Vec::new(),
         docker_socket: true,
         scrollback: Some(100_000),
@@ -928,6 +933,37 @@ fn workspace_configuration() -> WorkspaceConfiguration {
         execution_lifetime: "persisted".into(),
         terminal: WorkspaceTerminal::default(),
     }
+}
+
+#[test]
+fn workspace_inspection_always_redacts_environment_values() {
+    let host = Host::new();
+    let request = Request::WorkspaceInspect { name: "other".into() };
+
+    let failure = session(&[], &[])
+        .dispatch(&request, &services(&host))
+        .expect_err("inspection requires authority");
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(host.ledger.reached().is_empty(), "denial must precede host inspection");
+
+    let reply = session(&[Capability::WorkspaceRead], &[])
+        .dispatch(&request, &services(&host))
+        .expect("read-only inspection");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
+    assert!(!format!("{configuration:?}").contains("cycle19-secret"));
+
+    let reply = session(&[Capability::WorkspaceRead, Capability::WorkspaceControl], &[])
+        .dispatch(&request, &services(&host))
+        .expect("explicit control authority");
+    let Reply::WorkspaceConfiguration(configuration) = reply else {
+        panic!("unexpected reply")
+    };
+    assert!(configuration.environment.is_empty());
+    assert!(configuration.environment_redacted);
 }
 
 /// Every call, paired with the capability that must permit it.
@@ -2874,10 +2910,20 @@ fn notification_failure_is_structured_and_the_session_remains_usable() {
     host.fail_notification.set(true);
     let mut allowed = session(&[Capability::NotificationPublish, Capability::WorkspaceRead], &[]);
     let request = Request::NotificationPublish {
-        notification: hl_extension::Notification { id: "monitor".into(), title: "Database".into(), body: "offline".into() },
+        notification: hl_extension::Notification {
+            id: "monitor".into(),
+            title: "Database".into(),
+            body: "offline".into(),
+        },
     };
-    assert!(matches!(allowed.dispatch(&request, &services(&host)), Err(Failure::Failed { .. })));
-    assert!(matches!(allowed.dispatch(&Request::WorkspaceInfo, &services(&host)), Ok(Reply::Workspace(_))));
+    assert!(matches!(
+        allowed.dispatch(&request, &services(&host)),
+        Err(Failure::Failed { .. })
+    ));
+    assert!(matches!(
+        allowed.dispatch(&Request::WorkspaceInfo, &services(&host)),
+        Ok(Reply::Workspace(_))
+    ));
 }
 
 #[test]
@@ -2886,14 +2932,25 @@ fn one_session_cannot_multiply_unbounded_notification_identities() {
     let mut allowed = session(&[Capability::NotificationPublish], &[]);
     for index in 0..32 {
         let request = Request::NotificationPublish {
-            notification: hl_extension::Notification { id: format!("job-{index}"), title: "Job".into(), body: "done".into() },
+            notification: hl_extension::Notification {
+                id: format!("job-{index}"),
+                title: "Job".into(),
+                body: "done".into(),
+            },
         };
         assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
     }
     let overflow = Request::NotificationPublish {
-        notification: hl_extension::Notification { id: "job-32".into(), title: "Job".into(), body: "done".into() },
+        notification: hl_extension::Notification {
+            id: "job-32".into(),
+            title: "Job".into(),
+            body: "done".into(),
+        },
     };
-    assert!(matches!(allowed.dispatch(&overflow, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        allowed.dispatch(&overflow, &services(&host)),
+        Err(Failure::Conflict { .. })
+    ));
 }
 
 #[test]

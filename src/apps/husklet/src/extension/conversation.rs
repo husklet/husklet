@@ -1405,7 +1405,29 @@ mod tests {
         }
     }
 
-    impl hl_extension::port::WorkspaceControl for Host {}
+    impl hl_extension::port::WorkspaceControl for Host {
+        fn inspect(&self, name: &str) -> Result<hl_extension::WorkspaceConfiguration, HostError> {
+            self.ledger.note("workspace.inspect");
+            Ok(hl_extension::WorkspaceConfiguration {
+                generation: "0123456789abcdef0123456789abcdef".into(),
+                name: name.into(),
+                image: "alpine:3.20".into(),
+                architecture: "arm64".into(),
+                storage: None,
+                shell: None,
+                cpus: None,
+                memory_mb: None,
+                environment: vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())],
+                environment_redacted: false,
+                mounts: Vec::new(),
+                docker_socket: false,
+                scrollback: None,
+                vpn: None,
+                execution_lifetime: "persisted".into(),
+                terminal: hl_extension::WorkspaceTerminal::default(),
+            })
+        }
+    }
 
     struct LifecycleHost(Vec<hl_extension::WorkspaceLifecycleChange>);
 
@@ -1589,6 +1611,22 @@ mod tests {
                     ..hl_extension::FilesystemGrant::default()
                 },
             )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn workspace_read_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::WorkspaceRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
             conversation.greet()?;
             conversation.serve(&services(&host))
         });
@@ -1982,6 +2020,33 @@ mod tests {
             ledger.reached().is_empty(),
             "denied calls must not reach the filesystem service"
         );
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn read_only_workspace_inspection_never_frames_environment_secrets() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = workspace_read_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::WorkspaceInspect { name: "dev".into() });
+        assert!(
+            !answer
+                .payload
+                .windows(b"cycle19-socket-secret".len())
+                .any(|window| window == b"cycle19-socket-secret"),
+            "the host secret entered the extension-facing frame"
+        );
+        let Reply::WorkspaceConfiguration(configuration) = codec::read_reply(&answer).expect("workspace reply") else {
+            panic!("unexpected reply")
+        };
+        assert!(configuration.environment.is_empty());
+        assert!(configuration.environment_redacted);
+        assert!(!format!("{configuration:?}").contains("cycle19-socket-secret"));
+        assert_eq!(ledger.reached(), vec!["workspace.inspect"]);
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));

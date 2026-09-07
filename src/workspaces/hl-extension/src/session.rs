@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    NotificationSink, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles,
-    WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    NotificationSink, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory,
+    PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -760,7 +760,12 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.workspace_control)?;
         match request {
-            Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(port.inspect(name)?)),
+            Request::WorkspaceInspect { name } => {
+                let mut configuration = port.inspect(name)?;
+                configuration.environment.clear();
+                configuration.environment_redacted = true;
+                Ok(Reply::WorkspaceConfiguration(configuration))
+            }
             Request::WorkspaceCreate { configuration } => {
                 Ok(Reply::WorkspaceConfiguration(port.create(configuration)?))
             }
@@ -1257,9 +1262,8 @@ impl Session {
 }
 
 fn validate_notification(notification: &crate::port::Notification) -> Result<(), Failure> {
-    let valid = |value: &str, max: usize| {
-        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
-    };
+    let valid =
+        |value: &str, max: usize| !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control);
     if !valid(&notification.id, 128) || !valid(&notification.title, 256) || !valid(&notification.body, 4096) {
         return Err(Failure::Conflict {
             detail: "notification id, title, or body is empty, oversized, or contains control characters".into(),

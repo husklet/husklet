@@ -5995,6 +5995,13 @@
           }
         },
         {
+          "name": "environment_redacted",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "mounts",
           "optional": false,
           "schema": {
@@ -11466,7 +11473,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:4743cd6f407e0187",
+  "source_fingerprint": "fnv1a64:0c9f1b8cfe4861a9",
   "specification_version": 1,
   "topics": [
     {

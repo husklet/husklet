@@ -576,6 +576,9 @@ pub struct WorkspaceConfiguration {
     pub cpus: Option<u32>,
     pub memory_mb: Option<u32>,
     pub environment: Vec<(String, String)>,
+    /// True when environment values were intentionally withheld from this reply.
+    #[serde(default)]
+    pub environment_redacted: bool,
     pub mounts: Vec<WorkspaceMount>,
     pub docker_socket: bool,
     pub scrollback: Option<u64>,
