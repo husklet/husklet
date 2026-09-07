@@ -189,6 +189,10 @@ fn parse_native_test_option(value: &str) -> Result<NativeTestOption, String> {
             name: "HL_TRANSLIT_SYMBOL_RECEIPT",
             value: "1",
         }),
+        "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST=1" => Ok(NativeTestOption {
+            name: "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST",
+            value: "1",
+        }),
         _ if !value.contains('=') => Err("native test options use KEY=VALUE syntax".to_owned()),
         _ => Err("unsupported native test option; expected HL_TRANSLIT_FS_AUTHORITY_TEST=1".to_owned()),
     }

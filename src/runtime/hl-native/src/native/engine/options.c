@@ -114,6 +114,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only force a threaded same-ISA fresh-arena rollover", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_FS_AUTHORITY_TEST",
                         "test-only force same-ISA FS direct-data authority refusal", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST",
+                        "test-only enable the same-ISA direct-CALL pre-spill discriminator", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST",
                         "test-only omit one same-ISA pcache external relocation", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PCACHE_MUTATION_TEST",
