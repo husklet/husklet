@@ -281,7 +281,9 @@ fn bounded_directory_cursor_crosses_the_real_socket() {
         Vec::new(),
     ))
     .with_filesystem(hl_extension::FilesystemGrant {
-        read: vec![RelativePath::new("src").expect("root")],
+        read: vec![hl_extension::FilesystemSelector::Subtree {
+            subtree: RelativePath::new("src").expect("root"),
+        }],
         ..hl_extension::FilesystemGrant::default()
     });
     let request = Request::FilesystemListPage {
@@ -342,7 +344,9 @@ fn large_file_range_beyond_the_old_ceiling_crosses_the_real_socket() {
         Vec::new(),
     ))
     .with_filesystem(hl_extension::FilesystemGrant {
-        read: vec![RelativePath::new("data/embeddings.bin").expect("root")],
+        read: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("data/embeddings.bin").expect("root"),
+        }],
         ..hl_extension::FilesystemGrant::default()
     });
     let request = Request::FilesystemReadRange {

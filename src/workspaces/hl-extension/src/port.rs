@@ -1280,7 +1280,7 @@ fn workspace_control_unavailable() -> HostError {
 /// Files beneath the extension's declared roots.
 pub trait WorkspaceFiles {
     /// Recursively inventories only the roots declared by this extension.
-    fn inventory(&self, _roots: &[RelativePath]) -> Result<FileInventory, HostError> {
+    fn inventory(&self, _roots: &[crate::FilesystemSelector]) -> Result<FileInventory, HostError> {
         Err(HostError::Unsupported("filesystem observation is unavailable".into()))
     }
 

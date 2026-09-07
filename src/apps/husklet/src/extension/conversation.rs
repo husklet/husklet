@@ -240,7 +240,12 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
     ) -> io::Result<Self> {
-        let roots = authority.roots().to_vec();
+        let roots = authority
+            .roots()
+            .iter()
+            .cloned()
+            .map(|subtree| hl_extension::FilesystemSelector::Subtree { subtree })
+            .collect::<Vec<_>>();
         Self::new_scoped(
             stream,
             authority,
@@ -501,7 +506,7 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::Filesystem) {
-            if let Ok(inventory) = services.files.inventory(self.session.filesystem_read_roots()) {
+            if let Ok(inventory) = services.files.inventory(self.session.filesystem_read_selectors()) {
                 snapshots.push(Snapshot::Filesystem(inventory));
             }
         }
@@ -1614,8 +1619,12 @@ mod tests {
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
                 hl_extension::FilesystemGrant {
-                    read: vec![RelativePath::new("src").unwrap()],
-                    write: vec![RelativePath::new("workspace.toml").unwrap()],
+                    read: vec![hl_extension::FilesystemSelector::Subtree {
+                        subtree: RelativePath::new("src").unwrap(),
+                    }],
+                    write: vec![hl_extension::FilesystemSelector::Exact {
+                        exact: RelativePath::new("workspace.toml").unwrap(),
+                    }],
                     ..hl_extension::FilesystemGrant::default()
                 },
                 hl_extension::WorkspaceEnvironmentGrant::default(),

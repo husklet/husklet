@@ -85,7 +85,9 @@ pub enum Report {
     Loss(String),
     /// The restart policy has latched a crash loop. Structured rather than
     /// parsed from `Loss`, so settings never guesses state from prose.
-    Fault { restarts: u32 },
+    Fault {
+        restarts: u32,
+    },
 }
 
 /// Where the page sends what a person did.
@@ -344,7 +346,10 @@ impl Plan {
             .read
             .iter()
             .chain(&self.record.filesystem.write)
-            .cloned()
+            .map(|selector| match selector {
+                hl_extension::FilesystemSelector::Exact { exact } => exact.clone(),
+                hl_extension::FilesystemSelector::Subtree { subtree } => subtree.clone(),
+            })
             .collect();
         Authority::new(self.record.name.clone(), self.record.granted.clone(), roots)
     }
@@ -1036,7 +1041,9 @@ tab_title = "Sample"
     impl hl_extension::port::VolumeStore for Ports {}
     impl hl_extension::port::NetworkStore for Ports {}
     impl hl_extension::NotificationSink for Ports {
-        fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+        fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+            Ok(())
+        }
     }
 
     impl ContainerInventory for Ports {

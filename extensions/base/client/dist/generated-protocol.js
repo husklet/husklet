@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:b73004972878b010
+// Protocol artifact fnv1a64:d8002634b9fcfe49
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2130,7 +2130,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "RelativePath"
+            "name": "FilesystemSelector"
           }
         }
       },
@@ -2141,7 +2141,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "RelativePath"
+            "name": "FilesystemSelector"
           }
         }
       },
@@ -2152,7 +2152,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "RelativePath"
+            "name": "FilesystemSelector"
           }
         }
       },
@@ -2163,7 +2163,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "RelativePath"
+            "name": "FilesystemSelector"
           }
         }
       },
@@ -2174,7 +2174,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "RelativePath"
+            "name": "FilesystemSelector"
           }
         }
       }
@@ -2183,6 +2183,47 @@ const definitions = {
     "serde": {
       "deny_unknown_fields": true
     }
+  },
+  "FilesystemSelector": {
+    "kind": "enum",
+    "serde": {
+      "deny_unknown_fields": true,
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Exact",
+        "payload": {
+          "fields": [
+            {
+              "name": "exact",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "Subtree",
+        "payload": {
+          "fields": [
+            {
+              "name": "subtree",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
   },
   "Frame": {
     "fields": [
