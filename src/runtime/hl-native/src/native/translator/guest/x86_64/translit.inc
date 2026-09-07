@@ -10340,11 +10340,12 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
                                                                                                       : 0;
         goto done_call_ibtc;
     }
-    if (source_block == NULL || source_block->host_entry_off == 0) goto done_call_ibtc;
+    if (source_block == NULL) { result = 197; goto done_call_ibtc; }
+    if (source_block->host_entry_off == 0) { result = 198; goto done_call_ibtc; }
     if (scenario == 123) {
         /* Pcache relocation offsets are arena-relative, and helper rel32 reachability is placement-sensitive:
            exercise the old path in unused bytes of this generation, then roll its ledger observation back. */
-        if (g_cp > arena + arena_size - 512) goto done_call_ibtc;
+        if (g_cp > arena + arena_size - 512) { result = 199; goto done_call_ibtc; }
         uint8_t *pcache_emitted = g_cp;
         hl_x64_asm pcache_asm = {pcache_emitted, pcache_emitted + 512, 0, 0};
         int saved_pcache = g_pcache;
@@ -10358,19 +10359,21 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         translit_helper_relative_emitted = saved_helper_relative_emitted;
         if (pcache_asm.overflow || pcache_site.flags_packed != NULL || pcache_site.flags_live != NULL ||
             pcache_site.restore_end != NULL || pcache_site.save_end == NULL || pcache_site.rip_end == NULL ||
-            pcache_site.end == NULL)
-            goto done_call_ibtc;
+            pcache_site.end == NULL) {
+            result = 200; goto done_call_ibtc;
+        }
     }
     if ((scenario == 121 || scenario == 123) &&
         (translit_test_call_site.flags_packed == NULL || translit_test_call_site.flags_live == NULL ||
          translit_test_call_site.restore_end == NULL ||
          !(translit_test_call_site.flags_packed < translit_test_call_site.flags_live &&
-           translit_test_call_site.flags_live < translit_test_call_site.restore_end)))
-        goto done_call_ibtc;
+           translit_test_call_site.flags_live < translit_test_call_site.restore_end))) {
+        result = 201; goto done_call_ibtc;
+    }
     if (__atomic_load_n(&translit_direct_call_ibtc_emitted, __ATOMIC_RELAXED) != emitted_before + 1)
-        goto done_call_ibtc;
+        { result = 202; goto done_call_ibtc; }
     if (__atomic_load_n(&translit_jcc_ibtc_emitted, __ATOMIC_RELAXED) != jcc_emitted_before)
-        goto done_call_ibtc;
+        { result = 203; goto done_call_ibtc; }
     struct cpu cpu = {0};
     cpu.rip = source;
     cpu.r[4] = stack;
