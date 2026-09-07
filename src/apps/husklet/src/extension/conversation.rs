@@ -801,6 +801,7 @@ impl Conversation {
         let mut request = codec::read_request(frame).map_err(|coding| Failure::Unsupported {
             call: coding.to_string(),
         })?;
+        self.session.authority().permit(request.capability())?;
         if let hl_extension::Request::TerminalSwitchOccupant { slot, generation, .. } = &mut request {
             let topology = services.terminal.topology().ok().map(|topology| {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -3042,6 +3043,48 @@ mod tests {
         );
         assert!(ledger.reached().is_empty(), "invalid environment reached a service");
 
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn denied_terminal_write_never_inspects_the_pane_or_echoes_input() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::ContainerRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let secret = b"sentinel-terminal-input-never-in-a-failure";
+
+        let denied = ask(
+            &mut wire,
+            &Request::TerminalWritePane {
+                slot: "s1".into(),
+                generation: 1,
+                revision: 2,
+                contents: secret.to_vec(),
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&denied),
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalControl.as_str()
+        ));
+        assert!(!denied.payload.windows(secret.len()).any(|window| window == secret));
+        assert!(ledger.reached().is_empty(), "denied input reached terminal inspection");
         let later = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
         assert_eq!(ledger.reached(), vec!["containers.list"]);
