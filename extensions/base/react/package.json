@@ -39,7 +39,7 @@
     "build": "tsc -p tsconfig.json && node tools/types.js",
     "prepack": "npm run build",
     "test": "npm run build && npm run types:examples && node --test 'test/*.test.js' && node tools/package-smoke.js",
-    "lint": "eslint --config eslint.config.js 'src/**/*.{ts,tsx}' --max-warnings 0",
+    "lint": "eslint --config eslint.config.js 'src/**/*.{ts,tsx}' 'tools/*.js' --max-warnings 0",
     "format": "prettier --write 'src/**/*.{ts,tsx}'",
     "format:check": "prettier --check 'src/**/*.{ts,tsx}'",
     "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --esModuleInterop --skipLibCheck --noEmit examples/postgres-inspector.ts",

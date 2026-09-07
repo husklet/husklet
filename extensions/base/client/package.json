@@ -41,7 +41,7 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.json && node tools/build.js",
-    "lint": "eslint 'src/**/*.ts' tools/build.js --max-warnings 0",
+    "lint": "eslint 'src/**/*.ts' 'tools/*.js' --max-warnings 0",
     "format": "prettier --write 'src/{api,index,semantic,session,wire}.ts' tools/build.js tsconfig.json package.json",
     "format:check": "prettier --check 'src/{api,index,semantic,session,wire}.ts' tools/build.js tsconfig.json package.json",
     "test": "npm run build && npm run types:examples && node tools/protocol-spec.js && node tools/api-reference.js && node --test test/*.test.js && node tools/package-smoke.js",

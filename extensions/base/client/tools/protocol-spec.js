@@ -35,7 +35,6 @@ for (const [name, definition] of Object.entries(schema.definitions)) {
   );
 }
 
-const stable = (value) => JSON.stringify(value, Object.keys(value).sort());
 const requestVariants = schema.roots.request.variants.map(({ name }) => name);
 const replyVariants = new Set(schema.roots.reply.variants.map(({ name }) => name));
 assert(Array.isArray(schema.request_to_reply), 'Rust protocol schema lacks request_to_reply');
