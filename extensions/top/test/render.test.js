@@ -2086,6 +2086,10 @@ test('volume and network panels render bounded real inventories and controls', (
     assert.ok(labels(volumeFrame).includes(label), label);
   for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  const networkStage = stageFromFrame(networkFrame);
+  assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>
