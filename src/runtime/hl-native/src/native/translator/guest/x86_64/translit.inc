@@ -3960,7 +3960,15 @@ static void *translit_unsupported_record_thread(void *opaque) {
 static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
-    if (scenario == 238) return translit_pre_spill_signal_stage_test() ? 0 : 238;
+    if (scenario == 238) {
+        pid_t child = fork();
+        if (child < 0) return 238;
+        if (child == 0) _exit(translit_pre_spill_signal_stage_test() ? 0 : 238);
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 238;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 238;
+    }
     if (scenario >= 239 && scenario <= 244) {
         pid_t child = fork();
         if (child < 0) return (int)scenario;
@@ -11417,6 +11425,13 @@ static int translit_pre_spill_signal_stage_test(void) {
     translit_emit_pre_spill_restore(&a, &site);
     uint8_t *end = a.cursor; hl_x64_u8(&a, 0x90);
     translit_emit_exit_const(&a, guest + 1, R_BRANCH);
+    /* Intel requires a serializing instruction between modifying an instruction stream and executing it.
+       This fixture publishes no product arena, so perform the current-thread half of publication here. */
+    unsigned serialize_eax = 0, serialize_ebx, serialize_ecx = 0, serialize_edx;
+    __asm__ volatile("cpuid"
+                     : "+a"(serialize_eax), "=b"(serialize_ebx), "+c"(serialize_ecx), "=d"(serialize_edx)
+                     :
+                     : "cc", "memory");
     const uint32_t rax = 1u << HL_X64_RAX, r11 = 1u << HL_X64_R11, both = rax | r11;
     jit_body_owner_range ranges[7]; uint32_t count = 0, token = 0;
     int exact = jit_body_owner_reserve_n(g_cache_gen, 7, &token) &&
