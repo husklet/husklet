@@ -185,6 +185,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
           },
           acquisition: async () => ({
             job: 'storybook-review',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
             revision: 1,
             state: 'failed',
             progress: null,
@@ -226,6 +227,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
             attempt === 1
               ? {
                   job,
+                  reference: 'registry.example/reviewed:1',
                   revision: 1,
                   state: 'failed',
                   progress: null,
@@ -312,6 +314,7 @@ for (const updating of [false, true]) {
             startAcquisition: async () => ({ job: 'scoped-review' }),
             acquisition: async () => ({
               job: 'scoped-review',
+              reference: 'local/scoped:2',
               revision: 4,
               state: 'ready',
               progress: null,
@@ -393,6 +396,7 @@ test('extension image entry submits from the keyboard and consent explains reque
           },
           acquisition: async () => ({
             job: 'candidate',
+            reference: 'registry.example/assistant:1.2.0',
             revision: 7,
             state: 'ready',
             progress: null,
