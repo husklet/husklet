@@ -2834,7 +2834,12 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a,
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
     ranges.rip_end = a->cursor;
-    int guard = 1;
+    /* The shared-record guard remains available to the native fixture below, but
+       production takes the compact helper path.  A balanced diagnostics-off cc1
+       run found the guard added 40.72% retired instructions and 29.32% elapsed
+       time despite a 95.16% hit rate: its unconditional aligned-table load and
+       branchless SSE selection cost more than the spill/reload misses it avoids. */
+    int guard = 0;
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (translit_test_jcc_guard >= 0) guard = translit_test_jcc_guard;
 #endif
