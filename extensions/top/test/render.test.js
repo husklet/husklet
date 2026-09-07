@@ -145,6 +145,16 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
+  assert.deepEqual(ancestorTags(stage, 'Workspace control').slice(0, 3), [
+    'Card',
+    'Column',
+    'Column',
+  ]);
+  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 3), [
+    'Row',
+    'CardContent',
+    'Card',
+  ]);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -4110,6 +4120,25 @@ function fieldValue(stage, placeholder) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
     .at(-1)?.SetProp.value?.Text;
+}
+
+function ancestorTags(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  const found = labelled(stage, label)?.SetProp.id;
+  const ancestors = [];
+  for (let node = found; parents.has(node);) {
+    node = parents.get(node);
+    ancestors.push(tags.get(node));
+  }
+  return ancestors;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

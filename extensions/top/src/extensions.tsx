@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -250,8 +249,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           wrap
         />
         <Heading label="Discover" scale="caption" />
-        <Row gap={1} wrap>
-          <Card grow={false} width={{ chars: 28 }} variant="outline">
+        <Column gap={2}>
+          <Card variant="filled">
             <CardHeader label="Workspace control" detail="First-party · Included" />
             <CardContent gap={1}>
               <Text
@@ -262,7 +261,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </CardContent>
           </Card>
           {!installed.some((extension) => extension.name === 'storybook') && (
-            <Card grow={false} width={{ chars: 28 }} variant="outline">
+            <Card variant="filled">
               <CardHeader label="Component playground" detail="First-party · Storybook" />
               <CardContent gap={1}>
                 <Text
@@ -270,17 +269,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   color="text-dim"
                   wrap
                 />
+                <Row>
+                  <Button
+                    label="Review access"
+                    enabled={!busy}
+                    onInvoke={() => inspect(STORYBOOK_IMAGE)}
+                  />
+                </Row>
               </CardContent>
-              <CardActions>
-                <Button
-                  label="Review access"
-                  enabled={!busy}
-                  onInvoke={() => inspect(STORYBOOK_IMAGE)}
-                />
-              </CardActions>
             </Card>
           )}
-        </Row>
+        </Column>
         <Card variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
@@ -491,18 +490,20 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           onRetry={reload}
         >
           {installed.map((extension) => (
-            <Card key={`${extension.name}:${extension.image_digest}`} variant="outline">
+            <Card key={`${extension.name}:${extension.image_digest}`} variant="filled">
               <CardHeader
                 label={extension.name}
                 detail={extension.version ?? extension.image_digest}
               />
-              <CardContent>
-                <Row gap={1} align="center" wrap>
+              <CardContent gap={1}>
+                <Row gap={1} wrap>
                   <Badge label={extension.enabled ? extension.status : 'disabled'} />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
                   />
+                </Row>
+                <Row gap={1} wrap>
                   {extension.status.startsWith('fault:') ? (
                     <Button
                       label="Retry"
