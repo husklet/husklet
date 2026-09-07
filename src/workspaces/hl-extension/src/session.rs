@@ -260,6 +260,7 @@ impl Session {
             | Request::FilesystemReadRange { .. }
             | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
+            | Request::FilesystemWriteObserved { .. }
             | Request::FilesystemCreateObserved { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
@@ -765,6 +766,22 @@ impl Session {
                     .authority()
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.write(path, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemWriteObserved {
+                path,
+                observed,
+                contents,
+            } => {
+                if contents.len() > 64 * 1024 || observed.is_empty() || observed.len() > 256 {
+                    return Err(Failure::Failed {
+                        detail: "observed filesystem write exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                Ok(Reply::Identity(port.write_observed(path, observed, contents)?))
             }
             Request::FilesystemCreateObserved { path, contents } => {
                 if contents.len() > 64 * 1024 {

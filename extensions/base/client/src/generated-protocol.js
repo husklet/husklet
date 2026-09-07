@@ -295,6 +295,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_read_range": "file_range",
   "filesystem_stat": "entry",
   "filesystem_write": "done",
+  "filesystem_write_observed": "identity",
   "filesystem_create_observed": "identity",
   "filesystem_mkdir": "done",
   "filesystem_rename": "done",
@@ -402,6 +403,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_read_range": "filesystem:read",
   "filesystem_stat": "filesystem:read",
   "filesystem_write": "filesystem:write",
+  "filesystem_write_observed": "filesystem:write",
   "filesystem_create_observed": "filesystem:write",
   "filesystem_mkdir": "filesystem:write",
   "filesystem_rename": "filesystem:write",
@@ -8754,6 +8756,43 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "RelativePath"
+              }
+            },
+            {
+              "name": "contents",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_write_observed",
+        "payload": {
+          "fields": [
+            {
+              "name": "path",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            },
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             },
             {

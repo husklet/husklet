@@ -496,6 +496,10 @@ export function workspace(session, { signal } = {}) {
       ),
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
+      writeObserved: async (path, observed, contents) => expect(
+        await session.call('filesystem_write_observed', { path, observed, contents: [...contents] }),
+        'identity',
+      ),
       createObserved: async (path, contents) => expect(
         await session.call('filesystem_create_observed', { path, contents: [...contents] }),
         'identity',
@@ -1638,7 +1642,7 @@ export const protocolCoverage = Object.freeze({
     volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],
     networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait', 'connect', 'disconnect'],
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
-    files: ['list', 'read', 'readRange', 'stat', 'write', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
+    files: ['list', 'read', 'readRange', 'stat', 'write', 'writeObserved', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],

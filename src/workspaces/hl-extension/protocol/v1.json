@@ -6543,6 +6543,10 @@
     },
     {
       "capability": "filesystem:write",
+      "request": "filesystem_write_observed"
+    },
+    {
+      "capability": "filesystem:write",
       "request": "filesystem_create_observed"
     },
     {
@@ -6962,6 +6966,10 @@
     {
       "reply": "done",
       "request": "filesystem_write"
+    },
+    {
+      "reply": "identity",
+      "request": "filesystem_write_observed"
     },
     {
       "reply": "identity",
@@ -9396,6 +9404,43 @@
           }
         },
         {
+          "name": "filesystem_write_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_create_observed",
           "payload": {
             "fields": [
@@ -10728,7 +10773,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:a5f890d044ca5186",
+  "source_fingerprint": "fnv1a64:9f8642edf6f521d7",
   "specification_version": 1,
   "topics": [
     {

@@ -464,6 +464,8 @@ export interface WorkspaceApi {
     read(path: string): Promise<number[]>;
     readRange(path: string, offset?: number, limit?: number, observed?: string | null): Promise<FileRange>;
     write(path: string, contents: Iterable<number>): Promise<void>;
+    /** Atomically replace exactly the file identity returned by stat/readRange. */
+    writeObserved(path: string, observed: string, contents: Iterable<number>): Promise<string>;
     createObserved(path: string, contents: Iterable<number>): Promise<string>;
     mkdir(path: string): Promise<void>;
     rename(from: string, to: string): Promise<void>;

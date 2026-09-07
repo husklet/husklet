@@ -1151,6 +1151,13 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
 
+    /// Atomically replaces a regular file only while it still has `observed` identity.
+    fn write_observed(&self, _path: &RelativePath, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
+        Err(HostError::Unsupported(
+            "observed filesystem writes are unavailable".into(),
+        ))
+    }
+
     fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
         Err(HostError::Unsupported(
             "observed filesystem creation is unavailable".into(),

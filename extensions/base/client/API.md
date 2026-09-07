@@ -24,6 +24,25 @@ branch on `error.kind`, not message text. Pending calls are bounded and time out
 closing the ordered session, because continuing could attach a later reply to the
 wrong caller.
 
+## Extension feasibility
+
+| Extension shape | Current fit | Relevant API and remaining constraint |
+| --- | --- | --- |
+| Code/embedding index | Partial | Bounded file listing, metadata, ranged reads, and exact manifest roots are sufficient for a deliberate scan. There is no filesystem-change topic yet, so an incremental indexer must rescan. |
+| LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
+| PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, and rendered UI cover administration. Database credentials and SQL transport remain the extension's own concern. |
+| Container/process inspector | Strong | Container inventories, immutable IDs, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. Manifest grants are currently workspace-wide rather than restricted to one container. |
+| Single-file workspace editor | Strong | An exact file path may be the sole `filesystem_roots` entry. `stat` plus `writeObserved` provides compare-and-swap replacement; ranged reads and observed rename/remove prevent stale agent decisions. |
+| UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
+| Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
+| Extension catalogue/manager | Partial | Discovery can be rendered from a catalogue owned by the manager extension; acquisition/install/update/enable/disable/remove are complete. The host does not define or trust a global catalogue service. |
+
+Capabilities use `group:verb` wire names. Filesystem authority is additionally
+confined by exact manifest roots, including a single file. Container grants do not
+yet carry an ID/name constraint; extensions receiving `containers:read` or
+`containers:control` can reach every container in the workspace, which must be
+shown honestly in installation consent.
+
 ## Workspace
 
 - `host.info(...)` — `workspace_info`, requires `workspaces:read`.
@@ -112,6 +131,7 @@ wrong caller.
 - `host.files.readRange(...)` — `filesystem_read_range`, requires `filesystem:read`.
 - `host.files.stat(...)` — `filesystem_stat`, requires `filesystem:read`.
 - `host.files.write(...)` — `filesystem_write`, requires `filesystem:write`.
+- `host.files.writeObserved(...)` — `filesystem_write_observed`, requires `filesystem:write`.
 - `host.files.createObserved(...)` — `filesystem_create_observed`, requires `filesystem:write`.
 - `host.files.mkdir(...)` — `filesystem_mkdir`, requires `filesystem:write`.
 - `host.files.rename(...)` — `filesystem_rename`, requires `filesystem:write`.

@@ -6,11 +6,11 @@ use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
-use hl_extension::RelativePath;
 use hl_extension::port::{Entry, FileRange, HostError, WorkspaceFiles};
+use hl_extension::RelativePath;
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -268,6 +268,64 @@ impl WorkspaceFiles for WorkspaceDirectory {
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError> {
         let target = self.publication(path)?;
         atomic_write(&target, contents).map_err(|error| absence(path, &error))
+    }
+
+    fn write_observed(&self, path: &RelativePath, observed: &str, contents: &[u8]) -> Result<String, HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
+        let entry = self.pinned(path)?;
+        let opened = open_entry_identity(path, &entry, observed)?;
+        for _ in 0..128 {
+            let quarantine = CString::new(format!(
+                ".husklet-write-old-{}-{}",
+                std::process::id(),
+                TEMPORARY.fetch_add(1, Ordering::Relaxed)
+            ))
+            .expect("fixed prefix has no NUL");
+            let captured = PinnedEntry {
+                directory: entry.directory.try_clone().map_err(|error| absence(path, &error))?,
+                metadata: entry.directory.metadata().map_err(|error| absence(path, &error))?,
+                name: quarantine,
+            };
+            match rename_noreplace(&entry, &captured) {
+                Ok(()) => {
+                    let status = rustix::fs::statat(
+                        &captured.directory,
+                        &captured.name,
+                        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                    )
+                    .map_err(io::Error::from)
+                    .map_err(|error| absence(path, &error))?;
+                    if (status.st_dev, status.st_ino) != (opened.dev(), opened.ino()) {
+                        rename_noreplace(&captured, &entry).map_err(|error| absence(path, &error))?;
+                        return Err(HostError::Conflict(format!(
+                            "{path} no longer matches the observed identity"
+                        )));
+                    }
+                    let target = self.publication(path)?;
+                    let identity = match atomic_create(&target, contents) {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            rename_noreplace(&captured, &entry).map_err(|rollback| {
+                                HostError::Failed(format!(
+                                    "{path}: publication failed ({error}) and rollback failed ({rollback})"
+                                ))
+                            })?;
+                            return Err(absence(path, &error));
+                        }
+                    };
+                    remove_entry(&captured)
+                        .and_then(|()| entry.directory.sync_all())
+                        .map_err(|error| absence(path, &error))?;
+                    return Ok(identity);
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(absence(path, &error)),
+            }
+        }
+        Err(HostError::Failed("could not reserve a unique write quarantine".into()))
     }
 
     fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
@@ -741,8 +799,8 @@ fn described_at(parent: &RelativePath, directory: &File, entry: &rustix::fs::Dir
 #[cfg(test)]
 mod tests {
     use super::WorkspaceDirectory;
-    use hl_extension::RelativePath;
     use hl_extension::port::{HostError, WorkspaceFiles};
+    use hl_extension::RelativePath;
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -873,6 +931,38 @@ mod tests {
     }
 
     #[test]
+    fn observed_write_replaces_only_the_inspected_file_and_returns_the_new_identity() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let target = path("settings.json");
+        let first = files.create_observed(&target, b"one").expect("create");
+
+        let second = files
+            .write_observed(&target, &first, b"two")
+            .expect("compare-and-swap write");
+        assert_ne!(second, first);
+        assert_eq!(
+            files.stat(&target).expect("stat").identity.as_deref(),
+            Some(second.as_str())
+        );
+        assert_eq!(files.read(&target).expect("read"), b"two");
+
+        assert!(matches!(
+            files.write_observed(&target, &first, b"stale"),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(files.read(&target).expect("read"), b"two");
+        assert!(std::fs::read_dir(&root).expect("root listing").all(|entry| {
+            !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-old-")
+        }));
+    }
+
+    #[test]
     fn observed_rename_and_remove_capture_then_validate_without_touching_replacements() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let root = temporary.path().join("workspace");
@@ -958,17 +1048,15 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
-        assert!(
-            std::fs::read_dir(temporary.path())
-                .expect("directory listing")
-                .all(|entry| {
-                    !entry
-                        .expect("entry")
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".husklet-write-")
-                })
-        );
+        assert!(std::fs::read_dir(temporary.path())
+            .expect("directory listing")
+            .all(|entry| {
+                !entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".husklet-write-")
+            }));
     }
 
     #[test]
@@ -1028,12 +1116,10 @@ mod tests {
         .expect("atomic publication");
 
         assert_eq!(std::fs::read(&target).expect("published contents"), b"new bytes");
-        assert!(
-            !std::fs::symlink_metadata(&target)
-                .expect("published metadata")
-                .file_type()
-                .is_symlink()
-        );
+        assert!(!std::fs::symlink_metadata(&target)
+            .expect("published metadata")
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::read(&outside).expect("outside contents"), b"outside bytes");
     }
 
@@ -1090,12 +1176,10 @@ mod tests {
 
         assert_eq!(std::fs::read(&outside).expect("outside"), b"outside");
         assert!(!root.join("remove-link").exists());
-        assert!(
-            std::fs::symlink_metadata(root.join("renamed-link"))
-                .expect("renamed link")
-                .file_type()
-                .is_symlink()
-        );
+        assert!(std::fs::symlink_metadata(root.join("renamed-link"))
+            .expect("renamed link")
+            .file_type()
+            .is_symlink());
     }
 
     #[test]

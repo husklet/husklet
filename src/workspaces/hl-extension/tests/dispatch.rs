@@ -699,6 +699,10 @@ impl WorkspaceFiles for Host {
         self.ledger.note("files.write");
         Ok(())
     }
+    fn write_observed(&self, _path: &RelativePath, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
+        self.ledger.note("files.write_observed");
+        Ok("v1:1:2:3:4:5:6:8".into())
+    }
     fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
         self.ledger.note("files.create_observed");
         Ok("v1:1:2:3:4:5:6:7".into())
@@ -1222,6 +1226,14 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::FilesystemWrite {
                 path: path("logs/app.log"),
+                contents: b"x".to_vec(),
+            },
+            Capability::FilesystemWrite,
+        ),
+        (
+            Request::FilesystemWriteObserved {
+                path: path("logs/app.log"),
+                observed: "v1:1:2:3:4:5:6:7".into(),
                 contents: b"x".to_vec(),
             },
             Capability::FilesystemWrite,
