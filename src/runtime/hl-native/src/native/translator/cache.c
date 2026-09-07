@@ -1871,7 +1871,7 @@ static int map_growth_test(uint32_t scenario, uint64_t *answer) {
 // aliasing pressure ~8x, so far more indirect branches hit inline and never reach the
 // dispatcher. The reader's hash width (guest/aarch64/stubs.c) and both fills (the per-arch
 // G_IBTC_FILL, which key on `(target>>2) & (IBTC_N-1)`) follow this constant.
-#define IBTC_N 65536
+#define IBTC_N 131072
 
 // 16-byte aligned so each {target,body} entry sits in a single 16-byte granule -> a
 // naturally-aligned 128-bit ldp/stp is single-copy atomic under FEAT_LSE2 (all Apple
