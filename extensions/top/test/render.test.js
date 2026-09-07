@@ -145,6 +145,16 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
+  assert.deepEqual(ancestorTags(stage, 'Workspace control').slice(0, 3), [
+    'Card',
+    'Column',
+    'Column',
+  ]);
+  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 3), [
+    'Row',
+    'CardContent',
+    'Card',
+  ]);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
@@ -181,6 +191,82 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     fieldValue(stage, 'registry.example/extension:version'),
     'ghcr.io/husklet/husklet/extension-storybook:latest',
   );
+});
+
+test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
+  const references = [];
+  let attempt = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            if (reference === 'not a reference') throw new Error('Image reference is invalid.');
+            attempt += 1;
+            return { job: `review-${attempt}` };
+          },
+          acquisition: async (job) =>
+            attempt === 1
+              ? {
+                  job,
+                  revision: 1,
+                  state: 'failed',
+                  progress: null,
+                  candidate: null,
+                  error: 'registry temporarily unavailable',
+                }
+              : {
+                  job,
+                  revision: 2,
+                  state: 'ready',
+                  progress: null,
+                  candidate: {
+                    name: 'reviewed',
+                    version: '1.0.0',
+                    image_digest: `sha256:${'c'.repeat(64)}`,
+                    installed_image_digest: null,
+                    requested: ['containers:read'],
+                  },
+                  error: null,
+                },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  change(stage, 'registry.example/extension:version', 'not a reference');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Image reference is invalid.'));
+  assert.equal(fieldValue(stage, 'registry.example/extension:version'), 'not a reference');
+
+  change(stage, 'registry.example/extension:version', 'registry.example/reviewed:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Inspection failed.'));
+  assert.ok(labelled(stage, 'registry temporarily unavailable'));
+  assert.ok(labelled(stage, 'Retry inspection'));
+  invoke(stage, 'Retry inspection');
+  await settled();
+  await settled();
+  assert.deepEqual(references, [
+    'not a reference',
+    'registry.example/reviewed:1',
+    'registry.example/reviewed:1',
+  ]);
+  assert.ok(labelled(stage, 'Review permissions'));
+  assert.ok(
+    labelled(stage, 'All access is off by default. Enable only what this extension needs.'),
+  );
+  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.deepEqual(latestSwitchValues(stage), [false]);
 });
 
 for (const updating of [false, true]) {
@@ -300,11 +386,11 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
-  assert.ok(labelled(stage, 'View containers and processes'));
-  assert.ok(labelled(stage, 'Read and write terminal text'));
+  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
   assert.ok(labelled(stage, '0/2 allowed'));
   assert.ok(
-    labelled(stage, 'containers:read'),
+    labelled(stage, 'View containers and processes (containers:read)'),
     'exact authority remains visible beside plain language',
   );
 
@@ -369,6 +455,62 @@ test('installed extension removal requires final consent and a failure remains r
   await settled();
   assert.equal(calls.length, 2);
   assert.ok(labelled(stage, 'assistant removed and verified.'));
+});
+
+test('installed extensions expose truthful enabled, disabled, fault and retry states', async () => {
+  const calls = [];
+  let publish;
+  let extension = {
+    name: 'assistant',
+    image_digest: `sha256:${'d'.repeat(64)}`,
+    version: '1.2.0',
+    enabled: true,
+    status: 'running',
+  };
+  const result = async (action) => {
+    calls.push(action);
+    extension =
+      action === 'disable'
+        ? { ...extension, enabled: false, status: 'stopped' }
+        : { ...extension, enabled: true, status: 'running' };
+    return { changed: true, extension };
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [extension],
+          disableAndWait: async () => result('disable'),
+          enableAndWait: async () => result('enable'),
+          retryAndWait: async () => result('retry'),
+        },
+        watchExtensions: async (listener) => {
+          publish = listener;
+          return () => {};
+        },
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Disable');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
+  invoke(stage, 'Enable');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'running'));
+
+  extension = { ...extension, enabled: true, status: 'fault: socket closed' };
+  publish([extension]);
+  await settled();
+  assert.ok(labelled(stage, 'Retry'));
+  invoke(stage, 'Retry');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, ['disable', 'enable', 'retry']);
+  assert.ok(labelled(stage, 'assistant recovered and verified.'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -3978,6 +4120,25 @@ function fieldValue(stage, placeholder) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
     .at(-1)?.SetProp.value?.Text;
+}
+
+function ancestorTags(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  const found = labelled(stage, label)?.SetProp.id;
+  const ancestors = [];
+  for (let node = found; parents.has(node);) {
+    node = parents.get(node);
+    ancestors.push(tags.get(node));
+  }
+  return ancestors;
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));

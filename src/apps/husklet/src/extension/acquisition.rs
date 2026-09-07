@@ -45,6 +45,7 @@ pub(crate) struct AcquisitionCandidate {
     pub version: String,
     pub requested: Grant,
     pub requested_containers: hl_extension::ContainerGrant,
+    pub requested_filesystem: hl_extension::FilesystemGrant,
     pub installed_digest: Option<String>,
 }
 
@@ -283,11 +284,35 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
     ) -> Result<(), HostError> {
+        self.install_resource_scoped(
+            job,
+            revision,
+            consented,
+            containers,
+            &hl_extension::FilesystemGrant::default(),
+        )
+    }
+
+    pub(crate) fn install_resource_scoped(
+        &self,
+        job: AcquisitionJob,
+        revision: u64,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        filesystem: &hl_extension::FilesystemGrant,
+    ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, _) = self.take_ready(job, revision)?;
         let result = Roster::workspace(&self.workspace)
             .and_then(|mut roster| {
-                roster.register_scoped(&candidate.manifest, &candidate.digest, consented, containers, moment())
+                roster.register_resource_scoped(
+                    &candidate.manifest,
+                    &candidate.digest,
+                    consented,
+                    containers,
+                    filesystem,
+                    moment(),
+                )
             })
             .map_err(|error| HostError::Failed(error.to_string()));
         self.finish(job, result, AcquisitionState::Installed)
@@ -305,6 +330,23 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
     ) -> Result<(), HostError> {
+        self.update_resource_scoped(
+            job,
+            revision,
+            consented,
+            containers,
+            &hl_extension::FilesystemGrant::default(),
+        )
+    }
+
+    pub(crate) fn update_resource_scoped(
+        &self,
+        job: AcquisitionJob,
+        revision: u64,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        filesystem: &hl_extension::FilesystemGrant,
+    ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
         let (candidate, installed_digest) = self.take_ready(job, revision)?;
         let result = (|| {
@@ -315,7 +357,7 @@ impl ExtensionAcquisitions {
                 .prepare_update_if_digest(&candidate.manifest, &candidate.digest, &installed_digest)
                 .map_err(|error| error.to_string())?;
             roster
-                .commit_update_scoped(update, consented, containers, moment())
+                .commit_update_resource_scoped(update, consented, containers, filesystem, moment())
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
@@ -415,6 +457,7 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 version: candidate.manifest.version.clone(),
                 requested: candidate.manifest.capabilities.clone(),
                 requested_containers: candidate.manifest.containers.clone(),
+                requested_filesystem: candidate.manifest.filesystem.clone(),
                 installed_digest,
             };
             (AcquisitionState::Ready(visible), Some(candidate))
@@ -451,7 +494,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 

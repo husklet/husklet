@@ -389,11 +389,11 @@ export function workspace(session, { signal } = {}) {
       startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
       acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
       cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-      install: async (job, revision, granted, containers = { selectors: [], create: false }) => expect(
-        await session.call('extension_install', { job, revision, granted, containers }), 'extension',
+      install: async (job, revision, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
+        await session.call('extension_install', { job, revision, granted, containers, filesystem }), 'extension',
       ),
-      update: async (job, revision, granted, containers = { selectors: [], create: false }) => expect(
-        await session.call('extension_update', { job, revision, granted, containers }), 'extension',
+      update: async (job, revision, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [] }) => expect(
+        await session.call('extension_update', { job, revision, granted, containers, filesystem }), 'extension',
       ),
     },
     containers: {
@@ -1915,6 +1915,7 @@ export function workspace(session, { signal } = {}) {
     revision,
     granted,
     containers = { selectors: [], create: false },
+    filesystem = { read: [], write: [] },
     { timeoutMs = 30_000 } = {},
   ) => {
     if (!Number.isSafeInteger(revision) || revision < 0) {
@@ -1959,7 +1960,7 @@ export function workspace(session, { signal } = {}) {
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](job, revision, granted, containers);
+      const committed = await api.extensions[operation](job, revision, granted, containers, filesystem);
       if (committed.name !== candidate.name || committed.image_digest !== digest) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }
@@ -1979,10 +1980,10 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.extensions.installAndWait = (job, revision, granted, containers, options) =>
-    commitAcquisitionAndWait('install', job, revision, granted, containers, options);
-  api.extensions.updateAndWait = (job, revision, granted, containers, options) =>
-    commitAcquisitionAndWait('update', job, revision, granted, containers, options);
+  api.extensions.installAndWait = (job, revision, granted, containers, filesystem, options) =>
+    commitAcquisitionAndWait('install', job, revision, granted, containers, filesystem, options);
+  api.extensions.updateAndWait = (job, revision, granted, containers, filesystem, options) =>
+    commitAcquisitionAndWait('update', job, revision, granted, containers, filesystem, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (
       typeof job !== 'string' ||

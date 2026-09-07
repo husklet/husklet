@@ -190,7 +190,7 @@ fn a_manifest_cannot_use_a_capability_it_did_not_declare() {
         Err(Invalid::Undeclared(Capability::Interface))
     );
 
-    let roots = manifest_document("filesystem_roots = [\"logs\"]\n");
+    let roots = manifest_document("[filesystem]\nread = [\"logs\"]\n");
     assert_eq!(
         Manifest::parse(&roots, PROTOCOL),
         Err(Invalid::Undeclared(Capability::FilesystemRead))
@@ -236,7 +236,7 @@ fn duplicate_or_untitled_pane_providers_are_refused() {
 fn a_manifest_path_that_escapes_is_refused_with_the_manifest() {
     let label = format!(
         "{{\"name\":\"x\",\"display_name\":\"X\",\"version\":\"1\",\"protocol\":{PROTOCOL},\
-          \"capabilities\":[\"filesystem:read\"],\"filesystem_roots\":[\"../../etc\"]}}"
+          \"capabilities\":[\"filesystem:read\"],\"filesystem\":{{\"read\":[\"../../etc\"]}}}}"
     );
     assert!(matches!(Manifest::parse(&label, PROTOCOL), Err(Invalid::Malformed(_))));
 }

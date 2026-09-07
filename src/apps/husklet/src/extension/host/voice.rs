@@ -293,7 +293,7 @@ mod tests {
         )
         .expect("encoded");
         let value: serde_json::Value = serde_json::from_slice(&payload).expect("json");
-        assert!(value.get("slot").is_none());
+        assert!(value["slot"].is_null());
     }
 
     #[test]

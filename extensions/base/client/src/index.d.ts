@@ -77,12 +77,17 @@ export interface ContainerGrant {
   selectors: ContainerSelector[];
   create: boolean;
 }
+export interface FilesystemGrant {
+  read: string[];
+  write: string[];
+}
 export interface ExtensionCandidate {
   name: string;
   version: string;
   image_digest: string;
   requested: ExtensionCapability[];
   requested_containers: ContainerGrant;
+  requested_filesystem: FilesystemGrant;
   installed_image_digest: string | null;
 }
 export interface ExtensionAcquisitionJob {
@@ -579,15 +584,15 @@ export interface WorkspaceApi {
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
+    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
+    installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant): Promise<ExtensionSummary>;
+    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, options?: { timeoutMs?: number }): Promise<
+    updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;

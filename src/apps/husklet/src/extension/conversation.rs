@@ -219,6 +219,7 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
     ) -> io::Result<Self> {
+        let roots = authority.roots().to_vec();
         Self::new_scoped(
             stream,
             authority,
@@ -227,6 +228,10 @@ impl Conversation {
             hl_extension::ContainerGrant {
                 selectors: vec![hl_extension::ContainerSelector::All { all: true }],
                 create: true,
+            },
+            hl_extension::FilesystemGrant {
+                read: roots.clone(),
+                write: roots,
             },
         )
     }
@@ -238,6 +243,7 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
+        filesystem: hl_extension::FilesystemGrant,
     ) -> io::Result<Self> {
         let control = stream.try_clone()?;
         Ok(Self {
@@ -246,7 +252,10 @@ impl Conversation {
             // The workspace overview exists before the sidecar connects. Its
             // empty slot is the extension's primary surface; extra tab/split
             // surfaces are acquired explicitly through the terminal port.
-            session: Session::new(authority).with_containers(containers).with_surface(""),
+            session: Session::new(authority)
+                .with_containers(containers)
+                .with_filesystem(filesystem)
+                .with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
             channels: Channels::new(),
@@ -461,7 +470,7 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::Filesystem) {
-            if let Ok(inventory) = services.files.inventory(self.session.authority().roots()) {
+            if let Ok(inventory) = services.files.inventory(self.session.filesystem_read_roots()) {
                 snapshots.push(Snapshot::Filesystem(inventory));
             }
         }
@@ -705,6 +714,12 @@ impl Conversation {
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
+        if frame.kind == Kind::Response {
+            return Err(Fault::Malformed(format!(
+                "extension sent unexpected {:?} frame on channel {:?}",
+                frame.kind, frame.channel
+            )));
+        }
         if frame.kind == Kind::Ping {
             self.wire
                 .send(&Frame::new(frame.channel, Kind::Pong, frame.payload.clone()))
@@ -1458,6 +1473,36 @@ mod tests {
         (theirs, served)
     }
 
+    fn filesystem_scoped_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let roots = vec![
+                RelativePath::new("src").unwrap(),
+                RelativePath::new("workspace.toml").unwrap(),
+            ];
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::FilesystemRead, Capability::FilesystemWrite]),
+                roots,
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::FilesystemGrant {
+                    read: vec![RelativePath::new("src").unwrap()],
+                    write: vec![RelativePath::new("workspace.toml").unwrap()],
+                },
+            )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
     #[test]
     fn conversation_drains_the_composed_native_extension_source() {
         let (_theirs, ours) = UnixStream::pair().expect("socket pair");
@@ -1626,6 +1671,39 @@ mod tests {
         assert_eq!(ledger.reached(), vec!["containers.list"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()), "a hangup is not a fault");
+    }
+
+    #[test]
+    fn filesystem_verb_scopes_fail_closed_over_the_extension_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = filesystem_scoped_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemWrite {
+                path: RelativePath::new("src/lib.rs").unwrap(),
+                contents: b"no".to_vec(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemRead {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(codec::is_failure(&answer));
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { .. })));
+        assert!(
+            ledger.reached().is_empty(),
+            "denied calls must not reach the filesystem service"
+        );
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]
@@ -1804,6 +1882,7 @@ mod tests {
                 selectors: vec![hl_extension::ContainerSelector::Name { name: "other".into() }],
                 create: false,
             },
+            hl_extension::FilesystemGrant::default(),
         )
         .expect("conversation");
         let host = Host { ledger };
@@ -2141,11 +2220,19 @@ mod tests {
         ports.workspace_control = &lifecycle;
         conversation.observe(&ports).expect("observe native mutation");
         let mut wire = Wire::new(peer);
-        let observed = (0..256).any(|_| {
-            let event: Snapshot = serde_json::from_slice(&wire.receive().expect("event").payload).expect("snapshot");
-            matches!(event, Snapshot::WorkspaceLifecycle(change)
+        let mut observed = false;
+        for _ in 0..256 {
+            let frame = wire.receive().expect("event");
+            let event: Snapshot = serde_json::from_slice(&frame.payload).expect("snapshot");
+            if matches!(event, Snapshot::WorkspaceLifecycle(change)
                 if change.workspace == name && change.action == hl_extension::WorkspaceLifecycleAction::Create)
-        });
+            {
+                observed = true;
+                break;
+            }
+            let credit = Frame::new(frame.channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+            conversation.exchange(&credit, &ports).expect("return event credit");
+        }
         assert!(
             observed,
             "native mutation was delivered through the shared lifecycle ledger"
@@ -2413,15 +2500,10 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        ask(
-            &mut wire,
-            &Request::InterfaceOpenTab {
-                title: "Sample".to_owned(),
-            },
-        );
         let drawn = ask(
             &mut wire,
-            &Request::InterfaceRender {
+            &Request::InterfaceRenderAt {
+                slot: String::new(),
                 frame: hl_gui::Frame::new(1),
             },
         );
@@ -2429,7 +2511,7 @@ mod tests {
         assert_eq!(codec::read_reply(&drawn).expect("a reply"), Reply::Done);
         let collected = queue.collect();
         assert_eq!(collected.frames.len(), 1, "the frame is held for the window");
-        assert_eq!(collected.frames[0].slot, "tab-Sample");
+        assert_eq!(collected.frames[0].slot, "");
         assert_eq!(collected.frames[0].frame.sequence, 1);
         assert!(queue.is_empty(), "collecting empties the queue");
         drop(wire);
@@ -2575,7 +2657,13 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned(), generation: Some(4) });
+        let answer = ask(
+            &mut wire,
+            &Request::ContainerStop {
+                id: "c1".to_owned(),
+                generation: 4,
+            },
+        );
 
         assert!(codec::is_failure(&answer), "a refusal is reported as one");
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {
@@ -2637,6 +2725,26 @@ mod tests {
         drop(wire);
 
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn a_peer_response_frame_fails_closed_instead_of_being_ignored() {
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        wire.send(&Frame::new(
+            hl_extension::ChannelId::new(2),
+            Kind::Response,
+            serde_json::to_vec(&serde_json::json!({ "reply": "workspace" })).unwrap(),
+        ))
+        .expect("unsolicited response sent");
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !served.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(served.is_finished(), "unexpected response must close promptly");
+        let fault = served.join().expect("joined").expect_err("unexpected response must close");
+        assert!(matches!(fault, Fault::Malformed(detail) if detail.contains("unexpected Response frame")));
     }
 
     #[test]

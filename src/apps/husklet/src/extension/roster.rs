@@ -197,10 +197,29 @@ impl<S: Storage> Roster<S> {
         containers: &hl_extension::ContainerGrant,
         at: i64,
     ) -> Result<(), Refusal> {
+        self.register_resource_scoped(
+            manifest,
+            digest,
+            consented,
+            containers,
+            &hl_extension::FilesystemGrant::default(),
+            at,
+        )
+    }
+
+    pub fn register_resource_scoped(
+        &mut self,
+        manifest: &Manifest,
+        digest: &str,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        filesystem: &hl_extension::FilesystemGrant,
+        at: i64,
+    ) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         let record = self
             .installation
-            .install_scoped(manifest, digest, consented, containers, at)?
+            .install_resource_scoped(manifest, digest, consented, containers, filesystem, at)?
             .clone();
         if let Err(fault) = self.records.save(&record) {
             self.installation = previous;
@@ -242,9 +261,28 @@ impl<S: Storage> Roster<S> {
         containers: &hl_extension::ContainerGrant,
         at: i64,
     ) -> Result<(), UpdateRefusal> {
+        self.commit_update_resource_scoped(
+            update,
+            consented,
+            containers,
+            &hl_extension::FilesystemGrant::default(),
+            at,
+        )
+    }
+
+    pub fn commit_update_resource_scoped(
+        &mut self,
+        update: Update,
+        consented: &Grant,
+        containers: &hl_extension::ContainerGrant,
+        filesystem: &hl_extension::FilesystemGrant,
+        at: i64,
+    ) -> Result<(), UpdateRefusal> {
         let records = &self.records;
         self.installation
-            .commit_update_scoped(update, consented, containers, at, |_, next| records.save(next))
+            .commit_update_resource_scoped(update, consented, containers, filesystem, at, |_, next| {
+                records.save(next)
+            })
             .map(|_| ())
             .map_err(|failure| match failure {
                 UpdateFailure::Refused(objection) => UpdateRefusal::Policy(objection),
@@ -401,7 +439,7 @@ pub fn described(record: &Record) -> Manifest {
         interface: None,
         pane_providers: record.pane_providers.clone(),
         resources: hl_extension::Resources::default(),
-        filesystem_roots: Vec::new(),
+        filesystem: hl_extension::FilesystemGrant::default(),
     });
     // These duplicated fields are the durable consent boundary. A nested
     // declaration can describe launch and presentation, never widen authority.
@@ -489,7 +527,7 @@ mod tests {
             interface: None,
             pane_providers: Vec::new(),
             resources: hl_extension::Resources::default(),
-            filesystem_roots: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }
     }
 

@@ -109,7 +109,32 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_composite_field_caption_names_its_editable_widget();
+    form_control_labels_name_their_choice_control();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn form_control_labels_name_their_choice_control() {
+    let mut session = Session::new();
+    let labelled = session.producer.create(Tag::FormControlLabel);
+    let choice = session.producer.create(Tag::Switch);
+    session.producer.append(NodeId::ROOT, labelled);
+    session.producer.append(labelled, choice);
+    session
+        .producer
+        .set(labelled, Prop::Label, PropValue::text("Allow container reads"));
+    session.flush().unwrap();
+
+    let widgets = session.widgets();
+    let caption = widgets
+        .iter()
+        .find(|candidate| candidate.has_css_class("hl-caption"))
+        .and_then(|candidate| candidate.clone().downcast::<gtk::Label>().ok())
+        .expect("form control caption");
+    let choice = widgets
+        .iter()
+        .find(|candidate| candidate.has_css_class("hl-field"))
+        .expect("labelled choice control");
+    assert_eq!(caption.mnemonic_widget().as_ref(), Some(choice));
 }
 
 fn every_composite_field_caption_names_its_editable_widget() {
