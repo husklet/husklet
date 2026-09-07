@@ -16,6 +16,10 @@ cases:
       exit: 42
       stdout_empty: true
       stderr: [" r0=*", " fall_total=*"]
+      diagnostics:
+        - { counter: translated_steps, equals: 51000010 }
+        - { counter: interpreted_steps, equals: 0 }
+        - { counter: translated_entries, equals: 125001 }
   - id: runtime/aarch64-dbt/alu-bench
     status: active
     compat: { class: smoke }
