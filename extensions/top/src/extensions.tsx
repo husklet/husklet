@@ -318,38 +318,40 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
-        <Heading label="Discover" scale="caption" />
-        <Column gap={2}>
-          <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
-            <CardHeader label="Workspace control" detail="First-party · Included" />
-            <CardContent gap={1}>
-              <Text
-                label="Settings, runtime resources, and terminal panes in one compact tab."
-                color="text-dim"
-                wrap
-              />
-            </CardContent>
-          </Card>
-          {!installed.some((extension) => extension.name === 'storybook') && (
+        {!acquisition && <Heading label="Discover" scale="caption" />}
+        {!acquisition && (
+          <Column gap={2}>
             <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
-              <CardHeader label="Component playground" detail="First-party · Storybook" />
+              <CardHeader label="Workspace control" detail="First-party · Included" />
               <CardContent gap={1}>
                 <Text
-                  label="Explore extension components, large tables, terminals, diffs, and metrics."
+                  label="Settings, runtime resources, and terminal panes in one compact tab."
                   color="text-dim"
                   wrap
                 />
-                <Row>
-                  <Button
-                    label="Review access"
-                    enabled={!busy}
-                    onInvoke={() => inspect(STORYBOOK_IMAGE)}
-                  />
-                </Row>
               </CardContent>
             </Card>
-          )}
-        </Column>
+            {!installed.some((extension) => extension.name === 'storybook') && (
+              <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
+                <CardHeader label="Component playground" detail="First-party · Storybook" />
+                <CardContent gap={1}>
+                  <Text
+                    label="Explore extension components, large tables, terminals, diffs, and metrics."
+                    color="text-dim"
+                    wrap
+                  />
+                  <Row>
+                    <Button
+                      label="Review access"
+                      enabled={!busy}
+                      onInvoke={() => inspect(STORYBOOK_IMAGE)}
+                    />
+                  </Row>
+                </CardContent>
+              </Card>
+            )}
+          </Column>
+        )}
         <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
