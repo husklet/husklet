@@ -2815,7 +2815,9 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a,
     return ranges;
 }
 
-static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *a, uint64_t target) {
+static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *a, uint64_t target,
+                                                                    uint8_t *pre_save_end,
+                                                                    uint8_t *pre_flags_packed) {
     translit_jcc_ibtc_site_ranges ranges = {0};
 #if defined(HL_NATIVE_TEST_HOOKS)
     if (!translit_test_direct_call_pre_spill || g_pcache) {
@@ -2831,8 +2833,13 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
         return ranges;
     }
 #else
-    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
-    ranges.save_end = a->cursor;
+    if (pre_flags_packed != NULL) {
+        ranges.save_end = pre_save_end;
+        ranges.flags_packed = pre_flags_packed;
+    } else {
+        hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+        ranges.save_end = a->cursor;
+    }
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
@@ -2852,10 +2859,12 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     /* Preserve the CALL's architectural flags without touching its just-committed guest stack.  This
        is the same packed representation used by the pre-spill signal owner: the probe and its optional
        counter may freely set host flags until the common restore below. */
-    hl_x64_u8(a, 0x9f); // lahf
-    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0); // seto %al
-    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
-    ranges.flags_packed = a->cursor;
+    if (pre_flags_packed == NULL) {
+        hl_x64_u8(a, 0x9f); // lahf
+        hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0); // seto %al
+        hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+        ranges.flags_packed = a->cursor;
+    }
 
     hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
     uint8_t *irq = hl_x64_jcc_rel32(a, 5);
@@ -3503,11 +3512,11 @@ static int translit_owner_append_direct_call(jit_body_owner_range ranges[TL_MAX_
     if (site->flags_packed != NULL)
         return translit_owner_append(ranges, count, instruction_start, call_committed, source, 0) &&
                translit_owner_append(ranges, count, call_committed, site->save_end, target, 0) &&
-               translit_owner_append(ranges, count, site->save_end, site->rip_end, target,
+               translit_owner_append(ranges, count, site->save_end, site->flags_packed, target,
                                      1u << HL_X64_RAX) &&
-               translit_owner_append(ranges, count, site->rip_end, site->flags_packed,
-                                     JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
-               translit_owner_append(ranges, count, site->flags_packed, site->flags_live,
+               translit_owner_append(ranges, count, site->flags_packed, site->rip_end, target,
+                                     (1u << HL_X64_RAX) | JIT_BODY_OWNER_FLAGS_FROM_PACKED) &&
+               translit_owner_append(ranges, count, site->rip_end, site->flags_live,
                                      JIT_BODY_OWNER_DYNAMIC_RIP,
                                      (1u << HL_X64_RAX) | JIT_BODY_OWNER_FLAGS_FROM_PACKED) &&
                translit_owner_append(ranges, count, site->flags_live, site->restore_end,
@@ -5812,6 +5821,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
         translit_ret_sim_ranges ret_site = {0};
         uint8_t *direct_call_committed = NULL;
+        uint8_t *direct_call_pre_save_end = NULL;
+        uint8_t *direct_call_pre_flags_packed = NULL;
         uint64_t direct_call_target = 0;
         int preserve_register = -1;
         uint8_t *riprel_readonly_save_end = NULL, *riprel_readonly_op_end = NULL;
@@ -6343,6 +6354,17 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (kind == TL_CALL) {
                 direct_call_committed = a->cursor;
                 direct_call_target = next + (uint64_t)insn.imm;
+#if defined(HL_NATIVE_TEST_HOOKS)
+                if (translit_test_direct_call_pre_spill && !g_pcache &&
+                    translit_jcc_ibtc_stub_entry != NULL) {
+                    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+                    direct_call_pre_save_end = a->cursor;
+                    hl_x64_u8(a, 0x9f);
+                    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0);
+                    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+                    direct_call_pre_flags_packed = a->cursor;
+                }
+#endif
             }
             if (kind == TL_CALL_MEM) {
                 hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
@@ -6378,7 +6400,9 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                                 (unsigned)direct_jmp_stitched, (unsigned)jcc_fall_stitched, source_page_delta);
 #endif
             if (kind == TL_CALL && translit_jcc_ibtc_stub_entry != NULL) {
-                ibtc_site = translit_emit_direct_call_ibtc(a, next + (uint64_t)insn.imm);
+                ibtc_site = translit_emit_direct_call_ibtc(a, next + (uint64_t)insn.imm,
+                                                           direct_call_pre_save_end,
+                                                           direct_call_pre_flags_packed);
                 direct_call_ibtc_sites++;
             } else if (kind == TL_CALL) {
                 translit_emit_exit_const(a, next + (uint64_t)insn.imm, R_BRANCH);
@@ -10326,7 +10350,8 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         uint32_t saved_helper_relative_count = translit_helper_relative_count;
         uint32_t saved_helper_relative_emitted = translit_helper_relative_emitted;
         g_pcache = 1;
-        translit_jcc_ibtc_site_ranges pcache_site = translit_emit_direct_call_ibtc(&pcache_asm, target);
+        translit_jcc_ibtc_site_ranges pcache_site =
+            translit_emit_direct_call_ibtc(&pcache_asm, target, NULL, NULL);
         g_pcache = saved_pcache;
         translit_helper_relative_count = saved_helper_relative_count;
         translit_helper_relative_emitted = saved_helper_relative_emitted;
