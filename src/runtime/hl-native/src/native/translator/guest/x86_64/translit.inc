@@ -10381,12 +10381,20 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     run_block(context, &cpu, source_block);
     uint64_t return_word = 0;
     memcpy(&return_word, (void *)(uintptr_t)(stack - 8), sizeof return_word);
-    if (cpu.rip != target || cpu.r[4] != stack - 8 || return_word != call_return ||
-        cpu.v[0] != (scenario == 123 ? UINT64_C(0x13579bdf2468ace0) : UINT64_C(0x8877665544332211)) ||
-        cpu.v[1] != (scenario == 123 ? 0 : UINT64_C(0x1122334455667788)) ||
-        cpu.jcc_ibtc_miss != TL_DIRECT_CALL_IBTC_MISS ||
-        __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1)
-        goto done_call_ibtc;
+    if (cpu.rip != target) { result = 190; goto done_call_ibtc; }
+    if (cpu.r[4] != stack - 8) { result = 191; goto done_call_ibtc; }
+    if (return_word != call_return) { result = 192; goto done_call_ibtc; }
+    if (cpu.v[0] !=
+        (scenario == 123 ? UINT64_C(0x13579bdf2468ace0) : UINT64_C(0x8877665544332211))) {
+        result = 193; goto done_call_ibtc;
+    }
+    if (cpu.v[1] != (scenario == 123 ? 0 : UINT64_C(0x1122334455667788))) {
+        result = 194; goto done_call_ibtc;
+    }
+    if (cpu.jcc_ibtc_miss != TL_DIRECT_CALL_IBTC_MISS) { result = 195; goto done_call_ibtc; }
+    if (__atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1) {
+        result = 196; goto done_call_ibtc;
+    }
     if (scenario == 121) {
         result = translit_direct_call_signal_stage_test() && cpu.r[4] == stack - 8 && return_word == source + 5
                      ? 0
