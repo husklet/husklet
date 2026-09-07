@@ -48,8 +48,9 @@ Manifests declare at most 128 exact selectors under `[containers]`, for example
 update calls carry the independently selected `ContainerGrant`; the host persists
 its intersection with the manifest beside the image digest. Lists, subscriptions,
 deep reads, execution access, terminal attachment and lifecycle calls are filtered
-or denied at the Rust dispatch boundary. A name is resolved through the current
-inventory to its immutable ID and generation before mutation.
+or denied at the Rust dispatch boundary. Exact-ID and wildcard mutations operate
+on immutable IDs. Name-scoped mutations fail closed until the host can assert the
+observed generation atomically with the mutation.
 
 Creation additionally requires `create = true`. Visibility never implies create.
 Omitting `[containers]` means no container authority, even with a container verb

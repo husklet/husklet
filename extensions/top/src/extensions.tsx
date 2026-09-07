@@ -358,8 +358,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 </FormControlLabel>
               )}
               {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
-                  <Text label="No container resources requested." color="text-dim" />
-                )}
+                <Text label="No container resources requested." color="text-dim" />
+              )}
               <Button
                 label={
                   busy === 'update'

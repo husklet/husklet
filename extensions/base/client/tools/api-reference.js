@@ -2,67 +2,124 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { PROTOCOL_BOUNDS, PROTOCOL_TOPICS, protocolSurface, requestCapability } from '../src/index.js';
+import {
+  PROTOCOL_BOUNDS,
+  PROTOCOL_TOPICS,
+  protocolSurface,
+  requestCapability,
+} from '../src/index.js';
 
 const output = fileURLToPath(new URL('../API.md', import.meta.url));
-const execution = new Set(['processes', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution']);
+const execution = new Set([
+  'processes',
+  'execution',
+  'executions',
+  'executionLogs',
+  'waitExecution',
+  'signalExecution',
+  'removeExecution',
+]);
 const semantic = new Set(['semantics', 'act']);
 const groups = new Map([
-  ['Workspace', []], ['Containers', []], ['Processes and executions', []], ['Terminal and panes', []],
-  ['Files', []], ['Images', []], ['Networks', []], ['Volumes', []], ['Extensions', []], ['Semantics', []],
+  ['Workspace', []],
+  ['Containers', []],
+  ['Processes and executions', []],
+  ['Terminal and panes', []],
+  ['Files', []],
+  ['Images', []],
+  ['Networks', []],
+  ['Volumes', []],
+  ['Extensions', []],
+  ['Semantics', []],
 ]);
 
 for (const [wire, route] of Object.entries(protocolSurface.requests)) {
   if (route.kind !== 'facade') continue;
-  const [namespace, method] = route.api.includes('.') ? route.api.split('.') : ['workspace', route.api];
-  const group = namespace === 'containers' && execution.has(method) ? 'Processes and executions'
-    : namespace === 'terminal' && semantic.has(method) ? 'Semantics'
-      : ({ workspace: 'Workspace', containers: 'Containers', terminal: 'Terminal and panes', files: 'Files', images: 'Images', networks: 'Networks', volumes: 'Volumes', extensions: 'Extensions' })[namespace];
+  const [namespace, method] = route.api.includes('.')
+    ? route.api.split('.')
+    : ['workspace', route.api];
+  const group =
+    namespace === 'containers' && execution.has(method)
+      ? 'Processes and executions'
+      : namespace === 'terminal' && semantic.has(method)
+        ? 'Semantics'
+        : {
+            workspace: 'Workspace',
+            containers: 'Containers',
+            terminal: 'Terminal and panes',
+            files: 'Files',
+            images: 'Images',
+            networks: 'Networks',
+            volumes: 'Volumes',
+            extensions: 'Extensions',
+          }[namespace];
   assert(group, `no documentation group for ${wire}`);
-  groups.get(group).push(`- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
+  groups
+    .get(group)
+    .push(`- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
 }
-groups.get('Terminal and panes').push(
-  '- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.',
-  '- `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.',
-  '- `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `panes:observe`, `panes:semantic-control`, and the corresponding read grant.',
-  '- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe` and `terminals:control`.',
-  '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe` and `terminals:control`.',
-  '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe` and `terminals:control`.',
-  '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:control`.',
-  '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:control`.',
-  '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-  '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-  '- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-  '- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:control`.',
-  '- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe` and `terminals:control`.',
-);
-groups.get('Semantics').push(
-  '- `host.terminal.inspectAndAct(slot, proposal, options)` — arms observation, reads the bounded semantic tree, verifies an enabled advertised node action, invokes it at that exact revision, and returns bounded XML before/after; requires `panes:observe`, `panes:semantic-read`, and `panes:semantic-control`.',
-);
-groups.get('Extensions').push(
-  '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extensions:install`.',
-  '- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extensions:read` and `extensions:control`.',
-  '- `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.',
-  '- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.',
-  '- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.',
-  '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.',
-  '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.',
-  '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.',
-  '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.',
-  '- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.',
-);
-groups.get('Processes and executions').push(
-  '- `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.',
-  '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.',
-);
+groups
+  .get('Terminal and panes')
+  .push(
+    '- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.',
+    '- `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.',
+    '- `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `panes:observe`, `panes:semantic-control`, and the corresponding read grant.',
+    '- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
+    '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
+    '- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
+    '- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:control`.',
+    '- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe` and `terminals:control`.',
+  );
+groups
+  .get('Semantics')
+  .push(
+    '- `host.terminal.inspectAndAct(slot, proposal, options)` — arms observation, reads the bounded semantic tree, verifies an enabled advertised node action, invokes it at that exact revision, and returns bounded XML before/after; requires `panes:observe`, `panes:semantic-read`, and `panes:semantic-control`.',
+  );
+groups
+  .get('Extensions')
+  .push(
+    '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extensions:install`.',
+    '- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extensions:read` and `extensions:control`.',
+    '- `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.',
+    '- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.',
+    '- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.',
+    '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.',
+    '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.',
+    '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.',
+    '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.',
+    '- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.',
+  );
+groups
+  .get('Processes and executions')
+  .push(
+    '- `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.',
+    '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.',
+  );
 
-const topicCapability = Object.fromEntries(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
-const sections = [...groups].map(([heading, operations]) => `## ${heading}\n\n${operations.join('\n')}`).join('\n\n');
-const events = Object.keys(protocolSurface.topics).map((topic) =>
-  `- \`host.subscribe('${topic}')\` / \`host.unsubscribe('${topic}')\` — requires \`${topicCapability[topic]}\`.`).join('\n');
-const internal = Object.entries(protocolSurface.requests).filter(([, route]) => route.kind === 'internal')
-  .map(([wire, route]) => `- \`${wire}\` — ${route.rationale}.`).join('\n');
-const bounds = Object.entries(PROTOCOL_BOUNDS).map(([name, value]) => `- \`${name}\`: ${value}`).join('\n');
+const topicCapability = Object.fromEntries(
+  PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]),
+);
+const sections = [...groups]
+  .map(([heading, operations]) => `## ${heading}\n\n${operations.join('\n')}`)
+  .join('\n\n');
+const events = Object.keys(protocolSurface.topics)
+  .map(
+    (topic) =>
+      `- \`host.subscribe('${topic}')\` / \`host.unsubscribe('${topic}')\` — requires \`${topicCapability[topic]}\`.`,
+  )
+  .join('\n');
+const internal = Object.entries(protocolSurface.requests)
+  .filter(([, route]) => route.kind === 'internal')
+  .map(([wire, route]) => `- \`${wire}\` — ${route.rationale}.`)
+  .join('\n');
+const bounds = Object.entries(PROTOCOL_BOUNDS)
+  .map(([name, value]) => `- \`${name}\`: ${value}`)
+  .join('\n');
 
 const reference = `# @husklet/client API reference
 
@@ -114,8 +171,9 @@ Manifests declare at most 128 exact selectors under \`[containers]\`, for exampl
 update calls carry the independently selected \`ContainerGrant\`; the host persists
 its intersection with the manifest beside the image digest. Lists, subscriptions,
 deep reads, execution access, terminal attachment and lifecycle calls are filtered
-or denied at the Rust dispatch boundary. A name is resolved through the current
-inventory to its immutable ID and generation before mutation.
+or denied at the Rust dispatch boundary. Exact-ID and wildcard mutations operate
+on immutable IDs. Name-scoped mutations fail closed until the host can assert the
+observed generation atomically with the mutation.
 
 Creation additionally requires \`create = true\`. Visibility never implies create.
 Omitting \`[containers]\` means no container authority, even with a container verb
@@ -174,4 +232,9 @@ ${internal}
 `;
 
 if (process.argv.includes('--write')) fs.writeFileSync(output, reference);
-else assert.equal(fs.readFileSync(output, 'utf8'), reference, 'API.md is stale; run npm run api:generate');
+else
+  assert.equal(
+    fs.readFileSync(output, 'utf8'),
+    reference,
+    'API.md is stale; run npm run api:generate',
+  );
