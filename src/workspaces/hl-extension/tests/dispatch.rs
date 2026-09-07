@@ -8,9 +8,9 @@
 use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
-    ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, Division, Entry, ExecutionSummary,
-    ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange, GridSize,
-    HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
+    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange,
+    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
     PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
     TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
@@ -710,6 +710,22 @@ impl WorkspaceFiles for Host {
             size: 0,
             identity: None,
         }])
+    }
+
+    fn list_page(
+        &self,
+        path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _observed: Option<&str>,
+        _limit: usize,
+    ) -> Result<DirectoryPage, HostError> {
+        self.ledger.note("files.list_page");
+        Ok(DirectoryPage {
+            entries: Vec::new(),
+            identity: format!("directory:{}", path.as_str()),
+            next: None,
+            more: false,
+        })
     }
 
     fn read(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
