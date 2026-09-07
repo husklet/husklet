@@ -675,6 +675,7 @@ static void *translate_block(uint64_t guest_pc) {
         uint64_t exit_kind;
         uint64_t conditional_target = 0;
         uint8_t *direct_target = NULL;
+        uint64_t direct_target_loop_steps = 0;
         uint64_t decoded_target = 0;
         if ((instruction & 0xFF000010u) == 0x54000000u ||
             (instruction & 0xFF000010u) == 0x54000010u ||
@@ -686,6 +687,7 @@ static void *translate_block(uint64_t guest_pc) {
             for (unsigned index = 0; index < count; ++index)
                 if (guest_for_instruction[index] == decoded_target) {
                     direct_target = host_for_instruction[index];
+                    direct_target_loop_steps = (uint64_t)count - index + 1;
                     break;
                 }
         int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
@@ -716,7 +718,7 @@ static void *translate_block(uint64_t guest_pc) {
         header->reserved = (uint64_t)has_memory;
         header->branch_target = conditional_target;
         header->branch_fallthrough = conditional ? cursor + 4 : 0;
-        header->loop_steps = direct_target == NULL ? 0 : (cursor - decoded_target) / 4 + 1;
+        header->loop_steps = direct_target_loop_steps;
         header->reserved2 = 0;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, source_end, entry, entry) != MAP_PUT_OK) {
