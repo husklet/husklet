@@ -466,6 +466,30 @@ fn nohooks_product_aggregates_child_only_mixed_execution_after_reap() {
 }
 
 #[test]
+fn nohooks_product_receipt_is_one_atomic_record() {
+    let root = tempfile::tempdir().unwrap();
+    build_fixture(root.path());
+    let output = run(root.path(), "on");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let records = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(PREFIX))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "product census cardinality:\n{stderr}");
+    let mut fields = std::collections::BTreeMap::new();
+    for field in records[0].split_ascii_whitespace() {
+        let (name, value) = field.split_once('=').unwrap_or_else(|| panic!("malformed field {field:?}"));
+        let value = value.parse::<i128>().unwrap_or_else(|_| panic!("non-integer field {name:?}"));
+        assert!(fields.insert(name, value).is_none(), "duplicate field {name:?}");
+    }
+    assert_eq!(fields["version"], 13);
+    for name in ["r0", "r_other", "dispatch_translation_miss", "t_other"] {
+        assert!(fields.contains_key(name), "product record omitted trailing field {name:?}");
+    }
+}
+
+#[test]
 fn real_worker_cli_typed_jcc_ibtc_on_and_off_reach_product_v4() {
     let root = tempfile::tempdir().unwrap();
     build_jcc_ibtc_fixture(root.path());

@@ -1412,6 +1412,32 @@ mod tests {
             expected.push(Box::leak(format!("executed_form{rank}_key").into_boxed_str()));
             expected.push(Box::leak(format!("executed_form{rank}_count").into_boxed_str()));
         }
+        for reason in 0..20 {
+            expected.push(Box::leak(format!("r{reason}").into_boxed_str()));
+        }
+        expected.extend([
+            "r_other",
+            "dispatch_translation_miss",
+            "dispatch_interpreted",
+            "dispatch_translated_return_total",
+            "dispatch_translated_return_mismatch",
+            "dispatch_interpreted_return_total",
+            "dispatch_interpreted_return_mismatch",
+            "t_fallthrough",
+            "t_jcc_taken",
+            "t_jcc_fall",
+            "t_direct_jmp",
+            "t_direct_call",
+            "t_ret",
+            "t_jmp_reg",
+            "t_jmp_mem",
+            "t_call_reg",
+            "t_call_mem",
+            "t_syscall",
+            "t_irq",
+            "t_fault",
+            "t_other",
+        ]);
         let mut fields = std::collections::BTreeMap::new();
         for token in records[0].split_whitespace() {
             let (name, value) = token.split_once('=').expect("well-formed diagnostic token");

@@ -3396,8 +3396,9 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
     for (unsigned kind = 0; kind < HL_BACKEND_SHAPE_T_COUNT; ++kind)
         translated_return_total += atomic_load_explicit(&census->translated_exit[kind], memory_order_relaxed);
     uint64_t translated_entries = atomic_load_explicit(&census->translated_entries, memory_order_relaxed);
-    if ((size_t)formatted + 1 >= sizeof record) HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
-    record[formatted++] = '\n';
+    /* The product receipt is one record.  Splitting its reason and exit fields onto a bare
+       continuation line makes the strict consumer reject a successful long-running workload,
+       and leaves that unprefixed tail indistinguishable from unrelated diagnostics. */
     for (unsigned reason = 0; reason < HL_BACKEND_TREE_REASON_COUNT; ++reason) {
         int added = snprintf(record + formatted, sizeof record - (size_t)formatted, " r%u=%llu", reason,
                              (unsigned long long)atomic_load_explicit(&census->reason[reason],
