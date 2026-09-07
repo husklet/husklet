@@ -10,8 +10,9 @@ int main(void) {
     if (signal(SIGALRM, stop) == SIG_ERR) return 1;
     alarm(1);
     __asm__ volatile("movz x0,#0\n"
-                     "1: add x0,x0,#1\n"
+                     "movz x1,#1\n"
+                     "1: madd x0,x0,x1,x1\n"
                      "cbnz x0,1b\n"
-                     : : : "x0", "cc", "memory");
+                     : : : "x0", "x1", "cc", "memory");
     return 2;
 }

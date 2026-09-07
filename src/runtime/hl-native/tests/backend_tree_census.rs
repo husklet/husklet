@@ -357,6 +357,44 @@ fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
 }
 
 #[test]
+fn aarch64_x86_three_source_lowering_covers_the_complete_allocated_family() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "static int hl_a64_x86_emit_three_source",
+        "(instruction & 0x1F000000u) != 0x1B000000u",
+        "op31 == 1u || op31 == 5u",
+        "op31 == 2u || op31 == 6u",
+        "!sf || o0",
+        "op31 != 0u && op31 != 1u && op31 != 2u && op31 != 5u && op31 != 6u",
+        "hl_a64_x86_emit_high_multiply(assembler, 1, op31 == 2u)",
+        "hl_a64_x86_emit_sign_extend32(assembler, 0)",
+        "hl_a64_x86_emit_zero_extend32(assembler, 0)",
+        "if (o0) hl_a64_x86_emit_neg(assembler, 0, sf)",
+        "hl_a64_x86_store_gpr(assembler, 0, destination, 0)",
+        "if (hl_a64_x86_emit_three_source(&assembler, instruction)) continue;",
+    ] {
+        assert!(source.contains(contract), "missing three-source contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/multiply.c");
+    for instruction in [
+        "madd x3,x0,x1,x2",
+        "msub x3,x0,x1,x2",
+        "madd w3,w0,w1,w2",
+        "msub w3,w0,w1,w2",
+        "smaddl x3,w0,w1,x2",
+        "smsubl x3,w0,w1,x2",
+        "umaddl x3,w0,w1,x2",
+        "umsubl x3,w0,w1,x2",
+        "smulh x3,x0,x1",
+        "umulh x3,x0,x1",
+        "madd x3,xzr,x1,xzr",
+        "madd xzr,x0,x1,x2",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [

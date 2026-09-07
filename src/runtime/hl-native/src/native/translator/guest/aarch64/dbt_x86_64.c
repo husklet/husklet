@@ -173,6 +173,40 @@ static void hl_a64_x86_emit_binary(hl_x64_asm *assembler, uint8_t opcode, unsign
     hl_x64_u8(assembler, 0xC8); /* operation %rcx,%rax (or 32-bit equivalents) */
 }
 
+static void hl_a64_x86_emit_neg(hl_x64_asm *assembler, int host_register, unsigned sf) {
+    if (sf || host_register >= 8)
+        hl_x64_u8(assembler, (uint8_t)(0x40 | (sf ? 8 : 0) | (host_register >= 8 ? 1 : 0)));
+    hl_x64_u8(assembler, 0xF7);
+    hl_x64_u8(assembler, (uint8_t)(0xD8 | (host_register & 7))); /* NEG r/m32|64 */
+}
+
+static void hl_a64_x86_emit_imul(hl_x64_asm *assembler, int destination, int source, unsigned sf) {
+    if (sf || destination >= 8 || source >= 8)
+        hl_x64_u8(assembler, (uint8_t)(0x40 | (sf ? 8 : 0) |
+                                        (destination >= 8 ? 4 : 0) | (source >= 8 ? 1 : 0)));
+    hl_x64_u8(assembler, 0x0F);
+    hl_x64_u8(assembler, 0xAF);
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((destination & 7) << 3) | (source & 7)));
+}
+
+static void hl_a64_x86_emit_sign_extend32(hl_x64_asm *assembler, int host_register) {
+    hl_x64_u8(assembler, (uint8_t)(0x48 | (host_register >= 8 ? 5 : 0)));
+    hl_x64_u8(assembler, 0x63); /* MOVSXD r64,r/m32 */
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((host_register & 7) << 3) | (host_register & 7)));
+}
+
+static void hl_a64_x86_emit_zero_extend32(hl_x64_asm *assembler, int host_register) {
+    if (host_register >= 8) hl_x64_u8(assembler, 0x45);
+    hl_x64_u8(assembler, 0x89); /* MOV r32,r32 clears the destination's high half. */
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((host_register & 7) << 3) | (host_register & 7)));
+}
+
+static void hl_a64_x86_emit_high_multiply(hl_x64_asm *assembler, int source, int is_signed) {
+    hl_x64_u8(assembler, (uint8_t)(0x48 | (source >= 8 ? 1 : 0)));
+    hl_x64_u8(assembler, 0xF7);
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((is_signed ? 5 : 4) << 3) | (source & 7)));
+}
+
 static void hl_a64_x86_emit_shift(hl_x64_asm *assembler, int host_register, unsigned operation,
                                   unsigned amount, unsigned sf) {
     if (!amount) return;
@@ -289,6 +323,46 @@ static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruc
         return 1;
     }
     return 0;
+}
+
+/* Data-processing (3 source). The interpreter decoder below is the complete
+ * architectural owner for admission: mirror every allocated op31/o0/sf shape
+ * here so no unallocated encoding can acquire a generated prefix. NZCV is
+ * untouched by the whole family. x31 is ZR for all four operand fields. */
+static int hl_a64_x86_emit_three_source(hl_x64_asm *assembler, uint32_t instruction) {
+    if ((instruction & 0x1F000000u) != 0x1B000000u) return 0;
+    unsigned sf = instruction >> 31;
+    unsigned op31 = (instruction >> 21) & 7u;
+    unsigned o0 = (instruction >> 15) & 1u;
+    unsigned destination = instruction & 31u;
+    unsigned source1 = (instruction >> 5) & 31u;
+    unsigned source2 = (instruction >> 16) & 31u;
+    unsigned addend = (instruction >> 10) & 31u;
+
+    if ((op31 == 1u || op31 == 5u) && !sf) return 0;
+    if ((op31 == 2u || op31 == 6u) && (!sf || o0)) return 0;
+    if (op31 != 0u && op31 != 1u && op31 != 2u && op31 != 5u && op31 != 6u) return 0;
+
+    hl_a64_x86_load_gpr(assembler, 0, source1, 0);
+    hl_a64_x86_load_gpr(assembler, 1, source2, 0);
+    if (op31 == 2u || op31 == 6u) {
+        hl_a64_x86_emit_high_multiply(assembler, 1, op31 == 2u);
+        hl_x64_mov_reg(assembler, 0, 2); /* high half: %rdx -> %rax */
+    } else {
+        if (op31 == 1u) {
+            hl_a64_x86_emit_sign_extend32(assembler, 0);
+            hl_a64_x86_emit_sign_extend32(assembler, 1);
+        } else if (op31 == 5u) {
+            hl_a64_x86_emit_zero_extend32(assembler, 0);
+            hl_a64_x86_emit_zero_extend32(assembler, 1);
+        }
+        hl_a64_x86_emit_imul(assembler, 0, 1, sf);
+        hl_a64_x86_load_gpr(assembler, 1, addend, 0);
+        if (o0) hl_a64_x86_emit_neg(assembler, 0, sf);
+        hl_a64_x86_emit_binary(assembler, 0x01, sf); /* product + Ra, or -product + Ra */
+    }
+    hl_a64_x86_store_gpr(assembler, 0, destination, 0);
+    return 1;
 }
 
 static int hl_a64_x86_emit_mov_wide(hl_x64_asm *assembler, uint32_t instruction) {
@@ -569,6 +643,7 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if (hl_a64_x86_emit_three_source(&assembler, instruction)) continue;
         if (hl_a64_x86_is_scalar_single_memory(instruction)) {
             hl_a64_x86_emit_scalar_single_memory(&assembler, instruction, cursor);
             has_memory = 1;
