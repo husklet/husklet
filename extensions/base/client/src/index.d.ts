@@ -618,7 +618,7 @@ export interface WorkspaceApi {
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
     execAndWait(id: string, generation: number, options: {
-      command: string[]; user?: string; workingDirectory?: string; timeoutMs?: number;
+      command: string[]; environment?: [string, string][]; user?: string; workingDirectory?: string; timeoutMs?: number;
       stdout?: boolean; stderr?: boolean;
     }): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
@@ -661,7 +661,7 @@ export interface WorkspaceApi {
     >;
     rename(id: string, generation: number, name: string): Promise<void>;
     kill(id: string, generation: number, signal: string): Promise<void>;
-    exec(id: string, generation: number, options: { command: string[]; user?: string; workingDirectory?: string }): Promise<string>;
+    exec(id: string, generation: number, options: { command: string[]; environment?: [string, string][]; user?: string; workingDirectory?: string }): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
   images: { inventory(): Promise<ImageInventory>; list(): Promise<ImageSummary[]>; pull(reference: string): Promise<ImageSummary>; inspect(reference: string): Promise<ImageDetails>; startPull(reference: string): Promise<ImagePullJob>; pullStatus(job: string): Promise<ImagePullStatus>; cancelPull(job: string): Promise<void>; remove(reference: string): Promise<void>; removeAndWait(reference: string, options?: { timeoutMs?: number }): Promise<{ changed: boolean; id: string }>; prune(): Promise<ImagePruneResult> };

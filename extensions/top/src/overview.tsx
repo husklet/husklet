@@ -11,6 +11,7 @@ import {
   Scroll,
   Spinner,
   Text,
+  ToggleButton,
   type ContainerSummary,
   type ExecutionSummary,
   type ImageSummary,
@@ -63,10 +64,11 @@ export function Navigation({
             <Column key={group.label} gap={0}>
               <Text label={group.label.toUpperCase()} color="text-dim" />
               {group.sections.map((name) => (
-                <Button
+                <ToggleButton
                   key={name}
                   label={title(name)}
-                  variant={section === name ? 'filled' : 'ghost'}
+                  checked={section === name}
+                  variant="ghost"
                   onInvoke={() => onSelect(name)}
                 />
               ))}

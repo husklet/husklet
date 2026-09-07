@@ -17,6 +17,7 @@ const capabilities = [
   'filesystem:read',
   'filesystem:write',
   'containers:read',
+  'containers:control',
   'networks:read',
   'interface:render',
 ];
@@ -221,9 +222,15 @@ test('embeddings indexer watches, range-reads one identity, and CAS-updates its 
   );
 });
 
-test('Postgres GUI inspects runtime resources and renders a bounded process window', async () => {
+test('Postgres GUI reads scoped credentials, queries by exec environment, and renders a bounded result window', async () => {
   const id = 'c'.repeat(64);
-  const run = await scenario('postgres-inspector.ts', { containerId: id }, (socket, frame) => {
+  const password = 'sentinel-password-never-in-replies';
+  const executionId = 'e'.repeat(32);
+  const run = await scenario('postgres-inspector.ts', {
+    containerId: id,
+    credentialPath: 'secrets/postgres.password',
+    query: 'select id,name from widgets',
+  }, (socket, frame) => {
     const { call } = frame.payload;
     if (call === 'container_inspect')
       respond(socket, frame, {
@@ -273,6 +280,26 @@ test('Postgres GUI inspects runtime resources and renders a bounded process wind
           truncated: false,
         },
       });
+    else if (call === 'filesystem_read')
+      respond(socket, frame, { reply: 'contents', with: [...Buffer.from(`${password}\n`)] });
+    else if (call === 'container_exec')
+      respond(socket, frame, { reply: 'identity', with: executionId });
+    else if (call === 'execution_wait')
+      respond(socket, frame, {
+        reply: 'execution',
+        with: {
+          id: executionId, container_id: id, running: false, exit_code: 0, pid: 42,
+          command: ['psql', '--csv'], user: 'postgres',
+        },
+      });
+    else if (call === 'execution_logs')
+      respond(socket, frame, {
+        reply: 'logs',
+        with: {
+          stdout: [...Buffer.from('id,name\n1,alpha\n2,beta\n')], stderr: [], truncated: false,
+          stdout_truncated: false, stderr_truncated: false, eof: true,
+        },
+      });
     else if (call === 'interface_open_tab')
       respond(socket, frame, { reply: 'identity', with: 'postgres-pane' });
     else respond(socket, frame, { reply: 'done' });
@@ -280,6 +307,7 @@ test('Postgres GUI inspects runtime resources and renders a bounded process wind
   assert.deepEqual(run.result, {
     container: id,
     processes: 2,
+    queryRows: 2,
     logsComplete: true,
     networks: 1,
     slot: 'postgres-pane',
@@ -292,4 +320,12 @@ test('Postgres GUI inspects runtime resources and renders a bounded process wind
   assert.equal(mutations.length, 3);
   assert.equal(mutations[2].Window.rows.length, 2);
   assert.equal(mutations[2].Window.range.count, 2);
+  const exec = run.calls.find(({ call }) => call === 'container_exec');
+  assert.deepEqual(exec.with, {
+    id, generation: 2,
+    command: ['psql', '--csv', '--no-psqlrc', '-c', 'select id,name from widgets'],
+    environment: [['PGPASSWORD', password]], user: null, working_directory: null,
+  });
+  for (const call of run.calls.filter(({ call }) => call !== 'container_exec'))
+    assert(!JSON.stringify(call).includes(password), `credential leaked through ${call.call}`);
 });

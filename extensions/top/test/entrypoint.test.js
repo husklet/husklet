@@ -907,6 +907,7 @@ test(
         id: containerId,
         generation: 7,
         command: ['sh', '-lc', 'printf hello world'],
+        environment: [],
         user: '1000:1000',
         working_directory: '/work tree',
       });

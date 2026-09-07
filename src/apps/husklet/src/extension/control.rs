@@ -57,6 +57,16 @@ impl ContainerLifecycle {
             networking_config, ..CreateContainer::default()
         }
     }
+
+    fn execution(command: &[String], environment: &[(String, hl_extension::ExecEnvironmentValue)],
+        user: Option<&str>, working_directory: Option<&str>) -> ExecConfig {
+        ExecConfig {
+            command: command.to_vec(),
+            env: Some(environment.iter().map(|(name, value)| format!("{name}={}", value.as_str())).collect()),
+            user: user.unwrap_or_default().to_owned(), working_dir: working_directory.unwrap_or_default().to_owned(),
+            ..ExecConfig::default()
+        }
+    }
 }
 
 impl ContainerControl for ContainerLifecycle {
@@ -173,15 +183,11 @@ impl ContainerControl for ContainerLifecycle {
         expected_id: &str,
         generation: u64,
         command: &[String],
+        environment: &[(String, hl_extension::ExecEnvironmentValue)],
         user: Option<&str>,
         working_directory: Option<&str>,
     ) -> Result<String, HostError> {
-        let config = ExecConfig {
-            command: command.to_vec(),
-            user: user.unwrap_or_default().to_owned(),
-            working_dir: working_directory.unwrap_or_default().to_owned(),
-            ..ExecConfig::default()
-        };
+        let config = Self::execution(command, environment, user, working_directory);
         let client = self.bridge.client();
         let created = self
             .bridge
@@ -234,6 +240,17 @@ mod tests {
         assert_eq!((binding[0].host_ip.as_str(), binding[0].host_port.as_str()), ("127.0.0.1", "18080"));
         assert!(request.exposed_ports.0.contains_key("8080/tcp"));
         assert!(request.networking_config.expect("network").endpoints_config.0.contains_key("private"));
+    }
+
+    #[test]
+    fn exec_environment_preserves_order_and_explicit_empty_input() {
+        let environment = [
+            ("PGUSER".into(), hl_extension::ExecEnvironmentValue::new("reader")),
+            ("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new("sentinel-password")),
+        ];
+        let configured = ContainerLifecycle::execution(&["psql".into()], &environment, None, None);
+        assert_eq!(configured.env.as_deref(), Some(["PGUSER=reader".into(), "PGPASSWORD=sentinel-password".into()].as_slice()));
+        assert_eq!(ContainerLifecycle::execution(&[], &[], None, None).env, Some(Vec::new()));
     }
 
     #[test]

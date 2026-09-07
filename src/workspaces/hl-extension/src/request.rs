@@ -13,6 +13,30 @@ use crate::port::{
     ProcessList, TabSummary, TerminalTopology, VolumeSummary, WorkspaceConfiguration, WorkspaceState,
 };
 
+/// An exec environment value. Its wire representation is a string, while
+/// diagnostics deliberately never reveal credential material.
+#[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
+pub struct ExecEnvironmentValue(String);
+
+impl ExecEnvironmentValue {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ExecEnvironmentValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
 /// A call from an extension.
 ///
 /// Adjacently tagged rather than internally tagged: an internal tag silently
@@ -170,6 +194,7 @@ pub enum Request {
         id: String,
         generation: u64,
         command: Vec<String>,
+        environment: Vec<(String, ExecEnvironmentValue)>,
         user: Option<String>,
         working_directory: Option<String>,
     },
@@ -769,6 +794,7 @@ mod tests {
         );
         assert_eq!(
             Request::ContainerExec {
+                environment: Vec::new(),
                 id: "a".into(),
                 generation: 4,
                 command: vec!["true".into()],

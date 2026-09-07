@@ -153,7 +153,7 @@ wrong caller.
 | --- | --- | --- |
 | Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
-| PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, and rendered UI cover administration. Database credentials and SQL transport remain the extension's own concern. |
+| PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
 | Single-file workspace editor | Strong | \`[filesystem]\` grants read and write roots independently, so an extension may scan a tree while modifying one exact file. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |

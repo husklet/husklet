@@ -82,7 +82,19 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'),
     true,
   );
-  assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
+  assert.equal(
+    taggedProperty(stageFromFrame(frame), 'Overview', 'ToggleButton', 'Checked')?.Flag,
+    true,
+  );
+  assert.equal(
+    taggedProperty(stageFromFrame(frame), 'Workspace', 'ToggleButton', 'Checked')?.Flag,
+    false,
+  );
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'ToggleButton').length,
+    10,
+    'every destination exposes its selected state to keyboard and assistive users',
+  );
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
 });
@@ -135,6 +147,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Workspace');
   await settled();
   await settled();
+  assert.equal(taggedProperty(stage, 'Overview', 'ToggleButton', 'Checked')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
   invoke(stage, 'Extensions');
@@ -4088,6 +4102,23 @@ function property(stage, label, prop) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === prop,
     )
     .at(-1)?.SetProp.value;
+}
+
+function taggedProperty(stage, label, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tagged = new Set(
+    patches.filter((patch) => patch.Create?.tag === tag).map((patch) => patch.Create.id),
+  );
+  const node = patches
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' &&
+        patch.SetProp.value?.Text === label &&
+        tagged.has(patch.SetProp.id),
+    )
+    .at(-1)?.SetProp.id;
+  return patches.filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop).at(-1)
+    ?.SetProp.value;
 }
 
 function latestPropertyForTag(stage, tag, prop) {

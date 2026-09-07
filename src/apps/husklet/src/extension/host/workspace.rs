@@ -460,12 +460,13 @@ mod halt_tests {
     #[test]
     fn halting_an_offline_checkpointed_workspace_never_starts_or_changes_its_checkpoint() {
         let root = tempfile::tempdir().expect("state root");
-        let storage = root.path().join("offline-halt");
+        let name = format!("offline-halt-{}", std::process::id());
+        let storage = root.path().join(&name);
         let checkpoint = storage.join("checkpoints/current/MANIFEST");
         std::fs::create_dir_all(checkpoint.parent().expect("checkpoint parent")).expect("checkpoint directory");
         std::fs::write(&checkpoint, b"committed checkpoint inventory").expect("checkpoint fixture");
 
-        let mut config = crate::config::WorkspaceConfig::new("offline-halt", "alpine:3.20", hl_ws::Arch::Amd64);
+        let mut config = crate::config::WorkspaceConfig::new(&name, "alpine:3.20", hl_ws::Arch::Amd64);
         config.storage = Some(storage.clone());
         let workspace = Workspace::new(&config);
         let plan = plan(storage.join("extensions/checkpoint-sidecar.sock"));
@@ -473,7 +474,10 @@ mod halt_tests {
 
         workspace.halt(&plan);
 
-        let changes = crate::workspace_lifecycle::since(before);
+        let changes: Vec<_> = crate::workspace_lifecycle::since(before)
+            .into_iter()
+            .filter(|change| change.workspace == name)
+            .collect();
         assert!(
             changes.iter().all(|change| !matches!(
                 change.action,

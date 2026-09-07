@@ -1448,7 +1448,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'container_kill', with: { id: containerId, generation: 7, signal: 'SIGTERM' } },
     { call: 'execution_kill', with: { id: executionId, signal: 'SIGHUP' } },
     { call: 'execution_remove', with: { id: executionId } },
-    { call: 'container_exec', with: { id: containerId, generation: 7, command: ['sh', '-lc', 'true'], user: '1000', working_directory: '/work' } },
+    { call: 'container_exec', with: { id: containerId, generation: 7, command: ['sh', '-lc', 'true'], environment: [], user: '1000', working_directory: '/work' } },
     { call: 'event_subscribe', with: { topic: 'containers' } },
   ]);
   const replies = [
@@ -1501,6 +1501,27 @@ test('configured container creation preserves its bounded typed specification', 
   assert.equal(Object.hasOwn(spec.mounts[0], 'read_only'), false, 'normalization does not mutate caller input');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'c-rich' } }));
   assert.equal(await pending, 'c-rich');
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('exec environment rejects secret-bearing invalid pairs before framing', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const api = workspace(stage.session); const id = 'c'.repeat(64);
+  for (const environment of [
+    [['PGPASSWORD', 'one'], ['PGPASSWORD', 'two']],
+    [['BAD=NAME', 'secret']],
+    [['PGPASSWORD', 'x'.repeat(8193)]],
+    Array.from({ length: 9 }, (_, index) => [`V${index}`, 'x'.repeat(8192)]),
+  ]) await assert.rejects(api.containers.exec(id, 4, { command: ['psql'], environment }), /environment/);
+  const pending = api.containers.exec(id, 4, {
+    command: ['psql'], environment: [['PGUSER', 'reader'], ['PGPASSWORD', 'sentinel-password']],
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'container_exec',
+    with: { id, generation: 4, command: ['psql'], environment: [['PGUSER', 'reader'], ['PGPASSWORD', 'sentinel-password']], user: null, working_directory: null },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'e1' } }));
+  assert.equal(await pending, 'e1');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
