@@ -121,13 +121,13 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
           try {
             const current = await api.info();
             const inspected = await api.inspect(current.name);
-            setConfiguration(inspected);
+            setConfiguration({ ...inspected, environment: candidate.environment });
             setObserved(inspected);
             setNumbers(numberDraft(inspected));
-            setDirty(false);
+            setDirty(true);
             setSaved('');
             setError(
-              `Settings were saved, but environment changes were not. Reloaded workspace: ${patchError}`,
+              `Settings were saved, but environment changes were not. Reloaded the latest workspace and retained your concealed environment edits for review and retry: ${patchError}`,
             );
           } catch (reloadCause) {
             setError(

@@ -367,9 +367,14 @@ test('workspace patch conflict reloads authority and keeps the partial-save warn
     .map((patch) => patch.SetProp.value?.Text ?? '');
   assert.ok(
     labels.some((label) =>
-      label.includes('Settings were saved, but environment changes were not. Reloaded workspace'),
+      label.includes(
+        'Settings were saved, but environment changes were not. Reloaded the latest workspace and retained your concealed environment edits for review and retry',
+      ),
     ),
   );
+  assert.equal(fieldValue(stage, 'value'), 'new');
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  assert.equal(isEnabled(stage, 'Save workspace'), true);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
