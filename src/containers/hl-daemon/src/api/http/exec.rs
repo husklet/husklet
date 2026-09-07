@@ -68,6 +68,7 @@ pub(super) async fn logs(
 pub(super) async fn create(
     State(state): State<DockerState>,
     Path(container): Path<String>,
+    Query(query): Query<GenerationQuery>,
     Json(config): Json<ExecConfig>,
 ) -> ApiResult<(StatusCode, Json<ExecCreated>)> {
     DetachKeys::parse(&config.detach_keys)?;
@@ -79,11 +80,9 @@ pub(super) async fn create(
         };
         ApiError::new(status, message)
     })?;
-    let parent = state
-        .containers
-        .inspect(&container)
-        .await
-        .map_err(ApiError::container)?;
+    let parent = if let Some(generation) = query.generation {
+        state.containers.inspect_if_generation(&container, query.container_id.as_deref().unwrap_or(&container), generation).await
+    } else { state.containers.inspect(&container).await }.map_err(ApiError::container)?;
     let process = config
         .process(&parent.spec.process)
         .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message))?;
@@ -110,12 +109,10 @@ pub(super) async fn create(
     } else {
         spec
     };
-    let exec = state
-        .containers
-        .executions()
-        .create(&container, spec)
-        .await
-        .map_err(ApiError::container)?;
+    let executions = state.containers.executions();
+    let exec = if let Some(generation) = query.generation {
+        executions.create_if_generation(&container, query.container_id.as_deref().unwrap_or(&container), generation, spec).await
+    } else { executions.create(&container, spec).await }.map_err(ApiError::container)?;
     Ok((
         StatusCode::CREATED,
         Json(ExecCreated {
@@ -123,6 +120,9 @@ pub(super) async fn create(
         }),
     ))
 }
+
+#[derive(Default, Deserialize)]
+pub(super) struct GenerationQuery { generation: Option<u64>, container_id: Option<String> }
 
 #[hl_design::adapter]
 pub(super) async fn wait(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<Json<Wait>> {

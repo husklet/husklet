@@ -57,6 +57,30 @@ async fn rename_is_validated_unique_and_durable() {
     assert_eq!(network.endpoints.get(&explicit.container).unwrap().name, "fixed-dns");
 }
 
+#[tokio::test]
+async fn generation_precondition_rejects_same_name_same_generation_replacement() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    let observed = containers.create(spec("selected")).await.unwrap();
+    containers.rename("selected", "former").await.unwrap();
+    let replacement = containers.create(spec("selected")).await.unwrap();
+    assert_eq!(observed.generation, replacement.generation, "control proves generation alone is insufficient");
+
+    let error = containers
+        .rename_if_generation("selected", observed.id.as_str(), observed.generation, "must-not-change")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::IdentityMismatch { expected, actual, .. }
+        if expected == observed.id && actual == replacement.id));
+    assert_eq!(containers.inspect("selected").await.unwrap().id, replacement.id);
+
+    let error = containers
+        .rename_if_generation("selected", replacement.id.as_str(), replacement.generation + 1, "also-unchanged")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::GenerationMismatch { expected: 1, actual: 0, .. }));
+    assert_eq!(containers.inspect("selected").await.unwrap().id, replacement.id);
+}
+
 #[tokio::test(start_paused = true)]
 async fn updates_persist_and_active_resources_require_restart() {
     let temporary = tempfile::tempdir().unwrap();

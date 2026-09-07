@@ -34,6 +34,11 @@ impl Containers {
         self.service.inspect(reference).await
     }
 
+    pub async fn inspect_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<Container> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        self.service.inspect_generation(reference, &expected_id, generation).await
+    }
+
     /// Sets one durable metadata label without changing runtime state.
     ///
     /// # Errors

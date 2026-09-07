@@ -63,16 +63,18 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
     setNotice(null);
     try {
       let verified: boolean | null = null;
-      if (verb === 'start') verified = (await api.containers.startAndWait(id)).changed;
-      else if (verb === 'stop') verified = (await api.containers.stopAndWait(id)).changed;
+      if (generation === undefined)
+        throw new Error(`Container ${id} has no observable generation; refresh before changing it.`);
+      if (verb === 'start') verified = (await api.containers.startAndWait(id, generation)).changed;
+      else if (verb === 'stop') verified = (await api.containers.stopAndWait(id, generation)).changed;
       else if (verb === 'restart') {
         if (generation === undefined)
           throw new Error(
             `Container ${id} has no observable generation; refresh before restarting it.`,
           );
         verified = (await api.containers.restartAndWait(id, generation)).changed;
-      } else if (verb === 'kill') await api.containers.kill(id, signal ?? 'SIGKILL');
-      else await api.containers[verb](id);
+      } else if (verb === 'kill') await api.containers.kill(id, generation, signal ?? 'SIGKILL');
+      else await api.containers[verb](id, generation);
       await resource.reload();
       setNotice(
         verified === false
@@ -133,7 +135,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
     setBusy(`remove:${item.id}`);
     setNotice(null);
     try {
-      const removed = await api.containers.removeAndWait(item.id);
+      const removed = await api.containers.removeAndWait(item.id, item.generation);
       inspectionRevision.current += 1;
       setSelected(null);
       setInspection({ id: '', state: 'idle', count: 0, detail: null, error: null });

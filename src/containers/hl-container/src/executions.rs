@@ -20,6 +20,12 @@ impl Executions {
         self.service.create_exec(container, spec).await
     }
 
+
+    pub async fn create_if_generation(&self, container: &str, expected_id: &str, generation: u64, spec: ExecSpec) -> Result<Exec> {
+        let expected_id: crate::ContainerId = expected_id.parse::<crate::ContainerId>().map_err(|message| crate::Error::InvalidSpec(message.into()))?;
+        self.service.create_exec_generation(container, Some(&expected_id), Some(generation), spec).await
+    }
+
     /// Inspects a durable execution record.
     ///
     /// # Errors

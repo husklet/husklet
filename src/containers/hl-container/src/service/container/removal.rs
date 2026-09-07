@@ -21,6 +21,8 @@ impl Service {
         force: bool,
         volumes: bool,
         completion: Option<ExitStatus>,
+        expected_id: Option<&crate::ContainerId>,
+        generation: Option<u64>,
     ) -> Result<Container> {
         if force {
             let container = self.resolve(reference).await?;
@@ -35,7 +37,7 @@ impl Service {
             Self::bounded(&container.id, self.stop_and_wait_executions(&container.id)).await?;
         }
         let _guard = self.operations.lock().await;
-        let container = self.resolve(reference).await?;
+        let container = self.resolve_generation(reference, expected_id, generation).await?;
         if container.state.is_active() {
             return Err(Error::InvalidState {
                 id: container.id,
@@ -152,7 +154,7 @@ impl Service {
             .collect::<Vec<_>>();
         let mut removed = Vec::with_capacity(candidates.len());
         for id in candidates {
-            match self.remove(&id, false, false, None).await {
+            match self.remove(&id, false, false, None, None, None).await {
                 Ok(container) => removed.push(container),
                 Err(Error::InvalidState { .. } | Error::NotFound(_)) => {}
                 Err(error) => return Err(error),

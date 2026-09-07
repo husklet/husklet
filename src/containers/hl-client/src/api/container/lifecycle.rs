@@ -23,6 +23,10 @@ impl Containers<'_> {
             .await
     }
 
+    pub async fn start_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        self.transport.empty(Method::POST, &format!("/containers/{}/start?generation={generation}&container_id={}", Component::opaque(reference), Component::opaque(expected_id))).await
+    }
+
     /// Resize a running container terminal.
     ///
     /// # Errors
@@ -50,6 +54,11 @@ impl Containers<'_> {
             .await
     }
 
+    pub async fn stop_if_generation(&self, reference: &str, expected_id: &str, generation: u64, timeout_seconds: Option<u64>) -> Result<()> {
+        let timeout = timeout_seconds.map_or_else(String::new, |seconds| format!("&t={seconds}"));
+        self.transport.empty(Method::POST, &format!("/containers/{}/stop?generation={generation}&container_id={}{timeout}", Component::opaque(reference), Component::opaque(expected_id))).await
+    }
+
     /// Stop and start a running container.
     ///
     /// # Errors
@@ -62,6 +71,11 @@ impl Containers<'_> {
                 &format!("/containers/{}/restart{query}", Component::opaque(id)),
             )
             .await
+    }
+
+    pub async fn restart_if_generation(&self, reference: &str, expected_id: &str, generation: u64, timeout_seconds: Option<u64>) -> Result<()> {
+        let timeout = timeout_seconds.map_or_else(String::new, |seconds| format!("&t={seconds}"));
+        self.transport.empty(Method::POST, &format!("/containers/{}/restart?generation={generation}&container_id={}{timeout}", Component::opaque(reference), Component::opaque(expected_id))).await
     }
 
     /// Deliver a Linux signal name or number to a running container.
@@ -81,6 +95,10 @@ impl Containers<'_> {
             .await
     }
 
+    pub async fn kill_if_generation(&self, reference: &str, expected_id: &str, generation: u64, signal: &str) -> Result<()> {
+        self.transport.empty(Method::POST, &format!("/containers/{}/kill?generation={generation}&container_id={}&signal={}", Component::opaque(reference), Component::opaque(expected_id), Component::opaque(signal))).await
+    }
+
     /// Atomically assign a new unique container name.
     ///
     /// # Errors
@@ -98,6 +116,10 @@ impl Containers<'_> {
             .await
     }
 
+    pub async fn rename_if_generation(&self, reference: &str, expected_id: &str, generation: u64, name: &str) -> Result<()> {
+        self.transport.empty(Method::POST, &format!("/containers/{}/rename?generation={generation}&container_id={}&name={}", Component::opaque(reference), Component::opaque(expected_id), Component::opaque(name))).await
+    }
+
     /// Suspend the container's initial process.
     ///
     /// # Errors
@@ -108,6 +130,10 @@ impl Containers<'_> {
             .await
     }
 
+    pub async fn pause_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        self.transport.empty(Method::POST, &format!("/containers/{}/pause?generation={generation}&container_id={}", Component::opaque(reference), Component::opaque(expected_id))).await
+    }
+
     /// Resume a paused container's initial process.
     ///
     /// # Errors
@@ -116,6 +142,10 @@ impl Containers<'_> {
         self.transport
             .empty(Method::POST, &format!("/containers/{}/unpause", Component::opaque(id)))
             .await
+    }
+
+    pub async fn unpause_if_generation(&self, reference: &str, expected_id: &str, generation: u64) -> Result<()> {
+        self.transport.empty(Method::POST, &format!("/containers/{}/unpause?generation={generation}&container_id={}", Component::opaque(reference), Component::opaque(expected_id))).await
     }
 
     /// Persist the complete container process tree and stop the live engine.
@@ -172,5 +202,9 @@ impl Containers<'_> {
                 &format!("/containers/{}?force={force}&v={volumes}", Component::opaque(id)),
             )
             .await
+    }
+
+    pub async fn remove_if_generation(&self, reference: &str, expected_id: &str, generation: u64, force: bool, volumes: bool) -> Result<()> {
+        self.transport.empty(Method::DELETE, &format!("/containers/{}?generation={generation}&container_id={}&force={force}&v={volumes}", Component::opaque(reference), Component::opaque(expected_id))).await
     }
 }

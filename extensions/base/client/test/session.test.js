@@ -1258,7 +1258,7 @@ test('real Unix container start wait arms first and ignores unchanged initial st
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).containers.startAndWait(id);
+    const result = await workspace(session).containers.startAndWait(id, 4);
     assert.equal(result.changed, true);
     assert.equal(result.container.state, 'running');
     assert.deepEqual(calls, ['event_subscribe', 'container_start', 'event_unsubscribe']);
@@ -1331,7 +1331,7 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).containers.stopAndWait(id);
+    const result = await workspace(session).containers.stopAndWait(id, 4);
     assert.equal(result.changed, true);
     assert.equal(result.container.state, 'exited');
     assert.deepEqual(calls, ['event_subscribe', 'container_stop', 'event_unsubscribe']);
@@ -1416,7 +1416,7 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    assert.deepEqual(await workspace(session).containers.removeAndWait(id), { changed: true, id });
+    assert.deepEqual(await workspace(session).containers.removeAndWait(id, 4), { changed: true, id });
     assert.equal(completeAbsenceSent, true, 'incomplete absence cannot settle removal');
     assert.deepEqual(calls, ['event_subscribe', 'container_remove', 'event_unsubscribe']);
     await session.close();
@@ -2807,6 +2807,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
         if (frame.payload.call === 'container_exec') {
           assert.deepEqual(frame.payload.with, {
             id: containerId,
+            generation: 4,
             command: ['printf', 'ok'],
             user: 'root',
             working_directory: '/tmp',
@@ -2852,16 +2853,16 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
     const session = await connect({ path: socketPath });
     const containers = workspace(session).containers;
     await assert.rejects(
-      containers.execAndWait(containerId, { command: ['true'], timeoutMs: 0 }),
+      containers.execAndWait(containerId, 4, { command: ['true'], timeoutMs: 0 }),
       /timeout/,
     );
     await assert.rejects(
-      containers.execAndWait(containerId, { command: ['true'], stdout: false, stderr: false }),
+      containers.execAndWait(containerId, 4, { command: ['true'], stdout: false, stderr: false }),
       /at least one/,
     );
     assert.deepEqual(calls, [], 'invalid later-stage options must not create an execution');
     assert.deepEqual(
-      await containers.execAndWait(containerId, {
+      await containers.execAndWait(containerId, 4, {
         command: ['printf', 'ok'],
         user: 'root',
         workingDirectory: '/tmp',
@@ -2930,7 +2931,7 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
   try {
     const session = await connect({ path: socketPath });
     await assert.rejects(
-      workspace(session).containers.execAndWait(containerId, {
+      workspace(session).containers.execAndWait(containerId, 4, {
         command: ['sleep', '1'],
         timeoutMs: 1,
       }),
@@ -3020,7 +3021,7 @@ test('real Unix execAndWait preserves the completed execution when bounded log r
   try {
     const session = await connect({ path: socketPath });
     await assert.rejects(
-      workspace(session).containers.execAndWait(containerId, { command: ['false'] }),
+      workspace(session).containers.execAndWait(containerId, 4, { command: ['false'] }),
       (error) => {
         assert(error instanceof ExecutionOperationError);
         assert.equal(error.executionId, executionId);

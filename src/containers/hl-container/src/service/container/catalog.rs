@@ -111,11 +111,21 @@ impl Service {
     }
 
     pub(crate) async fn rename(&self, reference: &str, name: String) -> Result<Container> {
+        self.rename_generation(reference, None, None, name).await
+    }
+
+    pub(crate) async fn rename_generation(
+        &self,
+        reference: &str,
+        expected_id: Option<&ContainerId>,
+        generation: Option<u64>,
+        name: String,
+    ) -> Result<Container> {
         if name.is_empty() {
             return Err(Error::InvalidSpec("name must not be empty".into()));
         }
         let _guard = self.operations.lock().await;
-        let mut container = self.resolve(reference).await?;
+        let mut container = self.resolve_generation(reference, expected_id, generation).await?;
         let old = container.spec.name.clone();
         container.spec.name = Some(name);
         container.spec.validate()?;
@@ -225,5 +235,38 @@ impl Service {
             )));
         }
         Ok(first)
+    }
+
+    pub(super) async fn resolve_generation(
+        &self, reference: &str, expected_id: Option<&ContainerId>, expected: Option<u64>,
+    ) -> Result<Container> {
+        let container = self.resolve(reference).await?;
+        if let Some(expected_id) = expected_id
+            && &container.id != expected_id
+        {
+            return Err(Error::IdentityMismatch {
+                reference: reference.into(), expected: expected_id.clone(), actual: container.id,
+            });
+        }
+        if let Some(expected) = expected
+            && container.generation != expected
+        {
+            return Err(Error::GenerationMismatch {
+                id: container.id,
+                expected,
+                actual: container.generation,
+            });
+        }
+        Ok(container)
+    }
+
+    pub(crate) async fn pin_generation(&self, reference: &str, expected_id: &ContainerId, generation: u64) -> Result<ContainerId> {
+        let _guard = self.operations.lock().await;
+        Ok(self.resolve_generation(reference, Some(expected_id), Some(generation)).await?.id)
+    }
+
+    pub(crate) async fn inspect_generation(&self, reference: &str, expected_id: &ContainerId, generation: u64) -> Result<Container> {
+        let _guard = self.operations.lock().await;
+        self.resolve_generation(reference, Some(expected_id), Some(generation)).await
     }
 }

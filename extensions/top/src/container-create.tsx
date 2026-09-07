@@ -36,7 +36,7 @@ export type ContainerCreateDraft = {
   ports: string;
 };
 
-type CreatedContainer = { id: string; name: string };
+type CreatedContainer = { id: string; name: string; generation: number };
 
 type ContainerCreateProps = {
   api: WorkspaceApi;
@@ -367,10 +367,11 @@ export function ContainerCreate({ api, blocked, onBusyChange, reload }: Containe
           name,
           ...containerCreateOptions(draft),
         });
-        target = { id, name };
+        const observed = await api.containers.inspect(id);
+        target = { id, name, generation: observed.generation };
         setCreated(target);
       }
-      await api.containers.start(target.id);
+      await api.containers.start(target.id, target.generation);
       setNotice(`Created and started ${target.name}.`);
       setCreated(null);
       setDraft(emptyDraft());

@@ -28,13 +28,13 @@ test('packaged external agent restores container after exact execution lifecycle
       } else if (call === 'event_subscribe' || call === 'event_unsubscribe') {
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       } else if (call === 'container_start' || call === 'container_stop') {
-        assert.deepEqual(frame.payload.with, { id: containerId });
+        assert.deepEqual(frame.payload.with, { id: containerId, generation: 4 });
         socket.write(encode({ channel: call === 'container_start' ? 210 : 211, kind: KIND.event, payload: {
           snapshot: 'containers', of: [container(call === 'container_start' ? 'running' : 'exited')],
         } }));
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       } else if (call === 'container_exec') {
-        assert.deepEqual(frame.payload.with, { id: containerId, command: ['printf', 'ok'], user: null, working_directory: null });
+        assert.deepEqual(frame.payload.with, { id: containerId, generation: 4, command: ['printf', 'ok'], user: null, working_directory: null });
         socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: executionId } }));
       } else if (call === 'execution_wait') {
         assert.deepEqual(frame.payload.with, { id: executionId, timeout_ms: 1000 });

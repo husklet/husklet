@@ -50,6 +50,8 @@ pub(in super::super) struct RemoveQuery {
     force: bool,
     #[serde(default, rename = "v", deserialize_with = "crate::api::http::query::flag")]
     volumes: bool,
+    generation: Option<u64>,
+    container_id: Option<String>,
 }
 
 pub(in super::super) async fn remove(
@@ -57,7 +59,9 @@ pub(in super::super) async fn remove(
     Path(id): Path<String>,
     Query(query): Query<RemoveQuery>,
 ) -> ApiResult<StatusCode> {
-    let result = if query.volumes {
+    let result = if let Some(generation) = query.generation {
+        state.containers.remove_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation, query.force, query.volumes).await
+    } else if query.volumes {
         state.containers.remove_volumes(&id, query.force).await
     } else if query.force {
         state.containers.remove_force(&id).await

@@ -817,46 +817,46 @@ pub trait ContainerControl {
 
     /// # Errors
     /// Returns a host failure.
-    fn start(&self, id: &str) -> Result<(), HostError>;
+    fn start(&self, reference: &str, expected_id: &str, generation: u64) -> Result<(), HostError>;
 
     /// # Errors
     /// Returns a host failure.
-    fn stop(&self, id: &str) -> Result<(), HostError>;
+    fn stop(&self, reference: &str, expected_id: &str, generation: u64) -> Result<(), HostError>;
 
     /// # Errors
     /// Returns a host failure.
-    fn remove(&self, id: &str) -> Result<(), HostError>;
+    fn remove(&self, reference: &str, expected_id: &str, generation: u64) -> Result<(), HostError>;
 
     /// Suspends a running container.
-    fn pause(&self, _id: &str) -> Result<(), HostError> {
+    fn pause(&self, _reference: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "container pause is unsupported by this host".into(),
         ))
     }
 
     /// Resumes a paused container.
-    fn unpause(&self, _id: &str) -> Result<(), HostError> {
+    fn unpause(&self, _reference: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "container unpause is unsupported by this host".into(),
         ))
     }
 
     /// Stops and starts a running container.
-    fn restart(&self, _id: &str) -> Result<(), HostError> {
+    fn restart(&self, _reference: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "container restart is unsupported by this host".into(),
         ))
     }
 
     /// Atomically assigns a new unique name to one immutable container identity.
-    fn rename(&self, _id: &str, _name: &str) -> Result<(), HostError> {
+    fn rename(&self, _reference: &str, _expected_id: &str, _generation: u64, _name: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "container rename is unsupported by this host".into(),
         ))
     }
 
     /// Delivers a validated Linux signal to a running container.
-    fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+    fn kill(&self, _reference: &str, _expected_id: &str, _generation: u64, _signal: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported(
             "container signaling is unsupported by this host".into(),
         ))
@@ -882,7 +882,9 @@ pub trait ContainerControl {
     /// detached from the extension connection, and returns its durable exec identity.
     fn execute(
         &self,
-        _id: &str,
+        _reference: &str,
+        _expected_id: &str,
+        _generation: u64,
         _command: &[String],
         _user: Option<&str>,
         _working_directory: Option<&str>,

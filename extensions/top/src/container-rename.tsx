@@ -44,7 +44,7 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
     const immutableId = container.id;
     setResult({ state: 'loading', error: null, name: requested });
     try {
-      await api.containers.rename(immutableId, requested);
+      await api.containers.rename(immutableId, container.generation, requested);
       setResult({ state: 'success', error: null, name: requested });
       await reload();
     } catch (error: unknown) {
