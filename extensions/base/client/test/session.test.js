@@ -1555,7 +1555,10 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    assert.deepEqual(await workspace(session).containers.removeAndWait(id, 4), { changed: true, id });
+    assert.deepEqual(await workspace(session).containers.removeAndWait(id, 4), {
+      changed: true,
+      id,
+    });
     assert.equal(completeAbsenceSent, true, 'incomplete absence cannot settle removal');
     assert.deepEqual(calls, ['event_subscribe', 'container_remove', 'event_unsubscribe']);
     await session.close();

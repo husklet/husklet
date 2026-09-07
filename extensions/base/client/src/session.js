@@ -514,7 +514,8 @@ export class Session {
     }
     if (frame.kind === KIND.pong) {
       if (!this.#welcomed) throw new Error('host pong arrived before the greeting');
-      if (frame.channel !== CONTROL) throw new Error('host pong arrived outside the control channel');
+      if (frame.channel !== CONTROL)
+        throw new Error('host pong arrived outside the control channel');
       const key = frame.payload.toString('hex');
       const pending = this.#pings.get(key);
       if (!pending) throw new Error('host returned an unknown ping token');
