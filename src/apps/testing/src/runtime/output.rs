@@ -683,7 +683,10 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     if !enabled {
         let shapes = stderr
             .split(|byte| *byte == b'\n')
-            .filter(|line| line.starts_with(BACKEND_SHAPE_DETAIL_PREFIX.as_bytes()))
+            .filter(|line| {
+                line.starts_with(BACKEND_SHAPE_DETAIL_PREFIX.as_bytes())
+                    || line.starts_with(BACKEND_SHAPE_PREFIX.as_bytes())
+            })
             .count();
         if shapes != 0 {
             return Err(format!("backend-shape diagnostic appeared {shapes} times, expected 0").into());
