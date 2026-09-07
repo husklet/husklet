@@ -117,10 +117,22 @@ fn synthetic_proc_fixture_is_closed_world() {
     std::fs::write(process.join("maps"), safe_maps).unwrap();
     std::fs::write(
         work.path().join("locks"),
+        b"   -> 2: POSIX ADVISORY WRITE 9001 08:01:2 0 EOF\n",
+    )
+    .unwrap();
+    assert_eq!(classify(work.path(), pid, &[]), 0, "unrelated blocked lock waiter");
+    std::fs::write(
+        work.path().join("locks"),
         b"1: POSIX ADVISORY WRITE 4242 08:01:1 0 EOF\n",
     )
     .unwrap();
     assert_ne!(classify(work.path(), pid, &[]), 0, "owned lock");
+    std::fs::write(
+        work.path().join("locks"),
+        b"1: POSIX ADVISORY WRITE 9001 08:01:1 0 EOF\n   -> 2: POSIX ADVISORY WRITE 4242 08:01:1 0 EOF\n",
+    )
+    .unwrap();
+    assert_ne!(classify(work.path(), pid, &[]), 0, "owned blocked lock waiter");
 }
 
 #[test]
