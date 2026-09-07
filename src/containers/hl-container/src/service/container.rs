@@ -74,6 +74,8 @@ pub(crate) struct Service {
     translation_cache: Option<std::path::PathBuf>,
     translation_cache_observability: bool,
     translation_symbols: Option<std::path::PathBuf>,
+    #[cfg(feature = "native-test-hooks")]
+    direct_call_pre_spill_test: bool,
     events: std::sync::RwLock<Vec<Arc<dyn crate::LifecycleEvents>>>,
     event_history: std::sync::Mutex<Vec<crate::LifecycleEvent>>,
     checkpoints: Arc<dyn crate::CheckpointImages>,
@@ -97,6 +99,8 @@ pub(crate) struct Dependencies<S> {
     pub(crate) translation_cache: Option<std::path::PathBuf>,
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<std::path::PathBuf>,
+    #[cfg(feature = "native-test-hooks")]
+    pub(crate) direct_call_pre_spill_test: bool,
     pub(crate) checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -116,6 +120,8 @@ impl Service {
             translation_cache,
             translation_cache_observability,
             translation_symbols,
+            #[cfg(feature = "native-test-hooks")]
+            direct_call_pre_spill_test,
             checkpoints,
         } = dependencies;
         let operations = volumes.operation();
@@ -159,6 +165,8 @@ impl Service {
             translation_cache,
             translation_cache_observability,
             translation_symbols,
+            #[cfg(feature = "native-test-hooks")]
+            direct_call_pre_spill_test,
             events: std::sync::RwLock::new(Vec::new()),
             event_history: std::sync::Mutex::new(Vec::new()),
             checkpoints,

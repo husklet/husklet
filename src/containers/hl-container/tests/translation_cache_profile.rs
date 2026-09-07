@@ -24,6 +24,27 @@ type Error = Box<dyn std::error::Error>;
 const UNIT_127_ASSEMBLY: &str = "a1d41926570d6ddfee050116a5698a9e5f7d2b7accf0dcfce685e46c707a7265";
 const CC1: &str = "/usr/libexec/gcc/x86_64-alpine-linux-musl/15.2.0/cc1";
 
+fn parse_direct_call_guard(value: Option<&str>) -> Result<bool, Error> {
+    match value {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(_) => Err("HL_PCACHE_PROFILE_DIRECT_CALL_GUARD must be 0 or 1".into()),
+    }
+}
+
+#[test]
+fn direct_call_guard_accepts_only_absent_zero_or_one() {
+    assert_eq!(parse_direct_call_guard(None).unwrap(), false);
+    assert_eq!(parse_direct_call_guard(Some("0")).unwrap(), false);
+    assert_eq!(parse_direct_call_guard(Some("1")).unwrap(), true);
+    for invalid in ["", "2", "true", " 1"] {
+        assert_eq!(
+            parse_direct_call_guard(Some(invalid)).unwrap_err().to_string(),
+            "HL_PCACHE_PROFILE_DIRECT_CALL_GUARD must be 0 or 1"
+        );
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct CompilerInput {
     archive_path: PathBuf,
@@ -754,6 +775,17 @@ int main(void) {
     let unpacked = images.unpack(&image, &platform)?;
 
     let config = Config::new(owned.path().join("state"));
+    #[cfg(feature = "native-test-hooks")]
+    let config = {
+        let direct_call_guard = match std::env::var("HL_PCACHE_PROFILE_DIRECT_CALL_GUARD") {
+            Ok(value) => parse_direct_call_guard(Some(&value))?,
+            Err(std::env::VarError::NotPresent) => parse_direct_call_guard(None)?,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("HL_PCACHE_PROFILE_DIRECT_CALL_GUARD is not valid UTF-8".into());
+            }
+        };
+        config.direct_call_pre_spill_test(direct_call_guard)
+    };
     let config = if mode.cached() {
         config.translation_cache(cache)
     } else {

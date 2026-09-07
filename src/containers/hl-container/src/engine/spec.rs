@@ -418,6 +418,12 @@ impl Spec {
             Self::set(options, "HL_PCACHE_DIR", cache.as_os_str().as_encoded_bytes())?;
         }
         Self::flag(options, "HL_PCACHE_OBSERVE", launch.translation_cache_observability)?;
+        #[cfg(feature = "native-test-hooks")]
+        Self::flag(
+            options,
+            "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST",
+            launch.direct_call_pre_spill_test,
+        )?;
         if let Some(directory) = &launch.translation_symbols {
             Self::set(options, "HL_TRANSLIT_SYMBOLIZE", b"1")?;
             Self::set(

@@ -328,6 +328,8 @@ mod tests {
             translation_cache: None,
             translation_cache_observability: false,
             translation_symbols: None,
+            #[cfg(feature = "native-test-hooks")]
+            direct_call_pre_spill_test: false,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             execution: crate::Execution::default(),
@@ -522,6 +524,21 @@ mod tests {
         );
         assert_eq!(spec.plan.options.get("HL_PCACHE"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_PCACHE_DIR"), Some("/translation-cache"));
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn direct_call_pre_spill_test_option_is_injected_only_when_typed_policy_enables_it() {
+        let mut launch = launch();
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST"), None);
+
+        launch.direct_call_pre_spill_test = true;
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(
+            spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST"),
+            Some("1")
+        );
     }
 
     #[test]

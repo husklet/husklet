@@ -113,6 +113,8 @@ pub struct Config {
     pub(crate) translation_cache: Option<TranslationCache>,
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<TranslationCache>,
+    #[cfg(feature = "native-test-hooks")]
+    pub(crate) direct_call_pre_spill_test: bool,
 }
 
 impl Config {
@@ -124,6 +126,8 @@ impl Config {
             translation_cache: None,
             translation_cache_observability: false,
             translation_symbols: None,
+            #[cfg(feature = "native-test-hooks")]
+            direct_call_pre_spill_test: false,
         }
     }
 
@@ -154,6 +158,14 @@ impl Config {
         self
     }
 
+    /// Enables the native direct-call pre-spill experiment for an explicit test run.
+    #[cfg(feature = "native-test-hooks")]
+    #[must_use]
+    pub fn direct_call_pre_spill_test(mut self, enabled: bool) -> Self {
+        self.direct_call_pre_spill_test = enabled;
+        self
+    }
+
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
@@ -164,6 +176,14 @@ impl Config {
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn direct_call_pre_spill_test_defaults_off_and_honors_explicit_override() {
+        let default = Config::new("/state");
+        assert!(!default.direct_call_pre_spill_test);
+        assert!(default.direct_call_pre_spill_test(true).direct_call_pre_spill_test);
+    }
 
     #[test]
     fn translation_cache_requires_an_absolute_path() {

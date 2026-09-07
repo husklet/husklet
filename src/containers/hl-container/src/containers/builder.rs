@@ -24,6 +24,8 @@ struct Assembly<S> {
     translation_cache: Option<std::path::PathBuf>,
     translation_cache_observability: bool,
     translation_symbols: Option<std::path::PathBuf>,
+    #[cfg(feature = "native-test-hooks")]
+    direct_call_pre_spill_test: bool,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -57,6 +59,8 @@ impl<S: Storage + 'static> Assembly<S> {
             translation_cache: self.translation_cache,
             translation_cache_observability: self.translation_cache_observability,
             translation_symbols: self.translation_symbols,
+            #[cfg(feature = "native-test-hooks")]
+            direct_call_pre_spill_test: self.direct_call_pre_spill_test,
             checkpoints: self.checkpoints,
         }));
         service.reconcile().await?;
@@ -105,6 +109,8 @@ impl Builder {
             .transpose()?;
         let translation_cache_observability = self.config.translation_cache_observability;
         let translation_symbols = self.config.translation_symbols.map(crate::config::TranslationCache::prepare).transpose()?;
+        #[cfg(feature = "native-test-hooks")]
+        let direct_call_pre_spill_test = self.config.direct_call_pre_spill_test;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
         let checkpoints = match self.checkpoints {
@@ -130,6 +136,8 @@ impl Builder {
                     translation_cache,
                     translation_cache_observability,
                     translation_symbols,
+                    #[cfg(feature = "native-test-hooks")]
+                    direct_call_pre_spill_test,
                     checkpoints,
                 }
                 .build()
@@ -146,6 +154,8 @@ impl Builder {
                     translation_cache,
                     translation_cache_observability,
                     translation_symbols,
+                    #[cfg(feature = "native-test-hooks")]
+                    direct_call_pre_spill_test,
                     checkpoints,
                 }
                 .build()
@@ -177,6 +187,8 @@ pub(super) async fn build_with<S: Storage + 'static>(
         translation_cache: None,
         translation_cache_observability: false,
         translation_symbols: None,
+        #[cfg(feature = "native-test-hooks")]
+        direct_call_pre_spill_test: false,
         checkpoints,
     }
     .build()
