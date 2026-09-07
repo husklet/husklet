@@ -720,6 +720,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario);
 static int translit_ret_ibtc_fixture_test(unsigned scenario);
 static int translit_indirect_ibtc_fixture_test(unsigned scenario);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
+static int translit_direct_call_signal_stage_test(void);
 static int translit_ret_signal_stage_test(void);
 static int translit_control_mem_signal_stage_test(int call);
 static int translit_pcache_census_signal_stage_test(void);
@@ -2923,6 +2924,14 @@ static uint8_t *translit_test_jmp_mem_borrow_start;
 static uint8_t *translit_test_jmp_mem_rip_end;
 static uint8_t *translit_test_jmp_mem_r11_end;
 static uint64_t translit_test_jmp_mem_source_guest;
+static uint8_t *translit_test_call_instruction_start;
+static uint8_t *translit_test_call_low_end;
+static uint8_t *translit_test_call_high_end;
+static uint8_t *translit_test_call_committed;
+static uint8_t *translit_test_call_instruction_end;
+static translit_jcc_ibtc_site_ranges translit_test_call_site;
+static uint64_t translit_test_call_source_guest;
+static uint64_t translit_test_call_target_guest;
 #endif
 
 static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t pop) {
@@ -3404,6 +3413,30 @@ static int translit_owner_append_ibtc(jit_body_owner_range ranges[TL_MAX_OWNER_R
             translit_owner_append(ranges, count, site->restore_end, site->end,
                                   JIT_BODY_OWNER_DYNAMIC_RIP, 0)) &&
            translit_owner_append(ranges, count, site->end, instruction_end, guest, 0);
+}
+
+static int translit_owner_append_direct_call(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
+                                              const uint8_t *instruction_start,
+                                              const uint8_t *instruction_end,
+                                              const uint8_t *call_committed,
+                                              const translit_jcc_ibtc_site_ranges *site,
+                                              uint64_t source, uint64_t target) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    translit_test_call_instruction_start = (uint8_t *)instruction_start;
+    translit_test_call_committed = (uint8_t *)call_committed;
+    translit_test_call_instruction_end = (uint8_t *)instruction_end;
+    translit_test_call_site = *site;
+    translit_test_call_source_guest = source;
+    translit_test_call_target_guest = target;
+#endif
+    return translit_owner_append(ranges, count, instruction_start, call_committed, source, 0) &&
+           translit_owner_append(ranges, count, call_committed, site->save_end, target, 0) &&
+           translit_owner_append(ranges, count, site->save_end,
+                                 site->restore_end != NULL ? site->restore_end : site->end,
+                                 target, 1u << HL_X64_RAX) &&
+           (site->restore_end == NULL ||
+            translit_owner_append(ranges, count, site->restore_end, site->end, target, 0)) &&
+           translit_owner_append(ranges, count, site->end, instruction_end, target, 0);
 }
 
 static int translit_owner_append_ret(jit_body_owner_range ranges[TL_MAX_OWNER_RANGES], uint32_t *count,
@@ -5679,6 +5712,8 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
         if (staged_telemetry) attempt_telemetry = translit_attempt_pending;
         translit_jcc_ibtc_site_ranges ibtc_site = {0};
         translit_ret_sim_ranges ret_site = {0};
+        uint8_t *direct_call_committed = NULL;
+        uint64_t direct_call_target = 0;
         int preserve_register = -1;
         uint8_t *riprel_readonly_save_end = NULL, *riprel_readonly_op_end = NULL;
         uint8_t *preserve_start = NULL, *preserve_end = NULL;
@@ -6198,8 +6233,18 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                 hl_x64_load_gs(a, HL_X64_R11, R_OFF(HL_X64_R11));
             }
             hl_x64_store_rsp_imm32(a, -8, (uint32_t)pushed);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (kind == TL_CALL) translit_test_call_low_end = a->cursor;
+#endif
             hl_x64_store_rsp_imm32(a, -4, (uint32_t)(pushed >> 32));
+#if defined(HL_NATIVE_TEST_HOOKS)
+            if (kind == TL_CALL) translit_test_call_high_end = a->cursor;
+#endif
             hl_x64_lea_rsp(a, -8);
+            if (kind == TL_CALL) {
+                direct_call_committed = a->cursor;
+                direct_call_target = next + (uint64_t)insn.imm;
+            }
             if (kind == TL_CALL_MEM) {
                 hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
                 hl_x64_store_gs(a, HL_X64_R11, OFF_RIP);
@@ -6350,6 +6395,14 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                        translit_owner_append(instruction_ranges, &instruction_range_count,
                                               preserve_end, a->cursor, pc, 0);
             TL_ATTEMPT_ADD(translit_rip_indirect_lowered, rip_indirect_lowered);
+        } else if (direct_call_committed != NULL && ibtc_site.end != NULL) {
+            owner_ok = translit_owner_append_direct_call(owners, &owner_count, instruction_start,
+                                                          a->cursor, direct_call_committed, &ibtc_site,
+                                                          pc, direct_call_target) &&
+                       translit_owner_append_direct_call(instruction_ranges, &instruction_range_count,
+                                                          instruction_start, a->cursor,
+                                                          direct_call_committed, &ibtc_site,
+                                                          pc, direct_call_target);
         } else if (ibtc_site.end != NULL) {
             owner_ok = translit_owner_append_ibtc(owners, &owner_count, instruction_start,
                                                   a->cursor, &ibtc_site, pc) &&
@@ -10017,6 +10070,12 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 160;
+    translit_test_call_instruction_start = NULL;
+    translit_test_call_low_end = NULL;
+    translit_test_call_high_end = NULL;
+    translit_test_call_committed = NULL;
+    translit_test_call_instruction_end = NULL;
+    translit_test_call_site = (translit_jcc_ibtc_site_ranges){0};
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t target_offset = 0x40;
@@ -10122,7 +10181,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) != miss_before + 1)
         goto done_call_ibtc;
     if (scenario == 121) {
-        result = translit_jcc_ibtc_signal_stage_test(0) && cpu.r[4] == stack - 8 && return_word == source + 5
+        result = translit_direct_call_signal_stage_test() && cpu.r[4] == stack - 8 && return_word == source + 5
                      ? 0
                      : 170;
         goto done_call_ibtc;
@@ -11159,6 +11218,68 @@ static int translit_pre_spill_signal_stage_test(void) {
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
     munmap(arena, arena_size);
+    return exact;
+}
+
+// The return word becomes architectural at the LEA boundary. Probe every emitted PC so the owner
+// ledger must reconstruct either the wholly pre-CALL state or the wholly committed target state;
+// in particular no post-commit PC may restart CALL with an already-decremented RSP.
+static int translit_direct_call_signal_stage_test(void) {
+    if (translit_test_call_instruction_start == NULL || translit_test_call_low_end == NULL ||
+        translit_test_call_high_end == NULL || translit_test_call_committed == NULL ||
+        translit_test_call_instruction_end == NULL || translit_test_call_site.save_end == NULL ||
+        translit_test_call_site.end == NULL ||
+        !(translit_test_call_instruction_start < translit_test_call_low_end &&
+          translit_test_call_low_end < translit_test_call_high_end &&
+          translit_test_call_high_end < translit_test_call_committed &&
+          translit_test_call_committed <= translit_test_call_site.save_end &&
+          translit_test_call_site.save_end < translit_test_call_site.end &&
+          translit_test_call_site.end <= translit_test_call_instruction_end))
+        return 0;
+    uint64_t stack_words[4] = {0};
+    uint64_t original_rsp = (uint64_t)(uintptr_t)&stack_words[2];
+    const uint64_t return_word = translit_test_call_source_guest + 5;
+    int saved_selected = translit_selected;
+    translit_selected = 1;
+    int exact = 1;
+    for (uint8_t *pc = translit_test_call_instruction_start;
+         exact && pc < translit_test_call_instruction_end; ++pc) {
+        int committed = pc >= translit_test_call_committed;
+        int rax_canonical = pc >= translit_test_call_site.save_end &&
+                            (translit_test_call_site.restore_end == NULL ||
+                             pc < translit_test_call_site.restore_end);
+        struct cpu cpu = {0}, expected_flags = {0};
+        ucontext_t native = {0};
+        uint64_t stack_image = pc < translit_test_call_low_end
+                                   ? UINT64_C(0xfeedfacecafebeef)
+                               : pc < translit_test_call_high_end
+                                   ? (UINT64_C(0xfeedface00000000) | (uint32_t)return_word)
+                                   : return_word;
+        stack_words[1] = stack_image;
+        greg_t *gregs = HL_HOST_UC_GREGS(&native);
+        for (unsigned reg = 0; reg < 16; ++reg) {
+            cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
+            gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
+        }
+        gregs[g_translit_greg[HL_X64_RSP]] =
+            (greg_t)(committed ? original_rsp - 8 : original_rsp);
+        gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
+        HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)pc;
+        exact = translit_signal_capture(&cpu, &native) &&
+                cpu.rip == (committed ? translit_test_call_target_guest
+                                      : translit_test_call_source_guest) &&
+                cpu.r[HL_X64_RSP] == (committed ? original_rsp - 8 : original_rsp) &&
+                cpu.r[HL_X64_RAX] == (rax_canonical ? UINT64_C(0xc000000000000000)
+                                                    : UINT64_C(0xa000000000000000)) &&
+                stack_words[1] == stack_image && (!committed || stack_words[1] == return_word);
+        for (unsigned reg = 1; exact && reg < 16; ++reg) {
+            if (reg == HL_X64_RSP) continue;
+            exact = cpu.r[reg] == UINT64_C(0xa000000000000000) + reg;
+        }
+        translit_flags_out(&expected_flags, UINT64_C(0xad7));
+        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+    }
+    translit_selected = saved_selected;
     return exact;
 }
 
