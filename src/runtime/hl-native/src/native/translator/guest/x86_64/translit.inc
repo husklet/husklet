@@ -8901,6 +8901,9 @@ static int translit_direct_jmp_ibtc_fixture_test(unsigned scenario) {
     translit_fall_fixture_length = sizeof guest_bytes;
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 153;
+    /* These fixtures assert diagnostic counter deltas.  Production counters are
+       intentionally dormant without explicit diagnostic authority. */
+    g_prof = 1;
     hl_backend_tree_begin(1, effective_host_services());
     const uint64_t source = translit_fall_fixture_guest + source_offset;
     const uint64_t target = translit_fall_fixture_guest + target_offset;
@@ -9537,6 +9540,8 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         translit_fall_fixture_length = sizeof guest_bytes;
         hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
         if (context == NULL) return 122;
+        /* These fixtures assert diagnostic counter deltas. */
+        g_prof = 1;
         struct interp_block *source_block = translit_jcc_ibtc_test_build(context, source);
         if (source_block == NULL) return 136;
         if (scenario == 136) {
@@ -9882,6 +9887,8 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
     translit_fall_fixture_length = sizeof guest_bytes;
     hl_x86_hot_context *context = hl_x86_hot_context_create(translit_fall_fixture_fetch, NULL, NULL);
     if (context == NULL) return 135;
+    /* These fixtures assert diagnostic counter deltas. */
+    g_prof = 1;
     hl_backend_tree_begin(1, effective_host_services());
     uint64_t source = translit_fall_fixture_guest + source_offset;
     uint64_t target = translit_fall_fixture_guest + target_offset;
