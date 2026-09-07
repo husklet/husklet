@@ -354,7 +354,16 @@ impl Manifest {
         if !manifest.filesystem.read.is_empty() && !manifest.capabilities.holds(Capability::FilesystemRead) {
             return Err(Invalid::Undeclared(Capability::FilesystemRead));
         }
-        if !manifest.filesystem.write.is_empty() && !manifest.capabilities.holds(Capability::FilesystemWrite) {
+        if [
+            &manifest.filesystem.write,
+            &manifest.filesystem.create,
+            &manifest.filesystem.delete,
+            &manifest.filesystem.rename,
+        ]
+        .iter()
+        .any(|roots| !roots.is_empty())
+            && !manifest.capabilities.holds(Capability::FilesystemWrite)
+        {
             return Err(Invalid::Undeclared(Capability::FilesystemWrite));
         }
         manifest.filesystem.validate()?;
