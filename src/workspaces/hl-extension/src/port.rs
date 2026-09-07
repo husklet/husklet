@@ -678,8 +678,63 @@ pub struct ExtensionAcquisitionStatus {
     pub error: Option<String>,
 }
 
+/// One host-curated extension locator. This metadata is discovery only: the
+/// acquired manifest and immutable image digest remain installation authority.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionCatalogueEntry {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub reference: String,
+    pub publisher: String,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionCatalogue {
+    pub entries: Vec<ExtensionCatalogueEntry>,
+    pub complete: bool,
+}
+
+impl ExtensionCatalogue {
+    pub const ENTRY_LIMIT: usize = 64;
+
+    /// Refuses unbounded or ambiguous discovery metadata before it reaches a renderer.
+    pub fn validate(&self) -> Result<(), HostError> {
+        if self.entries.len() > Self::ENTRY_LIMIT {
+            return Err(HostError::Failed("extension catalogue exceeds 64 entries".into()));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            let id = entry.id.as_bytes();
+            if id.is_empty()
+                || id.len() > 64
+                || !id
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                || !ids.insert(&entry.id)
+                || !bounded_text(&entry.title, 128)
+                || !bounded_text(&entry.description, 1024)
+                || !bounded_text(&entry.publisher, 128)
+                || !bounded_text(&entry.reference, 512)
+                || !bounded_text(&entry.source, 512)
+            {
+                return Err(HostError::Failed("extension catalogue metadata is invalid".into()));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn bounded_text(value: &str, limit: usize) -> bool {
+    !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
+}
+
 /// Installed-extension inventory and persisted lifecycle controls.
 pub trait ExtensionStore {
+    fn catalogue(&self) -> Result<ExtensionCatalogue, HostError> {
+        Err(HostError::Unsupported("extension catalogue is unavailable".into()))
+    }
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
         Err(HostError::Unsupported("extension inventory is unavailable".into()))
     }
@@ -1226,8 +1281,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
-        PANE_TEXT_BYTES,
+        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
+        bounded_pane_text, pane_lines,
     };
 
     #[test]
@@ -1335,5 +1390,44 @@ mod tests {
             Legacy.connect_with_aliases("network", "container", &aliases),
             Err(super::HostError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn catalogue_metadata_is_bounded_unique_and_control_free() {
+        let entry = super::ExtensionCatalogueEntry {
+            id: "storybook".into(),
+            title: "Component playground".into(),
+            description: "First-party components".into(),
+            reference: "registry/storybook:latest".into(),
+            publisher: "Husklet".into(),
+            source: "husklet:first-party/storybook".into(),
+        };
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone(), entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    description: "unsafe\nmetadata".into(),
+                    ..entry
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

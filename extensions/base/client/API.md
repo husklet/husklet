@@ -187,6 +187,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 ## Extensions
 
 - `host.extensions.list(...)` — `extension_list`, requires `extensions:read`.
+- `host.extensions.catalogue(...)` — `extension_catalogue`, requires `extensions:read`.
 - `host.extensions.inspect(...)` — `extension_inspect`, requires `extensions:read`.
 - `host.extensions.enable(...)` — `extension_enable`, requires `extensions:control`.
 - `host.extensions.disable(...)` — `extension_disable`, requires `extensions:control`.

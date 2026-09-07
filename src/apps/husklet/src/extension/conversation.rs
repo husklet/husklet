@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -1064,8 +1064,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1419,6 +1419,21 @@ mod tests {
     }
 
     impl hl_extension::port::ExtensionStore for Host {
+        fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+            self.ledger.note("extensions.catalogue");
+            Ok(hl_extension::port::ExtensionCatalogue {
+                entries: vec![hl_extension::port::ExtensionCatalogueEntry {
+                    id: "storybook".into(),
+                    title: "Component playground".into(),
+                    description: "First-party components".into(),
+                    reference: "registry/storybook:latest".into(),
+                    publisher: "Husklet".into(),
+                    source: "husklet:first-party/storybook".into(),
+                }],
+                complete: true,
+            })
+        }
+
         fn list(&self) -> Result<Vec<hl_extension::port::ExtensionSummary>, HostError> {
             self.ledger.note("extensions.list");
             Ok(vec![hl_extension::port::ExtensionSummary {
@@ -1653,6 +1668,27 @@ mod tests {
     fn ask(wire: &mut Wire<UnixStream>, request: &Request) -> Frame {
         wire.send(&codec::request(request).expect("encoded")).expect("sent");
         wire.receive().expect("an answer")
+    }
+
+    #[test]
+    fn catalogue_metadata_crosses_the_real_socket_without_becoming_install_authority() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(&mut wire, &Request::ExtensionCatalogue);
+        assert!(matches!(
+            codec::read_reply(&answer),
+            Ok(Reply::ExtensionCatalogue(catalogue))
+                if catalogue.complete
+                    && catalogue.entries.len() == 1
+                    && catalogue.entries[0].source == "husklet:first-party/storybook"
+                    && catalogue.entries[0].reference == "registry/storybook:latest"
+        ));
+        assert_eq!(ledger.reached(), vec!["extensions.catalogue"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]

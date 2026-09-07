@@ -9,9 +9,8 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
+    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -136,7 +135,7 @@ impl Session {
                 return Err(Failure::Denied {
                     capability: capability.as_str().into(),
                     detail: "non-filesystem capability used for path authority".into(),
-                })
+                });
             }
         };
         if roots.iter().any(|root| path.within(root)) {
@@ -294,6 +293,7 @@ impl Session {
             | Request::WorkspaceStop { .. }
             | Request::WorkspaceRestart { .. } => self.workspace_control(request, services),
             Request::ExtensionList
+            | Request::ExtensionCatalogue
             | Request::ExtensionInspect { .. }
             | Request::ExtensionEnable { .. }
             | Request::ExtensionDisable { .. }
@@ -735,6 +735,11 @@ impl Session {
         let port = self.peer.authority().port(request.capability(), services.extensions)?;
         match request {
             Request::ExtensionList => Ok(Reply::Extensions(port.list()?)),
+            Request::ExtensionCatalogue => {
+                let catalogue = port.catalogue()?;
+                catalogue.validate()?;
+                Ok(Reply::ExtensionCatalogue(catalogue))
+            }
             Request::ExtensionInspect { name } => Ok(Reply::Extension(port.inspect(name)?)),
             Request::ExtensionEnable { name, image_digest } => {
                 immutable_digest(image_digest, "extension image")?;

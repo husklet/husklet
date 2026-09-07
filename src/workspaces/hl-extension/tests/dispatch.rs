@@ -740,6 +740,14 @@ impl WorkspaceFiles for Host {
 }
 
 impl ExtensionStore for Host {
+    fn catalogue(&self) -> Result<hl_extension::port::ExtensionCatalogue, HostError> {
+        self.ledger.note("extensions.catalogue");
+        Ok(hl_extension::port::ExtensionCatalogue {
+            entries: Vec::new(),
+            complete: true,
+        })
+    }
+
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
         self.ledger.note("extensions.list");
         Ok(vec![ExtensionSummary {
@@ -944,6 +952,7 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::WorkspaceControl,
         ),
         (Request::ExtensionList, Capability::ExtensionRead),
+        (Request::ExtensionCatalogue, Capability::ExtensionRead),
         (
             Request::ExtensionInspect { name: "sample".into() },
             Capability::ExtensionRead,

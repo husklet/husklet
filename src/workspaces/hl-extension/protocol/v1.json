@@ -1407,6 +1407,78 @@
       "kind": "struct",
       "serde": {}
     },
+    "ExtensionCatalogue": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCatalogueEntry"
+            }
+          }
+        },
+        {
+          "name": "complete",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionCatalogueEntry": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "description",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "reference",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "publisher",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "source",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ExtensionName": {
       "kind": "ref",
       "name": "PeerName"
@@ -6435,6 +6507,10 @@
     },
     {
       "capability": "extensions:read",
+      "request": "extension_catalogue"
+    },
+    {
+      "capability": "extensions:read",
       "request": "extension_inspect"
     },
     {
@@ -6858,6 +6934,10 @@
     {
       "reply": "extensions",
       "request": "extension_list"
+    },
+    {
+      "reply": "extension_catalogue",
+      "request": "extension_catalogue"
     },
     {
       "reply": "extension",
@@ -7387,6 +7467,16 @@
           }
         },
         {
+          "name": "extension_catalogue",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCatalogue"
+            }
+          }
+        },
+        {
           "name": "extension",
           "payload": {
             "kind": "newtype",
@@ -7865,6 +7955,12 @@
         },
         {
           "name": "extension_list",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "extension_catalogue",
           "payload": {
             "kind": "unit"
           }
@@ -11155,7 +11251,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:caace62395c70761",
+  "source_fingerprint": "fnv1a64:abeea3010ecd4f94",
   "specification_version": 1,
   "topics": [
     {

@@ -1040,6 +1040,7 @@ test('extension facade preserves exact read and control request shapes', async (
   const api = workspace(stage.session);
   const operations = [
     api.extensions.list(),
+    api.extensions.catalogue(),
     api.extensions.inspect('top'),
     api.extensions.enable('top', `sha256:${'a'.repeat(64)}`),
     api.extensions.disable('top', `sha256:${'a'.repeat(64)}`),
@@ -1050,6 +1051,7 @@ test('extension facade preserves exact read and control request shapes', async (
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_list' },
+    { call: 'extension_catalogue' },
     { call: 'extension_inspect', with: { name: 'top' } },
     { call: 'extension_enable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
     { call: 'extension_disable', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
@@ -1060,6 +1062,10 @@ test('extension facade preserves exact read and control request shapes', async (
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }),
   );
+  const catalogue = { entries: [], complete: true };
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_catalogue', with: catalogue } }),
+  );
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }),
   );
@@ -1067,6 +1073,7 @@ test('extension facade preserves exact read and control request shapes', async (
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await Promise.all(operations), [
     [summary],
+    catalogue,
     summary,
     undefined,
     undefined,

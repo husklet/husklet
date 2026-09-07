@@ -93,6 +93,18 @@ export interface ExtensionCandidate {
   requested_filesystem: FilesystemGrant;
   installed_image_digest: string | null;
 }
+export interface ExtensionCatalogueEntry {
+  id: string;
+  title: string;
+  description: string;
+  reference: string;
+  publisher: string;
+  source: string;
+}
+export interface ExtensionCatalogue {
+  entries: ExtensionCatalogueEntry[];
+  complete: boolean;
+}
 export interface ExtensionAcquisitionJob {
   job: string;
 }
@@ -554,6 +566,8 @@ export interface WorkspaceApi {
   restart(name: string): Promise<void>;
   extensions: {
     list(): Promise<ExtensionSummary[]>;
+    /** Host-curated offline discovery metadata; acquisition still supplies install authority. */
+    catalogue(): Promise<ExtensionCatalogue>;
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */

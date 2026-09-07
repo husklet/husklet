@@ -55,6 +55,20 @@ const api = {
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
 };
 
+const firstPartyCatalogue = async () => ({
+  entries: [
+    {
+      id: 'storybook',
+      title: 'Component playground',
+      description: 'Explore extension components, large tables, terminals, diffs, and metrics.',
+      reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+      publisher: 'Husklet',
+      source: 'husklet:first-party/storybook',
+    },
+  ],
+  complete: true,
+});
+
 test('Top presents workspace, extensions, and every resource navigation choice', () => {
   const frame = host().render(
     h(Top, {
@@ -127,7 +141,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
         cursor_blink: false,
       },
     }),
-    extensions: { list: async () => [] },
+    extensions: { list: async () => [], catalogue: firstPartyCatalogue },
     watchExtensions: async () => () => {},
   };
   const stage = host();
@@ -203,6 +217,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
       api: {
         extensions: {
           list: async () => [],
+          catalogue: firstPartyCatalogue,
           startAcquisition: async (reference) => {
             references.push(reference);
             return { job: 'storybook-review' };

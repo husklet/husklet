@@ -2,16 +2,16 @@
 
 use hl_extension::port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
-    ExtensionStore, ExtensionSummary, HostError,
+    ExtensionCatalogue, ExtensionCatalogueEntry, ExtensionStore, ExtensionSummary, HostError,
 };
 use hl_extension::{ExtensionName, Grant, Stage};
 use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
+use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
-use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -56,6 +56,20 @@ impl ExtensionManagement {
 }
 
 impl ExtensionStore for ExtensionManagement {
+    fn catalogue(&self) -> Result<ExtensionCatalogue, HostError> {
+        Ok(ExtensionCatalogue {
+            entries: vec![ExtensionCatalogueEntry {
+                id: "storybook".into(),
+                title: "Component playground".into(),
+                description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+                reference: "ghcr.io/husklet/husklet/extension-storybook:latest".into(),
+                publisher: "Husklet".into(),
+                source: "husklet:first-party/storybook".into(),
+            }],
+            complete: true,
+        })
+    }
+
     fn list(&self) -> Result<Vec<ExtensionSummary>, HostError> {
         Ok(self.roster()?.entries().into_iter().map(summary).collect())
     }
@@ -347,9 +361,11 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management
-            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert!(events.drain().is_none());
     }
 

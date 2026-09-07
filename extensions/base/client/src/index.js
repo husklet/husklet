@@ -405,6 +405,7 @@ export function workspace(session, { signal } = {}) {
     restart: (name) => done('workspace_restart', { name }),
     extensions: {
       list: async () => expect(await session.call('extension_list'), 'extensions'),
+      catalogue: async () => expect(await session.call('extension_catalogue'), 'extension_catalogue'),
       inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
       enable: (name, imageDigest) => done('extension_enable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),
       disable: (name, imageDigest) => done('extension_disable', { name, image_digest: immutableDigest(imageDigest, 'extension image') }),

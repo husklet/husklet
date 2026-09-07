@@ -19,6 +19,7 @@ import {
   Text,
   type ExtensionAcquisitionStatus,
   type ExtensionCapability,
+  type ExtensionCatalogue,
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
@@ -28,7 +29,6 @@ import {
 
 type Change = { value?: unknown };
 
-const STORYBOOK_IMAGE = 'ghcr.io/husklet/husklet/extension-storybook:latest';
 const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
@@ -99,6 +99,8 @@ function FilesystemConsent({
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
+  const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
+  const [catalogueError, setCatalogueError] = React.useState('');
   const [inventoryState, setInventoryState] = React.useState<
     'loading' | 'empty' | 'error' | 'ready'
   >('loading');
@@ -141,6 +143,19 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     void reload();
   }, [reload]);
   React.useEffect(() => {
+    const catalogue = api.extensions.catalogue;
+    if (!catalogue) return;
+    void catalogue()
+      .then((value) => {
+        setCatalogue(value);
+        setCatalogueError('');
+      })
+      .catch((cause) => {
+        setCatalogue(null);
+        setCatalogueError(message(cause));
+      });
+  }, [api]);
+  React.useEffect(() => {
     let dispose: (() => Promise<void>) | undefined;
     void api
       .watchExtensions((listing) => {
@@ -176,6 +191,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       const started = await api.extensions.startAcquisition(wanted);
       cancelledJob.current = '';
       let status = await api.extensions.acquisition(started.job);
+      // Acquisition polling is event-handler work, not render-time computation.
+      // eslint-disable-next-line react-hooks/purity
       const deadline = Date.now() + 30_000;
       while (true) {
         setAcquisition(status);
@@ -197,6 +214,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           cancelledJob.current === started.job
         )
           break;
+        // eslint-disable-next-line react-hooks/purity
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         const changed = await api.extensions.waitForAcquisition(started.job, status.revision, {
@@ -331,24 +349,35 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 />
               </CardContent>
             </Card>
-            {!installed.some((extension) => extension.name === 'storybook') && (
-              <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
-                <CardHeader label="Component playground" detail="First-party · Storybook" />
-                <CardContent gap={1}>
-                  <Text
-                    label="Explore extension components, large tables, terminals, diffs, and metrics."
-                    color="text-dim"
-                    wrap
-                  />
-                  <Row>
-                    <Button
-                      label="Review access"
-                      enabled={!busy}
-                      onInvoke={() => inspect(STORYBOOK_IMAGE)}
-                    />
-                  </Row>
-                </CardContent>
-              </Card>
+            {catalogue?.entries
+              .filter((entry) => !installed.some((extension) => extension.name === entry.id))
+              .map((entry) => (
+                <Card
+                  key={entry.id}
+                  grow={false}
+                  justify="start"
+                  width={CONTENT_WIDTH}
+                  variant="filled"
+                >
+                  <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                  <CardContent gap={1}>
+                    <Text label={entry.description} color="text-dim" wrap />
+                    <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                    <Row>
+                      <Button
+                        label="Review access"
+                        enabled={!busy}
+                        onInvoke={() => inspect(entry.reference)}
+                      />
+                    </Row>
+                  </CardContent>
+                </Card>
+              ))}
+            {catalogue && !catalogue.complete && (
+              <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
+            )}
+            {catalogueError && (
+              <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
             )}
           </Column>
         )}

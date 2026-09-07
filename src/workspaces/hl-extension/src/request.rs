@@ -78,6 +78,7 @@ pub enum Request {
         name: String,
     },
     ExtensionList,
+    ExtensionCatalogue,
     ExtensionInspect {
         name: String,
     },
@@ -460,7 +461,7 @@ impl Request {
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
-            Self::ExtensionList | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
+            Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
             Self::ExtensionEnable { .. }
             | Self::ExtensionDisable { .. }
             | Self::ExtensionRetry { .. }
@@ -662,6 +663,7 @@ pub enum Reply {
     WorkspaceConfiguration(WorkspaceConfiguration),
     Workspaces(Vec<WorkspaceState>),
     Extensions(Vec<crate::port::ExtensionSummary>),
+    ExtensionCatalogue(crate::port::ExtensionCatalogue),
     Extension(crate::port::ExtensionSummary),
     ExtensionAcquisitionJob(crate::port::ExtensionAcquisitionJob),
     ExtensionAcquisition(crate::port::ExtensionAcquisitionStatus),

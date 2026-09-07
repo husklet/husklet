@@ -221,6 +221,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "workspace_stop": "done",
   "workspace_restart": "done",
   "extension_list": "extensions",
+  "extension_catalogue": "extension_catalogue",
   "extension_inspect": "extension",
   "extension_enable": "done",
   "extension_disable": "done",
@@ -329,6 +330,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "workspace_stop": "workspaces:control",
   "workspace_restart": "workspaces:control",
   "extension_list": "extensions:read",
+  "extension_catalogue": "extensions:read",
   "extension_inspect": "extensions:read",
   "extension_enable": "extensions:control",
   "extension_disable": "extensions:control",
@@ -1691,6 +1693,78 @@ const definitions = {
           "of": {
             "kind": "string"
           }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExtensionCatalogue": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionCatalogueEntry"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExtensionCatalogueEntry": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "title",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "description",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "reference",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "publisher",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "source",
+        "optional": false,
+        "schema": {
+          "kind": "string"
         }
       }
     ],
@@ -6765,6 +6839,16 @@ const roots = {
         }
       },
       {
+        "name": "extension_catalogue",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionCatalogue"
+          }
+        }
+      },
+      {
         "name": "extension",
         "payload": {
           "kind": "newtype",
@@ -7243,6 +7327,12 @@ const roots = {
       },
       {
         "name": "extension_list",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "extension_catalogue",
         "payload": {
           "kind": "unit"
         }
