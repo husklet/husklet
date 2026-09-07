@@ -10322,15 +10322,13 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         uint8_t *pcache_emitted = g_cp;
         hl_x64_asm pcache_asm = {pcache_emitted, pcache_emitted + 512, 0, 0};
         int saved_pcache = g_pcache;
-        uint32_t saved_external_count = translit_external_absolute_count;
-        uint32_t saved_external_emitted = translit_external_absolute_emitted;
-        int saved_external_unclassified = translit_external_absolute_unclassified;
+        uint32_t saved_helper_relative_count = translit_helper_relative_count;
+        uint32_t saved_helper_relative_emitted = translit_helper_relative_emitted;
         g_pcache = 1;
         translit_jcc_ibtc_site_ranges pcache_site = translit_emit_direct_call_ibtc(&pcache_asm, target);
         g_pcache = saved_pcache;
-        translit_external_absolute_count = saved_external_count;
-        translit_external_absolute_emitted = saved_external_emitted;
-        translit_external_absolute_unclassified = saved_external_unclassified;
+        translit_helper_relative_count = saved_helper_relative_count;
+        translit_helper_relative_emitted = saved_helper_relative_emitted;
         if (pcache_asm.overflow || pcache_site.flags_packed != NULL || pcache_site.flags_live != NULL ||
             pcache_site.restore_end != NULL || pcache_site.save_end == NULL || pcache_site.rip_end == NULL ||
             pcache_site.end == NULL)
