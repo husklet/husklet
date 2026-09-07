@@ -1919,6 +1919,8 @@ _Alignas(IBTC_ALIGN) static ibtc_ent g_ibtc[IBTC_N];
    grown ibtc_ent silently reintroduces torn dispatch), and movdqa #GP-faults if misaligned. */
 _Static_assert(sizeof(ibtc_ent) == 16, "ibtc_ent must be one 16-byte granule for the atomic pair publish");
 _Static_assert(IBTC_ALIGN % 16u == 0u, "the ibtc table's alignment must keep every entry 16-byte aligned");
+_Static_assert(sizeof g_ibtc == 2u * 1024u * 1024u,
+               "the shared IBTC has a deliberate two-MiB per-process memory bound");
 
 /* Wholesale-invalidate the inline-branch cache.  In a fork child the table is
    COW-inherited fully populated, so a memset first faults in every page (~190us
