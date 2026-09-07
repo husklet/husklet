@@ -1245,12 +1245,14 @@ mod tests {
             CString::new("HL_C_DIAGNOSTICS").unwrap(),
             CString::new("HL_PCACHE").unwrap(),
             CString::new("HL_PCACHE_DIR").unwrap(),
+            CString::new("HL_DIAGNOSTIC_PORT").unwrap(),
             CString::new("HL_TRANSLIT_JCC_IBTC_DISABLE").unwrap(),
         ];
         let one = CString::new("1").unwrap();
         let zero = CString::new("0").unwrap();
         let pcache_path = CString::new(pcache.path().to_str().unwrap()).unwrap();
-        let option_names = names[..if disabled { 5 } else { 4 }]
+        let diagnostic_port = CString::new(output.as_raw_fd().to_string()).unwrap();
+        let option_names = names[..if disabled { 6 } else { 5 }]
             .iter()
             .map(|name| name.as_ptr())
             .collect::<Vec<_>>();
@@ -1259,6 +1261,7 @@ mod tests {
             one.as_ptr(),
             one.as_ptr(),
             pcache_path.as_ptr(),
+            diagnostic_port.as_ptr(),
         ];
         if disabled {
             option_values.push(one.as_ptr());
@@ -1432,6 +1435,15 @@ mod tests {
         assert_ne!(fields["first_finalize_actor"], 0);
         assert_ne!(fields["first_finalize_slot_pid"], 0);
         fields
+    }
+
+    #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_nohooks_private_diagnostic_port_reaches_the_parser() {
+        let _serial = engine_test_lock();
+        let fields = run_product_diagnostic(product_jcc_ibtc_image(), false, true);
+        assert_eq!(fields["available"], 1);
+        assert!(fields["translated_entries"] > 0, "{fields:?}");
     }
 
     #[cfg(all(not(feature = "native-test-hooks"), target_os = "linux", target_arch = "x86_64"))]
