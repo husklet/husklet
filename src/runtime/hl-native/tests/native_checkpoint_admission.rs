@@ -176,3 +176,8 @@ fn production_phase1_freezes_before_scan_and_thaws_refusal() {
 fn production_empty_allowlist_accepts_child_with_only_stdio() {
     assert_eq!(classify(Path::new("empty-fds:test"), 0, &[]), 0);
 }
+
+#[test]
+fn native_domain_freeze_is_atomic_reversible_and_incarnation_safe() {
+    assert_eq!(classify(Path::new("domain-freeze:test"), 0, &[]), 0);
+}
