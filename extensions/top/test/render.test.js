@@ -763,6 +763,7 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    if (section === 'Containers') assert.ok(labelled(stage, 'Create first container'));
   }
 });
 

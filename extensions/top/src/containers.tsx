@@ -172,6 +172,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
       <ContainerCreate
         api={api}
         blocked={busy !== ''}
+        label={state === 'empty' ? 'Create first container' : undefined}
         onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
         reload={resource.reload}
       />
@@ -181,7 +182,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
         state={state}
         loadingLabel={'Reading containers…'}
         emptyLabel={'No containers'}
-        emptyDetail={'Create a container through an agent or extension, then refresh this page.'}
+        emptyDetail={'Open “Create first container” above to add it here.'}
         error={boundedMessage(resource.error)}
         retryLabel={'Retry containers'}
         onRetry={resource.reload}

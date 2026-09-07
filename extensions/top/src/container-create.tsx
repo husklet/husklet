@@ -41,6 +41,7 @@ type CreatedContainer = { id: string; name: string; generation: number };
 type ContainerCreateProps = {
   api: WorkspaceApi;
   blocked: boolean;
+  label?: string;
   onBusyChange: (busy: boolean) => void;
   reload: () => void | Promise<void>;
 };
@@ -339,7 +340,13 @@ function optionalDecimalLimit(value: string, label: string, maximum: number): nu
   return parsed;
 }
 
-export function ContainerCreate({ api, blocked, onBusyChange, reload }: ContainerCreateProps) {
+export function ContainerCreate({
+  api,
+  blocked,
+  label = 'Create a container',
+  onBusyChange,
+  reload,
+}: ContainerCreateProps) {
   const [draft, setDraft] = useState<ContainerCreateDraft>(emptyDraft);
   const [created, setCreated] = useState<CreatedContainer | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -387,7 +394,7 @@ export function ContainerCreate({ api, blocked, onBusyChange, reload }: Containe
   };
   const editable = !created && !blocked;
   return (
-    <Expander label={'Create a container'}>
+    <Expander label={label}>
       <Card variant={'outline'}>
         <CardHeader
           label={'New container'}
