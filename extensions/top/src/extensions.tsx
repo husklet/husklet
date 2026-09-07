@@ -47,6 +47,10 @@ function filesystemRoots(grant: FilesystemGrant, verb: FilesystemVerb): string[]
   return grant[verb] ?? [];
 }
 
+function filesystemGrantCount(grant: FilesystemGrant): number {
+  return FILESYSTEM_VERBS.reduce((count, { key }) => count + filesystemRoots(grant, key).length, 0);
+}
+
 function FilesystemConsent({
   requested,
   granted,
@@ -68,6 +72,10 @@ function FilesystemConsent({
         label="Each switch grants only the named action and root. Modify cannot create, delete, or rename."
         color="text-dim"
         wrap
+      />
+      <Text
+        label={`${filesystemGrantCount(granted)}/${requestCount} workspace paths allowed`}
+        color="text-dim"
       />
       {FILESYSTEM_VERBS.flatMap(({ key, label, meaning }) =>
         filesystemRoots(requested, key).map((path) => (

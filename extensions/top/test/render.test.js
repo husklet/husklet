@@ -418,6 +418,7 @@ for (const updating of [false, true]) {
       'Rename or move entries · migrations (rename)',
     ])
       assert.ok(labelled(stage, label), label);
+    assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
 
     toggleSwitch(stage, 0, true);
@@ -427,6 +428,7 @@ for (const updating of [false, true]) {
     toggleSwitch(stage, 5, true);
     toggleSwitch(stage, 7, true);
     toggleSwitch(stage, 9, true);
+    assert.ok(labelled(stage, '3/6 workspace paths allowed'));
     invoke(stage, updating ? 'Update extension' : 'Install extension');
     await settled();
     await settled();
