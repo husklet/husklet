@@ -219,6 +219,25 @@ fn aarch64_x86_dbt_records_one_typed_exit_per_generated_return() {
 }
 
 #[test]
+fn aarch64_rejection_census_weights_the_rejecting_form_at_retirement() {
+    let dbt = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    let interpreter = include_str!("../src/native/translator/guest/aarch64/interp/dispatch.c");
+    let census = include_str!("../src/native/engine/backend_tree.c");
+    assert!(dbt.contains("block->rejection_cause = cause;"), "{dbt}");
+    assert!(dbt.contains("HL_BACKEND_A64_REJECTION_UNSUPPORTED"), "{dbt}");
+    assert!(interpreter.contains(
+        "hl_backend_tree_a64_rejection_step(block->rejection_cause,\n                                                   block->rejection_instruction);"
+    ));
+    let writer = census
+        .rsplit_once("static inline void hl_backend_tree_a64_rejection_step(unsigned cause, uint32_t instruction) {")
+        .and_then(|(_, tail)| tail.split_once("\n}").map(|(body, _)| body))
+        .expect("production rejection-step writer");
+    assert!(!writer.contains("x86_jcc_route_enabled"), "policy suppressed rejection writer: {writer}");
+    assert!(census.contains("rejection_total == atomic_load_explicit(&census->interpreted_steps"));
+    assert!(census.contains("rejection_keyed == rejection_cause[HL_BACKEND_A64_REJECTION_UNSUPPORTED]"));
+}
+
+#[test]
 fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [
@@ -282,7 +301,7 @@ fn aarch64_x86_unsupported_census_is_observation_gated_and_at_the_rejection_seam
     let dbt = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     assert_eq!(dbt.matches("hl_backend_tree_a64_unsupported(instruction);").count(), 1);
     assert!(dbt.contains(
-        "hl_backend_tree_a64_unsupported(instruction);\n            break;"
+        "hl_backend_tree_a64_unsupported(instruction);\n            rejection_cause = HL_BACKEND_A64_REJECTION_UNSUPPORTED;\n            rejection_instruction = instruction;\n            break;"
     ));
 }
 

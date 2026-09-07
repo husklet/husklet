@@ -531,6 +531,16 @@ _Static_assert(HL_A64_X86_MAX_BLOCK_INSNS +
                    UINT16_MAX,
                "AArch64 x86 DBT dynamic retired count must not overflow");
 
+static void *hl_a64_x86_interpreter_fallback(uint64_t guest_pc, unsigned cause,
+                                              uint32_t instruction) {
+    struct interp_block *block = hl_a64_interp_translate_block(guest_pc);
+    if (block != NULL) {
+        block->rejection_cause = cause;
+        block->rejection_instruction = instruction;
+    }
+    return block;
+}
+
 static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
                                                  uint64_t cursor, uint64_t *target_out,
                                                  uint8_t *direct_target) {
@@ -613,12 +623,34 @@ static int hl_a64_x86_conditional_is_next(uint32_t instruction) {
     return 0;
 }
 
+/* BR, BLR and RET are one allocated branch-register family.  Keep the exact
+ * fixed-bit admission used by the architectural interpreter: PAC branches,
+ * ERET, DRPS and reserved encodings remain interpreter-owned.  BLR must read
+ * Rn before publishing x30 because `blr x30` branches to the old value. */
+static int hl_a64_x86_emit_indirect_terminal(hl_x64_asm *assembler, uint32_t instruction,
+                                              uint64_t guest_pc, uint64_t *exit_kind) {
+    uint32_t fixed = instruction & 0xFFFFFC1Fu;
+    if (fixed != 0xD61F0000u && fixed != 0xD63F0000u && fixed != 0xD65F0000u)
+        return 0;
+    unsigned source = (instruction >> 5) & 31u;
+    int target_register = fixed == 0xD63F0000u ? 1 : 0;
+    hl_a64_x86_load_gpr(assembler, target_register, source, 0);
+    if (fixed == 0xD63F0000u)
+        hl_a64_x86_emit_cpu_u64(assembler, 30 * (int)sizeof(uint64_t), pcrel_base(guest_pc) + 4);
+    hl_x64_reg_mem_disp32(assembler, 0x89, target_register, HL_A64_X86_CPU_REG, OFF_PC);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    *exit_kind = fixed == 0xD61F0000u   ? HL_BACKEND_SHAPE_T_INDIRECT_BRANCH
+                 : fixed == 0xD63F0000u ? HL_BACKEND_SHAPE_T_INDIRECT_CALL
+                                        : HL_BACKEND_SHAPE_T_RETURN;
+    return 1;
+}
+
 static void *translate_block(uint64_t guest_pc) {
     /* map_put/txpg_mark describe one non-wrapping source interval. AArch64
      * address arithmetic wraps, but a block spanning UINT64_MAX cannot be
      * represented by that cache contract, so leave it to the interpreter. */
     if (guest_pc >= UINT64_MAX - UINT64_C(0xFFF))
-        return hl_a64_interp_translate_block(guest_pc);
+        return hl_a64_x86_interpreter_fallback(guest_pc, HL_BACKEND_A64_REJECTION_RANGE, 0);
     uint64_t source_page = guest_pc & ~UINT64_C(0xFFF);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
     uint8_t *const begin = g_cp;
@@ -630,7 +662,7 @@ static void *translate_block(uint64_t guest_pc) {
     uint8_t *const cache_end = g_cache + CACHE_SZ;
     if ((size_t)(cache_end - entry) < HL_A64_X86_MAX_BLOCK_BYTES) {
         g_cp = begin;
-        return hl_a64_interp_translate_block(guest_pc);
+        return hl_a64_x86_interpreter_fallback(guest_pc, HL_BACKEND_A64_REJECTION_CAPACITY, 0);
     }
     hl_x64_asm assembler = {
         .cursor = entry,
@@ -640,6 +672,8 @@ static void *translate_block(uint64_t guest_pc) {
     uint64_t cursor = guest_pc;
     uint64_t source_end = guest_pc;
     int has_memory = 0;
+    unsigned rejection_cause = HL_BACKEND_A64_REJECTION_LIMIT;
+    uint32_t rejection_instruction = 0;
     uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     uint64_t guest_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     /* r14 is callee-saved by the entry trampoline and unused by the ALU
@@ -657,7 +691,10 @@ static void *translate_block(uint64_t guest_pc) {
         guest_for_instruction[count] = cursor;
         int fetch_ok = 0;
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);
-        if (!fetch_ok) break;
+        if (!fetch_ok) {
+            rejection_cause = HL_BACKEND_A64_REJECTION_FETCH;
+            break;
+        }
         if (cursor + 4 > source_end) source_end = cursor + 4;
         if (hl_a64_x86_emit_mov_wide(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
@@ -720,6 +757,8 @@ static void *translate_block(uint64_t guest_pc) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
             exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
+        } else if (hl_a64_x86_emit_indirect_terminal(&assembler, instruction, cursor, &exit_kind)) {
+            /* Complete terminal and typed exit were emitted together. */
         } else if ((instruction & 0xFC000000u) == 0x14000000u) {
             int64_t displacement = interp_sext(instruction & 0x3FFFFFFu, 26) * 4;
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor + (uint64_t)displacement);
@@ -730,10 +769,16 @@ static void *translate_block(uint64_t guest_pc) {
              * makes the candidate prefix interpreter-owned. Count once per
              * rejected translation attempt, never once per execution. */
             hl_backend_tree_a64_unsupported(instruction);
+            rejection_cause = HL_BACKEND_A64_REJECTION_UNSUPPORTED;
+            rejection_instruction = instruction;
             break;
         }
         if (!conditional) hl_a64_x86_emit_return(&assembler);
-        if (assembler.overflow) break;
+        if (assembler.overflow) {
+            rejection_cause = HL_BACKEND_A64_REJECTION_OVERFLOW;
+            rejection_instruction = instruction;
+            break;
+        }
         header->magic = HL_A64_X86_BLOCK_MAGIC;
         header->retired_steps = (uint64_t)count + 1;
         header->exit_kind = exit_kind;
@@ -757,7 +802,7 @@ static void *translate_block(uint64_t guest_pc) {
     }
 
     g_cp = begin;
-    return hl_a64_interp_translate_block(guest_pc);
+    return hl_a64_x86_interpreter_fallback(guest_pc, rejection_cause, rejection_instruction);
 }
 
 static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
