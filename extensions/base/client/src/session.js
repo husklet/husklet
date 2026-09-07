@@ -539,7 +539,7 @@ export class Session {
     }
     if (frame.kind === KIND.response && frame.channel === CALLS) {
       const pending = this.#pending[0];
-      if (!pending) return this.#onReply(frame.payload);
+      if (!pending) throw new Error('host returned a response without a pending call');
       const payload =
         (frame.flags & ERROR) !== 0
           ? validateFailure(frame.payload)

@@ -1097,6 +1097,52 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
   }
 });
 
+test('a real Unix response without a pending ordered call closes the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-unsolicited-response-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'unsolicited', granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    let reportClose;
+    const closed = new Promise((resolve) => {
+      reportClose = resolve;
+    });
+    const session = await connect({ path: socketPath, timeout: 200, onClose: reportClose });
+    peer.write(
+      encode({
+        channel: 2,
+        kind: KIND.response,
+        payload: {
+          reply: 'workspace',
+          with: { name: 'wrong', image: 'alpine', architecture: 'amd64' },
+        },
+      }),
+    );
+    await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('unsolicited response did not close session')), 200),
+      ),
+    ]);
+    await assert.rejects(session.call('workspace_info'), /session is closed/);
+    await session.close();
+  } finally {
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix install wait inspects revision, arms inventory, then commits exact candidate', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-wait-'));
   const socketPath = path.join(directory, 'host.sock');
