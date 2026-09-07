@@ -10213,6 +10213,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     translit_test_call_site = (translit_jcc_ibtc_site_ranges){0};
     translit_test_direct_call_pre_spill = scenario == 112 || scenario == 113 || scenario == 114 ||
                                              scenario == 121 || scenario == 123;
+    hl_backend_x86_jcc_route_test_enabled = scenario == 123;
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t target_offset = 0x40;
@@ -10576,6 +10577,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
 done_call_ibtc:
     translit_test_jcc_ibtc_stub_fail = 0;
     translit_test_direct_call_pre_spill = 0;
+    hl_backend_x86_jcc_route_test_enabled = 0;
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen);
@@ -11509,7 +11511,8 @@ static int translit_direct_call_signal_stage_test(void) {
                            ((UINT64_C(0xad7) >> 11) & 1);
         gregs[g_translit_greg[HL_X64_RSP]] =
             (greg_t)(committed ? original_rsp - 8 : original_rsp);
-        uint64_t host_flags = UINT64_C(0x402) | (~UINT64_C(0xad7) & UINT64_C(0x8d5));
+        uint64_t host_flags = UINT64_C(2) | (UINT64_C(0xad7) & UINT64_C(0x400)) |
+                              (~UINT64_C(0xad7) & UINT64_C(0x8d5));
         if (pc < translit_test_call_site.flags_packed || pc >= translit_test_call_site.flags_live)
             host_flags = UINT64_C(0xad7);
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)host_flags;
