@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:b73004972878b010
+// Protocol artifact fnv1a64:d8002634b9fcfe49
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -45,7 +45,8 @@ export type ExtensionName = PeerName;
 export type ExtensionSummary = { "name": string; "image_digest": string; "status": string; "version"?: string; "enabled"?: boolean; "pane_providers"?: Array<PaneProvider> };
 export type FileInventory = { "entries": Array<Entry>; "complete": boolean; "coalesced": number };
 export type FileRange = { "path": RelativePath; "identity": string; "offset": number; "total": number; "contents": Array<number>; "eof": boolean; "truncated": boolean };
-export type FilesystemGrant = { "read"?: Array<RelativePath>; "write"?: Array<RelativePath>; "create"?: Array<RelativePath>; "delete"?: Array<RelativePath>; "rename"?: Array<RelativePath> };
+export type FilesystemGrant = { "read"?: Array<FilesystemSelector>; "write"?: Array<FilesystemSelector>; "create"?: Array<FilesystemSelector>; "delete"?: Array<FilesystemSelector>; "rename"?: Array<FilesystemSelector> };
+export type FilesystemSelector = { "exact": RelativePath } | { "subtree": RelativePath };
 export type Frame = { "sequence": number; "patches": Array<Patch> };
 export type Grant = Array<Capability>;
 export type GridSize = { "columns": number; "rows": number };

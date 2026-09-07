@@ -1,4 +1,5 @@
-import type { WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
+import type { FilesystemSelector, WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
+export type { FilesystemSelector } from './generated-protocol.js';
 /** Environment variable naming the extension's authenticated Unix socket. */
 export declare const SOCKET: 'HUSKLET_EXTENSION_SOCKET';
 /** Current extension protocol version spoken by Session. */
@@ -49,11 +50,11 @@ export interface ContainerGrant {
     create: boolean;
 }
 export interface FilesystemGrant {
-    read: string[];
-    write: string[];
-    create: string[];
-    delete: string[];
-    rename: string[];
+    read: FilesystemSelector[];
+    write: FilesystemSelector[];
+    create: FilesystemSelector[];
+    delete: FilesystemSelector[];
+    rename: FilesystemSelector[];
 }
 export interface WorkspaceEnvironmentGrant {
     read: ({

@@ -1240,7 +1240,9 @@ static int hl_native_checkpoint_locks_admissible(const char *proc_root, pid_t pr
     int admissible = 1;
     while (getline(&line, &capacity, locks) >= 0) {
         long owner = -1;
-        if (sscanf(line, "%*s %*s %*s %*s %ld", &owner) != 1) { admissible = 0; break; }
+        int ordinary = sscanf(line, "%*s %*s %*s %*s %ld", &owner);
+        int blocked = ordinary == 1 ? 0 : sscanf(line, "%*s -> %*s %*s %*s %ld", &owner);
+        if (ordinary != 1 && blocked != 1) { admissible = 0; break; }
         if (owner == process) { admissible = 0; break; }
     }
     free(line);

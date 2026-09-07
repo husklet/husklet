@@ -170,7 +170,7 @@ impl Session {
     }
 
     #[must_use]
-    pub fn filesystem_read_roots(&self) -> &[hl_rpc::RelativePath] {
+    pub fn filesystem_read_selectors(&self) -> &[crate::FilesystemSelector] {
         &self.filesystem.read
     }
 
@@ -181,7 +181,7 @@ impl Session {
         path: &hl_rpc::RelativePath,
     ) -> Result<(), Failure> {
         self.peer.authority().permit(capability)?;
-        let roots: &[hl_rpc::RelativePath] = match capability {
+        let roots: &[crate::FilesystemSelector] = match capability {
             Capability::FilesystemRead => &self.filesystem.read,
             Capability::FilesystemWrite => match access {
                 FilesystemAccess::Write => &self.filesystem.write,
@@ -197,7 +197,7 @@ impl Session {
                 });
             }
         };
-        if roots.iter().any(|root| path.within(root)) {
+        if roots.iter().any(|selector| selector.permits(path)) {
             return Ok(());
         }
         Err(Failure::Denied {

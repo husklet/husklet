@@ -190,14 +190,14 @@ fn a_manifest_cannot_use_a_capability_it_did_not_declare() {
         Err(Invalid::Undeclared(Capability::Interface))
     );
 
-    let roots = manifest_document("[filesystem]\nread = [\"logs\"]\n");
+    let roots = manifest_document("[filesystem]\nread = [{ subtree = \"logs\" }]\n");
     assert_eq!(
         Manifest::parse(&roots, PROTOCOL),
         Err(Invalid::Undeclared(Capability::FilesystemRead))
     );
 
     for verb in ["write", "create", "delete", "rename"] {
-        let roots = manifest_document(&format!("[filesystem]\n{verb} = [\"logs\"]\n"));
+        let roots = manifest_document(&format!("[filesystem]\n{verb} = [{{ subtree = \"logs\" }}]\n"));
         assert_eq!(
             Manifest::parse(&roots, PROTOCOL),
             Err(Invalid::Undeclared(Capability::FilesystemWrite)),
