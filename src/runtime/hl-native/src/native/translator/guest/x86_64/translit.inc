@@ -11537,6 +11537,9 @@ static int translit_direct_call_signal_stage_test(void) {
                              pc < translit_test_call_site.restore_end);
         struct cpu cpu = {0}, expected_flags = {0};
         ucontext_t native = {0};
+        /* From rip_end onward the owner deliberately reads the target from cpu->rip; model the completed
+           store even while probing earlier static-owner PCs, where this poison-against-source is ignored. */
+        cpu.rip = translit_test_call_target_guest;
         uint64_t stack_image = pc < low_end
                                    ? UINT64_C(0xfeedfacecafebeef)
                                : pc < high_end
