@@ -59,25 +59,6 @@ impl WorkspaceDirectory {
         &self.root
     }
 
-    /// Resolves the parent while leaving the final entry itself untouched.
-    fn entry(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
-        let parts = path.parts();
-        let Some((name, parents)) = parts.split_last() else {
-            return Err(HostError::Conflict("the workspace root cannot be mutated".to_owned()));
-        };
-        let parent = join(&self.root, parents.to_vec());
-        let parent = parent.canonicalize().map_err(|error| absence(path, &error))?;
-        Ok(confine(&self.root, parent)?.join(name))
-    }
-
-    fn publication(&self, path: &RelativePath) -> Result<PathBuf, HostError> {
-        let target = self.entry(path)?;
-        if std::fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-            return Err(HostError::Conflict(format!("{path} is a symbolic link")));
-        }
-        Ok(target)
-    }
-
     fn pinned(&self, path: &RelativePath) -> Result<PinnedEntry, HostError> {
         let parts = path.parts();
         if parts.len() > PATH_DEPTH_LIMIT {
@@ -103,6 +84,14 @@ impl WorkspaceDirectory {
             metadata,
             name: c_name(Path::new(name)).map_err(|error| absence(path, &error))?,
         })
+    }
+
+    fn pinned_publication(&self, path: &RelativePath) -> Result<PinnedEntry, HostError> {
+        let entry = self.pinned(path)?;
+        if symlink_at(&entry.directory, &entry.name).map_err(|error| absence(path, &error))? {
+            return Err(HostError::Conflict(format!("{path} is a symbolic link")));
+        }
+        Ok(entry)
     }
 
     fn root_directory(&self) -> io::Result<File> {
@@ -164,6 +153,31 @@ impl WorkspaceDirectory {
             .map_err(|error| absence(path, &error))?;
         }
         open_at(&directory, name, rustix::fs::OFlags::RDONLY).map_err(|error| absence(path, &error))
+    }
+
+    fn create_observed_with(
+        &self,
+        path: &RelativePath,
+        contents: &[u8],
+        before_publish: impl FnOnce() -> io::Result<()>,
+    ) -> Result<String, HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
+        let entry = self.pinned_publication(path)?;
+        before_publish().map_err(|error| absence(path, &error))?;
+        let current = self.pinned_publication(path)?;
+        if (entry.metadata.dev(), entry.metadata.ino()) != (current.metadata.dev(), current.metadata.ino()) {
+            return Err(HostError::Conflict(format!("{path} parent changed before publication")));
+        }
+        atomic_create(&entry, contents).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                HostError::Conflict(format!("{path} no longer matches the observed identity"))
+            } else {
+                absence(path, &error)
+            }
+        })
     }
 }
 
@@ -355,8 +369,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
                             "{path} no longer matches the observed identity"
                         )));
                     }
-                    let target = self.publication(path)?;
-                    let identity = match atomic_create(&target, contents) {
+                    let identity = match atomic_create(&entry, contents) {
                         Ok(identity) => identity,
                         Err(error) => {
                             rename_noreplace(&captured, &entry).map_err(|rollback| {
@@ -380,14 +393,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
     }
 
     fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
-        let target = self.publication(path)?;
-        atomic_create(&target, contents).map_err(|error| {
-            if error.kind() == io::ErrorKind::AlreadyExists {
-                HostError::Conflict(format!("{path} no longer matches the observed identity"))
-            } else {
-                absence(path, &error)
-            }
-        })
+        self.create_observed_with(path, contents, || Ok(()))
     }
 
     fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
@@ -616,28 +622,69 @@ impl Drop for Temporary {
     }
 }
 
-fn atomic_create(target: &Path, contents: &[u8]) -> io::Result<String> {
+fn atomic_create(target: &PinnedEntry, contents: &[u8]) -> io::Result<String> {
+    atomic_create_with(target, contents, || Ok(()))
+}
+
+fn atomic_create_with(
+    target: &PinnedEntry,
+    contents: &[u8],
+    after_publish: impl FnOnce() -> io::Result<()>,
+) -> io::Result<String> {
     let mut identity = None;
-    atomic_write_with(
-        target,
-        contents,
-        || Ok(()),
-        |directory, temporary, file| {
-            let target = c_name(target)?;
-            rustix::fs::renameat_with(
-                directory,
-                temporary,
-                directory,
-                target,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(io::Error::from)?;
-            identity = Some(file_identity(&file.metadata()?));
-            directory.sync_all()?;
-            Ok(true)
-        },
-    )?;
+    atomic_write_at(target, contents, |directory, temporary, file| {
+        rustix::fs::renameat_with(
+            directory,
+            temporary,
+            directory,
+            &target.name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(io::Error::from)?;
+        after_publish()?;
+        identity = Some(file_identity(&file.metadata()?));
+        directory.sync_all()?;
+        Ok(true)
+    })?;
     identity.ok_or_else(|| io::Error::other("atomic creation did not publish"))
+}
+
+fn atomic_write_at(
+    target: &PinnedEntry,
+    contents: &[u8],
+    before_publish: impl FnOnce(&File, &CStr, &File) -> io::Result<bool>,
+) -> io::Result<()> {
+    if symlink_at(&target.directory, &target.name)? {
+        return Err(io::Error::other("publication target is a symbolic link"));
+    }
+    let mut opened = None;
+    for _ in 0..128 {
+        let sequence = TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let name = CString::new(format!(".husklet-write-{}-{sequence}.tmp", std::process::id()))
+            .expect("generated temporary names contain no NUL");
+        match open_exclusive_at(&target.directory, &name) {
+            Ok(file) => {
+                opened = Some((
+                    Temporary {
+                        directory: target.directory.try_clone()?,
+                        name,
+                    },
+                    file,
+                ));
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let (temporary, mut file) = opened
+        .ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not reserve atomic write temporary"))?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    if before_publish(&target.directory, &temporary.name, &file)? {
+        return Ok(());
+    }
+    target.directory.sync_all()
 }
 
 fn file_identity(metadata: &std::fs::Metadata) -> String {
@@ -653,6 +700,7 @@ fn file_identity(metadata: &std::fs::Metadata) -> String {
     )
 }
 
+#[cfg(test)]
 fn atomic_write_before_publish(
     target: &Path,
     contents: &[u8],
@@ -670,6 +718,7 @@ fn atomic_write_before_publish(
     )
 }
 
+#[cfg(test)]
 fn atomic_write_with(
     target: &Path,
     contents: &[u8],
@@ -774,28 +823,6 @@ fn read_bounded(file: File) -> io::Result<Vec<u8>> {
         )));
     }
     Ok(contents)
-}
-
-/// Appends already-validated components to the root.
-fn join(root: &Path, parts: Vec<&str>) -> PathBuf {
-    let mut full = root.to_path_buf();
-    for part in parts {
-        full.push(part);
-    }
-    full
-}
-
-/// Accepts a resolved path only while it is still under the resolved root.
-///
-/// This is the check a symbolic link would otherwise defeat.
-fn confine(root: &Path, resolved: PathBuf) -> Result<PathBuf, HostError> {
-    if resolved.starts_with(root) {
-        return Ok(resolved);
-    }
-    Err(HostError::Conflict(format!(
-        "{} resolves outside the workspace root",
-        resolved.display()
-    )))
 }
 
 /// A missing file is an absence; anything else is a host failure.
@@ -1187,6 +1214,64 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".husklet-write-")
         }));
+    }
+
+    #[test]
+    fn ancestor_replaced_after_confinement_cannot_redirect_creation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let parent = root.join("parent");
+        let displaced = root.join("displaced");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir_all(&parent).expect("parent");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let files = WorkspaceDirectory::new(&root).expect("workspace");
+        let path = path("parent/new.txt");
+        let result = files.create_observed_with(&path, b"workspace bytes", || {
+            std::fs::rename(&parent, &displaced)?;
+            std::os::unix::fs::symlink(&outside, &parent)?;
+            Ok(())
+        });
+
+        assert!(result.is_err(), "an ancestor replacement must fail publication");
+        assert!(!outside.join("new.txt").exists(), "creation escaped the workspace");
+        assert!(!displaced.join("new.txt").exists(), "failed creation was not published");
+    }
+
+    #[test]
+    fn created_file_identity_uses_the_published_file_after_ancestor_replacement() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let parent = root.join("parent");
+        let displaced = root.join("displaced");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir_all(&parent).expect("parent");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("new.txt"), b"outside bytes").expect("outside file");
+        let files = WorkspaceDirectory::new(&root).expect("workspace");
+        let entry = files
+            .pinned_publication(&path("parent/new.txt"))
+            .expect("pinned parent");
+
+        let identity = super::atomic_create_with(&entry, b"workspace bytes", || {
+            std::fs::rename(&parent, &displaced)?;
+            std::os::unix::fs::symlink(&outside, &parent)?;
+            Ok(())
+        })
+        .expect("creation remains bound to the opened parent");
+
+        assert_eq!(
+            std::fs::read(displaced.join("new.txt")).expect("created file"),
+            b"workspace bytes"
+        );
+        assert_eq!(
+            std::fs::read(outside.join("new.txt")).expect("outside file"),
+            b"outside bytes"
+        );
+        assert_eq!(
+            identity,
+            super::file_identity(&std::fs::metadata(displaced.join("new.txt")).expect("created metadata"))
+        );
     }
 
     #[test]
