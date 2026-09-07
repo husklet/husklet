@@ -1239,14 +1239,10 @@ static int hl_native_checkpoint_locks_admissible(const char *proc_root, pid_t pr
     size_t capacity = 0;
     int admissible = 1;
     while (getline(&line, &capacity, locks) >= 0) {
-        const char *record = line;
-        while (*record == ' ' || *record == '\t') ++record;
-        if (record[0] == '-' && record[1] == '>') {
-            record += 2;
-            while (*record == ' ' || *record == '\t') ++record;
-        }
         long owner = -1;
-        if (sscanf(record, "%*s %*s %*s %*s %ld", &owner) != 1) { admissible = 0; break; }
+        int ordinary = sscanf(line, "%*s %*s %*s %*s %ld", &owner);
+        int blocked = ordinary == 1 ? 0 : sscanf(line, "%*s -> %*s %*s %*s %ld", &owner);
+        if (ordinary != 1 && blocked != 1) { admissible = 0; break; }
         if (owner == process) { admissible = 0; break; }
     }
     free(line);
