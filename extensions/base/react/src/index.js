@@ -2,7 +2,7 @@
 
 import { Session } from '@husklet/client';
 import { Surface, reconciler } from './reconciler.js';
-import { PROPS, TRIGGERS } from './protocol.js';
+import { PROPS, TRIGGERS, sourceMutation } from './protocol.js';
 export { TABLE_COLUMN_LIMIT, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT } from './protocol.js';
 
 // Match the declaration surface below: React extensions get the complete
@@ -134,7 +134,6 @@ export function render(element, session, { title = 'Extension', split = null, bo
   reconciler.updateContainer(element, container, null, null);
   Object.assign(handle, {
     ready,
-    get slot() { return slot; },
     update(next) {
       reconciler.updateContainer(next, container, null, null);
     },
@@ -145,7 +144,7 @@ export function render(element, session, { title = 'Extension', split = null, bo
     },
     async source(mutation) {
       const owned = await ready;
-      const reply = await session.call('source_resize_at', { slot: owned, mutation });
+      const reply = await session.call('source_resize_at', { slot: owned, mutation: sourceMutation(mutation) });
       if (reply?.reply !== 'done') throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
     },
     close() {
@@ -167,6 +166,7 @@ export function render(element, session, { title = 'Extension', split = null, bo
       return withdrawal;
     },
   });
+  Object.defineProperty(handle, 'slot', { enumerable: true, get: () => slot });
   return handle;
 }
 
