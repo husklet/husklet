@@ -26,3 +26,12 @@ fn direct_call_pre_spill_guard_off_emits_no_guard_accounting() {
         "disabled guard must leave every guard counter at zero despite an eligible direct call"
     );
 }
+
+#[test]
+fn direct_call_guard_reads_atomic_pairs_during_concurrent_collision_publication() {
+    assert_eq!(
+        hl_native::x86_64_translit_displaced_test(246),
+        0,
+        "concurrent emitted readers must observe either the exact target/body pair or a typed miss"
+    );
+}

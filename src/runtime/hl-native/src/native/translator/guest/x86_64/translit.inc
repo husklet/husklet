@@ -5515,6 +5515,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario == 246) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(125));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 221) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -9280,6 +9289,67 @@ static void *translit_ret_publish_worker(void *opaque) {
     return NULL;
 }
 
+typedef struct {
+    hl_x86_hot_context *context;
+    struct interp_block *source;
+    ibtc_ent *cell;
+    uint64_t source_guest;
+    uint64_t target;
+    uint64_t collision;
+    void *target_body;
+    void *collision_body;
+    _Atomic unsigned start;
+    _Atomic unsigned readers_done;
+    _Atomic uint64_t hits;
+    _Atomic uint64_t misses;
+    _Atomic int failure;
+} translit_direct_call_publish_test;
+
+typedef struct {
+    translit_direct_call_publish_test *test;
+    uint64_t stack[8];
+} translit_direct_call_reader;
+
+static void *translit_direct_call_publish_worker(void *opaque) {
+    translit_direct_call_publish_test *test = opaque;
+    while (!atomic_load_explicit(&test->start, memory_order_acquire)) sched_yield();
+    while (atomic_load_explicit(&test->readers_done, memory_order_acquire) != 2) {
+        ibtc_publish(test->cell, test->collision, test->collision_body);
+        ibtc_publish(test->cell, test->target, test->target_body);
+    }
+    return NULL;
+}
+
+static void *translit_direct_call_reader_worker(void *opaque) {
+    enum { ITERATIONS = 20000 };
+    translit_direct_call_reader *reader = opaque;
+    translit_direct_call_publish_test *test = reader->test;
+    while (!atomic_load_explicit(&test->start, memory_order_acquire)) sched_yield();
+    for (unsigned iteration = 0; iteration < ITERATIONS; ++iteration) {
+        uint64_t stack = (uint64_t)(uintptr_t)&reader->stack[7];
+        struct cpu cpu = {.rip = test->source_guest, .ibtc_base = (uint64_t)g_ibtc};
+        cpu.r[HL_X64_RSP] = stack;
+        run_block(test->context, &cpu, test->source);
+        uint64_t return_word = 0;
+        memcpy(&return_word, (void *)(uintptr_t)(stack - 8), sizeof return_word);
+        if (cpu.r[HL_X64_RSP] != stack - 8 || return_word != test->source_guest + 5) {
+            atomic_store_explicit(&test->failure, 1, memory_order_relaxed);
+            break;
+        }
+        if (cpu.jcc_ibtc_miss == TL_DIRECT_CALL_IBTC_MISS && cpu.rip == test->target) {
+            atomic_fetch_add_explicit(&test->misses, 1, memory_order_relaxed);
+        } else if (cpu.jcc_ibtc_miss == 0 && cpu.rip == test->target + 5 && cpu.r[HL_X64_RAX] == 42) {
+            atomic_fetch_add_explicit(&test->hits, 1, memory_order_relaxed);
+        } else {
+            /* A target-key/collision-body tear executes the body which returns 43. */
+            atomic_store_explicit(&test->failure, 2, memory_order_relaxed);
+            break;
+        }
+    }
+    atomic_fetch_add_explicit(&test->readers_done, 1, memory_order_release);
+    return NULL;
+}
+
 static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     int xmm_canonical = scenario >= 239 && scenario <= 244;
     if (xmm_canonical) scenario = 192 + (scenario - 239);
@@ -10304,11 +10374,11 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     translit_test_call_instruction_end = NULL;
     translit_test_call_site = (translit_jcc_ibtc_site_ranges){0};
     translit_test_direct_call_pre_spill = scenario == 112 || scenario == 113 || scenario == 114 ||
-                                             scenario == 121 || scenario == 123;
+                                             scenario == 121 || scenario == 123 || scenario == 125;
     atomic_store_explicit(&translit_direct_call_guard[0],
                           (uint64_t)translit_direct_call_pre_spill_enabled(), memory_order_relaxed);
     hl_backend_x86_jcc_route_test_enabled = scenario == 123;
-    static _Alignas(4096) uint8_t guest_bytes[4096];
+    static _Alignas(4096) uint8_t guest_bytes[IBTC_N * 4 + 4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t target_offset = 0x40;
     size_t call_offset = scenario == 123 ? 5 : 0;
@@ -10512,6 +10582,71 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
     if (target_block == NULL || target_block->host_entry_off == 0) goto done_call_ibtc;
+
+    if (scenario == 125) {
+        const uint64_t collision_target = target + ((uint64_t)IBTC_N << 2);
+        const size_t collision_offset = (size_t)(collision_target - source);
+        guest_bytes[collision_offset] = 0xb8;
+        guest_bytes[collision_offset + 1] = 43;
+        memset(guest_bytes + collision_offset + 2, 0, 3);
+        guest_bytes[collision_offset + 5] = 0x0f;
+        guest_bytes[collision_offset + 6] = 0x0b;
+        struct interp_block *collision_block = translit_jcc_ibtc_test_build(context, collision_target);
+        if (collision_block == NULL || collision_block->host_entry_off == 0) {
+            result = 205;
+            goto done_call_ibtc;
+        }
+        translit_direct_call_publish_test test = {
+            .context = context,
+            .source = source_block,
+            .cell = &g_ibtc[ibtc_index(target)],
+            .source_guest = source,
+            .target = target,
+            .collision = collision_target,
+            .target_body = (uint8_t *)target_block + target_block->host_entry_off,
+            .collision_body = (uint8_t *)collision_block + collision_block->host_entry_off,
+        };
+        translit_direct_call_reader readers[2] = {{.test = &test}, {.test = &test}};
+        pthread_t publisher, reader_threads[2];
+        if (pthread_create(&publisher, NULL, translit_direct_call_publish_worker, &test) != 0 ||
+            pthread_create(&reader_threads[0], NULL, translit_direct_call_reader_worker, &readers[0]) != 0 ||
+            pthread_create(&reader_threads[1], NULL, translit_direct_call_reader_worker, &readers[1]) != 0) {
+            result = 206;
+            goto done_call_ibtc;
+        }
+        uint64_t attempts_before =
+            atomic_load_explicit(&translit_direct_call_guard[1], memory_order_relaxed);
+        uint64_t hits_before = atomic_load_explicit(&translit_direct_call_guard[2], memory_order_relaxed);
+        atomic_store_explicit(&test.start, 1, memory_order_release);
+        int joined = pthread_join(reader_threads[0], NULL) == 0 &&
+                     pthread_join(reader_threads[1], NULL) == 0 && pthread_join(publisher, NULL) == 0;
+        uint64_t hits = atomic_load_explicit(&test.hits, memory_order_relaxed);
+        uint64_t misses = atomic_load_explicit(&test.misses, memory_order_relaxed);
+        uint64_t attempts_after =
+            atomic_load_explicit(&translit_direct_call_guard[1], memory_order_relaxed);
+        uint64_t hits_after = atomic_load_explicit(&translit_direct_call_guard[2], memory_order_relaxed);
+        ibtc_ent final = ibtc_snapshot(test.cell);
+        if (!(joined && atomic_load_explicit(&test.failure, memory_order_relaxed) == 0 &&
+              hits + misses == 40000 && attempts_after == attempts_before + 40000 &&
+              hits_after > hits_before && hits_after - hits_before <= hits && hits != 0 && misses != 0 &&
+              final.target == target && final.body == test.target_body))
+            fprintf(stderr,
+                    "direct-call concurrent joined=%d failure=%d hits=%llu misses=%llu attempts=%llu/%llu "
+                    "guard-hits=%llu/%llu final=%llx/%p expected=%llx/%p\n",
+                    joined, atomic_load_explicit(&test.failure, memory_order_relaxed),
+                    (unsigned long long)hits, (unsigned long long)misses,
+                    (unsigned long long)attempts_before, (unsigned long long)attempts_after,
+                    (unsigned long long)hits_before, (unsigned long long)hits_after,
+                    (unsigned long long)final.target, final.body,
+                    (unsigned long long)target, test.target_body);
+        result = joined && atomic_load_explicit(&test.failure, memory_order_relaxed) == 0 &&
+                         hits + misses == 40000 && attempts_after == attempts_before + 40000 &&
+                         hits_after > hits_before && hits_after - hits_before <= hits && hits != 0 && misses != 0 &&
+                         final.target == target && final.body == test.target_body
+                     ? 0
+                     : 207;
+        goto done_call_ibtc;
+    }
 
     if (scenario == 123) {
         translit_jcc_ibtc_fast_redispatch(&cpu, target_block);
