@@ -10368,6 +10368,24 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     uint64_t guard_before[7];
     for (unsigned counter = 0; counter < 7; ++counter)
         guard_before[counter] = atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed);
+    uintptr_t guard_shared_address[7] = {0};
+    uint64_t guard_shared_before[7] = {0};
+    int guard_shared_missing = 0;
+    const enum hl_backend_direct_call_ibtc_counter guard_shared_kind[7] = {
+        HL_BACKEND_DIRECT_CALL_GUARD_ENABLED,  HL_BACKEND_DIRECT_CALL_GUARD_ATTEMPT,
+        HL_BACKEND_DIRECT_CALL_GUARD_HIT,      HL_BACKEND_DIRECT_CALL_GUARD_KEY_MISS,
+        HL_BACKEND_DIRECT_CALL_GUARD_NULL_MISS, HL_BACKEND_DIRECT_CALL_GUARD_IRQ,
+        HL_BACKEND_DIRECT_CALL_GUARD_SLOW,
+    };
+    for (unsigned counter = 1; counter < 7; ++counter) {
+        guard_shared_address[counter] =
+            hl_backend_tree_direct_call_ibtc_dynamic_counter_address(guard_shared_kind[counter]);
+        if ((scenario == 123 || scenario == 124) && guard_shared_address[counter] == 0)
+            guard_shared_missing = 1;
+        if (guard_shared_address[counter] != 0)
+            guard_shared_before[counter] =
+                __atomic_load_n((uint64_t *)guard_shared_address[counter], __ATOMIC_RELAXED);
+    }
     uintptr_t route_attempt_address = hl_backend_tree_x86_jcc_route_counter_address(
         HL_BACKEND_X86_JCC_ROUTE_ATTEMPTS);
     if (scenario == 123 && route_attempt_address == 0) return 158;
@@ -10375,6 +10393,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
                                         ? 0
                                         : __atomic_load_n((uint64_t *)route_attempt_address, __ATOMIC_RELAXED);
     int result = 162;
+    if (guard_shared_missing) { result = 158; goto done_call_ibtc; }
     int init_failed = 0;
     struct interp_block *source_block;
     if (scenario == 120) {
@@ -10484,10 +10503,13 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     if (scenario == 124) {
         int guard_unchanged = atomic_load_explicit(&translit_direct_call_guard[0], memory_order_relaxed) == 0;
-        for (unsigned counter = 1; counter < 7; ++counter)
+        for (unsigned counter = 1; counter < 7; ++counter) {
             guard_unchanged = guard_unchanged &&
                               atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed) ==
-                                  guard_before[counter];
+                                  guard_before[counter] &&
+                              __atomic_load_n((uint64_t *)guard_shared_address[counter], __ATOMIC_RELAXED) ==
+                                  guard_shared_before[counter];
+        }
         result = guard_unchanged ? 0 : 204;
         goto done_call_ibtc;
     }
@@ -10508,6 +10530,9 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             goto done_call_ibtc;
         for (unsigned counter = 0; counter < 7; ++counter)
             guard_before[counter] = atomic_load_explicit(&translit_direct_call_guard[counter], memory_order_relaxed);
+        for (unsigned counter = 1; counter < 7; ++counter)
+            guard_shared_before[counter] =
+                __atomic_load_n((uint64_t *)guard_shared_address[counter], __ATOMIC_RELAXED);
         route_attempt_before = route_attempt_address == 0
                                    ? 0
                                    : __atomic_load_n((uint64_t *)route_attempt_address, __ATOMIC_RELAXED);
@@ -10568,6 +10593,18 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
                              guard_before[5] + 1 &&
                          atomic_load_explicit(&translit_direct_call_guard[6], memory_order_relaxed) ==
                              guard_before[6] + 3 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[1], __ATOMIC_RELAXED) ==
+                             guard_shared_before[1] + 4 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[2], __ATOMIC_RELAXED) ==
+                             guard_shared_before[2] + 1 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[3], __ATOMIC_RELAXED) ==
+                             guard_shared_before[3] + 1 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[4], __ATOMIC_RELAXED) ==
+                             guard_shared_before[4] + 1 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[5], __ATOMIC_RELAXED) ==
+                             guard_shared_before[5] + 1 &&
+                         __atomic_load_n((uint64_t *)guard_shared_address[6], __ATOMIC_RELAXED) ==
+                             guard_shared_before[6] + 3 &&
                          (route_attempt_address == 0 || route_after == route_attempt_before + 3) &&
                          __atomic_load_n(&translit_direct_call_ibtc_miss, __ATOMIC_RELAXED) == miss_before + 3 &&
                          __atomic_load_n(&translit_direct_call_ibtc_irq, __ATOMIC_RELAXED) == irq_before + 1 &&
