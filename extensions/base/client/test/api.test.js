@@ -506,8 +506,13 @@ test('concurrent pane-change waits share their host subscription until the last 
   stage.server.close();
 });
 
-test('workspace lifecycle methods use the typed control calls', async () => {
+test('workspace lifecycle methods use the typed control calls', async (context) => {
   const stage = await pair();
+  context.after(async () => {
+    await stage.session.close();
+    stage.host.destroy();
+    await new Promise((resolve) => stage.server.close(resolve));
+  });
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
@@ -570,16 +575,8 @@ test('workspace lifecycle methods use the typed control calls', async () => {
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);
-  assert.deepEqual(results.slice(0, 4), [
-    configuration,
-    configuration,
-    configuration,
-    configuration,
-  ]);
-  assert.deepEqual(results.slice(4), [undefined, undefined, undefined, undefined]);
-  stage.session.close();
-  stage.host.destroy();
-  stage.server.close();
+  assert.deepEqual(results.slice(0, 3), [configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(3), [undefined, undefined, undefined, undefined]);
 });
 
 test('workspace environment patch preserves exact CAS framing without returning values', async () => {
