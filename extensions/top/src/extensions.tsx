@@ -492,6 +492,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <Entry
                       value={reference}
                       placeholder="registry.example/extension:version"
+                      tooltip={
+                        reference || 'Paste a full OCI image reference; press Enter to inspect'
+                      }
                       onChange={(event: Change) =>
                         setReference(String(event.value ?? '').slice(0, 512))
                       }
@@ -503,6 +506,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       onInvoke={() => inspect()}
                     />
                   </Row>
+                  <Text label="Paste a full image reference · Enter to inspect" color="text-dim" />
                 </CardContent>
               )}
               {acquisition?.candidate && (
@@ -768,7 +772,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 >
                   <CardHeader
                     label={extension.name}
-                    detail={extension.version ?? extension.image_digest}
+                    detail={
+                      extension.version ? `Version ${extension.version}` : 'Version unavailable'
+                    }
                   />
                   <CardContent gap={1}>
                     <Row gap={1} wrap>
@@ -777,7 +783,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                       />
                       <Text
-                        label={compactDigest(extension.image_digest)}
+                        label={`Image ${compactDigest(extension.image_digest)}`}
                         tooltip={extension.image_digest}
                       />
                     </Row>
@@ -788,7 +794,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       failure={lifecycleFailure}
                     />
                     <Row gap={1} wrap>
-                      {extension.status.startsWith('fault:') ? (
+                      {extension.name === 'top' ? (
+                        <Badge label="Required workspace manager" tone="positive" />
+                      ) : extension.status.startsWith('fault:') ? (
                         <Button
                           label="Retry"
                           enabled={!busy}
@@ -807,14 +815,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           onInvoke={() => lifecycle(extension, 'enable')}
                         />
                       )}
-                      <ConfirmAction
-                        label="Remove"
-                        confirmLabel={`Remove ${extension.name}`}
-                        question={`Remove ${extension.name} from this workspace?`}
-                        authorityKey={extension.image_digest}
-                        enabled={!busy}
-                        onConfirm={() => lifecycle(extension, 'remove')}
-                      />
+                      {extension.name !== 'top' && (
+                        <ConfirmAction
+                          label="Remove"
+                          confirmLabel={`Remove ${extension.name}`}
+                          question={`Remove ${extension.name} from this workspace?`}
+                          authorityKey={extension.image_digest}
+                          enabled={!busy}
+                          onConfirm={() => lifecycle(extension, 'remove')}
+                        />
+                      )}
                     </Row>
                   </CardContent>
                 </Card>

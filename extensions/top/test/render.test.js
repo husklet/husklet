@@ -861,6 +861,35 @@ test('installed extension removal requires final consent and a failure remains r
   assert.ok(labelled(stage, 'assistant removed and verified.'));
 });
 
+test('Top is visibly required and offers no self-disable or self-removal trap', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'top',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '0.1.0',
+              enabled: true,
+              status: 'running',
+            },
+          ],
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  assert.ok(labelled(stage, 'Required workspace manager'));
+  assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
+  assert.ok(labelled(stage, `Image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
+  assert.equal(labelled(stage, 'Disable'), undefined);
+  assert.equal(labelled(stage, 'Remove'), undefined);
+});
+
 test('installed extensions expose truthful enabled, disabled, fault and retry states', async () => {
   const calls = [];
   let publish;
