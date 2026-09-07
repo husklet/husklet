@@ -176,6 +176,7 @@ static void run_block(struct cpu *cpu, void *code) {
     g_interp_marker_armed = 1;
 
     uint64_t executed = 0;
+    int census_enabled = hl_backend_tree_steps_enabled();
     if (!hl_backend_tree_steps_enabled()) {
         for (;;) {
             if (executed && __atomic_load_n(&cpu->irq, __ATOMIC_RELAXED)) {
@@ -208,6 +209,11 @@ static void run_block(struct cpu *cpu, void *code) {
             int outcome = interp_step_census(cpu, &instruction);
             if (outcome != INTERP_END) {
                 hl_backend_tree_a64_body_retired(instruction);
+                /* Account beside the retirement record.  A synchronous fault
+                 * may unwind this interpreter invocation before its block-end
+                 * aggregate is reached; keeping both counters at the same
+                 * retirement point preserves exact reconciliation. */
+                hl_backend_tree_interpreted_steps(1);
                 executed++;
             }
             if (outcome != INTERP_NEXT) break;
@@ -216,7 +222,7 @@ static void run_block(struct cpu *cpu, void *code) {
 
     g_interp_marker_armed = 0;
     g_interp_marker_cpu = NULL;
-    hl_backend_tree_interpreted_steps(executed);
+    if (!census_enabled) hl_backend_tree_interpreted_steps(executed);
     hl_backend_tree_reason(cpu->reason);
 }
 
