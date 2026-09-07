@@ -1233,16 +1233,29 @@ int main(void) {
     } else {
         process.clone()
     };
+    let backend_diagnostic = std::env::var_os("HL_PCACHE_PROFILE_BACKEND_DIAGNOSTIC").map(PathBuf::from);
+    if let Some(path) = &backend_diagnostic {
+        require(path.is_absolute(), "backend diagnostic path is not absolute")?;
+    }
+    let execution = if backend_diagnostic.is_some() && mode.translated() {
+        Execution::translated(true)
+    } else {
+        container_execution(mode)
+    };
     let spec = ContainerSpec::new(root, initial_process)
         .name("pcache-profile")
         .guest(Guest::X86_64)
-        .execution(container_execution(mode))
+        .execution(execution)
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             read_only_root: false,
             network_isolated: true,
             seccomp_baseline: hl_container::SeccompBaseline::Container,
         });
+    let spec = match backend_diagnostic {
+        Some(path) => spec.backend_diagnostic(path),
+        None => spec,
+    };
     containers.create(spec).await?;
     if !matches!(
         mode,
