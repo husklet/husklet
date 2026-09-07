@@ -306,6 +306,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               onExpand={setExpanded}
             >
               <Environment
+                key={configuration.configuration_revision}
                 values={configuration.environment}
                 onChange={(value) => change('environment', value)}
               />

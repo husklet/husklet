@@ -275,6 +275,9 @@ test('workspace save rotates environment through the explicit revision-bound pat
     );
   assert.notEqual(environment, undefined);
   await settled();
+  toggleLatestSwitch(stage, true);
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
   change(stage, 'value', 'new');
   invoke(stage, 'Save workspace');
   await settled();
@@ -288,6 +291,11 @@ test('workspace save rotates environment through the explicit revision-bound pat
     nextRevision,
     { set: [['TOKEN', 'new']], remove: [] },
   ]);
+  assert.equal(
+    placeholderProperty(stage, 'value', 'Secret')?.Flag,
+    true,
+    'a saved revision returns authoritative environment values to concealed state',
+  );
 });
 
 test('workspace patch conflict reloads authority and keeps the partial-save warning visible', async () => {
