@@ -229,11 +229,18 @@ export class Session {
   #welcomed = false;
   #greetingTimer;
   #backpressured = false;
+  #deferredCredits = new Map<number, number>();
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
   #drainListener = () => {
     this.#backpressured = false;
+    try {
+      this.#flushCredits();
+    } catch (error) {
+      this.#finish(error);
+      this.#socket.destroy();
+    }
   };
   #closeListener = () => {
     this.#finish(new Error('extension host connection closed'));
@@ -598,7 +605,7 @@ export class Session {
       } finally {
         // Returning one credit after attempting every listener bounds a producer
         // without allowing one faulty observer to stall the whole event stream.
-        this.#write({ channel: frame.channel, kind: KIND.credit, payload: 1 });
+        this.#returnCredit(frame.channel);
       }
       return;
     }
@@ -609,6 +616,22 @@ export class Session {
     if (this.#closed && frame.kind !== KIND.close) throw new Error('extension session is closed');
     if (this.#backpressured) throw new Error('extension socket is applying write backpressure');
     if (!this.#socket.write(encode(frame))) this.#backpressured = true;
+  }
+
+  #returnCredit(channel: number) {
+    if (this.#backpressured) {
+      this.#deferredCredits.set(channel, (this.#deferredCredits.get(channel) ?? 0) + 1);
+      return;
+    }
+    this.#write({ channel, kind: KIND.credit, payload: 1 });
+  }
+
+  #flushCredits() {
+    for (const [channel, count] of this.#deferredCredits) {
+      this.#deferredCredits.delete(channel);
+      this.#write({ channel, kind: KIND.credit, payload: count });
+      if (this.#backpressured) return;
+    }
   }
 
   #detachDataListeners() {
@@ -636,6 +659,7 @@ export class Session {
     this.#events.clear();
     this.#topics.clear();
     this.#eventTopics.clear();
+    this.#deferredCredits.clear();
     try {
       this.#onClose(error);
     } catch {

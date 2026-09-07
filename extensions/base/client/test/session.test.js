@@ -1065,6 +1065,111 @@ test('real socket write backpressure admits no further calls until drain', async
   await new Promise((resolve) => server.close(resolve));
 });
 
+test('real Unix event credit waits for drain when its listener fills the write buffer', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-event-pressure-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const received = [];
+  let peer;
+  let reportCredit;
+  const credit = new Promise((resolve) => {
+    reportCredit = resolve;
+  });
+  const server = net.createServer((socket) => {
+    peer = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        received.push(frame);
+        if (frame.channel === 19 && frame.kind === KIND.credit) reportCredit(frame);
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'event_pressure', granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const client = net.createConnection(socketPath);
+  await new Promise((resolve, reject) => {
+    client.once('connect', resolve);
+    client.once('error', reject);
+  });
+  let call;
+  let reportEvent;
+  const event = new Promise((resolve) => {
+    reportEvent = resolve;
+  });
+  const closed = [];
+  const session = new Session(client, {
+    timeout: 1_000,
+    onClose: (error) => closed.push(error),
+    onEvent: () => {
+      call = session.call('workspace_info');
+      call.catch(() => {});
+      reportEvent();
+    },
+  });
+  try {
+    await session.ready;
+    const write = client.write.bind(client);
+    client.write = (bytes) => {
+      write(bytes);
+      return false;
+    };
+    peer.write(
+      encode({
+        channel: 19,
+        kind: KIND.event,
+        payload: { pane_provider: 'database', slot: 'pane-17' },
+      }),
+    );
+    await Promise.race([
+      event,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('event listener did not run')), 200),
+      ),
+    ]);
+    assert(call, 'the event listener issued its ordered call');
+    assert.equal(closed.length, 0, 'accepted backpressure does not close the session');
+    assert.equal(
+      received.some((frame) => frame.channel === 19 && frame.kind === KIND.credit),
+      false,
+      'credit is retained until the transport drains',
+    );
+
+    client.write = write;
+    client.emit('drain');
+    const returned = await Promise.race([
+      credit,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('deferred event credit did not drain')), 200),
+      ),
+    ]);
+    assert.equal(returned.payload, 1);
+    peer.write(
+      encode({
+        channel: 2,
+        kind: KIND.response,
+        payload: {
+          reply: 'workspace',
+          with: { name: 'demo', image: 'alpine', architecture: 'amd64' },
+        },
+      }),
+    );
+    assert.equal((await call).reply, 'workspace');
+    assert.equal(closed.length, 0);
+    await session.close();
+  } finally {
+    peer?.destroy();
+    client.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a real Unix reply on an uncorrelated channel fails the ordered session closed', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-channel-'));
   const socketPath = path.join(directory, 'host.sock');
