@@ -15,3 +15,12 @@ cases:
     expect:
       exit: 42
       stdout_empty: true
+  - id: runtime/aarch64-dbt-interp/scalar-memory
+    status: active
+    compat: { class: smoke }
+    build: { source: source/memory.c, output: scalar-memory, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/scalar-memory }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true

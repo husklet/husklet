@@ -28,3 +28,14 @@ cases:
       stdout_empty: true
       diagnostics:
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "51000010", interpreted_steps: "0", translated_entries: "125001" } }
+  - id: runtime/aarch64-dbt/scalar-memory
+    status: active
+    compat: { class: smoke }
+    build: { source: source/memory.c, output: scalar-memory, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/scalar-memory }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "62", interpreted_steps: "4", translated_entries: "14" } }

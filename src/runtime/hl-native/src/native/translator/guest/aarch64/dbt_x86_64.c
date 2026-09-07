@@ -323,6 +323,69 @@ static int hl_a64_x86_is_svc(uint32_t instruction) {
     return (instruction & 0xFFE0001Fu) == 0xD4000001u;
 }
 
+static void hl_a64_x86_emit_cpu_u64(hl_x64_asm *assembler, int offset, uint64_t value);
+
+static int hl_a64_x86_is_ldrb_post(uint32_t instruction) {
+    return (instruction & (1u << 26)) == 0 &&
+           (instruction & 0x3B200000u) == 0x38000000u &&
+           (instruction >> 30) == 0u && ((instruction >> 22) & 3u) == 1u &&
+           ((instruction >> 10) & 3u) == 1u;
+}
+
+/* The overwhelmingly common scalar memory instruction in the measured C
+ * workloads. Keep the canonical accessor -- it owns non-PIE projection,
+ * SIGBUS ledger accounting and the per-access signal marker -- while avoiding
+ * the generic single-transfer decoder on every execution. Architectural
+ * writes remain ordered load destination, writeback, then next PC. */
+static void hl_a64_x86_exec_ldrb_post(struct cpu *cpu, uint32_t instruction) {
+    int rt = (int)(instruction & 31u), rn = (int)((instruction >> 5) & 31u);
+    uint64_t base = interp_gpr_sp(cpu, rn);
+    int64_t offset = interp_sext((instruction >> 12) & 0x1FFu, 9);
+    uint64_t value = interp_load_bits(base, 1);
+    interp_set_gpr32(cpu, rt, (uint32_t)value);
+    interp_set_gpr_sp(cpu, rn, base + (uint64_t)offset);
+    cpu->pc += 4;
+}
+
+/* Scalar integer single-register transfers share one architectural decoder,
+ * but three address forms. Keep admission identical to that decoder so an
+ * emitted helper can only retire INTERP_NEXT: SIMD, pointer authentication and
+ * unallocated sign-extension forms remain interpreter-owned. */
+static int hl_a64_x86_is_scalar_single_memory(uint32_t instruction) {
+    if (instruction & (1u << 26)) return 0;
+    int scaled = (instruction & 0x3B000000u) == 0x39000000u;
+    int register_offset = (instruction & 0x3B200C00u) == 0x38200800u;
+    int unscaled = (instruction & 0x3B200000u) == 0x38000000u;
+    if (!scaled && !register_offset && !unscaled) return 0;
+    if ((instruction & 0x3B200C00u) == 0x38200400u ||
+        (instruction & 0x3B200C00u) == 0x38200C00u)
+        return 0;
+    if (register_offset && (((instruction >> 13) & 3u) < 2u)) return 0;
+    unsigned size = instruction >> 30;
+    unsigned opc = (instruction >> 22) & 3u;
+    return !(opc == 3u && size >= 2u);
+}
+
+static void hl_a64_x86_emit_scalar_single_memory(hl_x64_asm *assembler, uint32_t instruction,
+                                                  uint64_t guest_pc) {
+    /* The canonical interpreter accessor owns address projection, unaligned
+     * little-endian transfers, BUS accounting and SP/ZR/writeback semantics.
+     * One run_block landing pad below owns synchronous-fault recovery for all
+     * helper calls in this generated block. */
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_pc);
+    hl_x64_mov_reg(assembler, 7, HL_A64_X86_CPU_REG); /* cpu -> %rdi */
+    hl_x64_mov_imm64(assembler, 6, instruction);      /* insn -> %rsi */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xEC); hl_x64_u8(assembler, 8); /* align stack */
+    uintptr_t helper = hl_a64_x86_is_ldrb_post(instruction)
+                           ? (uintptr_t)hl_a64_x86_exec_ldrb_post
+                           : (uintptr_t)interp_exec_load_store_single;
+    hl_x64_mov_imm64(assembler, 11, helper);
+    hl_x64_u8(assembler, 0x41); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xD3); /* call *%r11 */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
+    hl_x64_u8(assembler, 0xC4); hl_x64_u8(assembler, 8);
+}
+
 static void hl_a64_x86_emit_cpu_u64(hl_x64_asm *assembler, int offset, uint64_t value) {
     hl_x64_mov_imm64(assembler, HL_A64_X86_VALUE_REG, value);
     hl_x64_reg_mem_disp32(assembler, 0x89, HL_A64_X86_VALUE_REG, HL_A64_X86_CPU_REG, offset);
@@ -485,6 +548,7 @@ static void *translate_block(uint64_t guest_pc) {
         .overflow = 0,
     };
     uint64_t cursor = guest_pc;
+    int has_memory = 0;
     uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     /* r14 is callee-saved by the entry trampoline and unused by the ALU
      * lowering. It counts only completed direct backedges. */
@@ -505,6 +569,11 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if (hl_a64_x86_is_scalar_single_memory(instruction)) {
+            hl_a64_x86_emit_scalar_single_memory(&assembler, instruction, cursor);
+            has_memory = 1;
+            continue;
+        }
         if ((instruction & 0xFC000000u) == 0x14000000u &&
             interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4)
             continue; /* B to the next instruction: retire inside this bounded block. */
@@ -547,7 +616,7 @@ static void *translate_block(uint64_t guest_pc) {
         header->magic = HL_A64_X86_BLOCK_MAGIC;
         header->retired_steps = (uint64_t)count + 1;
         header->exit_kind = exit_kind;
-        header->reserved = 0;
+        header->reserved = (uint64_t)has_memory;
         header->branch_target = conditional_target;
         header->branch_fallthrough = conditional ? cursor + 4 : 0;
         header->loop_steps = direct_target == NULL ? 0 : (cursor - decoded_target) / 4 + 1;
@@ -598,11 +667,33 @@ static void run_block(struct cpu *cpu, void *code) {
             cpu->reason = R_BRANCH;
             return;
         }
-        /* Every lowered instruction touches only registers/NZCV and the two
-         * terminal stores touch only the always-live cpu record. There is no
-         * guest-memory instruction, hence no synchronous-fault provenance
-         * interval to add. */
+        if (header->reserved > 1) {
+            static const char message[] = "AArch64 x86 DBT entered a corrupt memory marker";
+            (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
+            cpu->reason = R_BRANCH;
+            return;
+        }
+        /* Register state is canonical at every helper boundary. One marker for
+         * the whole translated entry lets the existing memory access seam
+         * abandon a faulting transfer without partially committing it. */
+        int has_memory = header->reserved != 0;
+        if (has_memory && sigsetjmp(g_interp_marker_jmp, 0) != 0) {
+            g_interp_access_active = 0;
+            g_interp_marker_armed = 0;
+            g_interp_marker_cpu = NULL;
+            hl_backend_tree_reason(cpu->reason);
+            return;
+        }
+        if (has_memory) {
+            g_interp_marker_cpu = cpu;
+            g_interp_marker_armed = 1;
+        }
         uint64_t repetitions = hl_a64_x86_dbt_enter(cpu, code);
+        if (has_memory) {
+            g_interp_access_active = 0;
+            g_interp_marker_armed = 0;
+            g_interp_marker_cpu = NULL;
+        }
         if (repetitions >= HL_A64_X86_BACKEDGE_BUDGET ||
             (header->loop_steps == 0 && repetitions != 0)) {
             static const char message[] = "AArch64 x86 DBT returned invalid backedge accounting";
