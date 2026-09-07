@@ -1004,6 +1004,12 @@ test('terminal management exposes exact pin state and acts through immutable tab
   );
   assert.ok(labelled(stage, 'Unpinned'));
   assert.ok(labelled(stage, 's4 · terminal'));
+  assert.equal(ancestorProperty(stage, 's4 · terminal', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(stage, 's4 · terminal', 'Card', 'Justify')?.Align, 'Start');
+  assert.ok(
+    ancestorProperty(stage, 's4 · terminal', 'Card', 'Width'),
+    'terminal inventory cards retain a compact readable bound',
+  );
   invoke(stage, 'Pin Build');
   await settled();
   await settled();

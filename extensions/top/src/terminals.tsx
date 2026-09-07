@@ -29,6 +29,7 @@ import { bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
 type TerminalCursor = { generation: number; revision: number };
+const TERMINAL_CARD_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
 
 export function Terminals({
   api,
@@ -460,7 +461,13 @@ export function Terminals({
         onRetry={resource.reload}
       >
         {view.records.map((tab) => (
-          <Card key={tab.id} variant={tab.pinned ? 'filled' : 'outline'}>
+          <Card
+            key={tab.id}
+            grow={false}
+            justify="start"
+            width={TERMINAL_CARD_WIDTH}
+            variant={tab.pinned ? 'filled' : 'outline'}
+          >
             <CardHeader label={tab.title} detail={tab.id} />
             <CardContent gap={1}>
               <Row gap={1} align="center">
