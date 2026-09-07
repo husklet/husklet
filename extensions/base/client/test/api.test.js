@@ -998,6 +998,10 @@ test('extension acquisition wait ignores unchanged and other jobs, then reads au
   const pending = api.extensions.waitForAcquisition('job-1', 7, { timeoutMs: 1_000 });
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extension-acquisitions' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual((await next()).payload, { call: 'extension_acquisition_status', with: { job: 'job-1' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 7, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
   for (const change of [
     { job: 'job-1', revision: 7, state: 'pulling', coalesced: 0 },
     { job: 'job-2', revision: 8, state: 'ready', coalesced: 0 },
@@ -1025,12 +1029,38 @@ test('extension acquisition wait times out with its exact cursor and disposes', 
   const pending = api.extensions.waitForAcquisition('job-1', 7, { timeoutMs: 5 });
   assert.equal((await next()).payload.call, 'event_subscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 7, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await pending, { changed: false, job: 'job-1', revision: 7 });
   stage.session.close();
   stage.host.destroy();
   stage.server.close();
+});
+
+test('extension acquisition wait refuses a status overtaken by an in-flight invalidation', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const pending = api.extensions.waitForAcquisition('job-1', 4, { timeoutMs: 1_000 });
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  stage.host.write(encode({ channel: 21, kind: KIND.event, payload: { snapshot: 'extension_acquisitions', of: {
+    job: 'job-1', revision: 6, state: 'ready', coalesced: 0,
+  } } }));
+  assert.equal((await next()).kind, KIND.credit);
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: {
+    job: 'job-1', reference: 'registry/demo:1', revision: 5, state: 'pulling', progress: null, candidate: null, error: null,
+  } } }));
+  assert.equal((await next()).payload.call, 'extension_acquisition_status');
+  const status = { job: 'job-1', reference: 'registry/demo:1', revision: 6, state: 'ready', progress: null, candidate: null, error: null };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition', with: status } }));
+  assert.equal((await next()).payload.call, 'event_unsubscribe');
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await pending, { changed: true, status });
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('extension facade preserves exact read and control request shapes', async () => {

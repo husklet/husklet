@@ -229,7 +229,7 @@ test('real Unix semantic action wait arms before authority and disposes after ch
   }
 });
 
-test('real Unix acquisition wait filters its cursor and disposes after authoritative status', async () => {
+test('real Unix acquisition wait reconnects from authoritative status without a new event', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-wait-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -244,36 +244,6 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
         calls.push(frame.payload.call);
         if (frame.payload.call === 'event_subscribe') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-          socket.write(
-            encode({
-              channel: 12,
-              kind: KIND.event,
-              payload: {
-                snapshot: 'extension_acquisitions',
-                of: {
-                  job: 'job-7',
-                  revision: 4,
-                  state: 'pulling',
-                  coalesced: 0,
-                },
-              },
-            }),
-          );
-          socket.write(
-            encode({
-              channel: 12,
-              kind: KIND.event,
-              payload: {
-                snapshot: 'extension_acquisitions',
-                of: {
-                  job: 'job-7',
-                  revision: 5,
-                  state: 'ready',
-                  coalesced: 1,
-                },
-              },
-            }),
-          );
         } else if (frame.payload.call === 'extension_acquisition_status') {
           socket.write(
             encode({
@@ -313,7 +283,7 @@ test('real Unix acquisition wait filters its cursor and disposes after authorita
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4);
+    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4, { timeoutMs: 100 });
     assert.equal(result.changed, true);
     assert.equal(result.status.revision, 5);
     assert.deepEqual(calls, [

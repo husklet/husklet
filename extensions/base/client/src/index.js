@@ -2045,26 +2045,40 @@ export function workspace(session, { signal } = {}) {
         clearTimeout(timer);
         Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
+      const refresh = async () => {
+        if (settled || reading) return;
+        reading = true;
+        try {
+          do {
+            const expectedRevision = latest?.revision;
+            latest = undefined;
+            const status = await api.extensions.acquisition(job);
+            if (status.job !== job) {
+              throw new Error('extension acquisition status returned a different job identity');
+            }
+            const requiredRevision = Math.max(expectedRevision ?? 0, latest?.revision ?? 0);
+            if (status.revision < requiredRevision) {
+              latest = { revision: requiredRevision };
+            } else if (status.revision > afterRevision) {
+              latest = undefined;
+              finish({ changed: true, status });
+            }
+          } while (latest && !settled);
+        } catch (error) {
+          finish(undefined, error);
+        } finally {
+          reading = false;
+        }
+      };
       const observe = (change) => {
         if (settled || change.job !== job || change.revision <= afterRevision) return;
         latest = change;
-        if (reading) return;
-        reading = true;
-        void (async () => {
-          try {
-            while (latest && !settled) {
-              const expected = latest; latest = undefined;
-              const status = await api.extensions.acquisition(job);
-              if (status.job !== job || status.revision < expected.revision || status.revision <= afterRevision) continue;
-              finish({ changed: true, status });
-            }
-          } catch (error) { finish(undefined, error); }
-          finally { reading = false; }
-        })();
+        void refresh();
       };
       api.watchExtensionAcquisitions(observe).then((stop) => {
         dispose = stop;
         if (settled) void stop();
+        else void refresh();
       }, (error) => finish(undefined, error));
       timer = setTimeout(() => finish({ changed: false, job, revision: afterRevision }), timeoutMs);
     });
