@@ -722,6 +722,23 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 #endif
 }
 
+/* The shared dispatcher already owns a bounded, signal-aware redispatch path:
+ * it accepts only a current-generation map hit, stops for irq/thread/signal,
+ * and returns to the full loop after eight edges.  The pure interpreter must
+ * not enter that path because re-decoding at its C boundary is the execution;
+ * admit only this backend's generated objects.  This is deliberately a
+ * stepping control, not code-cache chaining: every block still returns through
+ * hl_a64_x86_dbt_return and remains a dispatcher crossing. */
+static int hl_a64_x86_fast_redispatch(const void *code) {
+    if ((const uint8_t *)code < g_cache + sizeof(struct hl_a64_x86_block_header)) return 0;
+    const struct hl_a64_x86_block_header *header =
+        (const struct hl_a64_x86_block_header *)code - 1;
+    return header->magic == HL_A64_X86_BLOCK_MAGIC;
+}
+
+#undef G_FAST_REDISPATCH
+#define G_FAST_REDISPATCH(code) hl_a64_x86_fast_redispatch(code)
+
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
      * begin with an eight-byte descriptor magic. Generated blocks begin with
