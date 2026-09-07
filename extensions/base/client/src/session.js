@@ -185,6 +185,7 @@ export class Session {
   #ready;
   #rejectReady;
   #welcomed = false;
+  #greetingTimer;
   #backpressured = false;
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
@@ -221,6 +222,11 @@ export class Session {
     this.#onEventError = onEventError;
     this.#onClose = onClose;
     this.#events.add(onEvent);
+    this.#greetingTimer = setTimeout(() => {
+      const error = new Error(`extension host handshake timed out after ${this.#timeout}ms`);
+      this.#finish(error); this.#socket.destroy();
+    }, this.#timeout);
+    this.#greetingTimer.unref?.();
     socket.on('data', this.#dataListener);
     socket.on('end', this.#endListener);
     socket.on('drain', this.#drainListener);
@@ -501,6 +507,7 @@ export class Session {
   #finish(error) {
     if (this.#closed) return;
     this.#closed = true;
+    clearTimeout(this.#greetingTimer);
     this.#rejectReady(error);
     for (const pending of this.#pending.splice(0)) {
       clearTimeout(pending.timer);
@@ -524,7 +531,8 @@ export class Session {
     if (this.#welcomed) throw new Error('host sent a second greeting');
     if (frame.kind !== KIND.open) throw new Error('host greeting must open the control channel');
     const welcome = frame.payload;
-    if (!welcome || welcome.protocol === undefined) return;
+    requiredObject(welcome, 'host greeting');
+    if (!Number.isSafeInteger(welcome.protocol)) throw new TypeError('host greeting protocol must be an integer');
     if (welcome.protocol !== PROTOCOL) {
       throw new Error(`host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`);
     }
@@ -541,6 +549,7 @@ export class Session {
       },
     );
     this.#welcomed = true;
+    clearTimeout(this.#greetingTimer);
     this.#ready();
   }
 }

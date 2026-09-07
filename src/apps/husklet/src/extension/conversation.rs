@@ -1014,8 +1014,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
-        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1111,7 +1111,6 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
-                generation: 0,
             }])
         }
 
@@ -1593,7 +1592,6 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
-                generation: 0,
             }])
         );
         assert_eq!(ledger.reached(), vec!["containers.list"]);
@@ -1633,6 +1631,25 @@ mod tests {
             Ok(()),
             "a hangup after a pong stays clean"
         );
+    }
+
+    #[test]
+    fn semantic_flag_violations_are_refused_before_authority() {
+        for flag in [Flags::ERROR, Flags::COALESCED] {
+            let ledger = Arc::new(Ledger::default());
+            let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+            let mut wire = Wire::new(theirs);
+            shake(&mut wire, PROTOCOL);
+            let request = codec::request(&Request::ContainerList).expect("request").flagged(flag);
+            wire.send(&request).expect("malformed request sent");
+
+            let refusal = wire.receive().expect("flag refusal");
+            assert!(codec::is_failure(&refusal));
+            assert!(matches!(codec::read_failure(&refusal), Ok(Failure::Unsupported { call }) if call.contains("complete, unflagged request")));
+            assert!(ledger.reached().is_empty(), "malformed flags reached authority");
+            drop(wire);
+            assert_eq!(served.join().expect("joined"), Ok(()));
+        }
     }
 
     #[test]
@@ -1798,7 +1815,6 @@ mod tests {
                 image: "image".into(),
                 state: "running".into(),
                 created,
-                generation: 0,
             }])
         };
 
@@ -1856,7 +1872,6 @@ mod tests {
             image: "image".into(),
             state: "running".into(),
             created: 1,
-            generation: 0,
         }]);
         let mut peer = Wire::new(theirs);
 

@@ -336,6 +336,7 @@ mod halt_tests {
                 reference: "extension:test".to_owned(),
                 digest: record.image_digest.clone(),
                 entrypoint: vec!["/extension".to_owned()],
+                command: Vec::new(),
                 user: "1000:1000".to_owned(),
             },
             socket,

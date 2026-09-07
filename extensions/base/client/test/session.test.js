@@ -480,6 +480,24 @@ test('real Unix partial EOF and illegal headers fail closed without sending cred
   }
 });
 
+test('a malformed greeting fails immediately instead of stranding readiness', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-greeting-'));
+  const socketPath = path.join(directory, 'host.sock'); const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: { peer: 'missing-version', granted: [] } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const started = Date.now();
+  try {
+    await assert.rejects(connect({ path: socketPath, connectTimeout: 1_000 }), /protocol must be an integer/);
+    assert(Date.now() - started < 500, 'structural greeting errors do not wait for the connection deadline');
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real socket write backpressure admits no further calls until drain', async () => {
   const bounded = (promise, label) => Promise.race([
     promise,

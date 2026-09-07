@@ -53,3 +53,25 @@ test('control heartbeats retain arbitrary non-JSON bytes', () => {
   const [frame] = new Reader().take(encode({ channel: 19, kind: KIND.ping, payload }));
   assert.deepEqual(frame.payload, payload);
 });
+
+test('the encoder rejects values that cannot be represented by the wire header', () => {
+  for (const channel of [-1, 0x1_0000_0000, 1.5, Number.NaN]) {
+    assert.throws(() => encode({ channel, kind: KIND.event, payload: null }), /unsigned 32-bit/);
+  }
+  assert.throws(() => encode({ kind: 255, payload: null }), /unknown kind/);
+  assert.throws(() => encode({ kind: KIND.event, flags: 0x80, payload: null }), /unknown flags/);
+  assert.throws(() => encode({ kind: KIND.event, payload: undefined }), /bytes or a JSON value/);
+});
+
+test('one-byte delivery retains a bounded frame without repeated buffer growth', () => {
+  const payload = { text: 'x'.repeat(256 * 1024) };
+  const bytes = encode({ channel: 9, kind: KIND.event, payload });
+  const reader = new Reader();
+  let frames = [];
+  for (const byte of bytes) {
+    frames = reader.take(Uint8Array.of(byte));
+    assert(reader.buffered <= HEADER + PAYLOAD_LIMIT);
+  }
+  assert.deepEqual(frames[0].payload, payload);
+  assert.equal(reader.buffered, 0);
+});
