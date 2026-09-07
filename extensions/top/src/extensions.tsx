@@ -373,7 +373,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <Text label={`Source ${entry.source}`} color="text-dim" wrap />
                     <Row>
                       <Button
-                        label="Review access"
+                        label={`Review ${entry.title}`}
                         enabled={!busy}
                         onInvoke={() => inspect(entry.reference)}
                       />

@@ -187,7 +187,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Column',
     'Column',
   ]);
-  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
@@ -237,7 +237,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review access');
+  invoke(stage, 'Review Component playground');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
