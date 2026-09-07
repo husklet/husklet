@@ -639,6 +639,13 @@ pub struct Entry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DirectoryPage {
+    pub entries: Vec<Entry>,
+    pub next: Option<RelativePath>,
+    pub more: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct FileRange {
     pub path: RelativePath,
     pub identity: String,
@@ -1282,6 +1289,22 @@ pub trait WorkspaceFiles {
     /// # Errors
     /// Returns a host failure.
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError>;
+
+    fn list_page(
+        &self,
+        path: &RelativePath,
+        after: Option<&RelativePath>,
+        limit: usize,
+    ) -> Result<DirectoryPage, HostError> {
+        let mut entries = self.list(path)?;
+        if let Some(after) = after {
+            entries.retain(|entry| entry.path > *after);
+        }
+        let more = entries.len() > limit;
+        entries.truncate(limit);
+        let next = entries.last().map(|entry| entry.path.clone());
+        Ok(DirectoryPage { entries, next, more })
+    }
 
     /// # Errors
     /// Returns a host failure.

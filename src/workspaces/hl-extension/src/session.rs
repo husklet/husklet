@@ -490,6 +490,7 @@ impl Session {
                     .map_err(Failure::from)
             }
             Request::FilesystemList { .. }
+            | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
             | Request::FilesystemReadRange { .. }
             | Request::FilesystemStat { .. }
@@ -1140,6 +1141,29 @@ impl Session {
             Request::FilesystemList { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entries(port.list(path)?))
+            }
+            Request::FilesystemListPage { path, after, limit } => {
+                if *limit == 0 || *limit > 256 {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory page limit must be 1..256".into(),
+                    });
+                }
+                if after.as_ref().is_some_and(|cursor| {
+                    let directory = path.as_str();
+                    let value = cursor.as_str();
+                    let child = if directory.is_empty() {
+                        Some(value)
+                    } else {
+                        value.strip_prefix(directory).and_then(|rest| rest.strip_prefix('/'))
+                    };
+                    child.is_none_or(|name| name.is_empty() || name.contains('/'))
+                }) {
+                    return Err(Failure::Failed {
+                        detail: "filesystem directory cursor must name a child after the directory".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::DirectoryPage(port.list_page(path, after.as_ref(), *limit)?))
             }
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;

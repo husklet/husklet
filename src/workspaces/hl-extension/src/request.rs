@@ -387,6 +387,11 @@ pub enum Request {
     FilesystemList {
         path: RelativePath,
     },
+    FilesystemListPage {
+        path: RelativePath,
+        after: Option<RelativePath>,
+        limit: usize,
+    },
     FilesystemRead {
         path: RelativePath,
     },
@@ -553,6 +558,7 @@ impl Request {
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemList { .. }
+            | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
             | Self::FilesystemReadRange { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
@@ -582,6 +588,7 @@ impl Request {
     pub const fn path(&self) -> Option<&RelativePath> {
         match self {
             Self::FilesystemList { path }
+            | Self::FilesystemListPage { path, .. }
             | Self::FilesystemRead { path }
             | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
@@ -711,6 +718,7 @@ pub enum Reply {
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     Entries(Vec<Entry>),
+    DirectoryPage(crate::port::DirectoryPage),
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),

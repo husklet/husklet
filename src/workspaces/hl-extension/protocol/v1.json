@@ -996,6 +996,41 @@
       "kind": "struct",
       "serde": {}
     },
+    "DirectoryPage": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
+          }
+        },
+        {
+          "name": "next",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "RelativePath"
+            }
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "Division": {
       "kind": "enum",
       "serde": {
@@ -7139,6 +7174,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_list_page"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_read"
     },
     {
@@ -7578,6 +7617,10 @@
     {
       "reply": "entries",
       "request": "filesystem_list"
+    },
+    {
+      "reply": "directory_page",
+      "request": "filesystem_list_page"
     },
     {
       "reply": "contents",
@@ -8092,6 +8135,16 @@
                 "kind": "ref",
                 "name": "Entry"
               }
+            }
+          }
+        },
+        {
+          "name": "directory_page",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "DirectoryPage"
             }
           }
         },
@@ -10235,6 +10288,44 @@
           }
         },
         {
+          "name": "filesystem_list_page",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "after",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "ref",
+                    "name": "RelativePath"
+                  }
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_read",
           "payload": {
             "fields": [
@@ -11724,7 +11815,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:68ec15e7eb6822ce",
+  "source_fingerprint": "fnv1a64:4937a3123291733a",
   "specification_version": 1,
   "topics": [
     {

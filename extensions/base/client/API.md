@@ -147,6 +147,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 ## Files
 
 - `host.files.list(...)` — `filesystem_list`, requires `filesystem:read`.
+- `host.files.listPage(...)` — `filesystem_list_page`, requires `filesystem:read`.
 - `host.files.read(...)` — `filesystem_read`, requires `filesystem:read`.
 - `host.files.readRange(...)` — `filesystem_read_range`, requires `filesystem:read`.
 - `host.files.stat(...)` — `filesystem_stat`, requires `filesystem:read`.

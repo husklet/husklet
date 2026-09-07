@@ -196,14 +196,69 @@ impl WorkspaceFiles for Host {
         Ok(Vec::new())
     }
 
+    fn list_page(
+        &self,
+        _path: &RelativePath,
+        _after: Option<&RelativePath>,
+        _limit: usize,
+    ) -> Result<hl_extension::port::DirectoryPage, HostError> {
+        Ok(hl_extension::port::DirectoryPage {
+            entries: vec![Entry {
+                path: RelativePath::new("src/b.ts").expect("path"),
+                directory: false,
+                size: 7,
+                identity: None,
+            }],
+            next: Some(RelativePath::new("src/b.ts").expect("path")),
+            more: true,
+        })
+    }
+
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         Ok(())
     }
 }
 
+#[test]
+fn bounded_directory_cursor_crosses_the_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").expect("name"),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![RelativePath::new("src").expect("root")],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemListPage {
+        path: RelativePath::new("src").expect("path"),
+        after: Some(RelativePath::new("src/a.ts").expect("cursor")),
+        limit: 1,
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+    sender.send(&codec::request(&request).expect("request")).expect("sent");
+    let frame = receiver.receive().expect("request frame");
+    let decoded = codec::read_request(&frame).expect("request decodes");
+    let reply = session.dispatch(&decoded, &services(&host)).expect("page allowed");
+    receiver
+        .send(&codec::reply(&reply).expect("reply"))
+        .expect("reply sent");
+    let answer = codec::read_reply(&sender.receive().expect("reply frame")).expect("reply decodes");
+    let Reply::DirectoryPage(page) = answer else {
+        panic!("unexpected reply")
+    };
+    assert_eq!(page.next.expect("cursor").as_str(), "src/b.ts");
+    assert!(page.more);
+}
+
 impl hl_extension::port::ExtensionStore for Host {}
 impl hl_extension::NotificationSink for Host {
-    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {

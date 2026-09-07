@@ -1902,6 +1902,18 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   stage.server.close();
 });
 
+test('directory pagination carries an authoritative bounded cursor over Unix framing', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).files.listPage('src', { after: 'src/a.ts', limit: 2 });
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_list_page', with: { path: 'src', after: 'src/a.ts', limit: 2 },
+  });
+  const page = { entries: [{ path: 'src/b.ts', directory: false, size: 7 }], next: 'src/b.ts', more: true };
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'directory_page', with: page } }));
+  assert.deepEqual(await pending, page);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('observed filesystem ranges and creation preserve exact identities on the wire', async () => {
   const stage = await pair();
   const next = frames(stage.host);

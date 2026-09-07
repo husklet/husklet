@@ -421,6 +421,11 @@ export interface FileEntry {
   size: number;
   identity?: string | null;
 }
+export interface DirectoryPage {
+  entries: FileEntry[];
+  next: string | null;
+  more: boolean;
+}
 export interface FileInventory {
   entries: FileEntry[];
   complete: boolean;
@@ -849,6 +854,8 @@ export interface WorkspaceApi {
   };
   files: {
     list(path: string): Promise<FileEntry[]>;
+    /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
+    listPage(path: string, options?: { after?: string | null; limit?: number }): Promise<DirectoryPage>;
     stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
     readRange(path: string, offset?: number, limit?: number, observed?: string | null): Promise<FileRange>;

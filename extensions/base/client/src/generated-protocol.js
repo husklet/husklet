@@ -315,6 +315,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "terminal_switch_occupant": "done",
   "terminal_switch_occupant_observed": "done",
   "filesystem_list": "entries",
+  "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
   "filesystem_read_range": "file_range",
   "filesystem_stat": "entry",
@@ -427,6 +428,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_switch_occupant": "terminals:control",
   "terminal_switch_occupant_observed": "terminals:control",
   "filesystem_list": "filesystem:read",
+  "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
   "filesystem_read_range": "filesystem:read",
   "filesystem_stat": "filesystem:read",
@@ -1285,6 +1287,41 @@ const definitions = {
       },
       {
         "name": "read_only",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "DirectoryPage": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "Entry"
+          }
+        }
+      },
+      {
+        "name": "next",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        }
+      },
+      {
+        "name": "more",
         "optional": false,
         "schema": {
           "kind": "boolean"
@@ -7450,6 +7487,16 @@ const roots = {
         }
       },
       {
+        "name": "directory_page",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "DirectoryPage"
+          }
+        }
+      },
+      {
         "name": "entry",
         "payload": {
           "kind": "newtype",
@@ -9582,6 +9629,44 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "RelativePath"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_list_page",
+        "payload": {
+          "fields": [
+            {
+              "name": "path",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            },
+            {
+              "name": "after",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],
