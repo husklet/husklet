@@ -77,6 +77,8 @@ struct interp_block {
     uint64_t guest_start; // entry guest PC == the map key
     uint64_t guest_end;   // one past the last instruction the pre-scan decoded
     uint64_t insn_count;  // diagnostics only
+    uint32_t rejection_instruction; // first instruction that rejected DBT admission
+    uint32_t rejection_cause;       // HL_BACKEND_A64_REJECTION_*; zero for interpreter-only builds
 };
 
 // Unreachable (G_BLOCK_ALIGN is literal 0) but must exist: the call compiles inside `if (0)`, not `#if 0`.
@@ -122,6 +124,8 @@ static void *translate_block(uint64_t gpc) {
     block->guest_start = gpc;
     block->guest_end = cursor;
     block->insn_count = count;
+    block->rejection_instruction = 0;
+    block->rejection_cause = HL_BACKEND_A64_REJECTION_NONE;
 
     // Key = entry PC; [guest_start, guest_end) is the SOURCE interval map_invalidate_source_ranges() intersects.
     // `body` = the same address (no prologue); non-NULL map_body() means "live translation" to patch_links_to().
@@ -209,6 +213,8 @@ static void run_block(struct cpu *cpu, void *code) {
             int outcome = interp_step_census(cpu, &instruction);
             if (outcome != INTERP_END) {
                 hl_backend_tree_a64_body_retired(instruction);
+                hl_backend_tree_a64_rejection_step(block->rejection_cause,
+                                                   block->rejection_instruction);
                 /* Account beside the retirement record.  A synchronous fault
                  * may unwind this interpreter invocation before its block-end
                  * aggregate is reached; keeping both counters at the same

@@ -61,6 +61,17 @@ static int hl_backend_x86_jcc_route_format(char *record, size_t capacity, const 
                     (unsigned long long)route[HL_BACKEND_X86_JCC_ROUTE_KNOWN_FALLTHROUGH]);
 }
 
+enum {
+    HL_BACKEND_A64_REJECTION_NONE,
+    HL_BACKEND_A64_REJECTION_RANGE,
+    HL_BACKEND_A64_REJECTION_CAPACITY,
+    HL_BACKEND_A64_REJECTION_FETCH,
+    HL_BACKEND_A64_REJECTION_UNSUPPORTED,
+    HL_BACKEND_A64_REJECTION_OVERFLOW,
+    HL_BACKEND_A64_REJECTION_LIMIT,
+    HL_BACKEND_A64_REJECTION_COUNT,
+};
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 #define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
 #define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
@@ -1057,6 +1068,10 @@ static inline void hl_backend_tree_a64_body_retired(uint32_t instruction) {
 #endif
 }
 static inline void hl_backend_tree_a64_unsupported(uint32_t instruction) { (void)instruction; }
+static inline void hl_backend_tree_a64_rejection_step(unsigned cause, uint32_t instruction) {
+    (void)cause;
+    (void)instruction;
+}
 
 static inline void hl_backend_tree_reason(unsigned reason) {
     struct hl_backend_tree_slot *slot = g_backend_tree_self;
@@ -2782,6 +2797,8 @@ struct hl_backend_mixed_sse_shared {
     _Atomic uint64_t interpreted_steps;
     _Atomic uint64_t a64_major[HL_BACKEND_A64_MAJOR_COUNT];
     _Atomic uint64_t a64_retired_form[HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT];
+    _Atomic uint64_t a64_rejection_cause[HL_BACKEND_A64_REJECTION_COUNT];
+    _Atomic uint64_t a64_rejection_form[HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT];
     _Atomic uint64_t a64_unsupported_total;
     _Atomic uint64_t a64_unsupported_form[HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT];
     _Atomic uint64_t map_misses;
@@ -3642,6 +3659,67 @@ static void hl_backend_mixed_sse_report(struct hl_backend_mixed_sse_shared *cens
             HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
         formatted += a64_added;
     }
+    uint64_t rejection_total = 0;
+    uint64_t rejection_cause[HL_BACKEND_A64_REJECTION_COUNT];
+    for (unsigned cause = 0; cause < HL_BACKEND_A64_REJECTION_COUNT; ++cause) {
+        rejection_cause[cause] =
+            atomic_load_explicit(&census->a64_rejection_cause[cause], memory_order_relaxed);
+        rejection_total += rejection_cause[cause];
+    }
+    uint64_t rejection_top_count[HL_BACKEND_A64_RETIRED_FORM_TOP] = {0};
+    unsigned rejection_top_form[HL_BACKEND_A64_RETIRED_FORM_TOP] = {0};
+    uint64_t rejection_keyed = 0;
+    for (unsigned form = 0; form < HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT; ++form) {
+        uint64_t count = atomic_load_explicit(&census->a64_rejection_form[form], memory_order_relaxed);
+        rejection_keyed += count;
+        for (unsigned rank = 0; count != 0 && rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank) {
+            if (count > rejection_top_count[rank] ||
+                (count == rejection_top_count[rank] && form < rejection_top_form[rank])) {
+                for (unsigned move = HL_BACKEND_A64_RETIRED_FORM_TOP - 1; move > rank; --move) {
+                    rejection_top_count[move] = rejection_top_count[move - 1];
+                    rejection_top_form[move] = rejection_top_form[move - 1];
+                }
+                rejection_top_count[rank] = count;
+                rejection_top_form[rank] = form;
+                break;
+            }
+        }
+    }
+    uint64_t rejection_selected = 0;
+    for (unsigned rank = 0; rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank)
+        rejection_selected += rejection_top_count[rank];
+    a64_added = snprintf(
+        record + formatted, sizeof record - (size_t)formatted,
+        "\n[diag] aarch64-rejection-step version=1 total=%llu interpreted_steps=%llu reconcile=%u "
+        "cause_none=%llu cause_range=%llu cause_capacity=%llu cause_fetch=%llu "
+        "cause_unsupported=%llu cause_overflow=%llu cause_limit=%llu unsupported_keyed=%llu "
+        "unsupported_reconcile=%u selected=%llu other=%llu top_n=%u",
+        (unsigned long long)rejection_total,
+        (unsigned long long)atomic_load_explicit(&census->interpreted_steps, memory_order_relaxed),
+        rejection_total == atomic_load_explicit(&census->interpreted_steps, memory_order_relaxed),
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_NONE],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_RANGE],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_CAPACITY],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_FETCH],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_UNSUPPORTED],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_OVERFLOW],
+        (unsigned long long)rejection_cause[HL_BACKEND_A64_REJECTION_LIMIT],
+        (unsigned long long)rejection_keyed,
+        rejection_keyed == rejection_cause[HL_BACKEND_A64_REJECTION_UNSUPPORTED],
+        (unsigned long long)rejection_selected,
+        (unsigned long long)(rejection_keyed - rejection_selected), HL_BACKEND_A64_RETIRED_FORM_TOP);
+    if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
+        HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
+    formatted += a64_added;
+    for (unsigned rank = 0; rank < HL_BACKEND_A64_RETIRED_FORM_TOP; ++rank) {
+        a64_added = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                             " form%u_key=%03x form%u_count=%llu", rank,
+                             rejection_top_form[rank], rank,
+                             (unsigned long long)rejection_top_count[rank]);
+        if (a64_added <= 0 || (size_t)a64_added >= sizeof record - (size_t)formatted)
+            HL_BACKEND_PRODUCT_FORMAT_FAIL(box);
+        formatted += a64_added;
+    }
     if (census->x86_jcc_route_enabled) {
         uint64_t top_count[HL_BACKEND_A64_UNSUPPORTED_TOP] = {0};
         unsigned top_form[HL_BACKEND_A64_UNSUPPORTED_TOP] = {0};
@@ -3806,6 +3884,14 @@ static inline void hl_backend_tree_a64_unsupported(uint32_t instruction) {
     unsigned form = instruction >> 21;
     atomic_fetch_add_explicit(&census->a64_unsupported_total, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&census->a64_unsupported_form[form], 1, memory_order_relaxed);
+}
+static inline void hl_backend_tree_a64_rejection_step(unsigned cause, uint32_t instruction) {
+    struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
+    if (census == NULL || cause >= HL_BACKEND_A64_REJECTION_COUNT) return;
+    atomic_fetch_add_explicit(&census->a64_rejection_cause[cause], 1, memory_order_relaxed);
+    if (cause == HL_BACKEND_A64_REJECTION_UNSUPPORTED)
+        atomic_fetch_add_explicit(&census->a64_rejection_form[instruction >> 21], 1,
+                                  memory_order_relaxed);
 }
 static inline void hl_backend_tree_map_miss(void) {
     struct hl_backend_mixed_sse_shared *census = g_backend_mixed_sse;
