@@ -3014,6 +3014,7 @@ static uint8_t *translit_test_call_instruction_end;
 static translit_jcc_ibtc_site_ranges translit_test_call_site;
 static uint64_t translit_test_call_source_guest;
 static uint64_t translit_test_call_target_guest;
+static int translit_test_call_signal_failure;
 #endif
 
 static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t pop) {
@@ -10403,7 +10404,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     if (scenario == 121) {
         result = translit_direct_call_signal_stage_test() && cpu.r[4] == stack - 8 && return_word == source + 5
                      ? 0
-                     : 170;
+                     : translit_test_call_signal_failure != 0 ? translit_test_call_signal_failure : 219;
         goto done_call_ibtc;
     }
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
@@ -11486,6 +11487,7 @@ static int translit_pre_spill_signal_stage_test(void) {
 // ledger must reconstruct either the wholly pre-CALL state or the wholly committed target state;
 // in particular no post-commit PC may restart CALL with an already-decremented RSP.
 static int translit_direct_call_signal_stage_test(void) {
+    translit_test_call_signal_failure = 210;
     if (translit_test_call_instruction_start == NULL || translit_test_call_low_end == NULL ||
         translit_test_call_high_end == NULL || translit_test_call_committed == NULL ||
         translit_test_call_instruction_end == NULL || translit_test_call_site.save_end == NULL ||
@@ -11518,7 +11520,7 @@ static int translit_direct_call_signal_stage_test(void) {
         translit_test_call_site.save_end < start + 33 ||
         memcmp(translit_test_call_site.save_end - 9, save_rax_prefix, sizeof save_rax_prefix) != 0 ||
         saved_rax_disp != R_OFF(HL_X64_RAX))
-        return 0;
+        { translit_test_call_signal_failure = 211; return 0; }
     uint64_t stack_words[4] = {0};
     uint64_t original_rsp = (uint64_t)(uintptr_t)&stack_words[2];
     uint8_t *const low_end = start + 8;
@@ -11556,21 +11558,29 @@ static int translit_direct_call_signal_stage_test(void) {
             host_flags = UINT64_C(0xad7);
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)host_flags;
         HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)pc;
-        exact = translit_signal_capture(&cpu, &native) &&
-                cpu.rip == (committed ? translit_test_call_target_guest
-                                      : translit_test_call_source_guest) &&
-                cpu.r[HL_X64_RSP] == (committed ? original_rsp - 8 : original_rsp) &&
-                cpu.r[HL_X64_RAX] == (rax_canonical ? UINT64_C(0xc000000000000000)
-                                                    : UINT64_C(0xa000000000000000)) &&
-                stack_words[1] == stack_image && (!committed || stack_words[1] == return_word);
+        if (!translit_signal_capture(&cpu, &native)) { translit_test_call_signal_failure = 212; exact = 0; break; }
+        if (cpu.rip != (committed ? translit_test_call_target_guest : translit_test_call_source_guest))
+            { translit_test_call_signal_failure = 213; exact = 0; break; }
+        if (cpu.r[HL_X64_RSP] != (committed ? original_rsp - 8 : original_rsp))
+            { translit_test_call_signal_failure = 214; exact = 0; break; }
+        if (cpu.r[HL_X64_RAX] != (rax_canonical ? UINT64_C(0xc000000000000000)
+                                                : UINT64_C(0xa000000000000000)))
+            { translit_test_call_signal_failure = 215; exact = 0; break; }
+        if (stack_words[1] != stack_image || (committed && stack_words[1] != return_word))
+            { translit_test_call_signal_failure = 216; exact = 0; break; }
         for (unsigned reg = 1; exact && reg < 16; ++reg) {
             if (reg == HL_X64_RSP) continue;
-            exact = cpu.r[reg] == UINT64_C(0xa000000000000000) + reg;
+            if (cpu.r[reg] != UINT64_C(0xa000000000000000) + reg) {
+                translit_test_call_signal_failure = 217; exact = 0;
+            }
         }
         translit_flags_out(&expected_flags, UINT64_C(0xad7));
-        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+        if (exact && translit_flags_in(&cpu) != translit_flags_in(&expected_flags)) {
+            translit_test_call_signal_failure = 218; exact = 0;
+        }
     }
     translit_selected = saved_selected;
+    if (exact) translit_test_call_signal_failure = 0;
     return exact;
 }
 
