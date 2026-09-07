@@ -10316,12 +10316,21 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     if (source_block == NULL || source_block->host_entry_off == 0) goto done_call_ibtc;
     if (scenario == 123) {
-        uint8_t pcache_emitted[512] = {0};
-        hl_x64_asm pcache_asm = {pcache_emitted, pcache_emitted + sizeof pcache_emitted, 0, 0};
+        /* Pcache relocation offsets are arena-relative, and helper rel32 reachability is placement-sensitive:
+           exercise the old path in unused bytes of this generation, then roll its ledger observation back. */
+        if (g_cp > arena + arena_size - 512) goto done_call_ibtc;
+        uint8_t *pcache_emitted = g_cp;
+        hl_x64_asm pcache_asm = {pcache_emitted, pcache_emitted + 512, 0, 0};
         int saved_pcache = g_pcache;
+        uint32_t saved_external_count = translit_external_absolute_count;
+        uint32_t saved_external_emitted = translit_external_absolute_emitted;
+        int saved_external_unclassified = translit_external_absolute_unclassified;
         g_pcache = 1;
         translit_jcc_ibtc_site_ranges pcache_site = translit_emit_direct_call_ibtc(&pcache_asm, target);
         g_pcache = saved_pcache;
+        translit_external_absolute_count = saved_external_count;
+        translit_external_absolute_emitted = saved_external_emitted;
+        translit_external_absolute_unclassified = saved_external_unclassified;
         if (pcache_asm.overflow || pcache_site.flags_packed != NULL || pcache_site.flags_live != NULL ||
             pcache_site.restore_end != NULL || pcache_site.save_end == NULL || pcache_site.rip_end == NULL ||
             pcache_site.end == NULL)
