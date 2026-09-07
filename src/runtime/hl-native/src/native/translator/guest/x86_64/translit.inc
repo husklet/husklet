@@ -3949,6 +3949,20 @@ static int translit_single_fetch_test(void);
 
 HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 238) return translit_pre_spill_signal_stage_test() ? 0 : 238;
+    if (scenario >= 239 && scenario <= 244) {
+        pid_t child = fork();
+        if (child < 0) return (int)scenario;
+        if (child == 0) _exit(translit_indirect_ibtc_fixture_test(scenario));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : (int)scenario;
+    }
+    if (scenario == 245) {
+        pid_t child = fork();
+        if (child < 0) return 245;
+        if (child == 0) _exit(translit_ret_ibtc_fixture_test(scenario));
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 245;
+    }
     if (scenario == 224 || scenario == 225) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -9177,6 +9191,8 @@ static void *translit_ret_publish_worker(void *opaque) {
 }
 
 static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
+    int xmm_canonical = scenario >= 239 && scenario <= 244;
+    if (xmm_canonical) scenario = 192 + (scenario - 239);
     const size_t arena_size = 256 * 1024;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -9185,21 +9201,26 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const uint64_t source = (uint64_t)(uintptr_t)guest_bytes;
     const uint64_t target = source + 0x40;
+    size_t terminal = xmm_canonical ? 5 : 0;
+    if (xmm_canonical) {
+        static const uint8_t movq_rbx_xmm0[] = {0x66, 0x48, 0x0f, 0x6e, 0xc3};
+        memcpy(guest_bytes, movq_rbx_xmm0, sizeof movq_rbx_xmm0);
+    }
     if (scenario == 192) {
-        guest_bytes[0] = 0xff;
-        guest_bytes[1] = 0xe0; // jmp *%rax
+        guest_bytes[terminal] = 0xff;
+        guest_bytes[terminal + 1] = 0xe0; // jmp *%rax
     } else if (scenario == 193 || scenario == 196) {
-        guest_bytes[0] = 0xff;
-        guest_bytes[1] = scenario == 193 ? 0x25 : 0x15; // jmp/call *disp32(%rip)
-        int32_t displacement = 10;
-        memcpy(guest_bytes + 2, &displacement, sizeof displacement);
+        guest_bytes[terminal] = 0xff;
+        guest_bytes[terminal + 1] = scenario == 193 ? 0x25 : 0x15; // jmp/call *disp32(%rip)
+        int32_t displacement = (int32_t)(16 - (terminal + 6));
+        memcpy(guest_bytes + terminal + 2, &displacement, sizeof displacement);
         memcpy(guest_bytes + 16, &target, sizeof target);
     } else if (scenario == 194) {
-        guest_bytes[0] = 0xff;
-        guest_bytes[1] = 0xd0; // call *%rax
+        guest_bytes[terminal] = 0xff;
+        guest_bytes[terminal + 1] = 0xd0; // call *%rax
     } else if (scenario == 197) {
-        guest_bytes[0] = 0xff;
-        guest_bytes[1] = 0x10; // call *(%rax)
+        guest_bytes[terminal] = 0xff;
+        guest_bytes[terminal + 1] = 0x10; // call *(%rax)
         memcpy(guest_bytes + 16, &target, sizeof target);
     } else if (scenario == 198) {
         guest_bytes[0] = 0xff;
@@ -9208,8 +9229,8 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
         guest_bytes[3] = 0x08; // call *8(%rax,%rcx,4)
         memcpy(guest_bytes + 16, &target, sizeof target);
     } else {
-        guest_bytes[0] = 0xff;
-        guest_bytes[1] = 0x20; // jmp *(%rax)
+        guest_bytes[terminal] = 0xff;
+        guest_bytes[terminal + 1] = 0x20; // jmp *(%rax)
         memcpy(guest_bytes + 16, &target, sizeof target);
     }
     guest_bytes[0x40] = 0xbb;
@@ -9250,15 +9271,18 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
     if (cpu.rip != target || cpu.jcc_ibtc_miss != TL_INDIRECT_IBTC_MISS ||
         cpu.r[HL_X64_RSP] != expected_rsp || translit_flags_in(&cpu) != flags)
         return 197;
-    if (call && stack[-1] != source + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 200;
+    if (xmm_canonical && (cpu.v[0] != UINT64_C(0x8877000000000003) || cpu.v[1] != 0)) return 206;
+    if (call && stack[-1] != source + terminal + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 200;
     translit_jcc_ibtc_fill(&cpu, NULL, 0);
     if (cpu.jcc_ibtc_miss != 0 || ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 201;
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
+    cpu.r[3] = UINT64_C(0x8877000000000003);
     cpu.r[HL_X64_RAX] = rax;
     if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
+    if (xmm_canonical && (cpu.v[0] != UINT64_C(0x8877000000000003) || cpu.v[1] != 0)) return 207;
     if (cpu.jcc_ibtc_miss != TL_INDIRECT_IBTC_MISS) return 202;
     uint64_t collision = target + ((uint64_t)IBTC_N << 2);
     ibtc_publish(&g_ibtc[ibtc_index(target)], collision, (void *)(uintptr_t)1);
@@ -9276,22 +9300,27 @@ static int translit_indirect_ibtc_fixture_test(unsigned scenario) {
         cpu.jcc_ibtc_miss != 0 ||
         translit_flags_in(&cpu) != flags)
         return 199;
-    if (call && stack[-1] != source + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 203;
+    if (xmm_canonical && (cpu.v[0] != UINT64_C(0x8877000000000003) || cpu.v[1] != 0)) return 208;
+    if (call && stack[-1] != source + terminal + (scenario == 196 ? 6 : scenario == 198 ? 4 : 2)) return 203;
     smc_inplace_drop();
     if (ibtc_snapshot(&g_ibtc[ibtc_index(target)]).target != 0) return 204;
     cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc, .irq = 1};
+    cpu.r[3] = UINT64_C(0x8877000000000003);
     cpu.r[HL_X64_RAX] = rax;
     if (scenario == 198) cpu.r[HL_X64_RCX] = 2;
     cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
     translit_flags_out(&cpu, UINT64_C(0xad7));
     run_block(context, &cpu, source_block);
     return cpu.rip == target && cpu.jcc_ibtc_miss == 0 && cpu.r[HL_X64_RSP] == expected_rsp &&
+                   (!xmm_canonical || (cpu.v[0] == UINT64_C(0x8877000000000003) && cpu.v[1] == 0)) &&
                    translit_flags_in(&cpu) == flags
                ? 0
                : 205;
 }
 
 static int translit_ret_ibtc_fixture_test(unsigned scenario) {
+    int xmm_canonical = scenario == 245;
+    if (xmm_canonical) scenario = 121;
     if (scenario == 126) {
         uint64_t target = UINT64_C(0x510004);
         ibtc_publish(&g_ibtc[ibtc_index(target)], target, (void *)(uintptr_t)UINT64_C(0x1234));
@@ -9312,7 +9341,12 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         if (arena == MAP_FAILED) return 121;
         static _Alignas(4096) uint8_t guest_bytes[4096];
         memset(guest_bytes, 0x0f, sizeof guest_bytes);
-        guest_bytes[0] = scenario == 122 ? 0xc2 : 0xc3;
+        size_t terminal = xmm_canonical ? 5 : 0;
+        if (xmm_canonical) {
+            static const uint8_t movq_rbx_xmm0[] = {0x66, 0x48, 0x0f, 0x6e, 0xc3};
+            memcpy(guest_bytes, movq_rbx_xmm0, sizeof movq_rbx_xmm0);
+        }
+        guest_bytes[terminal] = scenario == 122 ? 0xc2 : 0xc3;
         if (scenario == 135) {
             guest_bytes[0] = 0xb8;
             guest_bytes[1] = 99;
@@ -9347,7 +9381,7 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         if (scenario == 136) {
             uint32_t token;
             jit_body_owner_range invalid = {
-                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 18};
+                (uint64_t)(uintptr_t)g_cp, (uint64_t)(uintptr_t)(g_cp + 1), source, 1u << 19};
             return jit_body_owner_reserve_n(g_cache_gen, 1, &token) &&
                            !jit_body_owner_publish_n(g_cache_gen, token, &invalid, 1)
                        ? 0
@@ -9367,6 +9401,8 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         int architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
+        architecture_exact = architecture_exact &&
+            (!xmm_canonical || (cpu.v[0] == UINT64_C(0x8877000000000003) && cpu.v[1] == 0));
         if (scenario == 125)
             return architecture_exact && cpu.rip == target && cpu.r[4] == expected_rsp &&
                            cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
@@ -9452,6 +9488,8 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 0; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
+        architecture_exact = architecture_exact &&
+            (!xmm_canonical || (cpu.v[0] == UINT64_C(0x8877000000000003) && cpu.v[1] == 0));
         if (scenario == 123 || scenario == 124)
             return architecture_exact && cpu.rip == target && cpu.r[4] == expected_rsp &&
                            cpu.jcc_ibtc_miss == TL_RET_IBTC_MISS &&
@@ -9464,6 +9502,18 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         architecture_exact = translit_flags_in(&cpu) == expected_flags;
         for (unsigned reg = 1; architecture_exact && reg < 16; ++reg)
             if (reg != HL_X64_RSP) architecture_exact = cpu.r[reg] == UINT64_C(0x8877000000000000) + reg;
+        if (xmm_canonical) {
+            *stack = target;
+            struct cpu irq_cpu = {.rip = source, .ibtc_base = (uint64_t)g_ibtc, .irq = 1};
+            for (unsigned reg = 0; reg < 16; ++reg)
+                irq_cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
+            irq_cpu.r[HL_X64_RSP] = (uint64_t)(uintptr_t)stack;
+            translit_flags_out(&irq_cpu, UINT64_C(0xad7));
+            run_block(context, &irq_cpu, source_block);
+            if (irq_cpu.v[0] != UINT64_C(0x8877000000000003) || irq_cpu.v[1] != 0 ||
+                irq_cpu.rip != target)
+                return 138;
+        }
         return architecture_exact && cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
                        atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
                                             memory_order_relaxed) == 1
@@ -11508,6 +11558,8 @@ static int translit_ret_signal_stage_test(void) {
             cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
+        cpu.v[0] = UINT64_C(0x0123456789abcdef);
+        cpu.v[1] = UINT64_C(0xfedcba9876543210);
         const uint64_t live_rax = 99;
         gregs[g_translit_greg[HL_X64_RAX]] =
             (greg_t)(stages[stage].host_rax_live ? live_rax : target);
@@ -11528,6 +11580,8 @@ static int translit_ret_signal_stage_test(void) {
         struct cpu expected_flags = {0};
         translit_flags_out(&expected_flags, UINT64_C(0xad7));
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+        exact = exact && cpu.v[0] == UINT64_C(0x0123456789abcdef) &&
+                cpu.v[1] == UINT64_C(0xfedcba9876543210);
         if (!exact && failed_stage == 0) failed_stage = 120 + stage;
     }
     translit_selected = saved_selected;
@@ -11577,6 +11631,8 @@ static int translit_control_mem_signal_stage_test(int call) {
             cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
+        cpu.v[0] = UINT64_C(0x0123456789abcdef);
+        cpu.v[1] = UINT64_C(0xfedcba9876543210);
         cpu.rip = stages[stage].cpu_rip;
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
         HL_HOST_UC_PC(&native) = (greg_t)(uintptr_t)stages[stage].pc;
@@ -11590,6 +11646,8 @@ static int translit_control_mem_signal_stage_test(int call) {
         }
         translit_flags_out(&expected_flags, UINT64_C(0xad7));
         exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags);
+        exact = exact && cpu.v[0] == UINT64_C(0x0123456789abcdef) &&
+                cpu.v[1] == UINT64_C(0xfedcba9876543210);
     }
     translit_selected = saved_selected;
     hl_x86_hot_context_destroy(context);
