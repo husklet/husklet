@@ -168,7 +168,7 @@ jobs:
         id: publication
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: node tools/npm/publication-plan.js
+        run: node extensions/base/tools/npm/publication-plan.js
 
       - name: Publish client with npm trusted publishing
         if: steps.publication.outputs.client == 'true'
