@@ -11,10 +11,10 @@ import {
 } from '@husklet/react';
 declare const process: { argv: string[]; stdout: { write(value: string): void } };
 
-type Configuration = { path: string; containerId: string };
+type Configuration = { path: string; containerId: string; credentialPath: string; query: string };
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration | null;
-if (!configuration?.path || !configuration.containerId) {
-  throw new TypeError('usage: postgres-inspector.ts JSON(path, containerId)');
+if (!configuration?.path || !configuration.containerId || !configuration.credentialPath || !configuration.query) {
+  throw new TypeError('usage: postgres-inspector.ts JSON(path, containerId, credentialPath, query)');
 }
 const session = await connect({ path: configuration.path, pendingLimit: 16, timeout: 5_000 });
 try {
@@ -25,7 +25,20 @@ try {
     host.containers.logs(configuration.containerId, { stdout: true, stderr: true }),
     host.networks.list(),
   ]);
-  const schema: readonly ColumnSpec[] = processes.titles.map((title, index) => ({
+  const credential = new TextDecoder()
+    .decode(Uint8Array.from(await host.files.read(configuration.credentialPath)))
+    .trimEnd();
+  const query = await host.containers.execAndWait(container.id, container.generation, {
+    command: ['psql', '--csv', '--no-psqlrc', '-c', configuration.query],
+    environment: [['PGPASSWORD', credential]],
+  });
+  const queryRows = new TextDecoder()
+    .decode(Uint8Array.from(query.output.stdout))
+    .trimEnd()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split(','));
+  const schema: readonly ColumnSpec[] = (queryRows.shift() ?? ['result']).map((title, index) => ({
     key: String(index),
     title,
     width: index === 0 ? { chars: 8 } : 'fill',
@@ -47,21 +60,21 @@ try {
   await surface.ready;
   await surface.flush();
   await surface.source({ Open: { source, columns: schema } });
-  await surface.source({ Length: { source, version: 1, rows: processes.processes.length } });
+  await surface.source({ Length: { source, version: 1, rows: queryRows.length } });
   await surface.source({
     Window: {
       source,
       version: 1,
       request: 1,
-      range: { start: 0, count: Math.min(128, processes.processes.length) },
-      rows: processes.processes
+      range: { start: 0, count: Math.min(128, queryRows.length) },
+      rows: queryRows
         .slice(0, 128)
         .map((row, key) => ({ key, cells: row.map((value) => ({ Text: value })) })),
     },
   });
   await surface.flush();
   process.stdout.write(
-    `${JSON.stringify({ container: container.id, processes: processes.processes.length, logsComplete: logs.eof, networks: networks.length, slot: surface.slot })}\n`,
+    `${JSON.stringify({ container: container.id, processes: processes.processes.length, queryRows: queryRows.length, logsComplete: logs.eof, networks: networks.length, slot: surface.slot })}\n`,
   );
   await surface.close();
 } finally {

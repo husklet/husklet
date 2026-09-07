@@ -1143,6 +1143,64 @@ test('a real Unix response without a pending ordered call closes the session', a
   }
 });
 
+test('a stalled real Unix peer cannot grow the shared call and ping ledger past its bound', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-ping-bound-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const received = [];
+  let reportPings;
+  const pingsSeen = new Promise((resolve) => {
+    reportPings = resolve;
+  });
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      received.push(...reader.take(chunk));
+      if (received.filter((frame) => frame.kind === KIND.ping).length === 2) reportPings();
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'ping_bound', granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath, pendingLimit: 2, timeout: 1_000 });
+    const first = session.ping();
+    const second = session.ping();
+    // Observe rejections immediately; the peer deliberately never answers the
+    // two operations already occupying the bounded correlation ledger.
+    const firstClosed = first.catch((error) => error);
+    const secondClosed = second.catch((error) => error);
+    await assert.rejects(session.ping(), /operation limit of 2 is exhausted/);
+    await assert.rejects(session.call('workspace_info'), /call limit of 2 is exhausted/);
+    await Promise.race([
+      pingsSeen,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('the two admitted pings did not reach the peer')), 200),
+      ),
+    ]);
+    assert.equal(
+      received.filter((frame) => frame.kind === KIND.ping).length,
+      2,
+      'rejected operations never reach the transport',
+    );
+    await session.close();
+    for (const error of await Promise.all([firstClosed, secondClosed])) {
+      assert(error instanceof Error, 'closing rejects every retained ping');
+    }
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix install wait inspects revision, arms inventory, then commits exact candidate', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-wait-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -2855,6 +2913,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
             id: containerId,
             generation: 4,
             command: ['printf', 'ok'],
+            environment: [],
             user: 'root',
             working_directory: '/tmp',
           });

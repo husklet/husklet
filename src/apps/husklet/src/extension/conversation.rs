@@ -714,7 +714,10 @@ impl Conversation {
     /// Handles one frame from the peer.
     fn exchange(&mut self, frame: &Frame, services: &Services<'_>) -> Result<(), Fault> {
         self.flush_interactions()?;
-        if frame.kind == Kind::Response {
+        if matches!(
+            frame.kind,
+            Kind::Response | Kind::Event | Kind::Open | Kind::Reset | Kind::Pong
+        ) {
             return Err(Fault::Malformed(format!(
                 "extension sent unexpected {:?} frame on channel {:?}",
                 frame.kind, frame.channel
@@ -2728,23 +2731,30 @@ mod tests {
     }
 
     #[test]
-    fn a_peer_response_frame_fails_closed_instead_of_being_ignored() {
-        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::new(Ledger::default()));
-        let mut wire = Wire::new(theirs);
-        shake(&mut wire, PROTOCOL);
-        wire.send(&Frame::new(
-            hl_extension::ChannelId::new(2),
-            Kind::Response,
-            serde_json::to_vec(&serde_json::json!({ "reply": "workspace" })).unwrap(),
-        ))
-        .expect("unsolicited response sent");
-        let deadline = Instant::now() + Duration::from_millis(200);
-        while !served.is_finished() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
+    fn peer_only_frame_kinds_fail_closed_instead_of_being_ignored() {
+        for kind in [Kind::Response, Kind::Event, Kind::Open, Kind::Reset, Kind::Pong] {
+            let ledger = Arc::new(Ledger::default());
+            let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+            let mut wire = Wire::new(theirs);
+            shake(&mut wire, PROTOCOL);
+            wire.send(&Frame::new(
+                hl_extension::ChannelId::new(2),
+                kind,
+                serde_json::to_vec(&serde_json::json!({})).unwrap(),
+            ))
+            .expect("illegal directional frame sent");
+            let deadline = Instant::now() + Duration::from_millis(200);
+            while !served.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(served.is_finished(), "unexpected {kind:?} must close promptly");
+            let fault = served.join().expect("joined").expect_err("illegal frame must close");
+            assert!(
+                matches!(fault, Fault::Malformed(detail) if detail.contains(&format!("unexpected {kind:?} frame"))),
+                "{kind:?} was not classified as a malformed directional frame"
+            );
+            assert!(ledger.reached().is_empty(), "{kind:?} never reaches authority");
         }
-        assert!(served.is_finished(), "unexpected response must close promptly");
-        let fault = served.join().expect("joined").expect_err("unexpected response must close");
-        assert!(matches!(fault, Fault::Malformed(detail) if detail.contains("unexpected Response frame")));
     }
 
     #[test]

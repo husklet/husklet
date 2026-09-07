@@ -890,6 +890,7 @@ pub trait ContainerControl {
         _expected_id: &str,
         _generation: u64,
         _command: &[String],
+        _environment: &[(String, crate::ExecEnvironmentValue)],
         _user: Option<&str>,
         _working_directory: Option<&str>,
     ) -> Result<String, HostError> {

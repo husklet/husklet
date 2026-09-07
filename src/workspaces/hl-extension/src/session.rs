@@ -580,15 +580,18 @@ impl Session {
                 id,
                 generation,
                 command,
+                environment,
                 user,
                 working_directory,
             } => {
+                validate_exec_environment(environment)?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
                 Ok(Reply::Identity(port.execute(
                     id,
                     &target.id,
                     *generation,
                     command,
+                    environment,
                     user.as_deref(),
                     working_directory.as_deref(),
                 )?))
@@ -1187,6 +1190,30 @@ fn validate_endpoint_aliases(aliases: &[String]) -> Result<(), Failure> {
     } else {
         Err(Failure::Conflict {
             detail: "network endpoint aliases must be at most 64 unique, 1..=253-byte ASCII endpoint names".into(),
+        })
+    }
+}
+
+fn validate_exec_environment(environment: &[(String, crate::ExecEnvironmentValue)]) -> Result<(), Failure> {
+    let names: std::collections::BTreeSet<&str> = environment.iter().map(|(name, _)| name.as_str()).collect();
+    let valid = environment.len() <= 256
+        && names.len() == environment.len()
+        && environment.iter().all(|(name, value)| {
+            !name.is_empty()
+                && name.len() <= 256
+                && !name.contains(['=', '\0'])
+                && value.as_str().len() <= 8192
+                && !value.as_str().contains('\0')
+        });
+    let aggregate = environment
+        .iter()
+        .map(|(name, value)| name.len() + value.as_str().len())
+        .sum::<usize>();
+    if valid && aggregate <= 65_536 {
+        Ok(())
+    } else {
+        Err(Failure::Conflict {
+            detail: "exec environment must contain at most 256 unique NUL-free pairs and 65536 UTF-8 bytes; names are nonempty, exclude '=', and are at most 256 bytes; values are at most 8192 bytes".into(),
         })
     }
 }

@@ -377,7 +377,7 @@ export class Session {
         }),
       );
     }
-    if (this.#pending.length >= this.#limit) {
+    if (this.#pending.length + this.#pings.size >= this.#limit) {
       return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
     }
     if (this.#backpressured)
@@ -422,6 +422,9 @@ export class Session {
   /** Round-trips an opaque bounded heartbeat without consuming call ordering. */
   ping() {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
+    if (this.#pending.length + this.#pings.size >= this.#limit) {
+      return Promise.reject(new Error(`extension operation limit of ${this.#limit} is exhausted`));
+    }
     if (this.#backpressured)
       return Promise.reject(new Error('extension socket is applying write backpressure'));
     const token = Buffer.allocUnsafe(8);
