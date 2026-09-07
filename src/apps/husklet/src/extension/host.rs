@@ -1365,13 +1365,8 @@ tab_title = "Sample"
     fn describe(wire: &mut Wire<UnixStream>, sequence: u64) -> Result<(), Transit> {
         call(
             wire,
-            &Request::InterfaceOpenTab {
-                title: "Sample".to_owned(),
-            },
-        )?;
-        call(
-            wire,
-            &Request::InterfaceRender {
+            &Request::InterfaceRenderAt {
+                slot: String::new(),
                 frame: hl_gui::Frame::new(sequence),
             },
         )

@@ -2220,11 +2220,19 @@ mod tests {
         ports.workspace_control = &lifecycle;
         conversation.observe(&ports).expect("observe native mutation");
         let mut wire = Wire::new(peer);
-        let observed = (0..256).any(|_| {
-            let event: Snapshot = serde_json::from_slice(&wire.receive().expect("event").payload).expect("snapshot");
-            matches!(event, Snapshot::WorkspaceLifecycle(change)
+        let mut observed = false;
+        for _ in 0..256 {
+            let frame = wire.receive().expect("event");
+            let event: Snapshot = serde_json::from_slice(&frame.payload).expect("snapshot");
+            if matches!(event, Snapshot::WorkspaceLifecycle(change)
                 if change.workspace == name && change.action == hl_extension::WorkspaceLifecycleAction::Create)
-        });
+            {
+                observed = true;
+                break;
+            }
+            let credit = Frame::new(frame.channel, Kind::Credit, serde_json::to_vec(&1_u32).expect("credit"));
+            conversation.exchange(&credit, &ports).expect("return event credit");
+        }
         assert!(
             observed,
             "native mutation was delivered through the shared lifecycle ledger"
@@ -2492,15 +2500,10 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        ask(
-            &mut wire,
-            &Request::InterfaceOpenTab {
-                title: "Sample".to_owned(),
-            },
-        );
         let drawn = ask(
             &mut wire,
-            &Request::InterfaceRender {
+            &Request::InterfaceRenderAt {
+                slot: String::new(),
                 frame: hl_gui::Frame::new(1),
             },
         );
@@ -2508,7 +2511,7 @@ mod tests {
         assert_eq!(codec::read_reply(&drawn).expect("a reply"), Reply::Done);
         let collected = queue.collect();
         assert_eq!(collected.frames.len(), 1, "the frame is held for the window");
-        assert_eq!(collected.frames[0].slot, "tab-Sample");
+        assert_eq!(collected.frames[0].slot, "");
         assert_eq!(collected.frames[0].frame.sequence, 1);
         assert!(queue.is_empty(), "collecting empties the queue");
         drop(wire);
