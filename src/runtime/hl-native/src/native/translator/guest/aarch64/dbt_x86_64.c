@@ -325,6 +325,28 @@ static int hl_a64_x86_is_svc(uint32_t instruction) {
 
 static void hl_a64_x86_emit_cpu_u64(hl_x64_asm *assembler, int offset, uint64_t value);
 
+static int hl_a64_x86_is_ldrb_post(uint32_t instruction) {
+    return (instruction & (1u << 26)) == 0 &&
+           (instruction & 0x3B200000u) == 0x38000000u &&
+           (instruction >> 30) == 0u && ((instruction >> 22) & 3u) == 1u &&
+           ((instruction >> 10) & 3u) == 1u;
+}
+
+/* The overwhelmingly common scalar memory instruction in the measured C
+ * workloads. Keep the canonical accessor -- it owns non-PIE projection,
+ * SIGBUS ledger accounting and the per-access signal marker -- while avoiding
+ * the generic single-transfer decoder on every execution. Architectural
+ * writes remain ordered load destination, writeback, then next PC. */
+static void hl_a64_x86_exec_ldrb_post(struct cpu *cpu, uint32_t instruction) {
+    int rt = (int)(instruction & 31u), rn = (int)((instruction >> 5) & 31u);
+    uint64_t base = interp_gpr_sp(cpu, rn);
+    int64_t offset = interp_sext((instruction >> 12) & 0x1FFu, 9);
+    uint64_t value = interp_load_bits(base, 1);
+    interp_set_gpr32(cpu, rt, (uint32_t)value);
+    interp_set_gpr_sp(cpu, rn, base + (uint64_t)offset);
+    cpu->pc += 4;
+}
+
 /* Scalar integer single-register transfers share one architectural decoder,
  * but three address forms. Keep admission identical to that decoder so an
  * emitted helper can only retire INTERP_NEXT: SIMD, pointer authentication and
@@ -355,7 +377,10 @@ static void hl_a64_x86_emit_scalar_single_memory(hl_x64_asm *assembler, uint32_t
     hl_x64_mov_imm64(assembler, 6, instruction);      /* insn -> %rsi */
     hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
     hl_x64_u8(assembler, 0xEC); hl_x64_u8(assembler, 8); /* align stack */
-    hl_x64_mov_imm64(assembler, 11, (uintptr_t)interp_exec_load_store_single);
+    uintptr_t helper = hl_a64_x86_is_ldrb_post(instruction)
+                           ? (uintptr_t)hl_a64_x86_exec_ldrb_post
+                           : (uintptr_t)interp_exec_load_store_single;
+    hl_x64_mov_imm64(assembler, 11, helper);
     hl_x64_u8(assembler, 0x41); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xD3); /* call *%r11 */
     hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83);
     hl_x64_u8(assembler, 0xC4); hl_x64_u8(assembler, 8);
