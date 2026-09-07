@@ -71,7 +71,8 @@ export type ExtensionCapability =
   | 'extensions:install'
   | 'filesystem:read'
   | 'filesystem:write'
-  | 'interface:render';
+  | 'interface:render'
+  | 'notifications:publish';
 export type ContainerSelector = { id: string } | { name: string } | { all: true };
 export interface ContainerGrant {
   selectors: ContainerSelector[];
@@ -577,6 +578,9 @@ export interface WorkspaceApi {
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   restart(name: string): Promise<void>;
+  notifications: {
+    publish(notification: { id: string; title: string; body: string }): Promise<void>;
+  };
   extensions: {
     list(): Promise<ExtensionSummary[]>;
     /** Host-curated offline discovery metadata; acquisition still supplies install authority. */

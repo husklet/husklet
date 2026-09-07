@@ -10,7 +10,8 @@ use hl_rpc::Authority;
 use crate::capability::Capability;
 use crate::port::{
     ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore, PANE_GRID_EDGE,
-    PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    NotificationSink, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceControl, WorkspaceFiles,
+    WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -32,6 +33,7 @@ pub struct Services<'a> {
     pub networks: &'a dyn NetworkStore,
     pub terminal: &'a dyn TerminalSurface,
     pub files: &'a dyn WorkspaceFiles,
+    pub notifications: &'a dyn NotificationSink,
 }
 
 /// One connected extension.
@@ -42,6 +44,7 @@ pub struct Session {
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
     filesystem: FilesystemGrant,
+    notification_ids: std::collections::BTreeSet<String>,
 }
 
 /// One reconciliation frame and the surface that owns its sequence.
@@ -94,6 +97,7 @@ impl Session {
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
             filesystem: FilesystemGrant::default(),
+            notification_ids: std::collections::BTreeSet::new(),
         }
     }
 
@@ -304,6 +308,17 @@ impl Session {
             | Request::ExtensionAcquisitionCancel { .. }
             | Request::ExtensionInstall { .. }
             | Request::ExtensionUpdate { .. } => self.extensions(request, services),
+            Request::NotificationPublish { notification } => {
+                validate_notification(notification)?;
+                if !self.notification_ids.contains(&notification.id) && self.notification_ids.len() >= 32 {
+                    return Err(Failure::Conflict {
+                        detail: "one extension session may publish at most 32 notification identities".into(),
+                    });
+                }
+                services.notifications.publish(notification)?;
+                self.notification_ids.insert(notification.id.clone());
+                Ok(Reply::Done)
+            }
             Request::ContainerList
             | Request::ContainerInspect { .. }
             | Request::ContainerProcesses { .. }
@@ -1239,6 +1254,18 @@ impl Session {
         self.mutations.retain(|mutation| mutation.slot != slot);
         Ok(Reply::Done)
     }
+}
+
+fn validate_notification(notification: &crate::port::Notification) -> Result<(), Failure> {
+    let valid = |value: &str, max: usize| {
+        !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+    };
+    if !valid(&notification.id, 128) || !valid(&notification.title, 256) || !valid(&notification.body, 4096) {
+        return Err(Failure::Conflict {
+            detail: "notification id, title, or body is empty, oversized, or contains control characters".into(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

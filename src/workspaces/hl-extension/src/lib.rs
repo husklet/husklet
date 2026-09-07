@@ -53,6 +53,7 @@ pub use port::{
     SemanticNode,
 };
 pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
+pub use port::{Notification, NotificationSink};
 pub use request::{ExecEnvironmentValue, Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{

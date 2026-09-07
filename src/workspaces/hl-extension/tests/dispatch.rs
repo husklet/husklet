@@ -43,6 +43,14 @@ impl Ledger {
 struct Host {
     ledger: Ledger,
     cancelled_revision: Cell<Option<u64>>,
+    fail_notification: Cell<bool>,
+}
+
+impl hl_extension::NotificationSink for Host {
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+        self.ledger.note("notifications.publish");
+        if self.fail_notification.get() { Err(HostError::Failed("desktop unavailable".into())) } else { Ok(()) }
+    }
 }
 impl hl_extension::port::VolumeStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
@@ -120,6 +128,7 @@ impl Host {
         Self {
             ledger: Ledger::default(),
             cancelled_revision: Cell::new(None),
+            fail_notification: Cell::new(false),
         }
     }
 
@@ -870,6 +879,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        notifications: host,
     }
 }
 
@@ -1021,6 +1031,16 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
             },
             Capability::ExtensionInstall,
+        ),
+        (
+            Request::NotificationPublish {
+                notification: hl_extension::Notification {
+                    id: "build".into(),
+                    title: "Complete".into(),
+                    body: "done".into(),
+                },
+            },
+            Capability::NotificationPublish,
         ),
         (
             Request::ExtensionInstall {
@@ -2821,6 +2841,59 @@ fn execution_logs_require_a_stream_before_calling_host() {
         )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
+}
+
+#[test]
+fn notifications_are_bounded_and_denied_before_host_delivery() {
+    let host = Host::new();
+    let request = Request::NotificationPublish {
+        notification: hl_extension::Notification {
+            id: "build".into(),
+            title: "Index ready".into(),
+            body: "Background indexing completed".into(),
+        },
+    };
+    assert!(session(&[], &[]).dispatch(&request, &services(&host)).is_err());
+    assert!(host.ledger.reached().is_empty());
+    let mut allowed = session(&[Capability::NotificationPublish], &[]);
+    assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
+    let invalid = Request::NotificationPublish {
+        notification: hl_extension::Notification {
+            id: "bad\nidentity".into(),
+            title: "Index ready".into(),
+            body: "done".into(),
+        },
+    };
+    assert!(allowed.dispatch(&invalid, &services(&host)).is_err());
+    assert_eq!(host.ledger.reached(), vec!["notifications.publish"]);
+}
+
+#[test]
+fn notification_failure_is_structured_and_the_session_remains_usable() {
+    let host = Host::new();
+    host.fail_notification.set(true);
+    let mut allowed = session(&[Capability::NotificationPublish, Capability::WorkspaceRead], &[]);
+    let request = Request::NotificationPublish {
+        notification: hl_extension::Notification { id: "monitor".into(), title: "Database".into(), body: "offline".into() },
+    };
+    assert!(matches!(allowed.dispatch(&request, &services(&host)), Err(Failure::Failed { .. })));
+    assert!(matches!(allowed.dispatch(&Request::WorkspaceInfo, &services(&host)), Ok(Reply::Workspace(_))));
+}
+
+#[test]
+fn one_session_cannot_multiply_unbounded_notification_identities() {
+    let host = Host::new();
+    let mut allowed = session(&[Capability::NotificationPublish], &[]);
+    for index in 0..32 {
+        let request = Request::NotificationPublish {
+            notification: hl_extension::Notification { id: format!("job-{index}"), title: "Job".into(), body: "done".into() },
+        };
+        assert_eq!(allowed.dispatch(&request, &services(&host)), Ok(Reply::Done));
+    }
+    let overflow = Request::NotificationPublish {
+        notification: hl_extension::Notification { id: "job-32".into(), title: "Job".into(), body: "done".into() },
+    };
+    assert!(matches!(allowed.dispatch(&overflow, &services(&host)), Err(Failure::Conflict { .. })));
 }
 
 #[test]

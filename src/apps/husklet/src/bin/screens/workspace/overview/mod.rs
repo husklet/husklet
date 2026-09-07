@@ -51,6 +51,7 @@ impl<'a> Overview<'a> {
         use screens::workspace::extension::{Delivery, Signal};
 
         let (post, deliveries) = screens::workspace::extension::channel();
+        let notification_name = name.to_string();
         // The two halves were built apart and carry the same three cases under
         // their own names, because the page lives in this binary and the host
         // lives in the library; this is the whole of the translation.
@@ -64,6 +65,14 @@ impl<'a> Overview<'a> {
                     slot: mutation.slot,
                     mutation: mutation.mutation,
                 },
+                Report::Notification(notification) => {
+                    let message = gtk::gio::Notification::new(&notification_title(&notification_name, &notification.title));
+                    message.set_body(Some(&notification.body));
+                    if let Some(application) = gtk::gio::Application::default() {
+                        application.send_notification(Some(&notification_id(&notification_name, &notification.id)), &message);
+                    }
+                    return;
+                }
                 Report::Loss(reason) => Delivery::Loss(reason),
                 Report::Fault { restarts } => Delivery::Fault { restarts },
             };
@@ -288,5 +297,25 @@ impl<'a> Overview<'a> {
             view.select_name(page.id());
         }
         view.widget.clone()
+    }
+}
+
+fn notification_title(extension: &str, title: &str) -> String {
+    format!("{extension}: {title}")
+}
+
+fn notification_id(extension: &str, id: &str) -> String {
+    format!("{extension}:{id}")
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::{notification_id, notification_title};
+
+    #[test]
+    fn host_owns_visible_attribution_and_stable_replacement_identity() {
+        assert_eq!(notification_title("indexer", "Complete"), "indexer: Complete");
+        assert_eq!(notification_id("indexer", "build"), notification_id("indexer", "build"));
+        assert_ne!(notification_id("indexer", "build"), notification_id("monitor", "build"));
     }
 }

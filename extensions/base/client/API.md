@@ -210,6 +210,10 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.
 - `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.
 
+## Notifications
+
+- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.
+
 ## Semantics
 
 - `host.terminal.semantics(...)` — `pane_semantic_read`, requires `panes:semantic-read`.

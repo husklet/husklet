@@ -657,6 +657,17 @@ pub const EXTENSION_REFERENCE_BYTES: usize = 512;
 pub const EXTENSION_JOB_BYTES: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Notification {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+}
+
+pub trait NotificationSink {
+    fn publish(&self, notification: &Notification) -> Result<(), HostError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionAcquisitionJob {
     pub job: String,
 }

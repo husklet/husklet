@@ -133,6 +133,11 @@
       "executes": false,
       "mutates": false,
       "wire": "interface:render"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "notifications:publish"
     }
   ],
   "definitions": {
@@ -338,6 +343,12 @@
         },
         {
           "name": "interface:render",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "notifications:publish",
           "payload": {
             "kind": "unit"
           }
@@ -2511,6 +2522,33 @@
         "minimum": 0,
         "signed": false
       },
+      "serde": {}
+    },
+    "Notification": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "title",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "body",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
       "serde": {}
     },
     "Occupant": {
@@ -6640,6 +6678,10 @@
       "request": "extension_acquisition_cancel"
     },
     {
+      "capability": "notifications:publish",
+      "request": "notification_publish"
+    },
+    {
       "capability": "extensions:install",
       "request": "extension_install"
     },
@@ -7072,6 +7114,10 @@
     {
       "reply": "done",
       "request": "extension_acquisition_cancel"
+    },
+    {
+      "reply": "done",
+      "request": "notification_publish"
     },
     {
       "reply": "extension",
@@ -8234,6 +8280,22 @@
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "notification_publish",
+          "payload": {
+            "fields": [
+              {
+                "name": "notification",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "Notification"
                 }
               }
             ],
@@ -11404,7 +11466,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:2ae8464a2d043261",
+  "source_fingerprint": "fnv1a64:4743cd6f407e0187",
   "specification_version": 1,
   "topics": [
     {

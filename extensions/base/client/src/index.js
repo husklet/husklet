@@ -403,6 +403,19 @@ export function workspace(session, { signal } = {}) {
     start: (name) => done('workspace_start', { name }),
     stop: (name) => done('workspace_stop', { name }),
     restart: (name) => done('workspace_restart', { name }),
+    notifications: {
+      publish: (notification) => {
+        if (!notification || typeof notification !== 'object') throw new TypeError('notification must be an object');
+        for (const [field, limit] of [['id', 128], ['title', 256], ['body', 4096]]) {
+          const value = notification[field];
+          if (typeof value !== 'string' || value.length === 0
+            || new TextEncoder().encode(value).byteLength > limit || /[\u0000-\u001f\u007f]/u.test(value)) {
+            throw new TypeError(`notification ${field} must contain 1..${limit} UTF-8 bytes without control characters`);
+          }
+        }
+        return done('notification_publish', { notification });
+      },
+    },
     extensions: {
       list: async () => expect(await session.call('extension_list'), 'extensions'),
       catalogue: async () => expect(await session.call('extension_catalogue'), 'extension_catalogue'),
@@ -2140,7 +2153,7 @@ function facadePath(call) {
   for (const [prefix, group] of [
     ['workspace_', ''], ['extension_', 'extensions.'], ['container_', 'containers.'],
     ['image_', 'images.'], ['volume_', 'volumes.'], ['network_', 'networks.'],
-    ['terminal_', 'terminal.'], ['filesystem_', 'files.'],
+    ['terminal_', 'terminal.'], ['filesystem_', 'files.'], ['notification_', 'notifications.'],
   ]) if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
   return null;
 }
@@ -2168,6 +2181,7 @@ export const protocolCoverage = Object.freeze({
     terminal: ['panes', 'tabs', 'topology', 'openTab', 'pinTab', 'split', 'splitObserved', 'spawn', 'spawnObserved', 'read', 'semantics', 'act', 'writeInput', 'resizeGrid', 'resizeGridObserved', 'close', 'closeObserved', 'focus', 'focusObserved', 'retitle', 'retitleObserved', 'ratio', 'ratioObserved', 'switchOccupant', 'switchOccupantObserved'],
     files: ['list', 'read', 'readRange', 'stat', 'write', 'writeObserved', 'createObserved', 'mkdir', 'rename', 'renameObserved', 'remove', 'removeObserved'],
     extensions: ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update'],
+    notifications: ['publish'],
     interfaceEvents: ['invoke', 'submit', 'change', 'select', 'scroll', 'close', 'context', 'key', 'focus', 'pointer', 'drag', 'drop'],
     workspaceEvents: ['key', 'focus', 'pointer'],
     snapshotTopics: SNAPSHOT_TOPICS,

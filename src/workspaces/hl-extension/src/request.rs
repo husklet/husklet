@@ -108,6 +108,9 @@ pub enum Request {
         job: String,
         revision: u64,
     },
+    NotificationPublish {
+        notification: crate::port::Notification,
+    },
     ExtensionInstall {
         job: String,
         revision: u64,
@@ -558,6 +561,7 @@ impl Request {
             | Self::InterfaceRenderAt { .. }
             | Self::SourceResize { .. }
             | Self::SourceResizeAt { .. } => Capability::Interface,
+            Self::NotificationPublish { .. } => Capability::NotificationPublish,
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }

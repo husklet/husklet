@@ -378,6 +378,7 @@ impl Supply for Workspace {
         let store = Store {
             current: self.config.name.clone(),
         };
+        let notifications = conversation.notifications();
         let services = Services {
             workspace: self.describe(),
             workspaces: &store,
@@ -390,6 +391,7 @@ impl Supply for Workspace {
             networks: extensions.networks(),
             terminal,
             files: extensions.files(),
+            notifications: &notifications,
         };
         conversation.serve(&services).map_err(|fault| fault.to_string())
     }

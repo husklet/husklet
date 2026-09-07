@@ -64,6 +64,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("extension_acquisition_start", "extension_acquisition_job"),
     ("extension_acquisition_status", "extension_acquisition"),
     ("extension_acquisition_cancel", "done"),
+    ("notification_publish", "done"),
     ("extension_install", "extension"),
     ("extension_update", "extension"),
     ("container_list", "containers"),
@@ -232,6 +233,7 @@ fn request_capability(request: &str) -> Capability {
         | "interface_render_at"
         | "source_resize"
         | "source_resize_at" => Capability::Interface,
+        "notification_publish" => Capability::NotificationPublish,
         "event_subscribe" | "event_unsubscribe" => panic!("event capability is selected by topic"),
         _ => panic!("unclassified Request wire tag {request}"),
     }

@@ -31,13 +31,14 @@ pub struct Interface {
     pub frames: Vec<SurfaceFrame>,
     /// Changes to the windowed sources the extension's tables draw from.
     pub mutations: Vec<SurfaceMutation>,
+    pub notifications: Vec<hl_extension::Notification>,
 }
 
 impl Interface {
     /// Whether there is anything for the GUI to apply.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.frames.is_empty() && self.mutations.is_empty()
+        self.frames.is_empty() && self.mutations.is_empty() && self.notifications.is_empty()
     }
 }
 
@@ -72,6 +73,7 @@ impl Queue {
         Interface {
             frames: std::mem::take(&mut held.frames),
             mutations: std::mem::take(&mut held.mutations),
+            notifications: std::mem::take(&mut held.notifications),
         }
     }
 
@@ -128,6 +130,21 @@ impl Queue {
 
     fn hold(&self) -> std::sync::MutexGuard<'_, Interface> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl hl_extension::NotificationSink for Queue {
+    fn publish(&self, notification: &hl_extension::Notification) -> Result<(), hl_extension::HostError> {
+        let mut held = self.hold();
+        if let Some(current) = held.notifications.iter_mut().find(|current| current.id == notification.id) {
+            current.clone_from(notification);
+            return Ok(());
+        }
+        if held.notifications.len() >= 32 {
+            return Err(hl_extension::HostError::Failed("notification queue is full".into()));
+        }
+        held.notifications.push(notification.clone());
+        Ok(())
     }
 }
 
@@ -280,6 +297,10 @@ impl Conversation {
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
         self.events = Some(events);
+    }
+
+    pub(crate) fn notifications(&self) -> Queue {
+        self.queue.clone()
     }
 
     pub(crate) fn with_voice(&mut self, voice: super::host::Voice) {
@@ -1138,6 +1159,13 @@ mod tests {
     struct Host {
         ledger: Arc<Ledger>,
     }
+
+    impl hl_extension::NotificationSink for Host {
+        fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+            self.ledger.note("notifications.publish");
+            Ok(())
+        }
+    }
     impl hl_extension::port::VolumeStore for Host {
         fn list(&self) -> Result<Vec<hl_extension::port::VolumeSummary>, HostError> {
             self.ledger.note("volumes.list");
@@ -1503,6 +1531,7 @@ mod tests {
             networks: host,
             terminal: host,
             files: host,
+            notifications: host,
         }
     }
 
@@ -1515,6 +1544,7 @@ mod tests {
                 Capability::ExtensionRead,
                 Capability::ExtensionInstall,
                 Capability::Interface,
+                Capability::NotificationPublish,
             ]),
             Vec::new(),
         )
@@ -1867,6 +1897,25 @@ mod tests {
         assert!(matches!(codec::read_reply(&answer), Ok(Reply::ExecutionOutput(page))
             if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row-42\n"));
         assert_eq!(ledger.reached(), vec!["executions.output"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn bounded_notification_crosses_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(&mut wire, &Request::NotificationPublish {
+            notification: hl_extension::Notification {
+                id: "index".into(),
+                title: "Index ready".into(),
+                body: "One million rows indexed".into(),
+            },
+        });
+        assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
+        assert_eq!(ledger.reached(), vec!["notifications.publish"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }

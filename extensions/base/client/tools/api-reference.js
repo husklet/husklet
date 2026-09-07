@@ -31,6 +31,7 @@ const groups = new Map([
   ['Networks', []],
   ['Volumes', []],
   ['Extensions', []],
+  ['Notifications', []],
   ['Semantics', []],
 ]);
 
@@ -53,11 +54,14 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             networks: 'Networks',
             volumes: 'Volumes',
             extensions: 'Extensions',
+            notifications: 'Notifications',
           }[namespace];
   assert(group, `no documentation group for ${wire}`);
   groups
     .get(group)
-    .push(`- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
+    .push(wire === 'notification_publish'
+      ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
+      : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
 }
 groups
   .get('Terminal and panes')

@@ -171,6 +171,17 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   stage.server.close();
 });
 
+test('background notification validates before framing and uses its exact Unix call', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  assert.throws(() => api.notifications.publish({ id: 'bad\n', title: 'Build', body: 'done' }), /control characters/);
+  const notification = { id: 'index-build', title: 'Index ready', body: '1,000,000 rows indexed' };
+  const publishing = api.notifications.publish(notification);
+  assert.deepEqual((await next()).payload, { call: 'notification_publish', with: { notification } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal(await publishing, undefined);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('the complete typed facade binds cancellation without changing method arguments', async () => {
   const stage = await pair();
   const next = frames(stage.host);

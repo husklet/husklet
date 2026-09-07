@@ -135,6 +135,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": false,
     "wire": "interface:render"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "notifications:publish"
   }
 ]);
 export const PROTOCOL_TOPICS = Object.freeze([
@@ -230,6 +235,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "extension_acquisition_start": "extension_acquisition_job",
   "extension_acquisition_status": "extension_acquisition",
   "extension_acquisition_cancel": "done",
+  "notification_publish": "done",
   "extension_install": "extension",
   "extension_update": "extension",
   "container_list": "containers",
@@ -340,6 +346,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_acquisition_start": "extensions:install",
   "extension_acquisition_status": "extensions:install",
   "extension_acquisition_cancel": "extensions:install",
+  "notification_publish": "notifications:publish",
   "extension_install": "extensions:install",
   "extension_update": "extensions:install",
   "container_list": "containers:read",
@@ -632,6 +639,12 @@ const definitions = {
       },
       {
         "name": "interface:render",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "notifications:publish",
         "payload": {
           "kind": "unit"
         }
@@ -2805,6 +2818,33 @@ const definitions = {
       "minimum": 0,
       "signed": false
     },
+    "serde": {}
+  },
+  "Notification": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "title",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "body",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      }
+    ],
+    "kind": "struct",
     "serde": {}
   },
   "Occupant": {
@@ -7600,6 +7640,22 @@ const roots = {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "notification_publish",
+        "payload": {
+          "fields": [
+            {
+              "name": "notification",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "Notification"
               }
             }
           ],
