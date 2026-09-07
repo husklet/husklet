@@ -5,6 +5,18 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-static-pie, -O2, -std=gnu11]
 cases:
+  - id: runtime/translated-fork-exec/legacy-clone-tls
+    status: active
+    compat: { class: compatibility }
+    build: { source: legacy_clone_tls.c, output: legacy-clone-tls, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/legacy-clone-tls }
+    run: []
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: legacy_clone_tls.txt
+      diagnostics:
+        - { counter: translated_entries, greater-than: 0 }
   - id: runtime/translated-fork-exec/vfork-exec
     status: active
     compat: { class: compatibility }
