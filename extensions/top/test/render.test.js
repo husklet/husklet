@@ -485,7 +485,8 @@ test('extension inspection keeps invalid and failed references recoverable with 
                   state: 'failed',
                   progress: null,
                   candidate: null,
-                  error: 'registry temporarily unavailable',
+                  error:
+                    'registry operation failed: {"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}\\n',
                 }
               : {
                   job,
@@ -521,7 +522,12 @@ test('extension inspection keeps invalid and failed references recoverable with 
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Inspection failed.'));
-  assert.ok(labelled(stage, 'registry temporarily unavailable'));
+  assert.ok(
+    labelled(
+      stage,
+      'Registry refused the image: requested access to the resource is denied. Check that the reference exists and is accessible.',
+    ),
+  );
   assert.ok(labelled(stage, 'Retry inspection'));
   invoke(stage, 'Retry inspection');
   await settled();
@@ -531,8 +537,8 @@ test('extension inspection keeps invalid and failed references recoverable with 
     'registry.example/reviewed:1',
     'registry.example/reviewed:1',
   ]);
-  assert.ok(labelled(stage, 'Review install'));
-  assert.ok(labelled(stage, 'Manifest reviewed 1.0.0'));
+  assert.ok(labelled(stage, 'Review reviewed'));
+  assert.ok(labelled(stage, 'reviewed · 1.0.0'));
   assert.ok(labelled(stage, 'Review permissions'));
   assert.ok(labelled(stage, `Reviewed image sha256:${'c'.repeat(12)}…${'c'.repeat(8)}`));
   assert.ok(labelled(stage, 'Source registry.example/reviewed:1'));
@@ -595,8 +601,8 @@ for (const updating of [false, true]) {
     await settled();
     await settled();
 
-    assert.ok(labelled(stage, updating ? 'Review update' : 'Review install'));
-    assert.ok(labelled(stage, 'Manifest scoped 2.0.0'));
+    assert.ok(labelled(stage, 'Review scoped'));
+    assert.ok(labelled(stage, 'scoped · 2.0.0'));
     assert.ok(labelled(stage, 'Source local/scoped:2'));
     assert.ok(labelled(stage, `Reviewed image ${compactDigest(candidate.image_digest)}`));
     if (updating) {
@@ -624,14 +630,16 @@ for (const updating of [false, true]) {
       ),
     );
     for (const label of [
-      'View contents · src/ (subtree) (read)',
-      'View contents · README.md (exact file) (read)',
-      'Modify existing contents · src/config.json (exact file) (write)',
-      'Create new entries · generated/ (subtree) (create)',
-      'Delete entries · cache/ (subtree) (delete)',
-      'Rename or move entries · migrations/ (subtree) (rename)',
+      'View contents folder · src/ and everything inside',
+      'View contents file · README.md',
+      'Modify existing contents file · src/config.json',
+      'Create new entries folder · generated/ and everything inside',
+      'Delete entries folder · cache/ and everything inside',
+      'Rename or move entries folder · migrations/ and everything inside',
     ])
       assert.ok(labelled(stage, label), label);
+    assert.ok(labelled(stage, '0/10 permissions allowed'));
+    assert.ok(labelled(stage, 'Container access · 0/4'));
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
 
@@ -643,7 +651,8 @@ for (const updating of [false, true]) {
     toggleSwitch(stage, 7, true);
     toggleSwitch(stage, 9, true);
     assert.ok(labelled(stage, '3/6 workspace paths allowed'));
-    invoke(stage, updating ? 'Update extension' : 'Install extension');
+    assert.ok(labelled(stage, '3/10 permissions allowed'));
+    invoke(stage, updating ? 'Update with selected access' : 'Install with selected access');
     await settled();
     await settled();
 
@@ -710,7 +719,13 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
-  assert.ok(labelled(stage, '0/2 allowed'));
+  assert.ok(labelled(stage, '0/2 permissions allowed'));
+  assert.ok(labelled(stage, 'Husklet access · 0/2'));
+  assert.equal(
+    labelled(stage, 'Workspace files'),
+    undefined,
+    'unrequested authority groups do not consume compact review space',
+  );
   assert.equal(
     labelled(stage, 'Allow requested'),
     undefined,
@@ -723,14 +738,18 @@ test('extension image entry submits from the keyboard and consent explains reque
 
   toggleSwitch(stage, 0, true);
   toggleSwitch(stage, 1, true);
-  assert.ok(labelled(stage, '2/2 allowed'));
+  assert.ok(labelled(stage, '2/2 permissions allowed'));
+  assert.ok(labelled(stage, 'Husklet access · 2/2'));
   assert.ok(labelled(stage, 'Clear Husklet access'));
-  invoke(stage, 'Install extension');
+  invoke(stage, 'Install with selected access');
   await settled();
   await settled();
   assert.ok(labelled(stage, 'signature verification unavailable'));
-  assert.ok(labelled(stage, 'Install extension'), 'failed installation retains a direct retry');
-  invoke(stage, 'Install extension');
+  assert.ok(
+    labelled(stage, 'Install with selected access'),
+    'failed installation retains a direct retry',
+  );
+  invoke(stage, 'Install with selected access');
   await settled();
   await settled();
   assert.deepEqual(calls.at(-1), [
