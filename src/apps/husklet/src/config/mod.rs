@@ -487,34 +487,6 @@ impl WorkspaceStore {
         Ok((updated, changed))
     }
 
-    /// Assign identity to one exact legacy record without changing its configuration.
-    #[cfg(feature = "runtime")]
-    pub fn adopt_generation(&mut self, expected: &WorkspaceConfig) -> io::Result<WorkspaceConfig> {
-        let _lock = self.lock_and_reload()?;
-        let current = self
-            .get(&expected.name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace no longer exists"))?;
-        if !expected.generation.is_empty() || current != expected {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "workspace changed; inspect again",
-            ));
-        }
-        let mut adopted = current.clone();
-        adopted.generation = uuid::Uuid::new_v4().simple().to_string();
-        adopted.configuration_revision = uuid::Uuid::new_v4().simple().to_string();
-        let mut items = self.items.clone();
-        let position = items
-            .iter()
-            .position(|workspace| workspace.name == adopted.name)
-            .expect("the checked legacy workspace remains present while locked");
-        items[position] = adopted.clone();
-        self.save(&items)?;
-        self.items = items;
-        crate::workspace_lifecycle::changed(&adopted.name, hl_extension::WorkspaceLifecycleAction::Update);
-        Ok(adopted)
-    }
-
     /// Remove a workspace by name; returns whether one was removed, then persists.
     pub fn remove(&mut self, name: &str) -> io::Result<bool> {
         #[cfg(feature = "runtime")]

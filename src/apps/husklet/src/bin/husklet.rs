@@ -539,7 +539,7 @@ fn remove_workspace(
     close_domain: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
     close_launchers: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let mut workspace = store.get(name).cloned().ok_or_else(|| {
+    let workspace = store.get(name).cloned().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Workspace {name:?} no longer exists."),
@@ -550,9 +550,6 @@ fn remove_workspace(
             std::io::ErrorKind::AlreadyExists,
             "Workspace changed; inspect and consent again.",
         ));
-    }
-    if generation.is_empty() {
-        workspace = store.adopt_generation(&workspace)?;
     }
     let generation = workspace.generation.clone();
     // Keep the persisted entry until teardown succeeds: it is the authority needed to locate and
