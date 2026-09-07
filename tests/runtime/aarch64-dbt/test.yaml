@@ -50,3 +50,15 @@ cases:
       stdout_empty: true
       diagnostics:
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "13" } }
+  - id: runtime/aarch64-dbt/cross-block-loop
+    status: active
+    compat: { class: smoke }
+    build: { source: source/cross_block.c, output: cross-block-loop, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/cross-block-loop }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { record: "[diag] backend-tree", count: 1, fields: { crossings: "2000003", translated_steps: "4000011", interpreted_steps: "0", translated_entries: "2000003" } }
+        - { record: "[diag] backend-shape-detail", count: 1, fields: { translated_entries: "2000003", stitch_jmp: "0", stitch_cond_fall: "0", e_jmp_chained: "0", e_jt_chained: "0" } }
