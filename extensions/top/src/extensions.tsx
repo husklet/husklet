@@ -385,374 +385,390 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
-        {!acquisition && <Heading label="Discover" scale="caption" />}
-        {!acquisition && (
-          <Column gap={2}>
-            <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="filled">
-              <CardHeader label="Workspace control" detail="First-party · Included" />
-              <CardContent gap={1}>
-                <Text
-                  label="Settings, runtime resources, and terminal panes in one compact tab."
-                  color="text-dim"
-                  wrap
-                />
-              </CardContent>
-            </Card>
-            {catalogueState === 'loading' && (
-              <Row gap={1} align="center">
-                <Spinner />
-                <Text label="Loading extension catalogue…" color="text-dim" />
-              </Row>
-            )}
-            {catalogueState === 'ready' && availableCatalogue.length === 0 && (
-              <InlineMessage
-                label="No additional extensions are available in the built-in catalogue."
-                tone="neutral"
-              />
-            )}
-            {availableCatalogue.map((entry) => (
-              <Card
-                key={entry.id}
-                grow={false}
-                justify="start"
-                width={CONTENT_WIDTH}
-                variant="filled"
-              >
-                <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
-                <CardContent gap={1}>
-                  <Text label={entry.description} color="text-dim" wrap />
-                  <Text label={`Source ${entry.source}`} color="text-dim" wrap />
-                  <Row>
-                    <Button
-                      label={`Review ${entry.title}`}
-                      enabled={!busy}
-                      onInvoke={() => inspect(entry.reference)}
-                    />
+        <Row gap={3} align="start" wrap>
+          <Column gap={2} width={CONTENT_WIDTH}>
+            {!acquisition && <Heading label="Discover" scale="caption" />}
+            {!acquisition && (
+              <Column gap={2}>
+                {catalogueState === 'loading' && (
+                  <Row gap={1} align="center">
+                    <Spinner />
+                    <Text label="Loading extension catalogue…" color="text-dim" />
                   </Row>
-                </CardContent>
-              </Card>
-            ))}
-            {catalogue && !catalogue.complete && (
-              <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
-            )}
-            {catalogueState === 'error' && (
-              <Column gap={1}>
-                <InlineMessage label={`Catalogue unavailable: ${catalogueError}`} tone="warning" />
-                <Row>
-                  <Button label="Retry catalogue" onInvoke={loadCatalogue} />
-                </Row>
+                )}
+                {catalogueState === 'ready' && availableCatalogue.length === 0 && (
+                  <InlineMessage
+                    label="No additional extensions are available in the built-in catalogue."
+                    tone="neutral"
+                  />
+                )}
+                {availableCatalogue.map((entry) => (
+                  <Card
+                    key={entry.id}
+                    grow={false}
+                    justify="start"
+                    width={CONTENT_WIDTH}
+                    variant="filled"
+                  >
+                    <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                    <CardContent gap={1}>
+                      <Text label={entry.description} color="text-dim" wrap />
+                      <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                      <Row>
+                        <Button
+                          label={`Review ${entry.title}`}
+                          enabled={!busy}
+                          onInvoke={() => inspect(entry.reference)}
+                        />
+                      </Row>
+                    </CardContent>
+                  </Card>
+                ))}
+                {catalogue && !catalogue.complete && (
+                  <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
+                )}
+                {catalogueState === 'error' && (
+                  <Column gap={1}>
+                    <InlineMessage
+                      label={`Catalogue unavailable: ${catalogueError}`}
+                      tone="warning"
+                    />
+                    <Row>
+                      <Button label="Retry catalogue" onInvoke={loadCatalogue} />
+                    </Row>
+                  </Column>
+                )}
               </Column>
             )}
-          </Column>
-        )}
-        <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
-          <CardHeader label="Install from image" detail="OCI image reference" />
-          <CardContent>
-            <Row gap={1}>
-              <Entry
-                value={reference}
-                placeholder="registry.example/extension:version"
-                onChange={(event: Change) => setReference(String(event.value ?? '').slice(0, 512))}
-                onSubmit={() => inspect()}
-              />
-              <Button
-                label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
-                enabled={Boolean(reference.trim()) && !busy}
-                onInvoke={() => inspect()}
-              />
-            </Row>
-          </CardContent>
-          {acquisition?.candidate && (
-            <CardContent gap={1}>
-              <Heading
-                label={
-                  acquisition.candidate.installed_image_digest ? 'Review update' : 'Review install'
-                }
-                scale="caption"
-              />
-              <Text
-                label={`Manifest ${acquisition.candidate.name} ${acquisition.candidate.version}`}
-              />
-              <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
-              <Text
-                label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
-                tooltip={acquisition.candidate.image_digest}
-                wrap
-              />
-              {acquisition.candidate.installed_image_digest ? (
-                <InlineMessage
-                  label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
-                  tone="warning"
-                />
-              ) : null}
-              <Heading label="Review permissions" scale="caption" />
-              <InlineMessage
-                label="All access is off by default. Enable only what this extension needs."
-                tone="warning"
-              />
-              {acquisition.candidate.requested.length > 0 && (
-                <Text label="Husklet access" color="text-dim" />
-              )}
-              {acquisition.candidate.requested.length > 0 && (
-                <Row gap={1} align="center">
-                  <Text
-                    label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
-                    color="text-dim"
-                  />
-                  {granted.length > 0 && (
-                    <Button
-                      label="Clear Husklet access"
-                      variant="ghost"
-                      onInvoke={() => setGranted([])}
-                    />
-                  )}
-                </Row>
-              )}
-              {acquisition.candidate.requested.map((capability) => (
-                <FormControlLabel
-                  key={capability}
-                  label={`${capabilityLabel(capability)} (${capability})`}
-                  gap={2}
-                >
-                  <Switch
-                    checked={granted.includes(capability)}
-                    onToggle={(event: Change) =>
-                      setGranted((current) =>
-                        event.value
-                          ? [...new Set([...current, capability])]
-                          : current.filter((item) => item !== capability),
-                      )
+            <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
+              <CardHeader label="Install from image" detail="OCI image reference" />
+              <CardContent>
+                <Row gap={1}>
+                  <Entry
+                    value={reference}
+                    placeholder="registry.example/extension:version"
+                    onChange={(event: Change) =>
+                      setReference(String(event.value ?? '').slice(0, 512))
                     }
+                    onSubmit={() => inspect()}
                   />
-                </FormControlLabel>
-              ))}
-              {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
-                <>
-                  <Text label="Container access" color="text-dim" />
+                  <Button
+                    label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
+                    enabled={Boolean(reference.trim()) && !busy}
+                    onInvoke={() => inspect()}
+                  />
+                </Row>
+              </CardContent>
+              {acquisition?.candidate && (
+                <CardContent gap={1}>
+                  <Heading
+                    label={
+                      acquisition.candidate.installed_image_digest
+                        ? 'Review update'
+                        : 'Review install'
+                    }
+                    scale="caption"
+                  />
                   <Text
-                    label="Container access starts off. Select only what this extension needs."
-                    color="text-dim"
+                    label={`Manifest ${acquisition.candidate.name} ${acquisition.candidate.version}`}
+                  />
+                  <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
+                  <Text
+                    label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
+                    tooltip={acquisition.candidate.image_digest}
                     wrap
                   />
-                </>
-              )}
-              {requestedContainers.selectors.map((selector) => {
-                const key = selectorKey(selector);
-                const selected = grantedContainers.selectors.some(
-                  (candidate) => selectorKey(candidate) === key,
-                );
-                return (
-                  <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
-                    <Switch
-                      checked={selected}
-                      onToggle={(event: Change) =>
-                        setGrantedContainers((current) => ({
-                          ...current,
-                          selectors: event.value
-                            ? current.selectors.some((candidate) => selectorKey(candidate) === key)
-                              ? current.selectors
-                              : [...current.selectors, selector]
-                            : current.selectors.filter(
-                                (candidate) => selectorKey(candidate) !== key,
-                              ),
-                        }))
-                      }
+                  {acquisition.candidate.installed_image_digest ? (
+                    <InlineMessage
+                      label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                      tone="warning"
                     />
-                  </FormControlLabel>
-                );
-              })}
-              {requestedContainers.create && (
-                <FormControlLabel label="Create new containers" gap={2}>
-                  <Switch
-                    checked={grantedContainers.create}
-                    onToggle={(event: Change) =>
-                      setGrantedContainers((current) => ({
-                        ...current,
-                        create: Boolean(event.value),
-                      }))
-                    }
+                  ) : null}
+                  <Heading label="Review permissions" scale="caption" />
+                  <InlineMessage
+                    label="All access is off by default. Enable only what this extension needs."
+                    tone="warning"
                   />
-                </FormControlLabel>
-              )}
-              <Text label="Workspace files" color="text-dim" />
-              <FilesystemConsent
-                requested={requestedFilesystem}
-                granted={grantedFilesystem}
-                onChange={setGrantedFilesystem}
-              />
-              {(requestedWorkspaceEnvironment.read.length > 0 ||
-                requestedWorkspaceEnvironment.write.length > 0) && (
-                <Text label="Workspace environment values" color="text-dim" />
-              )}
-              {(['read', 'write'] as const).flatMap((verb) =>
-                requestedWorkspaceEnvironment[verb].map((selector) => {
-                  const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
-                  const checked = grantedWorkspaceEnvironment[verb].some(
-                    (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
-                  );
-                  return (
+                  {acquisition.candidate.requested.length > 0 && (
+                    <Text label="Husklet access" color="text-dim" />
+                  )}
+                  {acquisition.candidate.requested.length > 0 && (
+                    <Row gap={1} align="center">
+                      <Text
+                        label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
+                        color="text-dim"
+                      />
+                      {granted.length > 0 && (
+                        <Button
+                          label="Clear Husklet access"
+                          variant="ghost"
+                          onInvoke={() => setGranted([])}
+                        />
+                      )}
+                    </Row>
+                  )}
+                  {acquisition.candidate.requested.map((capability) => (
                     <FormControlLabel
-                      key={key}
-                      label={
-                        'all' in selector
-                          ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
-                          : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
-                      }
+                      key={capability}
+                      label={`${capabilityLabel(capability)} (${capability})`}
                       gap={2}
                     >
                       <Switch
-                        checked={checked}
+                        checked={granted.includes(capability)}
                         onToggle={(event: Change) =>
-                          setGrantedWorkspaceEnvironment((current) => ({
+                          setGranted((current) =>
+                            event.value
+                              ? [...new Set([...current, capability])]
+                              : current.filter((item) => item !== capability),
+                          )
+                        }
+                      />
+                    </FormControlLabel>
+                  ))}
+                  {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
+                    <>
+                      <Text label="Container access" color="text-dim" />
+                      <Text
+                        label="Container access starts off. Select only what this extension needs."
+                        color="text-dim"
+                        wrap
+                      />
+                    </>
+                  )}
+                  {requestedContainers.selectors.map((selector) => {
+                    const key = selectorKey(selector);
+                    const selected = grantedContainers.selectors.some(
+                      (candidate) => selectorKey(candidate) === key,
+                    );
+                    return (
+                      <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                        <Switch
+                          checked={selected}
+                          onToggle={(event: Change) =>
+                            setGrantedContainers((current) => ({
+                              ...current,
+                              selectors: event.value
+                                ? current.selectors.some(
+                                    (candidate) => selectorKey(candidate) === key,
+                                  )
+                                  ? current.selectors
+                                  : [...current.selectors, selector]
+                                : current.selectors.filter(
+                                    (candidate) => selectorKey(candidate) !== key,
+                                  ),
+                            }))
+                          }
+                        />
+                      </FormControlLabel>
+                    );
+                  })}
+                  {requestedContainers.create && (
+                    <FormControlLabel label="Create new containers" gap={2}>
+                      <Switch
+                        checked={grantedContainers.create}
+                        onToggle={(event: Change) =>
+                          setGrantedContainers((current) => ({
                             ...current,
-                            [verb]: event.value
-                              ? [...current[verb], selector]
-                              : current[verb].filter(
-                                  (candidate) =>
-                                    JSON.stringify(candidate) !== JSON.stringify(selector),
-                                ),
+                            create: Boolean(event.value),
                           }))
                         }
                       />
                     </FormControlLabel>
-                  );
-                }),
-              )}
-              <Row gap={1} wrap>
-                <Button
-                  label={
-                    busy === 'update'
-                      ? 'Updating…'
-                      : busy === 'install'
-                        ? 'Installing…'
-                        : acquisition.candidate.installed_image_digest
-                          ? 'Update extension'
-                          : 'Install extension'
-                  }
-                  enabled={!busy && acquisition.state === 'ready'}
-                  onInvoke={publish}
-                />
-                <Button
-                  label="Cancel review"
-                  variant="ghost"
-                  enabled={!busy}
-                  onInvoke={dismissReview}
-                />
-              </Row>
-            </CardContent>
-          )}
-          {acquisition && acquisition.state !== 'ready' && (
-            <CardContent gap={1}>
-              <Row gap={1} align="center" wrap>
-                {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
-                <Text label={acquisitionLabel(acquisition)} wrap />
-                {!['failed', 'cancelled'].includes(acquisition.state) ? (
-                  <Button
-                    label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
-                    enabled={busy !== 'cancel'}
-                    onInvoke={cancel}
+                  )}
+                  <Text label="Workspace files" color="text-dim" />
+                  <FilesystemConsent
+                    requested={requestedFilesystem}
+                    granted={grantedFilesystem}
+                    onChange={setGrantedFilesystem}
                   />
-                ) : acquisition.state === 'failed' ? (
-                  <>
-                    <Button label="Retry inspection" enabled={!busy} onInvoke={() => inspect()} />
+                  {(requestedWorkspaceEnvironment.read.length > 0 ||
+                    requestedWorkspaceEnvironment.write.length > 0) && (
+                    <Text label="Workspace environment values" color="text-dim" />
+                  )}
+                  {(['read', 'write'] as const).flatMap((verb) =>
+                    requestedWorkspaceEnvironment[verb].map((selector) => {
+                      const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                      const checked = grantedWorkspaceEnvironment[verb].some(
+                        (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                      );
+                      return (
+                        <FormControlLabel
+                          key={key}
+                          label={
+                            'all' in selector
+                              ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                              : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
+                          }
+                          gap={2}
+                        >
+                          <Switch
+                            checked={checked}
+                            onToggle={(event: Change) =>
+                              setGrantedWorkspaceEnvironment((current) => ({
+                                ...current,
+                                [verb]: event.value
+                                  ? [...current[verb], selector]
+                                  : current[verb].filter(
+                                      (candidate) =>
+                                        JSON.stringify(candidate) !== JSON.stringify(selector),
+                                    ),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      );
+                    }),
+                  )}
+                  <Row gap={1} wrap>
                     <Button
-                      label="Dismiss"
+                      label={
+                        busy === 'update'
+                          ? 'Updating…'
+                          : busy === 'install'
+                            ? 'Installing…'
+                            : acquisition.candidate.installed_image_digest
+                              ? 'Update extension'
+                              : 'Install extension'
+                      }
+                      enabled={!busy && acquisition.state === 'ready'}
+                      onInvoke={publish}
+                    />
+                    <Button
+                      label="Cancel review"
                       variant="ghost"
                       enabled={!busy}
-                      onInvoke={() => setAcquisition(null)}
+                      onInvoke={dismissReview}
                     />
-                  </>
-                ) : (
-                  <Button label="Dismiss" enabled={!busy} onInvoke={() => setAcquisition(null)} />
-                )}
-              </Row>
-              {acquisition.error && <InlineMessage label={acquisition.error} tone="danger" />}
-            </CardContent>
-          )}
-        </Card>
-        {error && <InlineMessage label={error} tone="danger" />}
-        {notice && (
-          <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />
-        )}
-        <Row gap={2}>
-          <Heading label="Installed" scale="title" />
-          <Button
-            label="Refresh"
-            enabled={!busy && inventoryState !== 'loading'}
-            onInvoke={reload}
-          />
-        </Row>
-        {watchError && <InlineMessage label={watchError} tone="warning" />}
-        <ResourceState
-          state={inventoryState}
-          loadingLabel="Loading installed extensions…"
-          emptyLabel="No extensions installed"
-          emptyDetail="Install an OCI extension above."
-          error={inventoryError || 'Installed extensions could not be loaded.'}
-          onRetry={reload}
-        >
-          {installed.map((extension) => (
-            <Card
-              key={`${extension.name}:${extension.image_digest}`}
-              grow={false}
-              justify="start"
-              width={CONTENT_WIDTH}
-              variant="filled"
-            >
-              <CardHeader
-                label={extension.name}
-                detail={extension.version ?? extension.image_digest}
-              />
-              <CardContent gap={1}>
-                <Row gap={1} wrap>
-                  <Badge
-                    label={extensionState(extension)}
-                    tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
-                  />
-                  <Text
-                    label={compactDigest(extension.image_digest)}
-                    tooltip={extension.image_digest}
-                  />
-                </Row>
-                <ExtensionFault extension={extension} />
-                <LifecycleFeedback
-                  extensionName={extension.name}
-                  pending={pendingLifecycle}
-                  failure={lifecycleFailure}
-                />
-                <Row gap={1} wrap>
-                  {extension.status.startsWith('fault:') ? (
-                    <Button
-                      label="Retry"
-                      enabled={!busy}
-                      onInvoke={() => lifecycle(extension, 'retry')}
-                    />
-                  ) : extension.enabled ? (
-                    <Button
-                      label="Disable"
-                      enabled={!busy}
-                      onInvoke={() => lifecycle(extension, 'disable')}
-                    />
-                  ) : (
-                    <Button
-                      label="Enable"
-                      enabled={!busy}
-                      onInvoke={() => lifecycle(extension, 'enable')}
-                    />
-                  )}
-                  <ConfirmAction
-                    label="Remove"
-                    confirmLabel={`Remove ${extension.name}`}
-                    question={`Remove ${extension.name} from this workspace?`}
-                    authorityKey={extension.image_digest}
-                    enabled={!busy}
-                    onConfirm={() => lifecycle(extension, 'remove')}
-                  />
-                </Row>
-              </CardContent>
+                  </Row>
+                </CardContent>
+              )}
+              {acquisition && acquisition.state !== 'ready' && (
+                <CardContent gap={1}>
+                  <Row gap={1} align="center" wrap>
+                    {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
+                    <Text label={acquisitionLabel(acquisition)} wrap />
+                    {!['failed', 'cancelled'].includes(acquisition.state) ? (
+                      <Button
+                        label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                        enabled={busy !== 'cancel'}
+                        onInvoke={cancel}
+                      />
+                    ) : acquisition.state === 'failed' ? (
+                      <>
+                        <Button
+                          label="Retry inspection"
+                          enabled={!busy}
+                          onInvoke={() => inspect()}
+                        />
+                        <Button
+                          label="Dismiss"
+                          variant="ghost"
+                          enabled={!busy}
+                          onInvoke={() => setAcquisition(null)}
+                        />
+                      </>
+                    ) : (
+                      <Button
+                        label="Dismiss"
+                        enabled={!busy}
+                        onInvoke={() => setAcquisition(null)}
+                      />
+                    )}
+                  </Row>
+                  {acquisition.error && <InlineMessage label={acquisition.error} tone="danger" />}
+                </CardContent>
+              )}
             </Card>
-          ))}
-        </ResourceState>
+            {error && <InlineMessage label={error} tone="danger" />}
+            {notice && (
+              <InlineMessage
+                label={notice.label}
+                tone={notice.uncertain ? 'warning' : 'positive'}
+              />
+            )}
+          </Column>
+          <Column gap={2} width={CONTENT_WIDTH}>
+            <Row gap={2}>
+              <Heading label="Installed" scale="caption" />
+              <Button
+                label="Refresh"
+                enabled={!busy && inventoryState !== 'loading'}
+                onInvoke={reload}
+              />
+            </Row>
+            {watchError && <InlineMessage label={watchError} tone="warning" />}
+            <ResourceState
+              state={inventoryState}
+              loadingLabel="Loading installed extensions…"
+              emptyLabel="No extensions installed"
+              emptyDetail="Choose an extension or inspect an OCI image."
+              error={inventoryError || 'Installed extensions could not be loaded.'}
+              onRetry={reload}
+            >
+              {installed.map((extension) => (
+                <Card
+                  key={`${extension.name}:${extension.image_digest}`}
+                  grow={false}
+                  justify="start"
+                  width={CONTENT_WIDTH}
+                  variant="filled"
+                >
+                  <CardHeader
+                    label={extension.name}
+                    detail={extension.version ?? extension.image_digest}
+                  />
+                  <CardContent gap={1}>
+                    <Row gap={1} wrap>
+                      <Badge
+                        label={extensionState(extension)}
+                        tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
+                      />
+                      <Text
+                        label={compactDigest(extension.image_digest)}
+                        tooltip={extension.image_digest}
+                      />
+                    </Row>
+                    <ExtensionFault extension={extension} />
+                    <LifecycleFeedback
+                      extensionName={extension.name}
+                      pending={pendingLifecycle}
+                      failure={lifecycleFailure}
+                    />
+                    <Row gap={1} wrap>
+                      {extension.status.startsWith('fault:') ? (
+                        <Button
+                          label="Retry"
+                          enabled={!busy}
+                          onInvoke={() => lifecycle(extension, 'retry')}
+                        />
+                      ) : extension.enabled ? (
+                        <Button
+                          label="Disable"
+                          enabled={!busy}
+                          onInvoke={() => lifecycle(extension, 'disable')}
+                        />
+                      ) : (
+                        <Button
+                          label="Enable"
+                          enabled={!busy}
+                          onInvoke={() => lifecycle(extension, 'enable')}
+                        />
+                      )}
+                      <ConfirmAction
+                        label="Remove"
+                        confirmLabel={`Remove ${extension.name}`}
+                        question={`Remove ${extension.name} from this workspace?`}
+                        authorityKey={extension.image_digest}
+                        enabled={!busy}
+                        onConfirm={() => lifecycle(extension, 'remove')}
+                      />
+                    </Row>
+                  </CardContent>
+                </Card>
+              ))}
+            </ResourceState>
+          </Column>
+        </Row>
       </Column>
     </Scroll>
   );

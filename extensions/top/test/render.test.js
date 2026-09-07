@@ -185,27 +185,19 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
-  assert.ok(labelled(stage, 'Workspace control'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
-  assert.deepEqual(ancestorTags(stage, 'Workspace control').slice(0, 3), [
-    'Card',
-    'Column',
-    'Column',
-  ]);
+  assert.equal(labelled(stage, 'Workspace control'), undefined);
+  assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 2), ['Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
   assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
   ]);
-  assert.ok(
-    ancestorProperty(stage, 'Workspace control', 'Card', 'Width'),
-    'discovery cards retain a readable bound instead of stretching with the window',
-  );
-  assert.equal(ancestorProperty(stage, 'Workspace control', 'Card', 'Grow')?.Number, 0);
   assert.equal(
-    ancestorProperty(stage, 'Workspace control', 'Card', 'Justify')?.Align,
+    ancestorProperty(stage, 'Component playground', 'Card', 'Justify')?.Align,
     'Start',
     'cross-axis alignment lets the declared maximum width govern the GTK card',
   );
