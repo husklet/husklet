@@ -800,6 +800,8 @@ fn hash_path(path: &std::path::Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{Failure, Guest, LaunchArguments, backend_receipt, execute, native_supervised_worker_for, rootfs_plan};
+    #[cfg(feature = "native-test-hooks")]
+    use super::{NativeTestOption, parse_native_test_option};
     #[cfg(unix)]
     use super::receipt_paths;
     use clap::Parser;
