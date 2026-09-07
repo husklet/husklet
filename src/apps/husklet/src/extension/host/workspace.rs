@@ -56,10 +56,11 @@ impl super::Host {
         terminal: Arc<dyn TerminalSurface + Send + Sync>,
         events: super::Events,
         entrypoint: impl Into<PathBuf>,
+        initial_section: Option<&str>,
         audience: super::Audience,
     ) -> Self {
         Self::open(
-            LocalWorkspace::new(workspace, name, entrypoint.into())
+            LocalWorkspace::new(workspace, name, entrypoint.into(), initial_section)
                 .through(terminal)
                 .observing(events),
             audience,
@@ -71,15 +72,22 @@ impl super::Host {
 struct LocalWorkspace {
     workspace: Workspace,
     entrypoint: PathBuf,
+    initial_section: Option<String>,
     child: Mutex<Option<std::process::Child>>,
 }
 
 #[cfg(debug_assertions)]
 impl LocalWorkspace {
-    fn new(workspace: &WorkspaceConfig, name: &ExtensionName, entrypoint: PathBuf) -> Self {
+    fn new(
+        workspace: &WorkspaceConfig,
+        name: &ExtensionName,
+        entrypoint: PathBuf,
+        initial_section: Option<&str>,
+    ) -> Self {
         Self {
             workspace: Workspace::extension(workspace, name),
             entrypoint,
+            initial_section: initial_section.map(str::to_owned),
             child: Mutex::new(None),
         }
     }
@@ -120,9 +128,14 @@ impl Supply for LocalWorkspace {
     }
 
     fn ensure(&self, plan: &Plan) -> Result<(), String> {
-        let child = std::process::Command::new("node")
+        let mut command = std::process::Command::new("node");
+        command
             .arg(&self.entrypoint)
-            .env("HUSKLET_EXTENSION_SOCKET", plan.spec.socket())
+            .env("HUSKLET_EXTENSION_SOCKET", plan.spec.socket());
+        if let Some(section) = &self.initial_section {
+            command.env("HUSKLET_TOP_SECTION", section);
+        }
+        let child = command
             .spawn()
             .map_err(|error| format!("start local extension {}: {error}", self.entrypoint.display()))?;
         *self.child.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);

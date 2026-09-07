@@ -66,10 +66,12 @@ impl<'a> Overview<'a> {
                     mutation: mutation.mutation,
                 },
                 Report::Notification(notification) => {
-                    let message = gtk::gio::Notification::new(&notification_title(&notification_name, &notification.title));
+                    let message =
+                        gtk::gio::Notification::new(&notification_title(&notification_name, &notification.title));
                     message.set_body(Some(&notification.body));
                     if let Some(application) = gtk::gio::Application::default() {
-                        application.send_notification(Some(&notification_id(&notification_name, &notification.id)), &message);
+                        application
+                            .send_notification(Some(&notification_id(&notification_name, &notification.id)), &message);
                     }
                     return;
                 }
@@ -89,6 +91,7 @@ impl<'a> Overview<'a> {
                     std::sync::Arc::clone(terminal),
                     events,
                     entrypoint,
+                    AppConfig::get().overview_pane.as_deref().and_then(top_section),
                     audience,
                 )
             } else {
@@ -292,12 +295,29 @@ impl<'a> Overview<'a> {
         // Debug selection is fail-closed: an unavailable extension leaves the
         // first mounted extension selected.
         if let Some(p) = AppConfig::get().overview_pane.as_deref() {
-            view.select_name(p);
+            view.select_name(if top_section(p).is_some() { "top" } else { p });
         } else if let Some(page) = self.page {
             view.select_name(page.id());
         }
         view.widget.clone()
     }
+}
+
+fn top_section(name: &str) -> Option<&str> {
+    matches!(
+        name,
+        "overview"
+            | "workspace"
+            | "extensions"
+            | "containers"
+            | "processes"
+            | "executions"
+            | "images"
+            | "volumes"
+            | "networks"
+            | "terminals"
+    )
+    .then_some(name)
 }
 
 fn notification_title(extension: &str, title: &str) -> String {
@@ -310,12 +330,32 @@ fn notification_id(extension: &str, id: &str) -> String {
 
 #[cfg(test)]
 mod notification_tests {
-    use super::{notification_id, notification_title};
+    use super::{notification_id, notification_title, top_section};
 
     #[test]
     fn host_owns_visible_attribution_and_stable_replacement_identity() {
         assert_eq!(notification_title("indexer", "Complete"), "indexer: Complete");
         assert_eq!(notification_id("indexer", "build"), notification_id("indexer", "build"));
         assert_ne!(notification_id("indexer", "build"), notification_id("monitor", "build"));
+    }
+
+    #[test]
+    fn debug_overview_routes_recognize_every_top_section_exactly() {
+        for section in [
+            "overview",
+            "workspace",
+            "extensions",
+            "containers",
+            "processes",
+            "executions",
+            "images",
+            "volumes",
+            "networks",
+            "terminals",
+        ] {
+            assert_eq!(top_section(section), Some(section));
+        }
+        assert_eq!(top_section("storybook"), None);
+        assert_eq!(top_section("extension"), None);
     }
 }

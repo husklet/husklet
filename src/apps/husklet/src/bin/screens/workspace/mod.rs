@@ -41,6 +41,7 @@ pub struct View {
     sidebar: gtk::Box,
     pages: gtk::Stack,
     items: Rc<RefCell<Vec<gtk::Button>>>,
+    pending_selection: Rc<RefCell<Option<String>>>,
     semantics: semantic::Registry,
 }
 
@@ -63,6 +64,7 @@ impl View {
         pages.set_vexpand(true);
         pages.set_transition_type(gtk::StackTransitionType::None);
         let items: Rc<RefCell<Vec<gtk::Button>>> = Rc::new(RefCell::new(Vec::new()));
+        let pending_selection = Rc::new(RefCell::new(None));
         for (index, (page, content)) in content.into_iter().enumerate() {
             let item = Self::entry(&pages, &items, &semantics, page.title(), page.title(), &content);
             if index == 0 {
@@ -93,6 +95,7 @@ impl View {
             sidebar,
             pages,
             items,
+            pending_selection,
             semantics,
         }
     }
@@ -145,6 +148,10 @@ impl View {
             item.add_css_class("on");
             self.pages.set_visible_child_name(name);
             self.semantics.select(&Self::semantic_path(name));
+        }
+        if self.pending_selection.borrow().as_deref() == Some(name) {
+            self.pending_selection.borrow_mut().take();
+            self.select_name(name);
         }
         self.update_sidebar_visibility();
     }
@@ -225,6 +232,11 @@ impl View {
     }
 
     pub fn select_name(&self, name: &str) {
+        if !self.holds(name) {
+            self.pending_selection.replace(Some(name.to_owned()));
+            return;
+        }
+        self.pending_selection.borrow_mut().take();
         self.pages.set_visible_child_name(name);
         Self::select_items(&self.items.borrow(), name);
         self.semantics.select(&Self::semantic_path(name));
@@ -348,6 +360,25 @@ mod semantic_tests {
             assert_eq!(view.entries(), ["Workspace"]);
             assert!(view.page("extensions").is_none());
             assert!(!view.sidebar.is_visible(), "removing the second page returns its space");
+        }) {
+            eprintln!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn requested_dynamic_page_is_selected_when_it_registers() {
+        if !crate::test_support::on_the_toolkit_thread(|| {
+            let view = View::with_semantics([], semantic::Registry::new("workspace"));
+            view.select_name("top");
+            assert_eq!(view.shown(), None, "an absent page is not falsely selected");
+
+            let storybook = gtk::Label::new(Some("storybook"));
+            view.attach("storybook", "Storybook", storybook.upcast_ref());
+            assert_eq!(view.shown().as_deref(), Some("storybook"));
+
+            let top = gtk::Label::new(Some("top"));
+            view.attach("top", "Top", top.upcast_ref());
+            assert_eq!(view.shown().as_deref(), Some("top"));
         }) {
             eprintln!("skipped: no display connection");
         }
