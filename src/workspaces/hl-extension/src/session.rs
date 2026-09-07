@@ -215,6 +215,7 @@ impl Session {
         id: &str,
         port: &dyn ContainerInventory,
     ) -> Result<crate::port::ContainerSummary, Failure> {
+        immutable_identity(id, &[32, 64], "container")?;
         let container = self.resolve_container(id, port)?;
         Ok(container)
     }

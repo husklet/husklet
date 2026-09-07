@@ -2092,10 +2092,20 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
             signal: "SIGTERM".into(),
         },
     ] {
-        assert!(matches!(
-            session.dispatch(&request, &services(&host)),
-            Err(Failure::Conflict { .. })
-        ));
+        let noun = if matches!(request, Request::ExecutionKill { .. }) {
+            "execution"
+        } else {
+            "container"
+        };
+        let failure = session
+            .dispatch(&request, &services(&host))
+            .expect_err("mutable identity refused");
+        assert_eq!(
+            failure,
+            Failure::Conflict {
+                detail: format!("{noun} operation requires the complete immutable ID returned by inspection"),
+            }
+        );
     }
     assert!(host.ledger.reached().is_empty());
 
@@ -2183,10 +2193,13 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
             name: "x".repeat(129),
         },
     ] {
-        assert!(matches!(
-            session.dispatch(&request, &services(&host)),
-            Err(Failure::Conflict { .. })
-        ));
+        let failure = session
+            .dispatch(&request, &services(&host))
+            .expect_err("invalid rename refused");
+        assert!(
+            matches!(failure, Failure::Conflict { .. }),
+            "unexpected failure: {failure:?}"
+        );
     }
     assert!(host.ledger.reached().is_empty());
     session
@@ -2703,7 +2716,12 @@ fn container_exec_returns_the_real_execution_identity() {
         },
         &services(&host),
     );
-    assert!(matches!(refused, Err(Failure::Conflict { .. })));
+    assert_eq!(
+        refused,
+        Err(Failure::Conflict {
+            detail: "container operation requires the complete immutable ID returned by inspection".into(),
+        })
+    );
     assert!(
         host.ledger.reached().is_empty(),
         "a mutable alias reached execution authority"
