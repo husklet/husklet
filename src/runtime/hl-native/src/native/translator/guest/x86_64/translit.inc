@@ -11486,6 +11486,7 @@ static int translit_pre_spill_signal_stage_test(void) {
         translit_flags_out(&executed, guest_flags);
         uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
         executed.mmscratch[0] = translit_flags_in(&executed);
+        if (!translit_bind_cpu(&executed)) { exact = 0; break; }
         hl_x86_translit_enter(&executed, arena);
         uint64_t returned_flags;
         /* Guest DF is observable at the translated boundary, but ordinary C requires DF clear. Snapshot
@@ -11497,6 +11498,8 @@ static int translit_pre_spill_signal_stage_test(void) {
                 (returned_flags & UINT64_C(0x400)) == (guest_flags & UINT64_C(0x400));
         for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
     }
+    /* The synthetic CPU is stack-owned; no later C or fixture may inherit its GS provenance. */
+    if (!translit_bind_cpu(NULL)) exact = 0;
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
     munmap(arena, arena_size);
