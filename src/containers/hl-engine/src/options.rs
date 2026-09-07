@@ -157,6 +157,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only enable the same-ISA direct-CALL pre-spill discriminator",
         Flag
     ),
+    launch!(
+        "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL",
+        "enable the same-ISA direct-CALL pre-spill fast path",
+        Flag
+    ),
     internal!(
         "HL_TRANSLIT_PCACHE_DROP_RELOCATION_TEST",
         "test-only omit one same-ISA pcache external relocation",

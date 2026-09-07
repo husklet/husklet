@@ -113,8 +113,7 @@ pub struct Config {
     pub(crate) translation_cache: Option<TranslationCache>,
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<TranslationCache>,
-    #[cfg(feature = "native-test-hooks")]
-    pub(crate) direct_call_pre_spill_test: bool,
+    pub(crate) direct_call_pre_spill: bool,
 }
 
 impl Config {
@@ -126,8 +125,7 @@ impl Config {
             translation_cache: None,
             translation_cache_observability: false,
             translation_symbols: None,
-            #[cfg(feature = "native-test-hooks")]
-            direct_call_pre_spill_test: false,
+            direct_call_pre_spill: false,
         }
     }
 
@@ -158,11 +156,10 @@ impl Config {
         self
     }
 
-    /// Enables the native direct-call pre-spill experiment for an explicit test run.
-    #[cfg(feature = "native-test-hooks")]
+    /// Enables the same-ISA direct-call pre-spill fast path for this service's launches.
     #[must_use]
-    pub fn direct_call_pre_spill_test(mut self, enabled: bool) -> Self {
-        self.direct_call_pre_spill_test = enabled;
+    pub fn direct_call_pre_spill(mut self, enabled: bool) -> Self {
+        self.direct_call_pre_spill = enabled;
         self
     }
 
@@ -177,12 +174,11 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    #[cfg(feature = "native-test-hooks")]
     #[test]
-    fn direct_call_pre_spill_test_defaults_off_and_honors_explicit_override() {
+    fn direct_call_pre_spill_defaults_off_and_honors_explicit_override() {
         let default = Config::new("/state");
-        assert!(!default.direct_call_pre_spill_test);
-        assert!(default.direct_call_pre_spill_test(true).direct_call_pre_spill_test);
+        assert!(!default.direct_call_pre_spill);
+        assert!(default.direct_call_pre_spill(true).direct_call_pre_spill);
     }
 
     #[test]

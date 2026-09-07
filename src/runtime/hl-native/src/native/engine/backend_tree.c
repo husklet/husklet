@@ -964,9 +964,10 @@ void hl_target_backend_tree_child_begin(void *shared, size_t shared_size) {
     g_backend_tree_self = NULL;
     if (g_backend_tree == NULL) return;
     /* The process option store is bound before this lifecycle entry. Snapshot
-       the immutable hook authority; all outcome observation remains ungated. */
+       the immutable launch/test authority; all outcome observation remains ungated. */
     atomic_store_explicit(&g_backend_tree->direct_call_guard_candidate_enabled,
-                          (uint64_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0),
+                          (uint64_t)(hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", 0) ||
+                                     hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0)),
                           memory_order_relaxed);
     int self = (int)getpid();
     atomic_store_explicit(&g_backend_tree->root_pid, self, memory_order_release);

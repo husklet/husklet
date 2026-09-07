@@ -64,8 +64,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) translation_cache: Option<PathBuf>,
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<PathBuf>,
-    #[cfg(feature = "native-test-hooks")]
-    pub(crate) direct_call_pre_spill_test: bool,
+    pub(crate) direct_call_pre_spill: bool,
     pub(crate) checkpoint: Option<CheckpointRole>,
     pub(crate) guest: Guest,
     pub(crate) execution: crate::Execution,

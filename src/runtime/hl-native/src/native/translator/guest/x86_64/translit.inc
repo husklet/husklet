@@ -2410,12 +2410,14 @@ static int translit_test_direct_jmp_ibtc_stub_fail;
 static int translit_test_jcc_guard = -1;
 #endif
 
+static int translit_direct_call_pre_spill_enabled(void) {
+    int enabled = hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", 0);
 #if defined(HL_NATIVE_TEST_HOOKS)
-static int translit_direct_call_pre_spill_test_enabled(void) {
-    return translit_test_direct_call_pre_spill ||
-           hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0);
-}
+    enabled = enabled || translit_test_direct_call_pre_spill ||
+              hl_option_flag_value("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL_TEST", 0);
 #endif
+    return enabled;
+}
 
 static int translit_jcc_ibtc_candidate(uint64_t source, uint64_t target) {
     (void)source;
@@ -2866,8 +2868,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
                                                                     uint8_t *pre_save_end,
                                                                     uint8_t *pre_flags_packed) {
     translit_jcc_ibtc_site_ranges ranges = {0};
-#if defined(HL_NATIVE_TEST_HOOKS)
-    if (!translit_direct_call_pre_spill_test_enabled() || g_pcache) {
+    if (!translit_direct_call_pre_spill_enabled() || g_pcache) {
         hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
         ranges.save_end = a->cursor;
         hl_x64_mov_imm64(a, HL_X64_RAX, target);
@@ -2879,20 +2880,6 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
         ranges.end = a->cursor;
         return ranges;
     }
-#else
-    (void)pre_save_end;
-    (void)pre_flags_packed;
-    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
-    ranges.save_end = a->cursor;
-    hl_x64_mov_imm64(a, HL_X64_RAX, target);
-    ranges.target_end = a->cursor;
-    hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
-    ranges.rip_end = a->cursor;
-    hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
-    translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
-    ranges.end = a->cursor;
-    return ranges;
-#endif
     if (pre_flags_packed != NULL) {
         ranges.save_end = pre_save_end;
         ranges.flags_packed = pre_flags_packed;
@@ -6434,8 +6421,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             if (kind == TL_CALL) {
                 direct_call_committed = a->cursor;
                 direct_call_target = next + (uint64_t)insn.imm;
-#if defined(HL_NATIVE_TEST_HOOKS)
-                if (translit_direct_call_pre_spill_test_enabled() && !g_pcache &&
+                if (translit_direct_call_pre_spill_enabled() && !g_pcache &&
                     translit_jcc_ibtc_stub_entry != NULL) {
                     hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
                     direct_call_pre_save_end = a->cursor;
@@ -6445,7 +6431,6 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
                     direct_call_pre_flags_packed = a->cursor;
                     hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
                 }
-#endif
             }
             if (kind == TL_CALL_MEM) {
                 hl_x64_load_gs(a, HL_X64_R11, TL_MM_ENTRY);
@@ -10321,7 +10306,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     translit_test_direct_call_pre_spill = scenario == 112 || scenario == 113 || scenario == 114 ||
                                              scenario == 121 || scenario == 123;
     atomic_store_explicit(&translit_direct_call_guard[0],
-                          (uint64_t)translit_direct_call_pre_spill_test_enabled(), memory_order_relaxed);
+                          (uint64_t)translit_direct_call_pre_spill_enabled(), memory_order_relaxed);
     hl_backend_x86_jcc_route_test_enabled = scenario == 123;
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);

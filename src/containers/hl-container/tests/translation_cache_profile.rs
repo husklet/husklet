@@ -775,7 +775,6 @@ int main(void) {
     let unpacked = images.unpack(&image, &platform)?;
 
     let config = Config::new(owned.path().join("state"));
-    #[cfg(feature = "native-test-hooks")]
     let config = {
         let direct_call_guard = match std::env::var("HL_PCACHE_PROFILE_DIRECT_CALL_GUARD") {
             Ok(value) => parse_direct_call_guard(Some(&value))?,
@@ -784,7 +783,7 @@ int main(void) {
                 return Err("HL_PCACHE_PROFILE_DIRECT_CALL_GUARD is not valid UTF-8".into());
             }
         };
-        config.direct_call_pre_spill_test(direct_call_guard)
+        config.direct_call_pre_spill(direct_call_guard)
     };
     let config = if mode.cached() {
         config.translation_cache(cache)
