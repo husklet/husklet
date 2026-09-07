@@ -26,6 +26,7 @@ import {
 type Change = { value?: unknown; expanded?: boolean };
 type Numbers = { cpus: string; memory: string; scrollback: string; fontSize: string };
 const SETTINGS_WIDTH = { minimum: { chars: 28 }, maximum: { chars: 36 } } as const;
+const CONTROL_WIDTH = { chars: 60 } as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
   const [configuration, setConfiguration] = React.useState<WorkspaceConfiguration | null>(null);
@@ -129,7 +130,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             <Text
               label="Settings save without stopping your workspace. Runtime identity changes apply when the workspace or panes reopen."
               color="text-dim"
-              width={SETTINGS_WIDTH}
+              width={CONTROL_WIDTH}
               wrap
             />
             <SettingsGroup
@@ -151,7 +152,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               <Text
                 label="Changing storage is refused while this workspace is running; other runtime settings are saved for the next restart."
                 color="text-dim"
-                width={SETTINGS_WIDTH}
+                width={CONTROL_WIDTH}
                 wrap
               />
               {field('Default shell', configuration.shell ?? '', 'Automatic when empty', (event) =>
@@ -169,6 +170,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               <Column gap={1}>
                 <Text label="Execution lifetime" />
                 <Select
+                  width={CONTROL_WIDTH}
                   value={configuration.execution_lifetime}
                   choices={[
                     { value: 'persisted', label: 'Persisted across restarts' },
@@ -419,7 +421,13 @@ function field(
   return (
     <Column gap={1}>
       <Text label={label} />
-      <Entry value={value} placeholder={placeholder} onChange={onChange} />
+      <Entry
+        value={value}
+        placeholder={placeholder}
+        grow={false}
+        width={CONTROL_WIDTH}
+        onChange={onChange}
+      />
     </Column>
   );
 }
