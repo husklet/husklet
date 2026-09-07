@@ -897,7 +897,8 @@ typedef struct translit_profile_execution_options {
 } translit_profile_execution_options;
 static translit_profile_execution_options translit_profile_options;
 typedef struct translit_hot_execution_options {
-    uint8_t jcc_ibtc_disabled, jcc_link_disabled, direct_jmp_ibtc_disabled, mixed_sse_disabled;
+    uint8_t jcc_ibtc_disabled, jcc_link_disabled, direct_jmp_ibtc_disabled, mixed_sse_disabled,
+        mulss_disabled;
 } translit_hot_execution_options;
 static translit_hot_execution_options translit_hot_options;
 
@@ -916,6 +917,8 @@ static void translit_profile_options_refresh(void) {
         (uint8_t)hl_option_flag_value("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0);
     translit_hot_options.mixed_sse_disabled =
         (uint8_t)hl_option_flag_value("HL_TRANSLIT_MIXED_SSE_DISABLE", 0);
+    translit_hot_options.mulss_disabled =
+        (uint8_t)hl_option_flag_value("HL_TRANSLIT_MULSS_DISABLE", 0);
     translit_profile_options.enabled =
         (g_prof || translit_profile_options.symbolize) && length != 0 &&
         length < sizeof translit_profile_options.directory;
@@ -1582,7 +1585,8 @@ static int translit_classify_two(const struct insn *insn) {
         if (insn->rep && op == 0x2A) return TL_SSE2; // CVTSI2SS xmm,r/m32|64
         // Legacy scalar MULSS changes only the low destination lane and MXCSR. Keep this first
         // landing register-register: memory needs faultable-load retirement separate from the copied op.
-        if (insn->rep && op == 0x59 && insn->mod == 3) return TL_SSE2;
+        if (insn->rep && op == 0x59 && insn->mod == 3 && !translit_hot_options.mulss_disabled)
+            return TL_SSE2;
         if (!insn->rep &&
             (op == 0x10 || op == 0x28 || ((op == 0x11 || op == 0x29) && insn->is_mem)))
             return TL_SSE2;
@@ -4128,7 +4132,8 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
             {"HL_TRANSLIT_MIXED_SSE_DISABLE", 0, 2}, {"HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE", 0, 4},
             {"HL_TRANSLIT_FS_AUTHORITY_TEST", 0, 5}, {"HL_TRANSLIT_PROVENANCE_FALLBACK", 0, 6},
             {"HL_TRANSLIT_BODY_OWNER_EXHAUST", 0, 7},
-            {"HL_TRANSLIT_BODY_CAP_TEST", 0, 12},
+            {"HL_TRANSLIT_MULSS_DISABLE", 0, 12},
+            {"HL_TRANSLIT_BODY_CAP_TEST", 0, 13},
             {"HL_TRANSLIT_RIPREL_READONLY", 1, 9},
             {"HL_TRANSLIT_FS_LOAD_BRIDGE", 1, 10},
             {"HL_TRANSLIT_RIPREL_LOAD_BRIDGE", 0, 11},
@@ -7163,6 +7168,7 @@ static int translit_mulss_fixture_test(void) {
     uint64_t saved_fixture_guest = translit_fall_fixture_guest;
     size_t saved_fixture_length = translit_fall_fixture_length;
     int saved_selected = translit_selected;
+    uint8_t saved_mulss_disabled = translit_hot_options.mulss_disabled;
     unsigned saved_mxcsr = _mm_getcsr();
     int result = 0;
     g_cache = arena;
@@ -7275,6 +7281,33 @@ static int translit_mulss_fixture_test(void) {
         map_clear();
     }
 
+    // The launch-scoped kill switch is the same-binary benchmark control. Prove it restores the
+    // interpreter boundary without incrementing either admission counter.
+    if (result == 0) {
+        uint8_t *code = guest + source_offset;
+        memcpy(code, instruction, sizeof instruction);
+        code[sizeof instruction] = 0x0f;
+        code[sizeof instruction + 1] = 0x0b;
+        struct insn decoded;
+        uint64_t admitted_before = translit_sse2_mulss_admitted;
+        uint64_t runs_before = translit_sse2_mulss_runs_admitted;
+        translit_hot_options.mulss_disabled = 1;
+        int length = hl_x86_decode_context(context, (uint64_t)(uintptr_t)code, &decoded);
+        memset(arena, 0, size);
+        g_cp = arena + sizeof(struct interp_block);
+        g_cache_gen = UINT64_MAX - 0xb20;
+        map_clear();
+        struct interp_block *block = (struct interp_block *)arena;
+        void *body = length > 0 ? translit_build(context, block, (uint64_t)(uintptr_t)code, NULL) : NULL;
+        if (length != (int)sizeof instruction || translit_classify(&decoded) == TL_SSE2 || body != NULL ||
+            translit_sse2_mulss_admitted != admitted_before ||
+            translit_sse2_mulss_runs_admitted != runs_before)
+            result = 359;
+        translit_hot_options.mulss_disabled = saved_mulss_disabled;
+        jit_body_owner_drop_generation(g_cache_gen);
+        map_clear();
+    }
+
     for (unsigned index = 0; result == 0 && index < sizeof refused / sizeof refused[0]; ++index) {
         uint8_t *code = guest + source_offset;
         memcpy(code, refused[index], refused_length[index]);
@@ -7297,6 +7330,7 @@ static int translit_mulss_fixture_test(void) {
     }
 
     _mm_setcsr(saved_mxcsr);
+    translit_hot_options.mulss_disabled = saved_mulss_disabled;
     translit_selected = saved_selected;
     if (context != NULL) hl_x86_hot_context_destroy(context);
     translit_fall_fixture_bytes = saved_fixture_bytes;

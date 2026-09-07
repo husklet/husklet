@@ -124,6 +124,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only publish one rechecksummed same-ISA pcache semantic mutation", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_TRANSLIT_MIXED_SSE_DISABLE",
                      "disable mixed normal/SSE same-ISA descriptor admission", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_TRANSLIT_MULSS_DISABLE",
+                     "disable legacy register MULSS same-ISA descriptor admission", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_JCC_LINK_DISABLE",
                         "test-only disable already-published same-page JCC links", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_JCC_IBTC_DISABLE",
