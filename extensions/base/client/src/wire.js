@@ -27,17 +27,41 @@ const KNOWN_FLAGS = 0b0000_0111;
 const KINDS = new Set(Object.values(KIND));
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const CAPACITY = HEADER + PAYLOAD_LIMIT;
+const JSON_DEPTH_LIMIT = 128;
+
+function validateJson(value) {
+  const pending = [[value, 0]];
+  while (pending.length > 0) {
+    const [current, depth] = pending.pop();
+    if (
+      typeof current === 'number' &&
+      (!Number.isFinite(current) || (Number.isInteger(current) && !Number.isSafeInteger(current)))
+    ) {
+      throw new Error('frame JSON contains a number that cannot cross the protocol losslessly');
+    }
+    if (!current || typeof current !== 'object') continue;
+    if (depth >= JSON_DEPTH_LIMIT)
+      throw new Error(`frame JSON exceeds the ${JSON_DEPTH_LIMIT} level depth limit`);
+    for (const child of Array.isArray(current) ? current : Object.values(current))
+      pending.push([child, depth + 1]);
+  }
+  return value;
+}
 
 /** Encodes one frame. */
 export function encode({ channel = CONTROL, kind, payload, flags = FLAG_END }) {
-  if (!Number.isInteger(channel) || channel < 0 || channel > 0xffff_ffff) throw new RangeError('frame channel must be an unsigned 32-bit integer');
+  if (!Number.isInteger(channel) || channel < 0 || channel > 0xffff_ffff)
+    throw new RangeError('frame channel must be an unsigned 32-bit integer');
   if (!KINDS.has(kind)) throw new RangeError(`frame has unknown kind ${kind}`);
-  if (!Number.isInteger(flags) || flags < 0 || flags > 0xff || (flags & ~KNOWN_FLAGS) !== 0) throw new RangeError(`frame has unknown flags ${flags}`);
+  if (!Number.isInteger(flags) || flags < 0 || flags > 0xff || (flags & ~KNOWN_FLAGS) !== 0)
+    throw new RangeError(`frame has unknown flags ${flags}`);
   const serialized = payload instanceof Uint8Array ? undefined : JSON.stringify(payload);
-  if (serialized === undefined && !(payload instanceof Uint8Array)) throw new TypeError('frame payload must be bytes or a JSON value');
-  const body = Buffer.isBuffer(payload) || payload instanceof Uint8Array
-    ? Buffer.from(payload)
-    : Buffer.from(serialized, 'utf8');
+  if (serialized === undefined && !(payload instanceof Uint8Array))
+    throw new TypeError('frame payload must be bytes or a JSON value');
+  const body =
+    Buffer.isBuffer(payload) || payload instanceof Uint8Array
+      ? Buffer.from(payload)
+      : Buffer.from(serialized, 'utf8');
   if (body.length > PAYLOAD_LIMIT) {
     throw new Error(`frame payload is ${body.length} bytes, above the ${PAYLOAD_LIMIT} limit`);
   }
@@ -62,7 +86,9 @@ export class Reader {
   #length = 0;
 
   /** Bytes retained for the incomplete frame at the front of the stream. */
-  get buffered() { return this.#length; }
+  get buffered() {
+    return this.#length;
+  }
 
   /** Adds bytes and returns every frame they completed. */
   take(chunk) {
@@ -102,9 +128,11 @@ export class Reader {
     let payload = Buffer.from(body);
     if (![KIND.ping, KIND.pong, KIND.close, KIND.reset].includes(kind)) {
       try {
-        payload = JSON.parse(UTF8.decode(body));
+        payload = validateJson(JSON.parse(UTF8.decode(body)));
       } catch (error) {
-        throw new Error(`frame payload is not valid UTF-8 JSON: ${error.message}`, { cause: error });
+        throw new Error(`frame payload is not valid UTF-8 JSON: ${error.message}`, {
+          cause: error,
+        });
       }
     }
     const frame = {

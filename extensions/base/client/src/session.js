@@ -2,8 +2,15 @@
 
 import { CONTROL, FLAG_END, KIND, Reader, encode } from './wire.js';
 import {
-  encodeRequest, PROTOCOL_CAPABILITIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_VERSION,
-  validateFailure, validateReplyFor, validateSnapshot, validateUiEvent as validateCurrentUiEvent,
+  encodeRequest,
+  PROTOCOL_CAPABILITIES,
+  PROTOCOL_REQUEST_CAPABILITIES,
+  PROTOCOL_TOPICS,
+  PROTOCOL_VERSION,
+  validateFailure,
+  validateReplyFor,
+  validateSnapshot,
+  validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
@@ -18,7 +25,9 @@ const ERROR = 2;
 const COALESCED = 4;
 const CLOSE_TIMEOUT = 1_000;
 const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [snapshot, wire]));
-const TOPIC_CAPABILITIES = new Map(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
+const TOPIC_CAPABILITIES = new Map(
+  PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]),
+);
 const CAPABILITIES = new Set(PROTOCOL_CAPABILITIES.map(({ wire }) => wire));
 
 class DenoSocket {
@@ -58,27 +67,42 @@ class DenoSocket {
 
   write(bytes) {
     if (this.#closed) return false;
-    this.#writing = this.#writing.then(() => this.#send(bytes)).then(
-      () => this.#emit('drain'),
-      (error) => { this.#emit('error', error); this.destroy(); },
-    );
+    this.#writing = this.#writing
+      .then(() => this.#send(bytes))
+      .then(
+        () => this.#emit('drain'),
+        (error) => {
+          this.#emit('error', error);
+          this.destroy();
+        },
+      );
     return true;
   }
 
   end(bytes, complete) {
     if (bytes) this.write(bytes);
     this.#writing.finally(() => {
-      try { this.#connection.closeWrite(); } catch { this.destroy(); }
+      try {
+        this.#connection.closeWrite();
+      } catch {
+        this.destroy();
+      }
       complete?.();
     });
   }
 
-  get destroyed() { return this.#closed; }
+  get destroyed() {
+    return this.#closed;
+  }
 
   destroy() {
     if (this.#closed) return;
     this.#closed = true;
-    try { this.#connection.close(); } catch { /* already closed */ }
+    try {
+      this.#connection.close();
+    } catch {
+      /* already closed */
+    }
     this.#emit('close');
   }
 
@@ -129,7 +153,20 @@ function extensionSocketPath() {
 }
 
 function requiredObject(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError(`${label} must be an object`);
+  return value;
+}
+
+function peerName(value) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 64 ||
+    !/^[a-z0-9_][a-z0-9._-]*$/.test(value)
+  ) {
+    throw new TypeError('host greeting extension must be a valid extension name');
+  }
   return value;
 }
 
@@ -180,6 +217,7 @@ export class Session {
   #limit;
   #timeout;
   #closed = false;
+  #closeReason;
   #granted = [];
   #greeted;
   #ready;
@@ -190,7 +228,9 @@ export class Session {
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
-  #drainListener = () => { this.#backpressured = false; };
+  #drainListener = () => {
+    this.#backpressured = false;
+  };
   #closeListener = () => {
     this.#finish(new Error('extension host connection closed'));
     this.#socket.removeListener('data', this.#dataListener);
@@ -201,10 +241,20 @@ export class Session {
   };
   #errorListener = (error) => this.#finish(error);
 
-  constructor(socket, {
-    onReply = () => {}, onRows = () => {}, onEvent = () => {}, onEventError = () => {}, onClose = () => {}, pendingLimit = 64, timeout = 30_000,
-  } = {}) {
-    if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1) throw new RangeError('pendingLimit must be a positive integer');
+  constructor(
+    socket,
+    {
+      onReply = () => {},
+      onRows = () => {},
+      onEvent = () => {},
+      onEventError = () => {},
+      onClose = () => {},
+      pendingLimit = 64,
+      timeout = 30_000,
+    } = {},
+  ) {
+    if (!Number.isSafeInteger(pendingLimit) || pendingLimit < 1)
+      throw new RangeError('pendingLimit must be a positive integer');
     if (!Number.isFinite(timeout) || timeout <= 0) throw new RangeError('timeout must be positive');
     this.#socket = socket;
     this.#limit = pendingLimit;
@@ -224,7 +274,8 @@ export class Session {
     this.#events.add(onEvent);
     this.#greetingTimer = setTimeout(() => {
       const error = new Error(`extension host handshake timed out after ${this.#timeout}ms`);
-      this.#finish(error); this.#socket.destroy();
+      this.#finish(error);
+      this.#socket.destroy();
     }, this.#timeout);
     this.#greetingTimer.unref?.();
     socket.on('data', this.#dataListener);
@@ -253,7 +304,8 @@ export class Session {
   static connect(path = extensionSocketPath(), handlers = {}) {
     if (!path) throw new Error(`${SOCKET} is not set; an extension runs inside a workspace`);
     const connectTimeout = handlers.connectTimeout ?? 30_000;
-    if (!Number.isFinite(connectTimeout) || connectTimeout <= 0) throw new RangeError('connectTimeout must be positive');
+    if (!Number.isFinite(connectTimeout) || connectTimeout <= 0)
+      throw new RangeError('connectTimeout must be positive');
     return new Promise((resolve, reject) => {
       let socket;
       let settled = false;
@@ -270,59 +322,78 @@ export class Session {
         socket?.destroy();
         reject(error);
       };
-      runtimeSocket(path).then((connected) => {
-        socket = connected;
-        socket.once('error', fail);
-        // Resolve only after the handshake, so a caller that renders straight
-        // away cannot outrun it.
-        socket.once('connect', () => {
-          const session = new Session(socket, handlers);
-          session.ready.then(() => {
-            if (settled) return session.close();
-            settled = true;
-            clearTimeout(timer);
-            socket.removeListener('error', fail);
-            resolve(session);
-          }).catch(fail);
-        });
-        if (socket instanceof DenoSocket) socket.open();
-      }).catch(fail);
+      runtimeSocket(path)
+        .then((connected) => {
+          socket = connected;
+          socket.once('error', fail);
+          // Resolve only after the handshake, so a caller that renders straight
+          // away cannot outrun it.
+          socket.once('connect', () => {
+            const session = new Session(socket, handlers);
+            session.ready
+              .then(() => {
+                if (settled) return session.close();
+                if (session.#closed) return fail(session.#closeReason);
+                settled = true;
+                clearTimeout(timer);
+                socket.removeListener('error', fail);
+                resolve(session);
+              })
+              .catch(fail);
+          });
+          if (socket instanceof DenoSocket) socket.open();
+        })
+        .catch(fail);
     });
   }
 
   /** Sends one call and resolves with the tagged host reply. */
   call(name, argument, { signal } = {}) {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
-    if (!this.#welcomed) return Promise.reject(new Error('extension host handshake is not complete'));
-    if (signal !== undefined && (typeof signal !== 'object' || typeof signal.addEventListener !== 'function'
-      || typeof signal.removeEventListener !== 'function' || typeof signal.aborted !== 'boolean')) {
+    if (!this.#welcomed)
+      return Promise.reject(new Error('extension host handshake is not complete'));
+    if (
+      signal !== undefined &&
+      (typeof signal !== 'object' ||
+        typeof signal.addEventListener !== 'function' ||
+        typeof signal.removeEventListener !== 'function' ||
+        typeof signal.aborted !== 'boolean')
+    ) {
       return Promise.reject(new TypeError('call signal must be an AbortSignal'));
     }
     if (signal?.aborted) return Promise.reject(abortError(signal.reason));
-    const capability = name === 'event_subscribe' || name === 'event_unsubscribe'
-      ? TOPIC_CAPABILITIES.get(argument?.topic)
-      : PROTOCOL_REQUEST_CAPABILITIES[name];
-    if (capability === undefined) return Promise.reject(new RangeError(`unclassified extension request ${name}`));
+    const capability =
+      name === 'event_subscribe' || name === 'event_unsubscribe'
+        ? TOPIC_CAPABILITIES.get(argument?.topic)
+        : PROTOCOL_REQUEST_CAPABILITIES[name];
+    if (capability === undefined)
+      return Promise.reject(new RangeError(`unclassified extension request ${name}`));
     if (!this.#granted.includes(capability)) {
-      return Promise.reject(new ExtensionError({
-        error: 'denied', capability,
-        detail: `extension lacks negotiated capability ${capability}`,
-      }));
+      return Promise.reject(
+        new ExtensionError({
+          error: 'denied',
+          capability,
+          detail: `extension lacks negotiated capability ${capability}`,
+        }),
+      );
     }
     if (this.#pending.length >= this.#limit) {
       return Promise.reject(new Error(`extension call limit of ${this.#limit} is exhausted`));
     }
-    if (this.#backpressured) return Promise.reject(new Error('extension socket is applying write backpressure'));
+    if (this.#backpressured)
+      return Promise.reject(new Error('extension socket is applying write backpressure'));
     const payload = encodeRequest(name, argument);
     return new Promise((resolve, reject) => {
-      const abort = signal ? () => {
-        const error = abortError(signal.reason);
-        // Calls share one ordered channel without request identifiers. Once a
-        // frame is written, retaining the session could bind its late reply to
-        // the next caller, so cancellation is deliberately fail-closed.
-        this.#finish(error);
-        this.#socket.destroy();
-      } : undefined;
+      const abort = signal
+        ? () => {
+            const error = abortError(signal.reason);
+            // Calls share one ordered channel without request identifiers. Once a
+            // frame is written, retaining the session could bind its late reply to
+            // the next caller, so cancellation is deliberately fail-closed.
+            this.#finish(error);
+            this.#socket.destroy();
+          }
+        : undefined;
       const timer = setTimeout(() => {
         const error = new Error(`extension call ${name} timed out after ${this.#timeout}ms`);
         // Without request identifiers, continuing after one missing ordered
@@ -351,7 +422,8 @@ export class Session {
   /** Round-trips an opaque bounded heartbeat without consuming call ordering. */
   ping() {
     if (this.#closed) return Promise.reject(new Error('extension session is closed'));
-    if (this.#backpressured) return Promise.reject(new Error('extension socket is applying write backpressure'));
+    if (this.#backpressured)
+      return Promise.reject(new Error('extension socket is applying write backpressure'));
     const token = Buffer.allocUnsafe(8);
     token.writeBigUInt64LE(BigInt(this.#nextPing++));
     const key = token.toString('hex');
@@ -361,8 +433,13 @@ export class Session {
         reject(new Error(`extension ping timed out after ${this.#timeout}ms`));
       }, this.#timeout);
       this.#pings.set(key, { resolve, reject, timer });
-      try { this.#write({ channel: CONTROL, kind: KIND.ping, payload: token }); }
-      catch (error) { clearTimeout(timer); this.#pings.delete(key); reject(error); }
+      try {
+        this.#write({ channel: CONTROL, kind: KIND.ping, payload: token });
+      } catch (error) {
+        clearTimeout(timer);
+        this.#pings.delete(key);
+        reject(error);
+      }
     });
   }
 
@@ -378,25 +455,36 @@ export class Session {
     this.#finish(new Error('extension session closed'));
     this.#closing = new Promise((resolve) => {
       if (this.#socket.destroyed) return resolve();
-      const timer = setTimeout(() => {
-        this.#socket.destroy();
-        this.#detachDataListeners();
-        resolve();
-      }, Math.min(this.#timeout, CLOSE_TIMEOUT));
+      const timer = setTimeout(
+        () => {
+          this.#socket.destroy();
+          this.#detachDataListeners();
+          resolve();
+        },
+        Math.min(this.#timeout, CLOSE_TIMEOUT),
+      );
       timer.unref?.();
-      this.#socket.end(encode({ channel: CONTROL, kind: KIND.close, payload: Buffer.alloc(0) }), () => {
-        clearTimeout(timer);
-        this.#socket.destroy();
-        this.#detachDataListeners();
-        resolve();
-      });
+      this.#socket.end(
+        encode({ channel: CONTROL, kind: KIND.close, payload: Buffer.alloc(0) }),
+        () => {
+          clearTimeout(timer);
+          this.#socket.destroy();
+          this.#detachDataListeners();
+          resolve();
+        },
+      );
     });
     return this.#closing;
   }
 
   #ended() {
-    try { this.#reader.finish(); }
-    catch (error) { this.#finish(error); this.#socket.destroy(); return; }
+    try {
+      this.#reader.finish();
+    } catch (error) {
+      this.#finish(error);
+      this.#socket.destroy();
+      return;
+    }
     this.#finish(new Error('extension host connection closed'));
   }
 
@@ -410,9 +498,12 @@ export class Session {
   }
 
   #handle(frame) {
-    if ((frame.flags & FLAG_END) === 0) throw new Error('fragmented extension frames are unsupported');
-    if ((frame.flags & ERROR) !== 0 && frame.kind !== KIND.response) throw new Error('error flag is only valid on responses');
-    if ((frame.flags & COALESCED) !== 0 && frame.kind !== KIND.event) throw new Error('coalesced flag is only valid on events');
+    if ((frame.flags & FLAG_END) === 0)
+      throw new Error('fragmented extension frames are unsupported');
+    if ((frame.flags & ERROR) !== 0 && frame.kind !== KIND.response)
+      throw new Error('error flag is only valid on responses');
+    if ((frame.flags & COALESCED) !== 0 && frame.kind !== KIND.event)
+      throw new Error('coalesced flag is only valid on events');
     if (frame.kind === KIND.ping) {
       if (!this.#welcomed) throw new Error('host ping arrived before the greeting');
       this.#write({ channel: frame.channel, kind: KIND.pong, payload: frame.payload });
@@ -423,13 +514,18 @@ export class Session {
       const key = frame.payload.toString('hex');
       const pending = this.#pings.get(key);
       if (!pending) throw new Error('host returned an unknown ping token');
-      this.#pings.delete(key); clearTimeout(pending.timer); pending.resolve();
+      this.#pings.delete(key);
+      clearTimeout(pending.timer);
+      pending.resolve();
       return;
     }
-    if (frame.kind === KIND.reset) throw new Error(`extension host reset the session: ${frame.payload.toString('utf8')}`);
+    if (frame.kind === KIND.reset)
+      throw new Error(`extension host reset the session: ${frame.payload.toString('utf8')}`);
     if (frame.kind === KIND.close) {
-      if (frame.channel === CONTROL) { this.#finish(new Error('extension host closed the session')); this.#socket.destroy(); }
-      else {
+      if (frame.channel === CONTROL) {
+        this.#finish(new Error('extension host closed the session'));
+        this.#socket.destroy();
+      } else {
         const topic = this.#eventTopics.get(frame.channel);
         this.#eventTopics.delete(frame.channel);
         if (topic !== undefined) this.#topics.delete(topic);
@@ -444,9 +540,10 @@ export class Session {
     if (frame.kind === KIND.response && frame.channel === CALLS) {
       const pending = this.#pending[0];
       if (!pending) return this.#onReply(frame.payload);
-      const payload = (frame.flags & ERROR) !== 0
-        ? validateFailure(frame.payload)
-        : validateReplyFor(pending.name, frame.payload);
+      const payload =
+        (frame.flags & ERROR) !== 0
+          ? validateFailure(frame.payload)
+          : validateReplyFor(pending.name, frame.payload);
       this.#pending.shift();
       clearTimeout(pending.timer);
       pending.signal?.removeEventListener('abort', pending.abort);
@@ -455,7 +552,8 @@ export class Session {
         if (pending.name === 'event_subscribe') this.#topics.add(pending.argument.topic);
         if (pending.name === 'event_unsubscribe') {
           this.#topics.delete(pending.argument.topic);
-          for (const [channel, topic] of this.#eventTopics) if (topic === pending.argument.topic) this.#eventTopics.delete(channel);
+          for (const [channel, topic] of this.#eventTopics)
+            if (topic === pending.argument.topic) this.#eventTopics.delete(channel);
         }
         pending.resolve(payload);
       }
@@ -467,9 +565,11 @@ export class Session {
       if (typeof payload?.snapshot === 'string') {
         payload = validateSnapshot(payload);
         const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
-        if (!topic || !this.#topics.has(topic)) throw new TypeError(`snapshot ${payload.snapshot} has no active subscription`);
+        if (!topic || !this.#topics.has(topic))
+          throw new TypeError(`snapshot ${payload.snapshot} has no active subscription`);
         const bound = this.#eventTopics.get(frame.channel);
-        if (bound !== undefined && bound !== topic) throw new TypeError(`event channel ${frame.channel} changed topic`);
+        if (bound !== undefined && bound !== topic)
+          throw new TypeError(`event channel ${frame.channel} changed topic`);
         this.#eventTopics.set(frame.channel, topic);
       } else {
         payload = validateUiEvent(payload);
@@ -479,7 +579,11 @@ export class Session {
           try {
             listener(payload, frame.channel);
           } catch (error) {
-            try { this.#onEventError(error); } catch { /* Error reporting cannot strand event credit. */ }
+            try {
+              this.#onEventError(error);
+            } catch {
+              /* Error reporting cannot strand event credit. */
+            }
           }
         }
       } finally {
@@ -507,6 +611,7 @@ export class Session {
   #finish(error) {
     if (this.#closed) return;
     this.#closed = true;
+    this.#closeReason = error;
     clearTimeout(this.#greetingTimer);
     this.#rejectReady(error);
     for (const pending of this.#pending.splice(0)) {
@@ -522,7 +627,11 @@ export class Session {
     this.#events.clear();
     this.#topics.clear();
     this.#eventTopics.clear();
-    try { this.#onClose(error); } catch { /* Lifecycle reporting cannot prevent closure. */ }
+    try {
+      this.#onClose(error);
+    } catch {
+      /* Lifecycle reporting cannot prevent closure. */
+    }
   }
 
   /** The host speaks first and states the grant, so an extension knows what it
@@ -532,22 +641,27 @@ export class Session {
     if (frame.kind !== KIND.open) throw new Error('host greeting must open the control channel');
     const welcome = frame.payload;
     requiredObject(welcome, 'host greeting');
-    if (!Number.isSafeInteger(welcome.protocol)) throw new TypeError('host greeting protocol must be an integer');
+    if (!Number.isSafeInteger(welcome.protocol))
+      throw new TypeError('host greeting protocol must be an integer');
     if (welcome.protocol !== PROTOCOL) {
-      throw new Error(`host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`);
+      throw new Error(
+        `host speaks protocol ${welcome.protocol}, this extension speaks ${PROTOCOL}`,
+      );
     }
+    const name = peerName(welcome.extension ?? welcome.peer);
     const granted = welcome.granted ?? [];
-    if (!Array.isArray(granted) || granted.some((capability) => typeof capability !== 'string' || !CAPABILITIES.has(capability))) {
+    if (
+      !Array.isArray(granted) ||
+      granted.some((capability) => typeof capability !== 'string' || !CAPABILITIES.has(capability))
+    ) {
       throw new TypeError('host greeting contains an unknown capability');
     }
     this.#granted = Object.freeze([...new Set(granted)]);
-    this.#write(
-      {
-        channel: CONTROL,
-        kind: KIND.response,
-        payload: { protocol: PROTOCOL, name: welcome.peer ?? welcome.extension, features: [] },
-      },
-    );
+    this.#write({
+      channel: CONTROL,
+      kind: KIND.response,
+      payload: { protocol: PROTOCOL, name, features: [] },
+    });
     this.#welcomed = true;
     clearTimeout(this.#greetingTimer);
     this.#ready();

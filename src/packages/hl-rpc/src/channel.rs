@@ -333,4 +333,38 @@ mod tests {
         let second = channels.open(Purpose::Call).expect("opened");
         assert_ne!(first, second, "a late frame must not land on a new channel");
     }
+
+    #[test]
+    fn deterministic_channel_lifecycle_sequences_preserve_every_bound() {
+        let mut channels = Channels::new();
+        let mut live = Vec::new();
+        let mut state = 0x5eed_u32;
+        for _ in 0..20_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            match state % 4 {
+                0 if live.len() < Channels::LIMIT => live.push(channels.open(Purpose::Subscription).expect("room")),
+                1 if !live.is_empty() => {
+                    let index = state as usize % live.len();
+                    let id = live.swap_remove(index);
+                    channels.close(id).expect("live");
+                    assert_eq!(channels.reserve(id), Err(Refusal::Unknown(id)));
+                    assert_eq!(channels.replenish(id, state), Err(Refusal::Unknown(id)));
+                }
+                2 if !live.is_empty() => {
+                    let id = live[state as usize % live.len()];
+                    let _ = channels.reserve(id).expect("live");
+                }
+                3 if !live.is_empty() => {
+                    let id = live[state as usize % live.len()];
+                    channels.replenish(id, state).expect("live");
+                }
+                _ => {}
+            }
+            assert_eq!(channels.len(), live.len());
+            assert!(channels.len() <= Channels::LIMIT);
+            for id in &live {
+                assert!(channels.credit(*id).is_some_and(|credit| credit <= Channels::CREDIT));
+            }
+        }
+    }
 }
