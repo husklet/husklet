@@ -83,7 +83,8 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "15", interpreted_steps: "0", translated_entries: "8", t_jcc_fall: "1", t_direct_call: "1", t_jmp_reg: "1", t_call_reg: "1", t_ret: "3", t_syscall: "1" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "15", interpreted_steps: "0", translated_entries: "8", translations: "8" } }
+        - { record: "[diag] backend-shape-detail", count: 1, fields: { translated_entries: "8", t_cond_not_taken: "1", t_direct_call: "1", t_indirect_branch: "1", t_indirect_call: "1", t_return: "3", t_syscall: "1" } }
   - id: runtime/aarch64-dbt/smc-targeted
     status: active
     compat: { class: compatibility }
