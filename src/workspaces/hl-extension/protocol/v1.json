@@ -8018,6 +8018,13 @@
                 }
               },
               {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "granted",
                 "optional": false,
                 "schema": {
@@ -8065,6 +8072,13 @@
                   "maximum": 9007199254740991,
                   "minimum": 0,
                   "signed": false
+                }
+              },
+              {
+                "name": "image_digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
                 }
               },
               {
@@ -11108,7 +11122,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:bbc0df4fc9c05829",
+  "source_fingerprint": "fnv1a64:3431973cc7bbb57f",
   "specification_version": 1,
   "topics": [
     {

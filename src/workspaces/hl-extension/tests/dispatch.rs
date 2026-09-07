@@ -803,6 +803,7 @@ impl ExtensionStore for Host {
         &self,
         job: &str,
         _revision: u64,
+        _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -814,6 +815,7 @@ impl ExtensionStore for Host {
         &self,
         job: &str,
         _revision: u64,
+        _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -990,6 +992,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ExtensionInstall {
+                image_digest: format!("sha256:{}", "a".repeat(64)),
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
@@ -1000,6 +1003,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ExtensionUpdate {
+                image_digest: format!("sha256:{}", "a".repeat(64)),
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
@@ -1667,6 +1671,20 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
             &services(&host)
         )
         .is_err());
+    assert!(matches!(
+        session.dispatch(
+            &Request::ExtensionInstall {
+                job: "job-1".into(),
+                revision: 7,
+                image_digest: "sha256:stale-catalogue-label".into(),
+                granted: Grant::default(),
+                containers: hl_extension::ContainerGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
+            },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     assert!(host.ledger.reached().is_empty());
 }
 

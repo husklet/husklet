@@ -314,7 +314,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Text
                 label={`Manifest ${acquisition.candidate.name} ${acquisition.candidate.version}`}
               />
-              <Text label={`Source ${reference}`} color="text-dim" wrap />
+              <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
               <Text
                 label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
                 tooltip={acquisition.candidate.image_digest}

@@ -1285,6 +1285,7 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
             }),
           );
         else if (frame.payload.call === 'extension_install') {
+          assert.equal(frame.payload.with.image_digest, candidate.image_digest);
           socket.write(
             encode({
               channel: 21,

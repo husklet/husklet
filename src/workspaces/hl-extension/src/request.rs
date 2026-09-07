@@ -110,6 +110,7 @@ pub enum Request {
     ExtensionInstall {
         job: String,
         revision: u64,
+        image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,
@@ -117,6 +118,7 @@ pub enum Request {
     ExtensionUpdate {
         job: String,
         revision: u64,
+        image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
         filesystem: crate::FilesystemGrant,

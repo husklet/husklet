@@ -766,25 +766,29 @@ impl Session {
             Request::ExtensionInstall {
                 job,
                 revision,
+                image_digest,
                 granted,
                 containers,
                 filesystem,
             } => {
                 acquisition_job(job)?;
+                immutable_digest(image_digest, "extension candidate image")?;
                 Ok(Reply::Extension(
-                    port.install(job, *revision, granted, containers, filesystem)?,
+                    port.install(job, *revision, image_digest, granted, containers, filesystem)?,
                 ))
             }
             Request::ExtensionUpdate {
                 job,
                 revision,
+                image_digest,
                 granted,
                 containers,
                 filesystem,
             } => {
                 acquisition_job(job)?;
+                immutable_digest(image_digest, "extension candidate image")?;
                 Ok(Reply::Extension(
-                    port.update(job, *revision, granted, containers, filesystem)?,
+                    port.update(job, *revision, image_digest, granted, containers, filesystem)?,
                 ))
             }
             _ => Err(Failure::Unsupported {

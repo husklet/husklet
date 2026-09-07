@@ -7396,6 +7396,13 @@ const roots = {
               }
             },
             {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "granted",
               "optional": false,
               "schema": {
@@ -7443,6 +7450,13 @@ const roots = {
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "signed": false
+              }
+            },
+            {
+              "name": "image_digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             },
             {

@@ -234,6 +234,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
                 }
               : {
                   job,
+                  reference: 'registry.example/reviewed:1',
                   revision: 2,
                   state: 'ready',
                   progress: null,
@@ -275,7 +276,11 @@ test('extension inspection keeps invalid and failed references recoverable with 
     'registry.example/reviewed:1',
     'registry.example/reviewed:1',
   ]);
+  assert.ok(labelled(stage, 'Review install'));
+  assert.ok(labelled(stage, 'Manifest reviewed 1.0.0'));
   assert.ok(labelled(stage, 'Review permissions'));
+  assert.ok(labelled(stage, `Reviewed image sha256:${'c'.repeat(12)}…${'c'.repeat(8)}`));
+  assert.ok(labelled(stage, 'Source registry.example/reviewed:1'));
   assert.ok(
     labelled(stage, 'All access is off by default. Enable only what this extension needs.'),
   );

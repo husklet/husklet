@@ -142,6 +142,7 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
     with: {
       job: 'job-1',
       revision: 1,
+      image_digest: `sha256:${'a'.repeat(64)}`,
       granted: ['containers:read'],
       containers: { selectors: [{ name: 'database' }], create: false },
       filesystem: { read: [], write: [] },

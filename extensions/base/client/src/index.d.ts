@@ -584,13 +584,13 @@ export interface WorkspaceApi {
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
-    install(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
     installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
     >;
-    update(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
+    update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant): Promise<ExtensionSummary>;
     /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
     updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, filesystem?: FilesystemGrant, options?: { timeoutMs?: number }): Promise<
       | { changed: true; extension: ExtensionSummary }

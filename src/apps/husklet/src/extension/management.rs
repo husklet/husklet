@@ -122,12 +122,13 @@ impl ExtensionStore for ExtensionManagement {
         &self,
         job: &str,
         revision: u64,
+        image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
-        let name = ready_name(&self.acquisitions, job, revision)?;
+        let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
             .install_resource_scoped(job, revision, granted, containers, filesystem)?;
         super::revision::publish_inventory_change(&self.workspace);
@@ -142,12 +143,13 @@ impl ExtensionStore for ExtensionManagement {
         &self,
         job: &str,
         revision: u64,
+        image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
         filesystem: &hl_extension::FilesystemGrant,
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
-        let name = ready_name(&self.acquisitions, job, revision)?;
+        let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
         self.acquisitions
             .update_resource_scoped(job, revision, granted, containers, filesystem)?;
         super::revision::publish_inventory_change(&self.workspace);
@@ -159,13 +161,25 @@ impl ExtensionStore for ExtensionManagement {
     }
 }
 
-fn ready_name(service: &ExtensionAcquisitions, job: AcquisitionJob, revision: u64) -> Result<String, HostError> {
+fn ready_name(
+    service: &ExtensionAcquisitions,
+    job: AcquisitionJob,
+    revision: u64,
+    image_digest: &str,
+) -> Result<String, HostError> {
     let snapshot = service.status(job)?;
+    reviewed_name(snapshot, revision, image_digest)
+}
+
+fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &str) -> Result<String, HostError> {
     if snapshot.revision != revision {
         return Err(HostError::Conflict("the acquisition revision has changed".into()));
     }
     match snapshot.state {
-        AcquisitionState::Ready(candidate) => Ok(candidate.name),
+        AcquisitionState::Ready(candidate) if candidate.digest == image_digest => Ok(candidate.name),
+        AcquisitionState::Ready(_) => Err(HostError::Conflict(
+            "the acquisition candidate digest differs from the reviewed image digest".into(),
+        )),
         _ => Err(HostError::Conflict("the acquisition is not awaiting consent".into())),
     }
 }
@@ -300,6 +314,30 @@ mod tests {
             status.candidate.unwrap().installed_image_digest.as_deref(),
             Some("sha256:old")
         );
+    }
+
+    #[test]
+    fn consent_commit_requires_the_exact_reviewed_candidate_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let snapshot = AcquisitionSnapshot {
+            reference: "registry.example/team/tool:latest".into(),
+            revision: 7,
+            state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                requested_containers: hl_extension::ContainerGrant::default(),
+                requested_filesystem: hl_extension::FilesystemGrant::default(),
+                reference: "registry.example/team/tool:latest".into(),
+                digest: digest.clone(),
+                name: "sample".into(),
+                version: "2".into(),
+                requested: Grant::default(),
+                installed_digest: None,
+            }),
+        };
+        assert_eq!(reviewed_name(snapshot.clone(), 7, &digest), Ok("sample".into()));
+        assert!(matches!(
+            reviewed_name(snapshot, 7, &format!("sha256:{}", "b".repeat(64))),
+            Err(HostError::Conflict(reason)) if reason.contains("reviewed image digest")
+        ));
     }
 
     #[test]
