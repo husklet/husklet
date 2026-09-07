@@ -16,7 +16,8 @@ cases:
     expect:
       exit: 0
       stdout: vfork_exec.txt
-      stderr: [" r0=*", " fall_total=*"]
       diagnostics:
         - { counter: fork_authorized_hits, greater-than: 0 }
         - { counter: direct_call_guard_candidate_enabled, equals: 1 }
+        - { counter: direct_call_guard_attempts, greater-than: 0 }
+        - { counter: direct_call_guard_fast_hits, greater-than: 0 }
