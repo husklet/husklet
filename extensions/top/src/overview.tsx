@@ -49,17 +49,28 @@ export function Navigation({
   section: Section;
   onSelect: (section: Section) => void;
 }) {
+  const groups: { label: string; sections: Section[] }[] = [
+    { label: 'Workspace', sections: ['overview', 'workspace', 'extensions'] },
+    { label: 'Runtime', sections: ['containers', 'processes', 'executions'] },
+    { label: 'Resources', sections: ['images', 'volumes', 'networks'] },
+    { label: 'Interface', sections: ['terminals'] },
+  ];
   return (
     <Column grow={false} width={{ chars: 14 }} height="fill" pad={1} gap={1}>
       <Scroll grow height="fill">
         <Column gap={1}>
-          {SECTIONS.map((name) => (
-            <Button
-              key={name}
-              label={title(name)}
-              variant={section === name ? 'filled' : 'ghost'}
-              onInvoke={() => onSelect(name)}
-            />
+          {groups.map((group) => (
+            <Column key={group.label} gap={0}>
+              <Text label={group.label.toUpperCase()} color="text-dim" />
+              {group.sections.map((name) => (
+                <Button
+                  key={name}
+                  label={title(name)}
+                  variant={section === name ? 'filled' : 'ghost'}
+                  onInvoke={() => onSelect(name)}
+                />
+              ))}
+            </Column>
           ))}
         </Column>
       </Scroll>
@@ -107,7 +118,7 @@ export function Overview({
   return (
     <Scroll grow height="fill">
       <Column pad={2} gap={2}>
-        <Heading label="Resource overview" scale="title" />
+        <Heading label="Workspace overview" scale="title" />
         <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
         <Row gap={1} align="center">
           {refreshing ? <Spinner /> : null}
@@ -168,7 +179,7 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card width={{ minimum: { chars: 16 } }} variant="outline">
+    <Card grow={false} width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }} variant="outline">
       <CardHeader label={label} />
       <CardContent gap={1}>
         <Heading label={value} scale="title" />

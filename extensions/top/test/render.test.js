@@ -66,7 +66,7 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   for (const label of [
-    'Resource overview',
+    'Workspace overview',
     'Workspace',
     'Extensions',
     'Containers',
@@ -83,6 +83,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     true,
   );
   assert.equal(property(stageFromFrame(frame), 'Overview', 'Variant')?.Variant, 'Filled');
+  for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
+    assert.ok(labels.includes(group), group);
 });
 
 test('Top owns workspace settings and extension management in the same tab', async () => {
@@ -139,6 +141,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Workspace control'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
@@ -299,11 +302,14 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes'));
   assert.ok(labelled(stage, 'Read and write terminal text'));
+  assert.ok(labelled(stage, '0/2 allowed'));
   assert.ok(
     labelled(stage, 'containers:read'),
     'exact authority remains visible beside plain language',
   );
 
+  invoke(stage, 'Allow requested');
+  assert.ok(labelled(stage, '2/2 allowed'));
   invoke(stage, 'Install extension');
   await settled();
   await settled();

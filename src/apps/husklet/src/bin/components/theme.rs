@@ -39,7 +39,9 @@ list.wslist > row:selected {{ background-color:{BG1}; }}
 .chip.amd {{ color:#a78bfa; background:rgba(167,139,250,.16); }}
 .chip.dar {{ color:#f0a35e; background:rgba(240,163,94,.15); }}
 .go {{ font-size:12px; color:{ACCENT}; font-weight:600; }}
-.empty {{ color:{DIM}; font-size:13px; padding:26px; }}
+.empty {{ padding:44px 26px; }}
+.empty-title {{ color:{TXT}; font-size:15px; font-weight:650; }}
+.empty-detail {{ color:{DIM}; font-size:12.5px; }}
 /* per-row action affordances: ▶ play + ⋯ menu — frameless (no button box), color-only hover */
 	.rowbtn, .rowbtn > button {{ min-height:0; min-width:0; padding:2px 7px; background:none; border:none; box-shadow:none; color:{DIM}; }}
 .rowbtn:hover, .rowbtn:hover > button, .rowbtn > button:hover {{ color:{TXT}; background:none; }}
@@ -164,7 +166,7 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 
 #[cfg(test)]
 mod tests {
-    use super::{css, ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, FAINT};
+    use super::{ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, FAINT, css};
 
     fn channel(value: u8) -> f64 {
         let value = f64::from(value) / 255.0;

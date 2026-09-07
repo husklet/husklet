@@ -114,10 +114,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           const key = `${status.job}:${status.candidate.image_digest}`;
           if (candidateKey.current !== key) {
             candidateKey.current = key;
-            setGranted(status.candidate.requested);
-            // Resource authority is opt-in. A review, including an update,
-            // starts from no container identities instead of silently widening
-            // authority to every selector in the manifest.
+            // Every authority is opt-in. Inspection must never grant access,
+            // including during an update where a manifest may have widened.
+            setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
           }
         }
@@ -246,6 +245,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           wrap
         />
         <Heading label="Discover" scale="caption" />
+        <Card variant="outline">
+          <CardHeader label="Workspace control" detail="First-party · Included" />
+          <CardContent gap={1}>
+            <Text
+              label="Manage workspace settings, containers, processes, storage, networks, and terminal panes from one compact tab."
+              color="text-dim"
+              wrap
+            />
+          </CardContent>
+        </Card>
         {!installed.some((extension) => extension.name === 'storybook') && (
           <Card variant="outline">
             <CardHeader label="Component playground" detail="First-party · Storybook" />
@@ -290,6 +299,29 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 tooltip={acquisition.candidate.image_digest}
               />
               <Text label="Capability access" color="text-dim" />
+              {acquisition.candidate.requested.length > 0 && (
+                <Row gap={1} align="center">
+                  <Text
+                    label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
+                    color="text-dim"
+                  />
+                  <Button
+                    label={
+                      granted.length === acquisition.candidate.requested.length
+                        ? 'Clear access'
+                        : 'Allow requested'
+                    }
+                    variant="ghost"
+                    onInvoke={() =>
+                      setGranted(
+                        granted.length === acquisition.candidate!.requested.length
+                          ? []
+                          : acquisition.candidate!.requested,
+                      )
+                    }
+                  />
+                </Row>
+              )}
               {acquisition.candidate.requested.map((capability) => (
                 <Row key={capability} gap={2} align="center">
                   <Switch
