@@ -7,6 +7,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repository = path.resolve(here, '../../../..');
 const schemaPath = path.join(repository, 'src/workspaces/hl-extension/protocol/v1.json');
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+const fingerprint = fs
+  .readFileSync(
+    path.join(repository, 'src/workspaces/hl-extension/protocol/v1.fnv1a64'),
+    'utf8',
+  )
+  .trim();
+assert.match(fingerprint, /^[0-9a-f]{16}$/, 'Rust protocol fingerprint must be canonical');
+const provenance = `// Protocol artifact fnv1a64:${fingerprint}\n`;
 const output = path.resolve(here, '../src');
 
 function walk(node, visit) {
@@ -66,6 +74,7 @@ for (const [call, capability] of Object.entries(requestCapabilities)) {
   else assert(capabilities.has(capability), `${call} requires absent capability ${capability}`);
 }
 const runtime = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
+${provenance.trimEnd()}
 export const PROTOCOL_SPECIFICATION_VERSION = ${schema.specification_version};
 export const PROTOCOL_VERSION = ${schema.protocol_version};
 export const PROTOCOL_BOUNDS = Object.freeze(${JSON.stringify(schema.bounds, null, 2)});
@@ -184,6 +193,7 @@ function enumType(node) {
   }).join(' | ');
 }
 const declarations = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
+${provenance.trimEnd()}
 export const PROTOCOL_SPECIFICATION_VERSION: ${schema.specification_version};
 export const PROTOCOL_VERSION: ${schema.protocol_version};
 export const PROTOCOL_BOUNDS: Readonly<${type({ kind: 'struct', fields: Object.entries(schema.bounds).map(([name]) => ({name, optional:false, schema:{kind:'integer',signed:false}})) })}>;

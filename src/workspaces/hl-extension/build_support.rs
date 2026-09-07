@@ -48,7 +48,23 @@ pub fn verify(manifest: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot read protocol/v1.json: {error}"))?;
     let recorded = std::fs::read_to_string(manifest.join("protocol/v1.fnv1a64"))
         .map_err(|error| format!("cannot read protocol/v1.fnv1a64: {error}"))?;
-    verify_contents(source_fingerprint(manifest)?, &document, recorded.trim())
+    verify_contents(source_fingerprint(manifest)?, &document, recorded.trim())?;
+    verify_client(manifest, recorded.trim())
+}
+
+fn verify_client(manifest: &Path, recorded: &str) -> Result<(), String> {
+    let client = manifest.join("../../../extensions/base/client/src");
+    let marker = format!("Protocol artifact fnv1a64:{recorded}");
+    for name in ["generated-protocol.js", "generated-protocol.d.ts"] {
+        let generated = std::fs::read_to_string(client.join(name))
+            .map_err(|error| format!("cannot read generated TypeScript client {name}: {error}"))?;
+        if !generated.contains(&marker) {
+            return Err(format!(
+                "generated TypeScript client {name} is stale relative to protocol/v1.json; run `npm run protocol:generate --prefix extensions/base/client`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn verify_contents(source: u64, document: &[u8], recorded: &str) -> Result<(), String> {
@@ -65,15 +81,18 @@ fn verify_contents(source: u64, document: &[u8], recorded: &str) -> Result<(), S
 }
 
 pub fn watched(manifest: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    SOURCE_PATHS
-        .iter()
-        .map(|path| manifest.join(path))
-        .chain([manifest.join("protocol/v1.json"), manifest.join("protocol/v1.fnv1a64")])
+    SOURCE_PATHS.iter().map(|path| manifest.join(path)).chain([
+        manifest.join("protocol/v1.json"),
+        manifest.join("protocol/v1.fnv1a64"),
+        manifest.join("../../../extensions/base/client/src/generated-protocol.js"),
+        manifest.join("../../../extensions/base/client/src/generated-protocol.d.ts"),
+    ])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fingerprint, verify_contents};
+    use super::{fingerprint, verify_client, verify_contents};
+    use std::fs;
 
     fn generated(source: u64) -> (Vec<u8>, String) {
         let document = format!("{{\n  \"source_fingerprint\": \"fnv1a64:{source:016x}\"\n}}\n").into_bytes();
@@ -92,5 +111,23 @@ mod tests {
 
         let (regenerated, current) = generated(8);
         verify_contents(8, &regenerated, &current).expect("regenerated pair");
+    }
+
+    #[test]
+    fn both_generated_client_artifacts_must_name_the_exact_protocol_fingerprint() {
+        let scratch = std::env::temp_dir().join(format!("hl-extension-client-freshness-{}", std::process::id()));
+        let manifest = scratch.join("src/workspaces/hl-extension");
+        let client = scratch.join("extensions/base/client/src");
+        fs::create_dir_all(&manifest).unwrap();
+        fs::create_dir_all(&client).unwrap();
+        let marker = "// Protocol artifact fnv1a64:0123456789abcdef\n";
+        fs::write(client.join("generated-protocol.js"), marker).unwrap();
+        fs::write(client.join("generated-protocol.d.ts"), marker).unwrap();
+        verify_client(&manifest, "0123456789abcdef").expect("matching generated pair");
+
+        fs::write(client.join("generated-protocol.d.ts"), "// stale\n").unwrap();
+        let error = verify_client(&manifest, "0123456789abcdef").unwrap_err();
+        assert!(error.contains("generated-protocol.d.ts is stale"));
+        fs::remove_dir_all(scratch).unwrap();
     }
 }
