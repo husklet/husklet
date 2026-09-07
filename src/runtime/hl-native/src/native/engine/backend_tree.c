@@ -65,9 +65,7 @@ static int hl_backend_x86_jcc_route_format(char *record, size_t capacity, const 
 #define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
 #define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
 #endif
-#if defined(HL_BACKEND_A64_OPCODE_CENSUS)
 #define HL_BACKEND_A64_MAJOR_COUNT 16u
-#endif
 
 enum hl_backend_finalize_caller {
     HL_BACKEND_FINALIZE_UNKNOWN,
