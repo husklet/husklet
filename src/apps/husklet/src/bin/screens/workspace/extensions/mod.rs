@@ -221,6 +221,7 @@ mod tests {
             pane_providers: Vec::new(),
             resources: Resources::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
         }
     }
