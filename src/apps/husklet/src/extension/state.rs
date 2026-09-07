@@ -190,6 +190,7 @@ mod tests {
 
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -213,6 +214,7 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let records = records(temporary.path());
         let record = Record {
+            containers: hl_extension::ContainerGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             image_digest: "sha256:aaaa".to_owned(),
             version: "1.0.0".to_owned(),
@@ -235,6 +237,7 @@ mod tests {
         let name = ExtensionName::new("sample").expect("name");
         records
             .save(&Record {
+                containers: hl_extension::ContainerGrant::default(),
                 name: name.clone(),
                 image_digest: "sha256:aaaa".to_owned(),
                 version: "1.0.0".to_owned(),

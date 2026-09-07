@@ -134,6 +134,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("filesystem_read_range", "file_range"),
     ("filesystem_stat", "entry"),
     ("filesystem_write", "done"),
+    ("filesystem_write_observed", "identity"),
     ("filesystem_create_observed", "identity"),
     ("filesystem_mkdir", "done"),
     ("filesystem_rename", "done"),
@@ -214,6 +215,7 @@ fn request_capability(request: &str) -> Capability {
             Capability::FilesystemRead
         }
         "filesystem_write"
+        | "filesystem_write_observed"
         | "filesystem_create_observed"
         | "filesystem_mkdir"
         | "filesystem_rename"

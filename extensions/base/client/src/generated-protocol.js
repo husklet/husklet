@@ -202,6 +202,11 @@ export const PROTOCOL_TOPICS = Object.freeze([
     "capability": "workspaces:events",
     "snapshot": "workspace_events",
     "wire": "workspace-events"
+  },
+  {
+    "capability": "filesystem:read",
+    "snapshot": "filesystem",
+    "wire": "filesystem"
   }
 ]);
 export const PROTOCOL_REPLIES = Object.freeze({
@@ -295,6 +300,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_read_range": "file_range",
   "filesystem_stat": "entry",
   "filesystem_write": "done",
+  "filesystem_write_observed": "identity",
   "filesystem_create_observed": "identity",
   "filesystem_mkdir": "done",
   "filesystem_rename": "done",
@@ -402,6 +408,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_read_range": "filesystem:read",
   "filesystem_stat": "filesystem:read",
   "filesystem_write": "filesystem:write",
+  "filesystem_write_observed": "filesystem:write",
   "filesystem_create_observed": "filesystem:write",
   "filesystem_mkdir": "filesystem:write",
   "filesystem_rename": "filesystem:write",
@@ -960,6 +967,32 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ContainerGrant": {
+    "fields": [
+      {
+        "name": "selectors",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerSelector"
+          }
+        }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
   "ContainerInventory": {
     "fields": [
       {
@@ -1083,6 +1116,59 @@ const definitions = {
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "ContainerSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Id",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "Name",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
   },
   "ContainerSummary": {
     "fields": [
@@ -1573,6 +1659,14 @@ const definitions = {
         }
       },
       {
+        "name": "requested_containers",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "ContainerGrant"
+        }
+      },
+      {
         "name": "installed_image_digest",
         "optional": true,
         "schema": {
@@ -1636,6 +1730,41 @@ const definitions = {
             "kind": "ref",
             "name": "PaneProvider"
           }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileInventory": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "Entry"
+          }
+        }
+      },
+      {
+        "name": "complete",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "coalesced",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
         }
       }
     ],
@@ -5463,6 +5592,12 @@ const definitions = {
         "payload": {
           "kind": "unit"
         }
+      },
+      {
+        "name": "filesystem",
+        "payload": {
+          "kind": "unit"
+        }
       }
     ]
   },
@@ -7220,6 +7355,14 @@ const roots = {
                 "kind": "ref",
                 "name": "Grant"
               }
+            },
+            {
+              "name": "containers",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ContainerGrant"
+              }
             }
           ],
           "kind": "struct"
@@ -7253,6 +7396,14 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "Grant"
+              }
+            },
+            {
+              "name": "containers",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ContainerGrant"
               }
             }
           ],
@@ -8775,6 +8926,43 @@ const roots = {
         }
       },
       {
+        "name": "filesystem_write_observed",
+        "payload": {
+          "fields": [
+            {
+              "name": "path",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            },
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "contents",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
         "name": "filesystem_create_observed",
         "payload": {
           "fields": [
@@ -9223,6 +9411,16 @@ const roots = {
           "of": {
             "kind": "ref",
             "name": "WorkspaceEventBatch"
+          }
+        }
+      },
+      {
+        "name": "filesystem",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "FileInventory"
           }
         }
       }
@@ -10142,6 +10340,16 @@ function validate(schema, value, path) {
 function validateEnum(schema, value, path) {
   const tag = schema.serde?.tag;
   const content = schema.serde?.content;
+  if (schema.serde?.untagged) {
+    const candidates = schema.variants.filter((variant) => {
+      if (variant.payload.kind !== 'struct' || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const keys = Object.keys(value);
+      return keys.length === variant.payload.fields.length
+        && keys.every((key) => variant.payload.fields.some((field) => field.name === key));
+    });
+    if (candidates.length !== 1) fail(path, 'exactly one untagged variant');
+    return validate(candidates[0].payload, value, path);
+  }
   if (tag) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value[tag] !== 'string') fail(path, `an object tagged by ${tag}`);
     const variant = schema.variants.find((entry) => entry.name === value[tag]);

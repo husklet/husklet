@@ -14,6 +14,7 @@ use crate::port::{
     PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
+use crate::{ContainerGrant, ContainerSelector};
 
 /// The host services a session dispatches to.
 ///
@@ -40,6 +41,7 @@ pub struct Session {
     surfaces: std::collections::BTreeSet<String>,
     pending: Vec<SurfaceFrame>,
     mutations: Vec<SurfaceMutation>,
+    containers: ContainerGrant,
 }
 
 /// One reconciliation frame and the surface that owns its sequence.
@@ -90,7 +92,119 @@ impl Session {
             surfaces: std::collections::BTreeSet::new(),
             pending: Vec::new(),
             mutations: Vec::new(),
+            containers: ContainerGrant::default(),
         }
+    }
+
+    /// Applies the exact resource consent recorded for this connection.
+    #[must_use]
+    pub fn with_containers(mut self, containers: ContainerGrant) -> Self {
+        self.containers = containers;
+        self
+    }
+
+    fn visible_container(&self, container: &crate::port::ContainerSummary) -> bool {
+        self.containers.all()
+            || self.containers.selectors.iter().any(|selector| match selector {
+                ContainerSelector::Id { id } => container.id == *id,
+                ContainerSelector::Name { name } => container.name == *name,
+                ContainerSelector::All { all } => *all,
+            })
+    }
+
+    /// Filters a host inventory before it crosses the extension boundary.
+    #[must_use]
+    pub fn visible_containers(
+        &self,
+        containers: Vec<crate::port::ContainerSummary>,
+    ) -> Vec<crate::port::ContainerSummary> {
+        containers
+            .into_iter()
+            .filter(|container| self.visible_container(container))
+            .collect()
+    }
+
+    /// Filters executions by the immutable identities of currently visible containers.
+    #[must_use]
+    pub fn visible_executions(
+        &self,
+        mut executions: crate::port::ExecutionList,
+        containers: &[crate::port::ContainerSummary],
+    ) -> crate::port::ExecutionList {
+        let ids: std::collections::BTreeSet<&str> = containers
+            .iter()
+            .filter(|container| self.visible_container(container))
+            .map(|container| container.id.as_str())
+            .collect();
+        executions
+            .executions
+            .retain(|execution| ids.contains(execution.container_id.as_str()));
+        executions
+    }
+
+    fn resolve_container(
+        &self,
+        id: &str,
+        port: &dyn ContainerInventory,
+    ) -> Result<crate::port::ContainerSummary, Failure> {
+        if let Some(container) = port
+            .list()?
+            .into_iter()
+            .find(|container| container.id == id && self.visible_container(container))
+        {
+            return Ok(container);
+        }
+        if self.containers.all()
+            || self
+                .containers
+                .selectors
+                .iter()
+                .any(|selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id))
+        {
+            return Ok(crate::port::ContainerSummary {
+                id: id.to_owned(),
+                name: String::new(),
+                image: String::new(),
+                state: String::new(),
+                created: 0,
+                generation: 0,
+            });
+        }
+        Err(Failure::Denied {
+            capability: Capability::ContainerRead.as_str().into(),
+            detail: "container is outside the extension's consented resource scope".into(),
+        })
+    }
+
+    fn resolve_mutation_container(
+        &self,
+        id: &str,
+        port: &dyn ContainerInventory,
+    ) -> Result<crate::port::ContainerSummary, Failure> {
+        immutable_identity(id, &[32, 64], "container")?;
+        let container = self.resolve_container(id, port)?;
+        let immutable_scope = self.containers.all()
+            || self.containers.selectors.iter().any(
+                |selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id),
+            );
+        if !immutable_scope {
+            return Err(Failure::Denied {
+                capability: Capability::ContainerControl.as_str().into(),
+                detail: "name-scoped container mutations require generation-bound host support".into(),
+            });
+        }
+        Ok(container)
+    }
+
+    fn resolve_execution(
+        &self,
+        id: &str,
+        port: &dyn ContainerInventory,
+    ) -> Result<crate::port::ExecutionSummary, Failure> {
+        immutable_identity(id, &[32], "execution")?;
+        let execution = port.execution(id)?;
+        self.resolve_container(&execution.container_id, port)?;
+        Ok(execution)
     }
 
     /// Adds a surface the host already owns, such as the workspace overview.
@@ -164,13 +278,13 @@ impl Session {
             | Request::ExecutionLogs { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerAttachTerminal { id, command } => {
-                immutable_identity(id, &[32, 64], "container")?;
+                let target = self.resolve_mutation_container(id, services.containers)?;
                 validate_terminal_command(command)?;
                 let port = self
                     .peer
                     .authority()
                     .port(Capability::ContainerAttach, services.terminal)?;
-                Ok(Reply::Identity(port.attach_container(id, command)?))
+                Ok(Reply::Identity(port.attach_container(&target.id, command)?))
             }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
@@ -260,6 +374,7 @@ impl Session {
             | Request::FilesystemReadRange { .. }
             | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
+            | Request::FilesystemWriteObserved { .. }
             | Request::FilesystemCreateObserved { .. }
             | Request::FilesystemMkdir { .. }
             | Request::FilesystemRename { .. }
@@ -290,16 +405,28 @@ impl Session {
             .authority()
             .port(Capability::ContainerRead, services.containers)?;
         match request {
-            Request::ContainerInspect { id } => Ok(Reply::Container(port.inspect(id)?)),
-            Request::ContainerProcesses { id } => Ok(Reply::Processes(port.processes(id)?)),
-            Request::ContainerLogs { id, stdout, stderr } => Ok(Reply::Logs(port.logs(id, *stdout, *stderr)?)),
-            Request::ExecutionInspect { id } => {
-                immutable_identity(id, &[32], "execution")?;
-                Ok(Reply::Execution(port.execution(id)?))
+            Request::ContainerInspect { id } => {
+                let target = self.resolve_container(id, port.port())?;
+                Ok(Reply::Container(port.inspect(&target.id)?))
             }
-            Request::ExecutionList => Ok(Reply::Executions(port.executions()?)),
+            Request::ContainerProcesses { id } => {
+                let target = self.resolve_container(id, port.port())?;
+                Ok(Reply::Processes(port.processes(&target.id)?))
+            }
+            Request::ContainerLogs { id, stdout, stderr } => {
+                let target = self.resolve_container(id, port.port())?;
+                Ok(Reply::Logs(port.logs(&target.id, *stdout, *stderr)?))
+            }
+            Request::ExecutionInspect { id } => Ok(Reply::Execution(self.resolve_execution(id, port.port())?)),
+            Request::ExecutionList => {
+                let containers = port.list()?;
+                Ok(Reply::Executions(
+                    self.visible_executions(port.executions()?, &containers),
+                ))
+            }
             Request::ExecutionLogs { id, stdout, stderr } => {
                 immutable_identity(id, &[32], "execution")?;
+                self.resolve_execution(id, port.port())?;
                 if !stdout && !stderr {
                     return Err(Failure::Conflict {
                         detail: "execution logs require stdout or stderr".into(),
@@ -309,6 +436,7 @@ impl Session {
             }
             Request::ExecutionWait { id, timeout_ms } => {
                 immutable_identity(id, &[32], "execution")?;
+                self.resolve_execution(id, port.port())?;
                 if !(1..=30_000).contains(timeout_ms) {
                     return Err(Failure::Conflict {
                         detail: "execution wait timeout_ms must be between 1 and 30000".into(),
@@ -316,7 +444,7 @@ impl Session {
                 }
                 Ok(Reply::Execution(port.execution_wait(id, *timeout_ms)?))
             }
-            Request::ContainerList => Ok(Reply::Containers(port.list()?)),
+            Request::ContainerList => Ok(Reply::Containers(self.visible_containers(port.list()?))),
             _ => Err(Failure::Unsupported {
                 call: "container read".into(),
             }),
@@ -325,6 +453,12 @@ impl Session {
 
     fn control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         if let Request::ContainerCreate { spec } = request {
+            if !self.containers.create {
+                return Err(Failure::Denied {
+                    capability: Capability::ContainerControl.as_str().into(),
+                    detail: "container creation was not consented".into(),
+                });
+            }
             if spec.mounts.iter().any(|mount| mount.read_only) {
                 self.peer.authority().permit(Capability::VolumeRead)?;
             }
@@ -345,48 +479,52 @@ impl Session {
                 Ok(Reply::Identity(port.create_spec(spec)?))
             }
             Request::ContainerStart { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.start(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.start(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerStop { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.stop(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.stop(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerRemove { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.remove(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.remove(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerPause { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.pause(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.pause(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerUnpause { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.unpause(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.unpause(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerRestart { id } => {
-                immutable_identity(id, &[32, 64], "container")?;
-                port.restart(id).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.restart(&target.id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerRename { id, name } => {
-                immutable_identity(id, &[32, 64], "container")?;
                 validate_container_name(name)?;
-                port.rename(id, name).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.rename(&target.id, name)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::ContainerKill { id, signal } => {
                 bounded_signal(signal)?;
-                immutable_identity(id, &[32, 64], "container")?;
-                port.kill(id, signal).map(|()| Reply::Done).map_err(Failure::from)
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                port.kill(&target.id, signal)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::ExecutionKill { id, signal } => {
                 bounded_signal(signal)?;
-                immutable_identity(id, &[32], "execution")?;
+                self.resolve_execution(id, services.containers)?;
                 port.execution_kill(id, signal)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
             Request::ExecutionRemove { id } => {
-                immutable_identity(id, &[32], "execution")?;
+                self.resolve_execution(id, services.containers)?;
                 port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::ContainerExec {
@@ -395,9 +533,9 @@ impl Session {
                 user,
                 working_directory,
             } => {
-                immutable_identity(id, &[32, 64], "container")?;
+                let target = self.resolve_mutation_container(id, services.containers)?;
                 Ok(Reply::Identity(port.execute(
-                    id,
+                    &target.id,
                     command,
                     user.as_deref(),
                     working_directory.as_deref(),
@@ -570,13 +708,23 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::ExtensionInstall { job, revision, granted } => {
+            Request::ExtensionInstall {
+                job,
+                revision,
+                granted,
+                containers,
+            } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.install(job, *revision, granted)?))
+                Ok(Reply::Extension(port.install(job, *revision, granted, containers)?))
             }
-            Request::ExtensionUpdate { job, revision, granted } => {
+            Request::ExtensionUpdate {
+                job,
+                revision,
+                granted,
+                containers,
+            } => {
                 acquisition_job(job)?;
-                Ok(Reply::Extension(port.update(job, *revision, granted)?))
+                Ok(Reply::Extension(port.update(job, *revision, granted, containers)?))
             }
             _ => Err(Failure::Unsupported {
                 call: "extension management".into(),
@@ -765,6 +913,22 @@ impl Session {
                     .authority()
                     .port(Capability::FilesystemWrite, services.files)?;
                 port.write(path, contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::FilesystemWriteObserved {
+                path,
+                observed,
+                contents,
+            } => {
+                if contents.len() > 64 * 1024 || observed.is_empty() || observed.len() > 256 {
+                    return Err(Failure::Failed {
+                        detail: "observed filesystem write exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                Ok(Reply::Identity(port.write_observed(path, observed, contents)?))
             }
             Request::FilesystemCreateObserved { path, contents } => {
                 if contents.len() > 64 * 1024 {

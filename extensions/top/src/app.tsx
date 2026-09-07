@@ -61,6 +61,7 @@ type TopProps = {
     networks: NetworkSummary[];
     terminals: TabSummary[];
   }>;
+  initialSection?: Section;
 };
 export function Top({
   api,
@@ -71,8 +72,9 @@ export function Top({
   networkDetails,
   volumeDetails,
   initial = {},
+  initialSection = 'overview',
 }: TopProps) {
-  const [section, setSection] = useState<Section>('overview');
+  const [section, setSection] = useState<Section>(initialSection);
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);

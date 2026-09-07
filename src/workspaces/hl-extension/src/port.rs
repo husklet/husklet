@@ -614,6 +614,14 @@ pub struct FileRange {
     pub truncated: bool,
 }
 
+/// A bounded, complete-or-explicitly-truncated view of every declared filesystem root.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileInventory {
+    pub entries: Vec<Entry>,
+    pub complete: bool,
+    pub coalesced: u64,
+}
+
 /// One installed extension and its durable lifecycle policy.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionSummary {
@@ -642,6 +650,8 @@ pub struct ExtensionCandidate {
     pub version: String,
     pub image_digest: String,
     pub requested: crate::Grant,
+    #[serde(default)]
+    pub requested_containers: crate::ContainerGrant,
     #[serde(default)]
     pub installed_image_digest: Option<String>,
 }
@@ -695,10 +705,22 @@ pub trait ExtensionStore {
     fn acquisition_cancel(&self, _job: &str, _revision: u64) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension acquisition is unavailable".into()))
     }
-    fn install(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+    fn install(
+        &self,
+        _job: &str,
+        _revision: u64,
+        _granted: &crate::Grant,
+        _containers: &crate::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension installation is unavailable".into()))
     }
-    fn update(&self, _job: &str, _revision: u64, _granted: &crate::Grant) -> Result<ExtensionSummary, HostError> {
+    fn update(
+        &self,
+        _job: &str,
+        _revision: u64,
+        _granted: &crate::Grant,
+        _containers: &crate::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         Err(HostError::Unsupported("extension update is unavailable".into()))
     }
 }
@@ -1122,6 +1144,11 @@ fn workspace_control_unavailable() -> HostError {
 
 /// Files beneath the extension's declared roots.
 pub trait WorkspaceFiles {
+    /// Recursively inventories only the roots declared by this extension.
+    fn inventory(&self, _roots: &[RelativePath]) -> Result<FileInventory, HostError> {
+        Err(HostError::Unsupported("filesystem observation is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError>;
@@ -1150,6 +1177,13 @@ pub trait WorkspaceFiles {
     /// # Errors
     /// Returns a host failure.
     fn write(&self, path: &RelativePath, contents: &[u8]) -> Result<(), HostError>;
+
+    /// Atomically replaces a regular file only while it still has `observed` identity.
+    fn write_observed(&self, _path: &RelativePath, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
+        Err(HostError::Unsupported(
+            "observed filesystem writes are unavailable".into(),
+        ))
+    }
 
     fn create_observed(&self, _path: &RelativePath, _contents: &[u8]) -> Result<String, HostError> {
         Err(HostError::Unsupported(

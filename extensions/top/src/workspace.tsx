@@ -103,7 +103,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   };
   if (!configuration)
     return (
-      <Column pad={4} gap={2}>
+      <Column pad={2} gap={2}>
         <Heading label="Workspace" scale="title" />
         {error ? (
           <InlineMessage label={error} tone="danger" />
@@ -119,7 +119,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const invalid = validationMessage(configuration, numbers);
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={3}>
+      <Column pad={2} gap={2}>
         <Heading label="Workspace" scale="title" />
         <Text
           label="Settings save without stopping your workspace. Runtime identity changes apply when the workspace or panes reopen."

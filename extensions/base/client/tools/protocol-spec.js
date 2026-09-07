@@ -15,26 +15,54 @@ function walk(node, visit) {
   for (const value of Object.values(node)) walk(value, visit);
 }
 walk(schema, (node) => {
-  assert.notEqual(node.kind, 'external_ref', `unresolved external protocol schema ${node.package}::${node.name}`);
-  if (node.kind === 'ref') assert(schema.definitions[node.name], `unresolved protocol reference ${node.name}`);
+  assert.notEqual(
+    node.kind,
+    'external_ref',
+    `unresolved external protocol schema ${node.package}::${node.name}`,
+  );
+  if (node.kind === 'ref')
+    assert(schema.definitions[node.name], `unresolved protocol reference ${node.name}`);
 });
 for (const [name, definition] of Object.entries(schema.definitions)) {
-  assert(!(definition.kind === 'ref' && definition.name === name), `non-progressing self reference ${name}`);
+  assert(
+    !(definition.kind === 'ref' && definition.name === name),
+    `non-progressing self reference ${name}`,
+  );
 }
 
 const stable = (value) => JSON.stringify(value, Object.keys(value).sort());
 const requestVariants = schema.roots.request.variants.map(({ name }) => name);
 const replyVariants = new Set(schema.roots.reply.variants.map(({ name }) => name));
 assert(Array.isArray(schema.request_to_reply), 'Rust protocol schema lacks request_to_reply');
-assert.deepEqual(schema.request_to_reply.map(({ request }) => request), requestVariants, 'request_to_reply must cover Request exactly in declaration order');
-const expectedReplies = Object.fromEntries(schema.request_to_reply.map(({ request, reply }) => [request, reply]));
-for (const [call, reply] of Object.entries(expectedReplies)) assert(replyVariants.has(reply), `${call} expects absent reply ${reply}`);
-assert(Array.isArray(schema.request_to_capability), 'Rust protocol schema lacks request_to_capability');
-assert.deepEqual(schema.request_to_capability.map(({ request }) => request), requestVariants, 'request_to_capability must cover Request exactly in declaration order');
-const requestCapabilities = Object.fromEntries(schema.request_to_capability.map(({ request, capability }) => [request, capability]));
+assert.deepEqual(
+  schema.request_to_reply.map(({ request }) => request),
+  requestVariants,
+  'request_to_reply must cover Request exactly in declaration order',
+);
+const expectedReplies = Object.fromEntries(
+  schema.request_to_reply.map(({ request, reply }) => [request, reply]),
+);
+for (const [call, reply] of Object.entries(expectedReplies))
+  assert(replyVariants.has(reply), `${call} expects absent reply ${reply}`);
+assert(
+  Array.isArray(schema.request_to_capability),
+  'Rust protocol schema lacks request_to_capability',
+);
+assert.deepEqual(
+  schema.request_to_capability.map(({ request }) => request),
+  requestVariants,
+  'request_to_capability must cover Request exactly in declaration order',
+);
+const requestCapabilities = Object.fromEntries(
+  schema.request_to_capability.map(({ request, capability }) => [request, capability]),
+);
 const capabilities = new Set(schema.capabilities.map(({ wire }) => wire));
 for (const [call, capability] of Object.entries(requestCapabilities)) {
-  if (capability === null) assert(['event_subscribe', 'event_unsubscribe'].includes(call), `${call} has no fixed capability`);
+  if (capability === null)
+    assert(
+      ['event_subscribe', 'event_unsubscribe'].includes(call),
+      `${call} has no fixed capability`,
+    );
   else assert(capabilities.has(capability), `${call} requires absent capability ${capability}`);
 }
 const runtime = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
@@ -82,6 +110,16 @@ function validate(schema, value, path) {
 function validateEnum(schema, value, path) {
   const tag = schema.serde?.tag;
   const content = schema.serde?.content;
+  if (schema.serde?.untagged) {
+    const candidates = schema.variants.filter((variant) => {
+      if (variant.payload.kind !== 'struct' || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const keys = Object.keys(value);
+      return keys.length === variant.payload.fields.length
+        && keys.every((key) => variant.payload.fields.some((field) => field.name === key));
+    });
+    if (candidates.length !== 1) fail(path, 'exactly one untagged variant');
+    return validate(candidates[0].payload, value, path);
+  }
   if (tag) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value[tag] !== 'string') fail(path, \`an object tagged by \${tag}\`);
     const variant = schema.variants.find((entry) => entry.name === value[tag]);
@@ -172,9 +210,17 @@ export function validateSnapshot(value: unknown): WireSnapshot;
 export function validateUiEvent(value: unknown): WireUiEvent;
 export function encodeRequest(call: WireRequest['call'], payload?: unknown): WireRequest;
 `;
-const files = [['generated-protocol.js', runtime], ['generated-protocol.d.ts', declarations]];
+const files = [
+  ['generated-protocol.js', runtime],
+  ['generated-protocol.d.ts', declarations],
+];
 for (const [name, contents] of files) {
   const target = path.join(output, name);
   if (process.argv.includes('--write')) fs.writeFileSync(target, contents);
-  else assert.equal(fs.readFileSync(target, 'utf8'), contents, `${name} is stale; run npm run protocol:generate`);
+  else
+    assert.equal(
+      fs.readFileSync(target, 'utf8'),
+      contents,
+      `${name} is stale; run npm run protocol:generate`,
+    );
 }

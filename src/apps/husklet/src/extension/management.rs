@@ -118,10 +118,16 @@ impl ExtensionStore for ExtensionManagement {
         self.acquisitions.cancel(AcquisitionJob::parse(job)?, revision)
     }
 
-    fn install(&self, job: &str, revision: u64, granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn install(
+        &self,
+        job: &str,
+        revision: u64,
+        granted: &Grant,
+        containers: &hl_extension::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
-        self.acquisitions.install(job, revision, granted)?;
+        self.acquisitions.install_scoped(job, revision, granted, containers)?;
         super::revision::publish_inventory_change(&self.workspace);
         let installed = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -130,10 +136,16 @@ impl ExtensionStore for ExtensionManagement {
         Ok(installed)
     }
 
-    fn update(&self, job: &str, revision: u64, granted: &Grant) -> Result<ExtensionSummary, HostError> {
+    fn update(
+        &self,
+        job: &str,
+        revision: u64,
+        granted: &Grant,
+        containers: &hl_extension::ContainerGrant,
+    ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
-        self.acquisitions.update(job, revision, granted)?;
+        self.acquisitions.update_scoped(job, revision, granted, containers)?;
         super::revision::publish_inventory_change(&self.workspace);
         let updated = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -181,6 +193,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 version: candidate.version,
                 image_digest: candidate.digest,
                 requested: candidate.requested,
+                requested_containers: candidate.requested_containers,
                 installed_image_digest: candidate.installed_digest,
             };
             ("ready", None, Some(candidate), None)
@@ -267,6 +280,7 @@ mod tests {
                 reference: "registry.example/team/tool:2".into(),
                 revision: 7,
                 state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                    requested_containers: hl_extension::ContainerGrant::default(),
                     reference: "registry.example/team/tool:2".into(),
                     digest: "sha256:new".into(),
                     name: "sample".into(),

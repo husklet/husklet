@@ -8,6 +8,7 @@ import type {
   NetworkDetailsSource,
   VolumeDetailsSource,
 } from './model.js';
+import { SECTIONS } from './overview.js';
 
 const providerSelections = selections();
 let surface: import('@husklet/react').RenderHandle;
@@ -60,6 +61,11 @@ surface.update(
     imageDetails={imageDetails}
     networkDetails={networkDetails}
     volumeDetails={volumeDetails}
+    initialSection={
+      SECTIONS.includes(process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])
+        ? (process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])
+        : undefined
+    }
   />,
 );
 await surface.flush();

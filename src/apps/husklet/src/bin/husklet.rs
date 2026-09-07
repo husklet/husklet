@@ -22,8 +22,8 @@ use sha2::Digest as _;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use vte4::prelude::*;
 use vte4::TerminalExtManual;
+use vte4::prelude::*;
 
 use hl::config::{TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount};
@@ -39,7 +39,7 @@ mod screenshot;
 use screenshot::Screenshot;
 
 use components::dialog::RemoveWorkspace;
-use components::theme::{css, ACCENT};
+use components::theme::{ACCENT, css};
 use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::{ProcessGroup, Processes};
@@ -98,6 +98,15 @@ struct AppConfig {
     resize: Option<String>,
     /// Debug: receipt for the fixed live tab/paste/close/type exercise (`HL_TERM_LIVE_ACTIONS`).
     live_actions: Option<String>,
+    /// Debug: create this workspace through the real form submission and provisioning path.
+    create_workspace: Option<String>,
+    /// Debug: override the image used by `HL_TERM_CREATE_WS`.
+    create_image: Option<String>,
+    /// Debug: write `ok` or the bounded provisioning error after an automated creation attempt.
+    create_receipt: Option<String>,
+    /// Debug builds only: run checked-out Top as a local socket peer.
+    #[cfg(debug_assertions)]
+    local_extension: Option<String>,
     #[cfg(feature = "gui-checkpoint-e2e")]
     checkpoint_journey: Option<String>,
     environment: host::environment::Environment,
@@ -121,6 +130,11 @@ impl AppConfig {
             script: std::env::var("HL_TERM_SCRIPT").ok(),
             resize: std::env::var("HL_TERM_RESIZE").ok(),
             live_actions: std::env::var("HL_TERM_LIVE_ACTIONS").ok(),
+            create_workspace: std::env::var("HL_TERM_CREATE_WS").ok(),
+            create_image: std::env::var("HL_TERM_CREATE_IMAGE").ok(),
+            create_receipt: std::env::var("HL_TERM_CREATE_RECEIPT").ok(),
+            #[cfg(debug_assertions)]
+            local_extension: std::env::var("HL_TERM_LOCAL_EXTENSION").ok(),
             #[cfg(feature = "gui-checkpoint-e2e")]
             checkpoint_journey: std::env::var("HL_GUI_CHECKPOINT_JOURNEY").ok(),
             screenshot_ms: std::env::var("HL_TERM_SHOT_MS")
@@ -262,6 +276,14 @@ impl Application {
 
     /// Opens the view selected by the headless screenshot configuration.
     fn open_configured_view(&self) {
+        if AppConfig::get().create_workspace.is_some() {
+            let app = self.0.clone();
+            let on_created: Rc<dyn Fn()> = Rc::new(move || {
+                Application(app.clone()).open_configured_terminal();
+            });
+            Form::open(&self.0, &on_created);
+            return;
+        }
         match AppConfig::get().view.as_deref() {
             Some("terminal") => {
                 self.open_configured_terminal();

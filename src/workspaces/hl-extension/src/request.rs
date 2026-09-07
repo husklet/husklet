@@ -87,11 +87,13 @@ pub enum Request {
         job: String,
         revision: u64,
         granted: crate::Grant,
+        containers: crate::ContainerGrant,
     },
     ExtensionUpdate {
         job: String,
         revision: u64,
         granted: crate::Grant,
+        containers: crate::ContainerGrant,
     },
     ContainerList,
     ContainerInspect {
@@ -345,6 +347,12 @@ pub enum Request {
         path: RelativePath,
         contents: Vec<u8>,
     },
+    /// Replaces only the exact file identity the caller previously inspected.
+    FilesystemWriteObserved {
+        path: RelativePath,
+        observed: String,
+        contents: Vec<u8>,
+    },
     FilesystemCreateObserved {
         path: RelativePath,
         contents: Vec<u8>,
@@ -491,6 +499,7 @@ impl Request {
             | Self::FilesystemReadRange { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. }
+            | Self::FilesystemWriteObserved { .. }
             | Self::FilesystemCreateObserved { .. }
             | Self::FilesystemMkdir { .. }
             | Self::FilesystemRename { .. }
@@ -518,6 +527,7 @@ impl Request {
             | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }
+            | Self::FilesystemWriteObserved { path, .. }
             | Self::FilesystemCreateObserved { path, .. }
             | Self::FilesystemMkdir { path }
             | Self::FilesystemRemove { path }
@@ -545,6 +555,7 @@ pub enum Topic {
     ExtensionAcquisitions,
     WorkspaceLifecycle,
     WorkspaceEvents,
+    Filesystem,
 }
 
 impl Topic {
@@ -566,6 +577,7 @@ impl Topic {
             Self::ExtensionAcquisitions => Capability::ExtensionInstall,
             Self::WorkspaceLifecycle => Capability::WorkspaceRead,
             Self::WorkspaceEvents => Capability::WorkspaceEvents,
+            Self::Filesystem => Capability::FilesystemRead,
         }
     }
 
@@ -583,6 +595,7 @@ impl Topic {
         Self::ExtensionAcquisitions,
         Self::WorkspaceLifecycle,
         Self::WorkspaceEvents,
+        Self::Filesystem,
     ];
 }
 

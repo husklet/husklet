@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use crate::capability::{Capability, Grant};
-use crate::manifest::{ExtensionName, Manifest};
+use crate::manifest::{ContainerGrant, ExtensionName, Manifest};
 
 /// What a host persists per workspace for one extension.
 ///
@@ -33,6 +33,9 @@ pub struct Record {
     pub version: String,
     /// Exactly what the person agreed to, never what was asked for.
     pub granted: Grant,
+    /// Exact resource consent paired with `granted` and the image digest.
+    #[serde(default)]
+    pub containers: ContainerGrant,
     /// Whether the sidecar should be running.
     pub enabled: bool,
     /// When the record was first written, in milliseconds since the epoch,
@@ -262,11 +265,12 @@ impl Installation {
     /// # Errors
     /// Returns `Objection::Presence` when a record already exists, and
     /// `Objection::Digest` when the digest is empty.
-    pub fn install(
+    pub fn install_scoped(
         &mut self,
         manifest: &Manifest,
         digest: &str,
         consented: &Grant,
+        consented_containers: &ContainerGrant,
         at: i64,
     ) -> Result<&Record, Objection> {
         if digest.is_empty() {
@@ -276,6 +280,7 @@ impl Installation {
             return Err(Objection::Presence(manifest.name.clone()));
         }
         let granted = manifest.capabilities.intersect(consented);
+        let containers = manifest.containers.intersect(consented_containers);
         // The name is vacant, checked above, so this always inserts.
         let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| Entry {
             record: Record {
@@ -283,6 +288,7 @@ impl Installation {
                 image_digest: digest.to_owned(),
                 version: manifest.version.clone(),
                 granted,
+                containers,
                 enabled: false,
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
@@ -291,6 +297,17 @@ impl Installation {
             restarts: Restarts::default(),
         });
         Ok(&entry.record)
+    }
+
+    /// Compatibility entry point for callers granting no container resources.
+    pub fn install(
+        &mut self,
+        manifest: &Manifest,
+        digest: &str,
+        consented: &Grant,
+        at: i64,
+    ) -> Result<&Record, Objection> {
+        self.install_scoped(manifest, digest, consented, &ContainerGrant::default(), at)
     }
 
     /// Inspects an update without changing the installed record or runtime.
@@ -334,10 +351,11 @@ impl Installation {
     /// # Errors
     /// Returns a refusal when state changed or consent is incomplete, or the
     /// replacement failure without changing the record.
-    pub fn commit_update<E>(
+    pub fn commit_update_scoped<E>(
         &mut self,
         update: Update,
         consented: &Grant,
+        consented_containers: &ContainerGrant,
         at: i64,
         replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
     ) -> Result<&Record, UpdateFailure<E>> {
@@ -363,6 +381,7 @@ impl Installation {
             image_digest: update.candidate_digest,
             version: update.candidate_version,
             granted,
+            containers: update.manifest.containers.intersect(consented_containers),
             enabled: entry.record.enabled,
             installed_at: at,
             pane_providers: update.manifest.pane_providers.clone(),
@@ -372,6 +391,17 @@ impl Installation {
         entry.record = next;
         entry.restarts = Restarts::default();
         Ok(&entry.record)
+    }
+
+    /// Compatibility update entry point that grants no newly requested container resources.
+    pub fn commit_update<E>(
+        &mut self,
+        update: Update,
+        consented: &Grant,
+        at: i64,
+        replace: impl FnOnce(&Record, &Record) -> Result<(), E>,
+    ) -> Result<&Record, UpdateFailure<E>> {
+        self.commit_update_scoped(update, consented, &ContainerGrant::default(), at, replace)
     }
 
     /// Cancels a prepared update. Ownership makes cancellation explicit while
@@ -557,6 +587,7 @@ mod tests {
 
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
+            containers: crate::ContainerGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -581,6 +612,35 @@ mod tests {
 
         assert!(record.granted.holds(Capability::ContainerRead));
         assert!(!record.granted.holds(Capability::ContainerControl));
+    }
+
+    #[test]
+    fn container_resource_consent_is_intersected_and_persisted_exactly() {
+        let mut installation = Installation::new();
+        let mut manifest = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+        manifest.containers = crate::ContainerGrant {
+            selectors: vec![
+                crate::ContainerSelector::Name {
+                    name: "database".into(),
+                },
+                crate::ContainerSelector::Name { name: "worker".into() },
+            ],
+            create: true,
+        };
+        let consent = crate::ContainerGrant {
+            selectors: vec![crate::ContainerSelector::Name {
+                name: "database".into(),
+            }],
+            create: false,
+        };
+        let record = installation
+            .install_scoped(&manifest, "sha256:a", &manifest.capabilities, &consent, 10)
+            .unwrap();
+
+        assert_eq!(record.containers, consent);
+        let encoded = serde_json::to_vec(record).unwrap();
+        let restored: super::Record = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(restored.containers, consent);
     }
 
     #[test]

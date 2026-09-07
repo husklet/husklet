@@ -7,8 +7,14 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
 const declarations = fs.readFileSync(path.resolve(here, '../src/index.d.ts'), 'utf8');
-const clientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/index.d.ts'), 'utf8');
-const generatedClientDeclarations = fs.readFileSync(path.resolve(here, '../../client/src/generated-protocol.d.ts'), 'utf8');
+const clientDeclarations = fs.readFileSync(
+  path.resolve(here, '../../client/src/index.d.ts'),
+  'utf8',
+);
+const generatedClientDeclarations = fs.readFileSync(
+  path.resolve(here, '../../client/src/generated-protocol.d.ts'),
+  'utf8',
+);
 
 /** The body of one component's interface, as generated. */
 function shape(name) {
@@ -59,7 +65,8 @@ test('the declarations were generated from this catalogue', () => {
 });
 
 test('a render handle exposes the addressed multi-surface lifecycle', () => {
-  const handle = declarations.match(/export interface RenderHandle \{(?<body>[\s\S]*?)\n\}/)?.groups?.body;
+  const handle = declarations.match(/export interface RenderHandle \{(?<body>[\s\S]*?)\n\}/)?.groups
+    ?.body;
   assert.ok(handle, 'the generated declarations expose RenderHandle');
   assert.match(handle, /readonly ready: Promise<string>;/);
   assert.match(handle, /readonly slot: string \| null;/);
@@ -73,13 +80,31 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
 });
 
 test('host events type the pane chooser identity as well as subscribed snapshots', () => {
-  assert.match(clientDeclarations, /export interface PaneSelection \{ pane_provider: string; slot: string \}/);
+  assert.match(
+    clientDeclarations,
+    /export interface PaneSelection\s*\{\s*pane_provider: string;\s*slot: string;\s*\}/,
+  );
   assert.match(clientDeclarations, /export type InterfaceEvent = WireUiEvent;/);
-  assert.match(clientDeclarations, /import type \{[^}]*\bWireUiEvent\b[^}]*\} from '\.\/generated-protocol\.js';/);
-  assert.match(generatedClientDeclarations, /\{ interaction: "key" \} & \{ "trigger": string; "node": number; "id": string; "slot"\?: string \| null; "key": string; "keycode": number; "modifiers": number; "pressed": boolean \}/);
-  assert.match(generatedClientDeclarations, /export type UiPointerPhase = "enter" \| "motion" \| "leave" \| "press" \| "release";/);
-  assert.match(generatedClientDeclarations, /"x"\?: number \| null; "y"\?: number \| null; "button": number; "modifiers": number/);
-  assert.match(clientDeclarations, /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/);
+  assert.match(
+    clientDeclarations,
+    /import type \{[^}]*\bWireUiEvent\b[^}]*\} from '\.\/generated-protocol\.js';/,
+  );
+  assert.match(
+    generatedClientDeclarations,
+    /\{ interaction: "key" \} & \{ "trigger": string; "node": number; "id": string; "slot"\?: string \| null; "key": string; "keycode": number; "modifiers": number; "pressed": boolean \}/,
+  );
+  assert.match(
+    generatedClientDeclarations,
+    /export type UiPointerPhase = "enter" \| "motion" \| "leave" \| "press" \| "release";/,
+  );
+  assert.match(
+    generatedClientDeclarations,
+    /"x"\?: number \| null; "y"\?: number \| null; "button": number; "modifiers": number/,
+  );
+  assert.match(
+    clientDeclarations,
+    /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/,
+  );
   assert.doesNotMatch(clientDeclarations, /LegacyInterfaceEvent/);
   assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
   assert.doesNotMatch(
@@ -91,7 +116,10 @@ test('host events type the pane chooser identity as well as subscribed snapshots
 
 test('windowed selection types immutable source generation and row identity', () => {
   assert.match(declarations, /interface SelectedCollectionRow \{ index: number; id: string; \}/);
-  assert.match(declarations, /interface CollectionSelection \{ source: number; version: number; rows: SelectedCollectionRow\[\]; \}/);
+  assert.match(
+    declarations,
+    /interface CollectionSelection \{ source: number; version: number; rows: SelectedCollectionRow\[\]; \}/,
+  );
   assert.match(shape('DataTable'), /onSelect\?: \(report: SelectionReport\) => void;/);
   assert.match(declarations, /collection\?: CollectionSelection \| null/);
 });

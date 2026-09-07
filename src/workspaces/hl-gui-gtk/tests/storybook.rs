@@ -27,14 +27,17 @@ mod unix {
         "Bounded key/value inspector",
     ];
     const PATCH_LIMIT: usize = 1_200;
+    const PRIMARY_SLOT: &str = "";
 
     #[test]
     fn every_composed_story_crosses_the_real_socket_and_renders_narrow_and_wide() {
         assert!(gtk::init().is_ok(), "run this test under Xvfb");
         let repository = repository();
         assert!(
-            repository.join("node_modules/@husklet/react").exists(),
-            "run `npm ci` at the repository root before the GTK Storybook E2E"
+            repository
+                .join("extensions/node_modules/@husklet/react")
+                .exists(),
+            "run `npm --prefix extensions ci` before the GTK Storybook E2E"
         );
         for (index, story) in STORIES.iter().enumerate() {
             render_story(&repository, story, index);
@@ -72,20 +75,31 @@ mod unix {
             codec::read_hello(&wire.receive().expect("Storybook greets the host")).expect("hello decodes");
         assert_eq!(hello.protocol, PROTOCOL);
 
-        let mut rendered = None;
+        let mut rendered = Vec::new();
+        let mut ready = false;
         for _ in 0..8 {
             let request = codec::read_request(&wire.receive().expect("Storybook sends a bounded call"))
                 .expect("Storybook request decodes through the production codec");
             let reply = match request {
+                Request::InterfaceRender { frame } => {
+                    assert!(
+                        frame.patches.len() <= PATCH_LIMIT,
+                        "{story} loading frame emitted {} patches",
+                        frame.patches.len()
+                    );
+                    rendered.push(frame);
+                    Reply::Done
+                }
                 Request::InterfaceOpenTab { .. } => Reply::Identity("storybook-main".into()),
                 Request::InterfaceRenderAt { slot, frame } => {
-                    assert_eq!(slot, "storybook-main");
+                    assert_eq!(slot, PRIMARY_SLOT);
                     assert!(
                         frame.patches.len() <= PATCH_LIMIT,
                         "{story} emitted {} patches",
                         frame.patches.len()
                     );
-                    rendered = Some(frame);
+                    rendered.push(frame);
+                    ready = true;
                     Reply::Done
                 }
                 Request::SourceResizeAt { .. } => Reply::Done,
@@ -93,16 +107,18 @@ mod unix {
             };
             wire.send(&codec::reply(&reply).expect("reply encodes"))
                 .expect("reply is sent");
-            if rendered.is_some() {
+            if ready {
                 break;
             }
         }
 
-        let frame = rendered.unwrap_or_else(|| panic!("{story} never rendered"));
+        assert!(ready, "{story} never rendered");
         let mut tree = Tree::new();
         let mut surface = Surface::new();
-        tree.apply(&frame, &mut surface)
-            .unwrap_or_else(|error| panic!("{story} failed in GTK: {error:?}"));
+        for frame in rendered {
+            tree.apply(&frame, &mut surface)
+                .unwrap_or_else(|error| panic!("{story} failed in GTK: {error:?}"));
+        }
         if story == "DataTable" {
             loop {
                 let carried = wire.receive().expect("DataTable publishes its logical length");
@@ -113,11 +129,11 @@ mod unix {
                 let Request::SourceResizeAt { slot, mutation } = request else {
                     panic!("DataTable sent {request:?} before its source length")
                 };
-                assert_eq!(slot, "storybook-main");
+                assert_eq!(slot, PRIMARY_SLOT);
                 let SourceMutation::Length { source, version, rows } = mutation else {
                     panic!("DataTable first source mutation was not its length")
                 };
-                assert_eq!(rows, 100_000);
+                assert_eq!(rows, 1_000_000);
                 surface
                     .resize(source, version, rows)
                     .expect("GTK accepts logical source length");
@@ -234,7 +250,7 @@ mod unix {
         }
 
         let event = emit_representative(story, &root, &surface, &tree);
-        let payload = codec::interaction(&event, Some("storybook-main"))
+        let payload = codec::interaction(&event, Some(PRIMARY_SLOT))
             .unwrap_or_else(|| panic!("{story} interaction has no production wire encoding"));
         wire.send(&Frame::new(ChannelId::new(3), Kind::Event, payload))
             .expect("interaction returns to Node");
@@ -315,7 +331,7 @@ mod unix {
             edit.value = "stale overwrite".to_owned();
             let stale = hl_gui::Event::Edit { node, id, edit };
             let payload =
-                codec::interaction(&stale, Some("storybook-main")).expect("stale edit has a wire representation");
+                codec::interaction(&stale, Some(PRIMARY_SLOT)).expect("stale edit has a wire representation");
             wire.send(&Frame::new(ChannelId::new(98), Kind::Event, payload))
                 .expect("stale native edit returns to Node");
             let rejected = receive_rejected_edit(&mut wire);
@@ -352,7 +368,7 @@ mod unix {
             assert_eq!(sort.version, hl_gui::Version::new(2));
             assert_eq!(sort.column, "id");
             assert!(sort.descending);
-            let payload = codec::interaction(&event, Some("storybook-main")).expect("sort has a wire representation");
+            let payload = codec::interaction(&event, Some(PRIMARY_SLOT)).expect("sort has a wire representation");
             wire.send(&Frame::new(ChannelId::new(99), Kind::Event, payload))
                 .expect("native sort returns to Node");
             let sorted = receive_rerender(&mut wire, story);
@@ -440,7 +456,7 @@ mod unix {
             let request = codec::read_request(&carried).expect("post-interaction request decodes");
             let frame = match request {
                 Request::InterfaceRenderAt { slot, frame } => {
-                    assert_eq!(slot, "storybook-main");
+                    assert_eq!(slot, PRIMARY_SLOT);
                     Some(frame)
                 }
                 Request::SourceResizeAt { .. } => None,
@@ -463,7 +479,7 @@ mod unix {
             }
             match codec::read_request(&carried).expect("stale-edit response decodes") {
                 Request::InterfaceRenderAt { slot, frame } => {
-                    assert_eq!(slot, "storybook-main");
+                    assert_eq!(slot, PRIMARY_SLOT);
                     wire.send(&codec::reply(&Reply::Done).expect("rejection acknowledgement encodes"))
                         .expect("rejection acknowledgement sends");
                     return frame;

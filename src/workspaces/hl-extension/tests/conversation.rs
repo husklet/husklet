@@ -14,8 +14,9 @@
 use std::cell::RefCell;
 
 use hl_extension::port::{
-    ContainerControl, ContainerCreateSpec, ContainerInventory, ContainerSummary, ContainerVolumeMount, Division, Entry, HostError, ImageStore, ImageSummary,
-    PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ContainerControl, ContainerCreateSpec, ContainerInventory, ContainerSummary, ContainerVolumeMount, Division, Entry,
+    HostError, ImageStore, ImageSummary, PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory,
+    WorkspaceState,
 };
 use hl_extension::{
     codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
@@ -67,7 +68,8 @@ struct Host {
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
     fn connect_with_aliases(&self, _reference: &str, _container: &str, aliases: &[String]) -> Result<(), HostError> {
-        *self.network_aliases.borrow_mut() = aliases.to_vec(); Ok(())
+        *self.network_aliases.borrow_mut() = aliases.to_vec();
+        Ok(())
     }
 }
 
@@ -806,19 +808,45 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("containers").expect("name"),
-        Grant::new([Capability::ContainerControl, Capability::VolumeWrite, Capability::NetworkWrite]),
+        Grant::new([
+            Capability::ContainerControl,
+            Capability::VolumeWrite,
+            Capability::NetworkWrite,
+        ]),
         Vec::new(),
-    ));
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: Vec::new(),
+        create: true,
+    });
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
-    let request = Request::ContainerCreate { spec: ContainerCreateSpec {
-        image: "alpine:3.20".into(), name: "worker".into(), hostname: Some("h".repeat(253)), entrypoint: None, command: Vec::new(),
-        environment: vec![("é".repeat(128), "value".into())], working_directory: None, user: None,
-        labels: Vec::new(), mounts: vec![ContainerVolumeMount {
-            volume: "v".repeat(255), target: "/data".into(), read_only: false,
-        }], network: Some("n".repeat(255)), ports: Vec::new(), memory_mb: None, cpus: None, pids_limit: None,
-    }};
-    sender.send(&codec::request(&request).expect("request encodes")).expect("request crosses socket");
+    let request = Request::ContainerCreate {
+        spec: ContainerCreateSpec {
+            image: "alpine:3.20".into(),
+            name: "worker".into(),
+            hostname: Some("h".repeat(253)),
+            entrypoint: None,
+            command: Vec::new(),
+            environment: vec![("é".repeat(128), "value".into())],
+            working_directory: None,
+            user: None,
+            labels: Vec::new(),
+            mounts: vec![ContainerVolumeMount {
+                volume: "v".repeat(255),
+                target: "/data".into(),
+                read_only: false,
+            }],
+            network: Some("n".repeat(255)),
+            ports: Vec::new(),
+            memory_mb: None,
+            cpus: None,
+            pids_limit: None,
+        },
+    };
+    sender
+        .send(&codec::request(&request).expect("request encodes"))
+        .expect("request crosses socket");
     let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");
     assert_eq!(decoded, request);
     assert!(matches!(
@@ -838,15 +866,22 @@ fn terminal_screen_grid_and_cursor_cross_the_real_socket_together() {
     ));
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
-    let request = Request::TerminalReadPane { slot: "pane-7".into(), lines: Some(20) };
-    sender.send(&codec::request(&request).expect("request encodes")).expect("request crosses socket");
+    let request = Request::TerminalReadPane {
+        slot: "pane-7".into(),
+        lines: Some(20),
+    };
+    sender
+        .send(&codec::request(&request).expect("request encodes"))
+        .expect("request crosses socket");
     let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");
     let Reply::Text(screen) = session.dispatch(&decoded, &services(&host)).expect("screen read") else {
         panic!("wrong terminal reply")
     };
     assert_eq!((screen.columns, screen.rows), (120, 40));
     assert_eq!((screen.cursor_column, screen.cursor_row), (12, 3));
-    receiver.send(&codec::reply(&Reply::Text(screen.clone())).expect("reply encodes")).expect("reply crosses socket");
+    receiver
+        .send(&codec::reply(&Reply::Text(screen.clone())).expect("reply encodes"))
+        .expect("reply crosses socket");
     let reply = codec::read_reply(&sender.receive().expect("reply arrives")).expect("reply decodes");
     assert_eq!(reply, Reply::Text(screen));
 }
@@ -855,19 +890,35 @@ fn terminal_screen_grid_and_cursor_cross_the_real_socket_together() {
 fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
     let (host_end, extension_end) = connected_pair();
     let host = Host::new();
-    let mut session = Session::new(Authority::new(ExtensionName::new("networks").unwrap(), Grant::new([Capability::NetworkWrite]), Vec::new()));
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("networks").unwrap(),
+        Grant::new([Capability::NetworkWrite]),
+        Vec::new(),
+    ));
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
-    let legacy: Request = serde_json::from_str(&format!("{{\"call\":\"network_connect\",\"with\":{{\"reference\":\"{}\",\"container\":\"{}\"}}}}", "a".repeat(32), "b".repeat(64))).unwrap();
+    let legacy: Request = serde_json::from_str(&format!(
+        "{{\"call\":\"network_connect\",\"with\":{{\"reference\":\"{}\",\"container\":\"{}\"}}}}",
+        "a".repeat(32),
+        "b".repeat(64)
+    ))
+    .unwrap();
     assert!(matches!(&legacy, Request::NetworkConnect { aliases, .. } if aliases.is_empty()));
     for request in [legacy, {
-        let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>(); aliases[0] = "x".repeat(253);
-        Request::NetworkConnect { reference: "a".repeat(32), container: "b".repeat(64), aliases }
+        let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>();
+        aliases[0] = "x".repeat(253);
+        Request::NetworkConnect {
+            reference: "a".repeat(32),
+            container: "b".repeat(64),
+            aliases,
+        }
     }] {
         sender.send(&codec::request(&request).unwrap()).unwrap();
         let decoded = codec::read_request(&receiver.receive().unwrap()).unwrap();
         session.dispatch(&decoded, &services(&host)).unwrap();
-        if let Request::NetworkConnect { aliases, .. } = request { assert_eq!(*host.network_aliases.borrow(), aliases); }
+        if let Request::NetworkConnect { aliases, .. } = request {
+            assert_eq!(*host.network_aliases.borrow(), aliases);
+        }
     }
 }
 

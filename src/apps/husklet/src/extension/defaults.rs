@@ -99,6 +99,7 @@ mod tests {
                 reference: reference.to_owned(),
                 digest: format!("sha256:{name}"),
                 manifest: Manifest {
+                    containers: hl_extension::ContainerGrant::default(),
                     name: ExtensionName::new(name).unwrap(),
                     display_name: name.to_owned(),
                     version: "0.1.0".to_owned(),

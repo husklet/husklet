@@ -40,8 +40,10 @@ pub use hl_rpc::{
 };
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
-    Activation, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection, Presentation, Resources,
+    Activation, ContainerGrant, ContainerSelector, ExtensionName, Invalid, Manifest, PaneProvider, PaneSelection,
+    Presentation, Resources,
 };
+pub use port::FileInventory;
 pub use port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionSummary,
@@ -54,8 +56,8 @@ pub use port::{NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceM
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};
 pub use subscription::{
-    ContainerInventory, ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions, WorkspaceEvent,
-    WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
+    ContainerInventory, ExtensionAcquisitionChange, PaneChange, PaneChangeKind, PointerPhase, Snapshot, Subscriptions,
+    WorkspaceEvent, WorkspaceEventBatch, WorkspaceLifecycleAction, WorkspaceLifecycleChange,
 };
 pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow};
 

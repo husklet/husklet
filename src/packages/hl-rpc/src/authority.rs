@@ -244,6 +244,16 @@ mod tests {
     }
 
     #[test]
+    fn one_file_root_grants_that_file_without_granting_its_siblings() {
+        let authority = authority(&[Reach::Files], &["settings/project.json"]);
+        let exact = RelativePath::new("settings/project.json").expect("path");
+        let sibling = RelativePath::new("settings/secrets.json").expect("path");
+
+        assert!(authority.permit_path(Reach::Files, &exact).is_ok());
+        assert!(authority.permit_path(Reach::Files, &sibling).is_err());
+    }
+
+    #[test]
     fn declaring_no_roots_reaches_nothing() {
         let authority = authority(&[Reach::Files], &[]);
         let path = RelativePath::new("logs/app.log").expect("path");

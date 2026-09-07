@@ -4,6 +4,7 @@ import { createElement as h } from 'react';
 import {
   Containers,
   Executions,
+  Extensions,
   Images,
   Networks,
   Overview,
@@ -65,7 +66,6 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   for (const label of [
-    'Top',
     'Resource overview',
     'Workspace',
     'Extensions',
@@ -138,8 +138,231 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Install an extension'));
+  assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Component playground'));
+  assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
+});
+
+test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
+  const references = [];
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            return { job: 'storybook-review' };
+          },
+          acquisition: async () => ({
+            job: 'storybook-review',
+            revision: 1,
+            state: 'failed',
+            progress: null,
+            candidate: null,
+            error: 'offline fixture',
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Review access');
+  await settled();
+  await settled();
+  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.equal(
+    fieldValue(stage, 'registry.example/extension:version'),
+    'ghcr.io/husklet/husklet/extension-storybook:latest',
+  );
+});
+
+for (const updating of [false, true]) {
+  test(`extension ${updating ? 'update' : 'install'} independently narrows requested container authority`, async () => {
+    const calls = [];
+    const candidate = {
+      name: 'scoped',
+      version: '2.0.0',
+      image_digest: `sha256:${'a'.repeat(64)}`,
+      requested: [],
+      requested_containers: {
+        selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
+        create: true,
+      },
+      installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
+    };
+    const stage = host();
+    stage.render(
+      h(Extensions, {
+        api: {
+          extensions: {
+            list: async () => [],
+            startAcquisition: async () => ({ job: 'scoped-review' }),
+            acquisition: async () => ({
+              job: 'scoped-review',
+              revision: 4,
+              state: 'ready',
+              progress: null,
+              candidate,
+              error: null,
+            }),
+            [`${updating ? 'update' : 'install'}AndWait`]: async (...args) => {
+              calls.push(args);
+              return { changed: true, extension: { ...candidate, status: 'running' } };
+            },
+          },
+          watchExtensions: async () => () => {},
+        },
+      }),
+    );
+    await settled();
+    change(stage, 'registry.example/extension:version', 'local/scoped:2');
+    invoke(stage, 'Inspect');
+    await settled();
+    await settled();
+
+    assert.ok(
+      labelled(stage, 'Container access starts off. Select only what this extension needs.'),
+    );
+    for (const label of [
+      'Container named database',
+      `Exact container ${'c'.repeat(64)}`,
+      'All workspace containers',
+      'Create new containers',
+    ])
+      assert.ok(labelled(stage, label), label);
+    assert.deepEqual(latestSwitchValues(stage), [false, false, false, false]);
+
+    toggleSwitch(stage, 0, true);
+    toggleSwitch(stage, 2, true);
+    toggleSwitch(stage, 3, true);
+    toggleSwitch(stage, 2, false);
+    invoke(stage, updating ? 'Update extension' : 'Install extension');
+    await settled();
+    await settled();
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].slice(0, 3), ['scoped-review', 4, []]);
+    assert.deepEqual(calls[0][3], {
+      selectors: [{ name: 'database' }],
+      create: true,
+    });
+  });
+}
+
+test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
+  const calls = [];
+  let installs = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async (reference) => {
+            calls.push(['inspect', reference]);
+            return { job: 'candidate' };
+          },
+          acquisition: async () => ({
+            job: 'candidate',
+            revision: 7,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'assistant',
+              version: '1.2.0',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['containers:read', 'terminals:output'],
+            },
+            error: null,
+          }),
+          installAndWait: async (job, revision, granted) => {
+            calls.push(['install', job, revision, granted]);
+            installs += 1;
+            if (installs === 1) throw new Error('signature verification unavailable');
+            return { changed: true, extension: { name: 'assistant' } };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
+  submit(stage, 'registry.example/extension:version');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.ok(labelled(stage, 'Read and write terminal text'));
+  assert.ok(
+    labelled(stage, 'containers:read'),
+    'exact authority remains visible beside plain language',
+  );
+
+  invoke(stage, 'Install extension');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'signature verification unavailable'));
+  assert.ok(labelled(stage, 'Install extension'), 'failed installation retains a direct retry');
+  invoke(stage, 'Install extension');
+  await settled();
+  await settled();
+  assert.deepEqual(calls.at(-1), [
+    'install',
+    'candidate',
+    7,
+    ['containers:read', 'terminals:output'],
+  ]);
+  assert.ok(labelled(stage, 'assistant installed and verified.'));
+});
+
+test('installed extension removal requires final consent and a failure remains retryable', async () => {
+  const calls = [];
+  let removes = 0;
+  const extension = {
+    name: 'assistant',
+    image_digest: `sha256:${'b'.repeat(64)}`,
+    version: '1.2.0',
+    enabled: true,
+    status: 'running',
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [extension],
+          removeAndWait: async (name, digest) => {
+            calls.push([name, digest]);
+            removes += 1;
+            if (removes === 1) throw new Error('extension is still stopping');
+            return { changed: true, extension };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Remove');
+  assert.deepEqual(calls, [], 'opening consent carries no removal authority');
+  assert.ok(labelled(stage, 'Remove assistant from this workspace?'));
+  invoke(stage, 'Remove assistant');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
+  invoke(stage, 'Remove');
+  invoke(stage, 'Remove assistant');
+  await settled();
+  await settled();
+  assert.equal(calls.length, 2);
+  assert.ok(labelled(stage, 'assistant removed and verified.'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -3565,6 +3788,32 @@ function labelled(stage, label) {
     .at(-1);
 }
 
+function switchNodes(stage) {
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.Create?.tag === 'Switch')
+    .map((patch) => patch.Create.id);
+}
+
+function latestSwitchValues(stage) {
+  return switchNodes(stage).map(
+    (node) =>
+      stage.frames
+        .flatMap((frame) => frame.patches)
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === 'Checked')
+        .at(-1)?.SetProp.value?.Flag,
+  );
+}
+
+function toggleSwitch(stage, index, value) {
+  const node = switchNodes(stage)[index];
+  assert.notEqual(node, undefined, `switch ${index} is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Toggle', node, id: `${node}:Toggle`, value }),
+    `switch ${index} toggles`,
+  );
+}
+
 function invoke(stage, label) {
   const nodes = stage.frames
     .flatMap((frame) => frame.patches)
@@ -3597,6 +3846,23 @@ function change(stage, placeholder, value) {
   assert.ok(
     stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
     `${placeholder} changes`,
+  );
+}
+
+function submit(stage, placeholder) {
+  const node = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter(
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.prop === 'Placeholder' &&
+        patch.SetProp.value?.Text === placeholder,
+    )
+    .at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${placeholder} field is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Submit', node, id: `${node}:Submit`, value: null }),
+    `${placeholder} submits`,
   );
 }
 

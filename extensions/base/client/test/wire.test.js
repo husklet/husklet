@@ -21,7 +21,11 @@ test('a frame survives the codec unchanged', () => {
 });
 
 test('frames split across chunks are reassembled', () => {
-  const bytes = encode({ channel: CONTROL, kind: KIND.event, payload: { sequence: 1, patches: [] } });
+  const bytes = encode({
+    channel: CONTROL,
+    kind: KIND.event,
+    payload: { sequence: 1, patches: [] },
+  });
   const reader = new Reader();
   assert.deepEqual(reader.take(bytes.subarray(0, 5)), []);
   const [read] = reader.take(bytes.subarray(5));
@@ -29,7 +33,11 @@ test('frames split across chunks are reassembled', () => {
 });
 
 test('header violations are rejected before a declared body is buffered', () => {
-  for (const [offset, value, message] of [[8, 99, /unknown kind/], [9, 0x80, /unknown flags/], [10, 1, /reserved/]]) {
+  for (const [offset, value, message] of [
+    [8, 99, /unknown kind/],
+    [9, 0x80, /unknown flags/],
+    [10, 1, /reserved/],
+  ]) {
     const bytes = encode({ kind: KIND.event, payload: null });
     bytes[offset] = value;
     assert.throws(() => new Reader().take(bytes.subarray(0, HEADER)), message);
@@ -52,4 +60,92 @@ test('control heartbeats retain arbitrary non-JSON bytes', () => {
   const payload = Buffer.from([0, 0xff, 10, 13]);
   const [frame] = new Reader().take(encode({ channel: 19, kind: KIND.ping, payload }));
   assert.deepEqual(frame.payload, payload);
+});
+
+test('the encoder rejects values that cannot be represented by the wire header', () => {
+  for (const channel of [-1, 0x1_0000_0000, 1.5, Number.NaN]) {
+    assert.throws(() => encode({ channel, kind: KIND.event, payload: null }), /unsigned 32-bit/);
+  }
+  assert.throws(() => encode({ kind: 255, payload: null }), /unknown kind/);
+  assert.throws(() => encode({ kind: KIND.event, flags: 0x80, payload: null }), /unknown flags/);
+  assert.throws(() => encode({ kind: KIND.event, payload: undefined }), /bytes or a JSON value/);
+});
+
+test('one-byte delivery retains a bounded frame without repeated buffer growth', () => {
+  const payload = { text: 'x'.repeat(256 * 1024) };
+  const bytes = encode({ channel: 9, kind: KIND.event, payload });
+  const reader = new Reader();
+  let frames = [];
+  for (const byte of bytes) {
+    frames = reader.take(Uint8Array.of(byte));
+    assert(reader.buffered <= HEADER + PAYLOAD_LIMIT);
+  }
+  assert.deepEqual(frames[0].payload, payload);
+  assert.equal(reader.buffered, 0);
+});
+
+test('deterministic arbitrary chunk boundaries preserve a mixed frame stream', () => {
+  const sent = Array.from({ length: 97 }, (_, index) => ({
+    channel: index * 2 + 1,
+    kind: index % 11 === 0 ? KIND.ping : KIND.event,
+    payload:
+      index % 11 === 0
+        ? Buffer.from([index, 0, 255 - index])
+        : { index, text: 'λ'.repeat((index * 37) % 509), exact: Number.MAX_SAFE_INTEGER - index },
+  }));
+  const bytes = Buffer.concat(sent.map(encode));
+  for (let seed = 1; seed <= 32; seed += 1) {
+    const reader = new Reader();
+    const received = [];
+    let state = seed;
+    let offset = 0;
+    while (offset < bytes.length) {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      const size = 1 + (state % 4093);
+      received.push(...reader.take(bytes.subarray(offset, offset + size)));
+      offset += size;
+      assert(reader.buffered <= HEADER + PAYLOAD_LIMIT);
+    }
+    reader.finish();
+    assert.deepEqual(
+      received.map(({ channel, kind, payload }) => ({ channel, kind, payload })),
+      sent,
+    );
+  }
+});
+
+test('malformed JSON at every truncation boundary never yields a partial value', () => {
+  const bytes = encode({ channel: 3, kind: KIND.event, payload: { nested: ['✓', { value: 7 }] } });
+  for (let cut = HEADER; cut < bytes.length; cut += 1) {
+    const reader = new Reader();
+    assert.deepEqual(reader.take(bytes.subarray(0, cut)), []);
+    assert.throws(() => reader.finish(), /unfinished frame/);
+  }
+  for (const body of [Buffer.from('{'), Buffer.from('{"n":1e999}'), Buffer.from([0xc3, 0x28])]) {
+    const frame = Buffer.alloc(HEADER + body.length);
+    frame.writeUInt32LE(body.length);
+    frame.writeUInt8(KIND.event, 8);
+    frame.writeUInt8(FLAG_END, 9);
+    body.copy(frame, HEADER);
+    assert.throws(() => new Reader().take(frame), /valid UTF-8 JSON/);
+  }
+});
+
+test('huge numbers and excessive JSON depth fail before typed dispatch', () => {
+  for (const document of ['{"n":1e999}', `{"n":${Number.MAX_SAFE_INTEGER + 2}}`]) {
+    const body = Buffer.from(document);
+    const frame = Buffer.alloc(HEADER + body.length);
+    frame.writeUInt32LE(body.length);
+    frame.writeUInt8(KIND.event, 8);
+    frame.writeUInt8(FLAG_END, 9);
+    body.copy(frame, HEADER);
+    assert.throws(() => new Reader().take(frame), /cannot cross the protocol losslessly/);
+  }
+  const body = Buffer.from(`${'['.repeat(129)}null${']'.repeat(129)}`);
+  const frame = Buffer.alloc(HEADER + body.length);
+  frame.writeUInt32LE(body.length);
+  frame.writeUInt8(KIND.event, 8);
+  frame.writeUInt8(FLAG_END, 9);
+  body.copy(frame, HEADER);
+  assert.throws(() => new Reader().take(frame), /depth limit/);
 });

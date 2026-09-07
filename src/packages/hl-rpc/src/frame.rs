@@ -220,6 +220,7 @@ impl Frame {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Malformed {
     Oversize { declared: usize },
+    Truncated { buffered: usize },
     UnknownKind(u8),
     UnknownFlags(u8),
     Reserved,
@@ -232,6 +233,10 @@ impl std::fmt::Display for Malformed {
                 formatter,
                 "frame declares {declared} bytes, above the {} byte limit",
                 Frame::PAYLOAD_LIMIT
+            ),
+            Self::Truncated { buffered } => write!(
+                formatter,
+                "connection closed with an unfinished frame ({buffered} bytes buffered)"
             ),
             Self::UnknownKind(code) => write!(formatter, "unknown frame kind {code}"),
             Self::UnknownFlags(bits) => write!(formatter, "unknown frame flags {bits:#010b}"),

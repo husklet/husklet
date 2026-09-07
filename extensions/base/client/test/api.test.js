@@ -3,20 +3,59 @@ import fs from 'node:fs';
 import net from 'node:net';
 import test from 'node:test';
 
-import { ExtensionError, PROTOCOL_CAPABILITIES, Session, protocolCoverage, protocolSurface, requestCapability, validateUiEvent, workspace } from '../src/index.js';
+import {
+  ExtensionError,
+  PROTOCOL_CAPABILITIES,
+  Session,
+  protocolCoverage,
+  protocolSurface,
+  requestCapability,
+  validateUiEvent,
+  workspace,
+} from '../src/index.js';
 import { KIND, Reader, encode } from '../src/wire.js';
 import { PROTOCOL } from '../src/session.js';
 
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
-  const calls = []; let publish;
-  const api = workspace({ granted: [], call() { throw new Error('raw call was not stubbed'); }, onEvent() { return () => {}; } });
-  api.watchPaneChanges = async (listener) => { publish = listener; calls.push('subscribe'); return async () => calls.push('unsubscribe'); };
+  const calls = [];
+  let publish;
+  const api = workspace({
+    granted: [],
+    call() {
+      throw new Error('raw call was not stubbed');
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
+  api.watchPaneChanges = async (listener) => {
+    publish = listener;
+    calls.push('subscribe');
+    return async () => calls.push('unsubscribe');
+  };
   let reads = 0;
   api.terminal.read = async (...args) => {
-    calls.push(['read', ...args]); reads += 1;
+    calls.push(['read', ...args]);
+    reads += 1;
     return reads === 1
-      ? { slot: 'pane-1', generation: 4, revision: 9, columns: 80, rows: 24, lines: [], truncated: false }
-      : { slot: 'pane-1', generation: 4, revision: 10, columns: 120, rows: 40, lines: [], truncated: false };
+      ? {
+          slot: 'pane-1',
+          generation: 4,
+          revision: 9,
+          columns: 80,
+          rows: 24,
+          lines: [],
+          truncated: false,
+        }
+      : {
+          slot: 'pane-1',
+          generation: 4,
+          revision: 10,
+          columns: 120,
+          rows: 40,
+          lines: [],
+          truncated: false,
+        };
   };
   api.terminal.resizeGridObserved = async (...args) => {
     calls.push(['resize', ...args]);
@@ -64,7 +103,17 @@ async function pair(options) {
     socket.once('connect', () => resolve(socket));
   });
   const [host, extension] = await Promise.all([accepted, connecting]);
-  host.write(encode({ channel: 0, kind: KIND.open, payload: { protocol: PROTOCOL, extension: 'test', granted: PROTOCOL_CAPABILITIES.map(({ wire }) => wire) } }));
+  host.write(
+    encode({
+      channel: 0,
+      kind: KIND.open,
+      payload: {
+        protocol: PROTOCOL,
+        extension: 'test',
+        granted: PROTOCOL_CAPABILITIES.map(({ wire }) => wire),
+      },
+    }),
+  );
   const session = new Session(extension, options);
   await session.ready;
   return { host, session, server };
@@ -97,54 +146,104 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   const list = api.containers.list();
   assert.equal((await next()).payload.call, 'workspace_info');
   assert.equal((await next()).payload.call, 'container_list');
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } } }));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied', capability: 'containers:read', detail: 'not granted' } }));
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'workspace',
+        with: { name: 'dev', architecture: 'arm64', image: 'alpine' },
+      },
+    }),
+  );
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      flags: 3,
+      payload: { error: 'denied', capability: 'containers:read', detail: 'not granted' },
+    }),
+  );
   assert.equal((await info).name, 'dev');
   await assert.rejects(list, (error) => error instanceof ExtensionError && error.kind === 'denied');
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('the complete typed facade binds cancellation without changing method arguments', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next();
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
   const controller = new AbortController();
   const api = workspace(stage.session).withSignal(controller.signal);
   const pending = api.containers.inspect('a'.repeat(32));
-  assert.deepEqual((await next()).payload, { call: 'container_inspect', with: { id: 'a'.repeat(32) } });
+  assert.deepEqual((await next()).payload, {
+    call: 'container_inspect',
+    with: { id: 'a'.repeat(32) },
+  });
   controller.abort();
   await assert.rejects(pending, { name: 'AbortError' });
   await assert.rejects(api.info(), /closed/);
-  stage.host.destroy(); stage.server.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('an already-aborted typed facade emits no Unix request frame', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next();
-  const controller = new AbortController(); controller.abort();
-  await assert.rejects(workspace(stage.session, { signal: controller.signal }).info(), { name: 'AbortError' });
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(workspace(stage.session, { signal: controller.signal }).info(), {
+    name: 'AbortError',
+  });
   const wrote = await Promise.race([
     next().then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 20)),
   ]);
   assert.equal(wrote, false);
-  await stage.session.close(); stage.host.destroy(); stage.server.close();
+  await stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('aborting a bound watcher releases its shared subscription without closing the session', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next();
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
   const controller = new AbortController();
   const api = workspace(stage.session).withSignal(controller.signal);
   const watching = api.watchContainers(() => {});
-  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'containers' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'containers' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await watching;
   controller.abort();
-  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'containers' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_unsubscribe',
+    with: { topic: 'containers' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stop();
   const info = workspace(stage.session).info();
   assert.equal((await next()).payload.call, 'workspace_info');
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine' } } }));
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'workspace',
+        with: { name: 'dev', architecture: 'arm64', image: 'alpine' },
+      },
+    }),
+  );
   assert.equal((await info).name, 'dev');
-  await stage.session.close(); stage.host.destroy(); stage.server.close();
+  await stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('pending calls are bounded and a timeout closes the ambiguous ordered stream', async () => {
@@ -158,7 +257,9 @@ test('pending calls are bounded and a timeout closes the ambiguous ordered strea
   await assert.rejects(first, /timed out/);
   await assert.rejects(second, /timed out/);
   await assert.rejects(stage.session.call('image_list'), /closed/);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('an event returns credit only after delivery', async () => {
@@ -170,13 +271,17 @@ test('an event returns credit only after delivery', async () => {
   await next();
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await subscribed;
-  stage.host.write(encode({ channel: 4, kind: KIND.event, payload: { snapshot: 'containers', of: [] } }));
+  stage.host.write(
+    encode({ channel: 4, kind: KIND.event, payload: { snapshot: 'containers', of: [] } }),
+  );
   const credit = await next();
   assert.deepEqual(seen, [{ snapshot: 'containers', of: [] }]);
   assert.equal(credit.channel, 4);
   assert.equal(credit.kind, KIND.credit);
   assert.equal(credit.payload, 1);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('a throwing event listener cannot starve healthy listeners or event credit', async () => {
@@ -189,16 +294,31 @@ test('a throwing event listener cannot starve healthy listeners or event credit'
   await next();
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await subscribed;
-  stage.session.onEvent(() => { throw new Error('broken observer'); });
+  stage.session.onEvent(() => {
+    throw new Error('broken observer');
+  });
   stage.session.onEvent((event) => seen.push(event));
-  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'images', of: { images: [], truncated: false } } }));
+  stage.host.write(
+    encode({
+      channel: 9,
+      kind: KIND.event,
+      payload: { snapshot: 'images', of: { images: [], truncated: false } },
+    }),
+  );
   const credit = await next();
   assert.deepEqual(errors, ['broken observer']);
   assert.deepEqual(seen, [{ snapshot: 'images', of: { images: [], truncated: false } }]);
-  assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, {
-    channel: 9, kind: KIND.credit, payload: 1,
-  });
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  assert.deepEqual(
+    { channel: credit.channel, kind: credit.kind, payload: credit.payload },
+    {
+      channel: 9,
+      kind: KIND.credit,
+      payload: 1,
+    },
+  );
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('a reply for the wrong operation fails closed and rejects every correlated caller', async () => {
@@ -208,9 +328,12 @@ test('a reply for the wrong operation fails closed and rejects every correlated 
   await next();
   const first = stage.session.call('workspace_info');
   const second = stage.session.call('workspace_list');
-  await next(); await next();
+  await next();
+  await next();
   const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspaces', with: [] } }));
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'workspaces', with: [] } }),
+  );
   await assert.rejects(first, /reply\.reply must be workspace/);
   await assert.rejects(second, /reply\.reply must be workspace/);
   await disconnected;
@@ -225,7 +348,9 @@ test('a malformed failure rejects the call and closes the ordered stream', async
   const pending = stage.session.call('workspace_info');
   await next();
   const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied' } }));
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, flags: 3, payload: { error: 'denied' } }),
+  );
   await assert.rejects(pending, /failure\.capability must be present/);
   await disconnected;
   await assert.rejects(stage.session.call('workspace_info'), /closed/);
@@ -242,7 +367,9 @@ test('a malformed subscribed snapshot closes without delivery or returned credit
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await subscribed;
   const disconnected = new Promise((resolve) => stage.host.once('close', resolve));
-  stage.host.write(encode({ channel: 8, kind: KIND.event, payload: { snapshot: 'containers', of: [{}] } }));
+  stage.host.write(
+    encode({ channel: 8, kind: KIND.event, payload: { snapshot: 'containers', of: [{}] } }),
+  );
   await disconnected;
   assert.deepEqual(seen, []);
   assert.equal(stage.host.readableLength, 0, 'invalid events return no credit');
@@ -254,23 +381,73 @@ test('separately typed GUI interaction events remain deliverable and return cred
   const stage = await pair({ onEvent: (event) => seen.push(event) });
   const next = frames(stage.host);
   await next();
-  const event = { interaction: 'key', trigger: 'Key', node: 7, id: '7:Key', slot: 'pane-1', key: 'a', keycode: 38, modifiers: 4, pressed: true };
+  const event = {
+    interaction: 'key',
+    trigger: 'Key',
+    node: 7,
+    id: '7:Key',
+    slot: 'pane-1',
+    key: 'a',
+    keycode: 38,
+    modifiers: 4,
+    pressed: true,
+  };
   stage.host.write(encode({ channel: 9, kind: KIND.event, payload: event }));
   const credit = await next();
   assert.deepEqual(seen, [event]);
-  assert.deepEqual({ channel: credit.channel, kind: credit.kind, payload: credit.payload }, { channel: 9, kind: KIND.credit, payload: 1 });
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  assert.deepEqual(
+    { channel: credit.channel, kind: credit.kind, payload: credit.payload },
+    { channel: 9, kind: KIND.credit, payload: 1 },
+  );
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('generated UI event validation accepts only the canonical payload', () => {
-  const current = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', slot: 'pane-1', source: 4, x: 2.5, y: 8 };
+  const current = {
+    interaction: 'drop',
+    trigger: 'Drop',
+    node: 7,
+    id: '7:Drop',
+    slot: 'pane-1',
+    source: 4,
+    x: 2.5,
+    y: 8,
+  };
   assert.equal(validateUiEvent(current), current);
-  const omitted = { interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 };
+  const omitted = {
+    interaction: 'drop',
+    trigger: 'Drop',
+    node: 7,
+    id: '7:Drop',
+    source: 4,
+    x: 2.5,
+    y: 8,
+  };
   const nullable = { ...omitted, slot: null };
   assert.equal(validateUiEvent(omitted), omitted);
   assert.equal(validateUiEvent(nullable), nullable);
-  assert.throws(() => validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 7, id: '7:Drop', x: 2.5, y: 8 }), /ui event/);
-  assert.throws(() => validateUiEvent({ slot: 'pane-1', event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } } }), /interaction/);
+  assert.throws(
+    () =>
+      validateUiEvent({
+        interaction: 'drop',
+        trigger: 'Drop',
+        node: 7,
+        id: '7:Drop',
+        x: 2.5,
+        y: 8,
+      }),
+    /ui event/,
+  );
+  assert.throws(
+    () =>
+      validateUiEvent({
+        slot: 'pane-1',
+        event: { Drop: { node: 7, id: '7:Drop', source: 4, x: 2.5, y: 8 } },
+      }),
+    /interaction/,
+  );
 });
 
 test('concurrent pane-change waits share their host subscription until the last disposer', async () => {
@@ -280,23 +457,42 @@ test('concurrent pane-change waits share their host subscription until the last 
   const api = workspace(stage.session);
   const first = api.watchPaneChanges(() => {});
   const second = api.watchPaneChanges(() => {});
-  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'pane-changes' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const [stopFirst, stopSecond] = await Promise.all([first, second]);
 
   await stopFirst();
   const probe = stage.session.call('workspace_info');
-  assert.equal((await next()).payload.call, 'workspace_info', 'the first disposer must not unsubscribe the second wait');
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: {
-    reply: 'workspace', with: { name: 'dev', architecture: 'arm64', image: 'alpine:3.20' },
-  } }));
+  assert.equal(
+    (await next()).payload.call,
+    'workspace_info',
+    'the first disposer must not unsubscribe the second wait',
+  );
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'workspace',
+        with: { name: 'dev', architecture: 'arm64', image: 'alpine:3.20' },
+      },
+    }),
+  );
   await probe;
 
   const stopped = stopSecond();
-  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_unsubscribe',
+    with: { topic: 'pane-changes' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stopped;
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('workspace lifecycle methods use the typed control calls', async () => {
@@ -305,38 +501,83 @@ test('workspace lifecycle methods use the typed control calls', async () => {
   await next();
   const api = workspace(stage.session);
   const configuration = {
-    name: 'other', image: 'alpine:3.20', architecture: 'arm64', storage: null, shell: null,
-    cpus: null, memory_mb: null, environment: [], mounts: [], docker_socket: true,
-    scrollback: 100000, vpn: null, execution_lifetime: 'persisted', terminal: {
-      font_family: null, font_size: null, foreground: null, background: null,
-      cursor_shape: null, cursor_blink: null,
+    name: 'other',
+    image: 'alpine:3.20',
+    architecture: 'arm64',
+    storage: null,
+    shell: null,
+    cpus: null,
+    memory_mb: null,
+    environment: [],
+    mounts: [],
+    docker_socket: true,
+    scrollback: 100000,
+    vpn: null,
+    execution_lifetime: 'persisted',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: null,
     },
   };
   const operations = [
-    api.inspect('other'), api.create(configuration), api.adopt({ ...configuration, generation: '' }), api.update('other', '0123456789abcdef0123456789abcdef', configuration),
-    api.delete('other', '0123456789abcdef0123456789abcdef'), api.start('other'), api.stop('other'), api.restart('other'),
+    api.inspect('other'),
+    api.create(configuration),
+    api.adopt({ ...configuration, generation: '' }),
+    api.update('other', '0123456789abcdef0123456789abcdef', configuration),
+    api.delete('other', '0123456789abcdef0123456789abcdef'),
+    api.start('other'),
+    api.stop('other'),
+    api.restart('other'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
-  assert.deepEqual(calls.map((call) => call.call), [
-    'workspace_inspect', 'workspace_create', 'workspace_adopt', 'workspace_update', 'workspace_delete',
-    'workspace_start', 'workspace_stop', 'workspace_restart',
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.call),
+    [
+      'workspace_inspect',
+      'workspace_create',
+      'workspace_adopt',
+      'workspace_update',
+      'workspace_delete',
+      'workspace_start',
+      'workspace_stop',
+      'workspace_restart',
+    ],
+  );
   for (let index = 0; index < operations.length; index += 1) {
-    const payload = index < 4
-      ? { reply: 'workspace_configuration', with: configuration }
-      : { reply: 'done' };
+    const payload =
+      index < 4 ? { reply: 'workspace_configuration', with: configuration } : { reply: 'done' };
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));
   }
   const results = await Promise.all(operations);
-  assert.deepEqual(results.slice(0, 4), [configuration, configuration, configuration, configuration]);
+  assert.deepEqual(results.slice(0, 4), [
+    configuration,
+    configuration,
+    configuration,
+    configuration,
+  ]);
   assert.deepEqual(results.slice(4), [undefined, undefined, undefined, undefined]);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('coverage names delivered snapshots and leaves unsupported topics unavailable', () => {
   assert.deepEqual(protocolCoverage.available.workspace, [
-    'info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart',
+    'info',
+    'list',
+    'inspect',
+    'create',
+    'adopt',
+    'update',
+    'delete',
+    'start',
+    'stop',
+    'restart',
   ]);
   assert.ok(protocolCoverage.available.containers.includes('create'));
   assert.ok(protocolCoverage.available.containers.includes('remove'));
@@ -345,47 +586,118 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(protocolCoverage.unavailable.workspace.includes('mutateWhileRunning'));
   assert.ok(protocolCoverage.available.containers.includes('processes'));
   assert.deepEqual(protocolCoverage.available.images, [
-    'inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait',
+    'inventory',
+    'list',
+    'inspect',
+    'pull',
+    'startPull',
+    'pullStatus',
+    'cancelPull',
+    'remove',
+    'prune',
+    'removeAndWait',
   ]);
   assert.deepEqual(protocolCoverage.unavailable.images, []);
-  assert.deepEqual(protocolCoverage.available.snapshotTopics, ['containers', 'container-inventory', 'executions', 'images', 'image-pulls', 'volumes', 'networks', 'terminal', 'pane-changes', 'extensions', 'extension-acquisitions', 'workspace-lifecycle', 'workspace-events']);
+  assert.deepEqual(protocolCoverage.available.snapshotTopics, [
+    'containers',
+    'container-inventory',
+    'executions',
+    'images',
+    'image-pulls',
+    'volumes',
+    'networks',
+    'terminal',
+    'pane-changes',
+    'extensions',
+    'extension-acquisitions',
+    'workspace-lifecycle',
+    'workspace-events',
+    'filesystem',
+  ]);
   assert.ok(protocolCoverage.available.terminal.includes('switchOccupant'));
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
-  assert.deepEqual(protocolCoverage.available.extensions, ['list', 'inspect', 'enable', 'disable', 'retry', 'remove', 'startAcquisition', 'acquisition', 'cancelAcquisition', 'install', 'update']);
+  assert.deepEqual(protocolCoverage.available.extensions, [
+    'list',
+    'inspect',
+    'enable',
+    'disable',
+    'retry',
+    'remove',
+    'startAcquisition',
+    'acquisition',
+    'cancelAcquisition',
+    'install',
+    'update',
+  ]);
   assert.deepEqual(protocolCoverage.unavailable.extensions, []);
   assert.ok(protocolCoverage.available.workspaceEvents.includes('key'));
-  assert.ok(!protocolCoverage.unavailable.events.some((name) => name.startsWith('global')),
-    'window-level workspace events must not also be advertised as unavailable under stale names');
+  assert.ok(
+    !protocolCoverage.unavailable.events.some((name) => name.startsWith('global')),
+    'window-level workspace events must not also be advertised as unavailable under stale names',
+  );
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drag'));
   assert.ok(protocolCoverage.available.interfaceEvents.includes('drop'));
   assert.ok(!protocolCoverage.unavailable.events.includes('drag'));
-  const api = workspace({ granted: ['workspaces:read'], call() { throw new Error('not called'); } });
+  const api = workspace({
+    granted: ['workspaces:read'],
+    call() {
+      throw new Error('not called');
+    },
+  });
   assert.deepEqual(api.granted, ['workspaces:read']);
   assert.equal(api.renameWorkspace, undefined);
   assert.equal(typeof api.containers.processes, 'function');
   assert.equal(typeof api.volumes.create, 'function');
   assert.equal(typeof api.networks.connect, 'function');
-  assert.deepEqual(Object.keys(api.images), protocolCoverage.available.images,
-    'coverage must enumerate every callable typed image authority in API order');
+  assert.deepEqual(
+    Object.keys(api.images),
+    protocolCoverage.available.images,
+    'coverage must enumerate every callable typed image authority in API order',
+  );
   assert.equal(typeof api.terminal.writeInput, 'function');
   assert.equal(typeof api.terminal.switchOccupant, 'function');
-  assert.deepEqual(Object.keys(api.files), protocolCoverage.available.files,
-    'coverage must enumerate observed filesystem authorities as well as compatibility calls');
+  assert.deepEqual(
+    Object.keys(api.files),
+    protocolCoverage.available.files,
+    'coverage must enumerate observed filesystem authorities as well as compatibility calls',
+  );
 });
 
 test('the schema-derived public surface covers every Rust request and topic', () => {
-  const schema = JSON.parse(fs.readFileSync(new URL('../../../../src/workspaces/hl-extension/protocol/v1.json', import.meta.url)));
+  const schema = JSON.parse(
+    fs.readFileSync(
+      new URL('../../../../src/workspaces/hl-extension/protocol/v1.json', import.meta.url),
+    ),
+  );
   const requests = schema.roots.request.variants.map(({ name }) => name);
   const topics = schema.topics.map(({ wire }) => wire);
   assert.deepEqual(Object.keys(protocolSurface.requests), requests);
   assert.deepEqual(Object.keys(protocolSurface.topics), topics);
   assert.deepEqual(
-    Object.entries(protocolSurface.requests).filter(([, route]) => route.kind === 'internal').map(([call]) => call),
-    ['interface_open_tab', 'interface_split', 'interface_withdraw', 'interface_render', 'interface_render_at', 'source_resize', 'source_resize_at'],
+    Object.entries(protocolSurface.requests)
+      .filter(([, route]) => route.kind === 'internal')
+      .map(([call]) => call),
+    [
+      'interface_open_tab',
+      'interface_split',
+      'interface_withdraw',
+      'interface_render',
+      'interface_render_at',
+      'source_resize',
+      'source_resize_at',
+    ],
     'only renderer-owned lifecycle, commit, and virtual-source transport may lack facade methods',
   );
 
-  const api = workspace({ granted: [], call() { throw new Error('not called'); }, onEvent() { return () => {}; } });
+  const api = workspace({
+    granted: [],
+    call() {
+      throw new Error('not called');
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
   for (const [call, route] of Object.entries(protocolSurface.requests)) {
     if (route.kind === 'internal') {
       assert.match(route.rationale, /renderer/, `${call} lacks a concrete internal rationale`);
@@ -396,16 +708,28 @@ test('the schema-derived public surface covers every Rust request and topic', ()
     assert.equal(typeof value, 'function', `${call} has no public ${route.api} method`);
   }
   for (const [topic, routes] of Object.entries(protocolSurface.topics)) {
-    assert.equal(typeof api[routes.subscribe], 'function', `${topic} has no typed subscription route`);
-    assert.equal(typeof api[routes.unsubscribe], 'function', `${topic} has no typed unsubscription route`);
+    assert.equal(
+      typeof api[routes.subscribe],
+      'function',
+      `${topic} has no typed subscription route`,
+    );
+    assert.equal(
+      typeof api[routes.unsubscribe],
+      'function',
+      `${topic} has no typed unsubscription route`,
+    );
   }
 });
 
 test('every fixed public facade request is classified with its Rust host capability', () => {
   const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
-  const calls = new Set([...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]));
-  calls.delete('event_subscribe'); calls.delete('event_unsubscribe');
-  for (const call of calls) assert.doesNotThrow(() => requestCapability(call), `${call} is unclassified`);
+  const calls = new Set(
+    [...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]),
+  );
+  calls.delete('event_subscribe');
+  calls.delete('event_unsubscribe');
+  for (const call of calls)
+    assert.doesNotThrow(() => requestCapability(call), `${call} is unclassified`);
   assert.equal(requestCapability('container_attach_terminal'), 'containers:attach');
   assert.equal(requestCapability('terminal_read_pane'), 'terminals:output');
   assert.equal(requestCapability('pane_semantic_action'), 'panes:semantic-control');
@@ -545,6 +869,24 @@ test('workspace input watcher uses its separate grant topic, returns credit, and
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('filesystem watcher preserves bounded completeness and coalescing metadata', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const seen = [];
+  const opening = api.watchFilesystem((value) => seen.push(value));
+  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'filesystem' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const stop = await opening;
+  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4 };
+  stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'filesystem', of: inventory } }));
+  assert.equal((await next()).kind, KIND.credit);
+  assert.deepEqual(seen, [inventory]);
+  const stopping = stop();
+  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'filesystem' } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await stopping;
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const seen = [];
@@ -628,16 +970,16 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface:render', 'containers:attach']),
-    api.extensions.update('job-2', 8, ['containers:read'])];
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }),
+    api.extensions.update('job-2', 8, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'] } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'] } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));
@@ -685,7 +1027,9 @@ test('extension acquisition wait times out with its exact cursor and disposes', 
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await pending, { changed: false, job: 'job-1', revision: 7 });
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('extension facade preserves exact read and control request shapes', async () => {
@@ -693,10 +1037,14 @@ test('extension facade preserves exact read and control request shapes', async (
   const next = frames(stage.host);
   await next();
   const api = workspace(stage.session);
-  const operations = [api.extensions.list(), api.extensions.inspect('top'),
-    api.extensions.enable('top', `sha256:${'a'.repeat(64)}`), api.extensions.disable('top', `sha256:${'a'.repeat(64)}`),
+  const operations = [
+    api.extensions.list(),
+    api.extensions.inspect('top'),
+    api.extensions.enable('top', `sha256:${'a'.repeat(64)}`),
+    api.extensions.disable('top', `sha256:${'a'.repeat(64)}`),
     api.extensions.retry('top', `sha256:${'a'.repeat(64)}`),
-    api.extensions.remove('top', `sha256:${'a'.repeat(64)}`)];
+    api.extensions.remove('top', `sha256:${'a'.repeat(64)}`),
+  ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
@@ -708,83 +1056,203 @@ test('extension facade preserves exact read and control request shapes', async (
     { call: 'extension_remove', with: { name: 'top', image_digest: `sha256:${'a'.repeat(64)}` } },
   ]);
   const summary = { name: 'top', image_digest: 'sha256:abc', status: 'standby' };
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }));
-  for (let index = 0; index < 4; index += 1) stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual(await Promise.all(operations), [[summary], summary, undefined, undefined, undefined, undefined]);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'extensions', with: [summary] } }),
+  );
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension', with: summary } }),
+  );
+  for (let index = 0; index < 4; index += 1)
+    stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.deepEqual(await Promise.all(operations), [
+    [summary],
+    summary,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('extension enable wait arms inventory before authority and verifies the exact digest', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
   const pending = api.extensions.enableAndWait('manager', digest, { timeoutMs: 1_000 });
-  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'extensions' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'extensions' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, { call: 'extension_enable', with: { name: 'manager', image_digest: digest } });
-  stage.host.write(encode({ channel: 23, kind: KIND.event, payload: { snapshot: 'extensions', of: [{
-    name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [],
-  }] } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'extension_enable',
+    with: { name: 'manager', image_digest: digest },
+  });
+  stage.host.write(
+    encode({
+      channel: 23,
+      kind: KIND.event,
+      payload: {
+        snapshot: 'extensions',
+        of: [
+          {
+            name: 'manager',
+            image_digest: digest,
+            version: '1',
+            status: 'duty',
+            enabled: true,
+            pane_providers: [],
+          },
+        ],
+      },
+    }),
+  );
   assert.equal((await next()).kind, KIND.credit);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const result = await pending;
-  assert.equal(result.changed, true); assert.equal(result.extension.image_digest, digest);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  assert.equal(result.changed, true);
+  assert.equal(result.extension.image_digest, digest);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('extension disable wait arms inventory before authority and verifies durable standby', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
   const digest = `sha256:${'c'.repeat(64)}`;
   const pending = api.extensions.disableAndWait('manager', digest, { timeoutMs: 1_000 });
   assert.equal((await next()).payload.call, 'event_subscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, { call: 'extension_disable', with: { name: 'manager', image_digest: digest } });
-  stage.host.write(encode({ channel: 24, kind: KIND.event, payload: { snapshot: 'extensions', of: [{
-    name: 'manager', image_digest: digest, version: '1', status: 'standby', enabled: false, pane_providers: [],
-  }] } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'extension_disable',
+    with: { name: 'manager', image_digest: digest },
+  });
+  stage.host.write(
+    encode({
+      channel: 24,
+      kind: KIND.event,
+      payload: {
+        snapshot: 'extensions',
+        of: [
+          {
+            name: 'manager',
+            image_digest: digest,
+            version: '1',
+            status: 'standby',
+            enabled: false,
+            pane_providers: [],
+          },
+        ],
+      },
+    }),
+  );
   assert.equal((await next()).kind, KIND.credit);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  const result = await pending; assert.equal(result.changed, true); assert.equal(result.extension.enabled, false);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  const result = await pending;
+  assert.equal(result.changed, true);
+  assert.equal(result.extension.enabled, false);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('extension remove wait arms before authority and proves exact digest absence with replacement disclosure', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
-  const digest = `sha256:${'e'.repeat(64)}`; const replacementDigest = `sha256:${'f'.repeat(64)}`;
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const digest = `sha256:${'e'.repeat(64)}`;
+  const replacementDigest = `sha256:${'f'.repeat(64)}`;
   const pending = api.extensions.removeAndWait('manager', digest, { timeoutMs: 1_000 });
   assert.equal((await next()).payload.call, 'event_subscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, { call: 'extension_remove', with: { name: 'manager', image_digest: digest } });
-  const replacement = { name: 'manager', image_digest: replacementDigest, version: '2', status: 'standby', enabled: false, pane_providers: [] };
-  stage.host.write(encode({ channel: 25, kind: KIND.event, payload: { snapshot: 'extensions', of: [replacement] } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'extension_remove',
+    with: { name: 'manager', image_digest: digest },
+  });
+  const replacement = {
+    name: 'manager',
+    image_digest: replacementDigest,
+    version: '2',
+    status: 'standby',
+    enabled: false,
+    pane_providers: [],
+  };
+  stage.host.write(
+    encode({
+      channel: 25,
+      kind: KIND.event,
+      payload: { snapshot: 'extensions', of: [replacement] },
+    }),
+  );
   assert.equal((await next()).kind, KIND.credit);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual(await pending, { changed: true, removed: { name: 'manager', image_digest: digest }, replacement });
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  assert.deepEqual(await pending, {
+    changed: true,
+    removed: { name: 'manager', image_digest: digest },
+    replacement,
+  });
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('extension retry wait arms before authority and requires exact durable duty', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
   const digest = `sha256:${'d'.repeat(64)}`;
   const pending = api.extensions.retryAndWait('manager', digest, { timeoutMs: 1_000 });
   assert.equal((await next()).payload.call, 'event_subscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, { call: 'extension_retry', with: { name: 'manager', image_digest: digest } });
-  stage.host.write(encode({ channel: 26, kind: KIND.event, payload: { snapshot: 'extensions', of: [{
-    name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true, pane_providers: [],
-  }] } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'extension_retry',
+    with: { name: 'manager', image_digest: digest },
+  });
+  stage.host.write(
+    encode({
+      channel: 26,
+      kind: KIND.event,
+      payload: {
+        snapshot: 'extensions',
+        of: [
+          {
+            name: 'manager',
+            image_digest: digest,
+            version: '1',
+            status: 'duty',
+            enabled: true,
+            pane_providers: [],
+          },
+        ],
+      },
+    }),
+  );
   assert.equal((await next()).kind, KIND.credit);
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  const result = await pending; assert.equal(result.changed, true); assert.equal(result.extension.status, 'duty');
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  const result = await pending;
+  assert.equal(result.changed, true);
+  assert.equal(result.extension.status, 'duty');
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('volume and network facades preserve safe request shapes', async () => {
@@ -844,7 +1312,13 @@ test('resource removal waits arm first and require non-truncated exact absence',
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     assert.deepEqual((await next()).payload, { call, with: argument });
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-    stage.host.write(encode({ channel: 12, kind: KIND.event, payload: { ...event, of: { ...event.of, truncated: true } } }));
+    stage.host.write(
+      encode({
+        channel: 12,
+        kind: KIND.event,
+        payload: { ...event, of: { ...event.of, truncated: true } },
+      }),
+    );
     assert.equal((await next()).kind, KIND.credit);
     stage.host.write(encode({ channel: 13, kind: KIND.event, payload: event }));
     assert.equal((await next()).kind, KIND.credit);
@@ -852,7 +1326,9 @@ test('resource removal waits arm first and require non-truncated exact absence',
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
     assert.deepEqual(await operation, expected);
   }
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('image inspection and destructive calls preserve explicit request shapes', async () => {
@@ -862,7 +1338,11 @@ test('image inspection and destructive calls preserve explicit request shapes', 
   const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
   assert.throws(() => api.images.remove('alpine:3.20'), /complete immutable sha256 digest/);
-  const operations = [api.images.inspect('alpine:3.20'), api.images.remove(digest), api.images.prune()];
+  const operations = [
+    api.images.inspect('alpine:3.20'),
+    api.images.remove(digest),
+    api.images.prune(),
+  ];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
@@ -870,12 +1350,37 @@ test('image inspection and destructive calls preserve explicit request shapes', 
     { call: 'image_remove', with: { reference: digest } },
     { call: 'image_prune' },
   ]);
-  const details = { id: 'i1', references: [], created: '', size: 0, os: 'linux', architecture: 'amd64', entrypoint: [], command: [], working_directory: '', user: '' };
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: details } }));
+  const details = {
+    id: 'i1',
+    references: [],
+    created: '',
+    size: 0,
+    os: 'linux',
+    architecture: 'amd64',
+    entrypoint: [],
+    command: [],
+    working_directory: '',
+    user: '',
+  };
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_details', with: details } }),
+  );
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'image_prune', with: { deleted: 2, space_reclaimed: 7 } } }));
-  assert.deepEqual(await Promise.all(operations), [details, undefined, { deleted: 2, space_reclaimed: 7 }]);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'image_prune', with: { deleted: 2, space_reclaimed: 7 } },
+    }),
+  );
+  assert.deepEqual(await Promise.all(operations), [
+    details,
+    undefined,
+    { deleted: 2, space_reclaimed: 7 },
+  ]);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('deep container methods and subscriptions use exact protocol request shapes', async () => {
@@ -900,11 +1405,29 @@ test('deep container methods and subscriptions use exact protocol request shapes
   assert.throws(() => api.containers.rename(containerId, '.worker'), /container name must/);
   assert.throws(() => api.containers.rename(containerId, 'x'.repeat(129)), /container name must/);
   const operations = [
-    api.containers.processes('c1'), api.containers.logs('c1', { stdout: true, stderr: false }),
-    api.containers.execution(executionId), api.containers.executions(), api.containers.executionLogs(executionId, { stdout: true, stderr: false }), api.containers.waitExecution(executionId, { timeoutMs: 250 }), api.containers.start(containerId), api.containers.pause(containerId), api.containers.unpause(containerId),
-    api.containers.restart(containerId), api.containers.rename(containerId, 'worker_2.prod'), api.containers.stop(containerId), api.containers.remove(containerId), api.containers.kill(containerId, 'SIGTERM'), api.containers.signalExecution(executionId, 'SIGHUP'), api.containers.removeExecution(executionId),
-    api.containers.exec(containerId, { command: ['sh', '-lc', 'true'], user: '1000', workingDirectory: '/work' }),
-    api.subscribe('containers'), api.unsubscribe('containers'),
+    api.containers.processes('c1'),
+    api.containers.logs('c1', { stdout: true, stderr: false }),
+    api.containers.execution(executionId),
+    api.containers.executions(),
+    api.containers.executionLogs(executionId, { stdout: true, stderr: false }),
+    api.containers.waitExecution(executionId, { timeoutMs: 250 }),
+    api.containers.start(containerId),
+    api.containers.pause(containerId),
+    api.containers.unpause(containerId),
+    api.containers.restart(containerId),
+    api.containers.rename(containerId, 'worker_2.prod'),
+    api.containers.stop(containerId),
+    api.containers.remove(containerId),
+    api.containers.kill(containerId, 'SIGTERM'),
+    api.containers.signalExecution(executionId, 'SIGHUP'),
+    api.containers.removeExecution(executionId),
+    api.containers.exec(containerId, {
+      command: ['sh', '-lc', 'true'],
+      user: '1000',
+      workingDirectory: '/work',
+    }),
+    api.subscribe('containers'),
+    api.unsubscribe('containers'),
   ];
   const calls = [];
   for (let index = 0; index < operations.length - 1; index += 1) calls.push((await next()).payload);
@@ -1000,21 +1523,33 @@ test('pane change observation subscribes over the live transport, filters metada
   await next();
   const api = workspace(stage.session);
   let observed;
-  const watching = api.watchPaneChanges((change) => { observed = change; });
-  assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'pane-changes' } });
+  const watching = api.watchPaneChanges((change) => {
+    observed = change;
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'pane-changes' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const dispose = await watching;
   const change = { slot: 'pane-7', kind: 'surface', revision: 12, generation: 40, coalesced: 3 };
-  stage.host.write(encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'pane_changes', of: change } }));
+  stage.host.write(
+    encode({ channel: 9, kind: KIND.event, payload: { snapshot: 'pane_changes', of: change } }),
+  );
   const credit = await next();
   assert.deepEqual(observed, change);
   assert.equal(credit.channel, 9);
   assert.equal(credit.kind, KIND.credit);
   const stopping = dispose();
-  assert.deepEqual((await next()).payload, { call: 'event_unsubscribe', with: { topic: 'pane-changes' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'event_unsubscribe',
+    with: { topic: 'pane-changes' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stopping;
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('terminal topology, bounded input, grid resize and retitle use exact typed calls', async () => {
@@ -1033,33 +1568,55 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const retitling = terminal.retitleObserved('s1', 4, 7, ' Build 🧪 ');
   const closing = terminal.closeObserved('s1', 4, 7);
   assert.deepEqual((await next()).payload, { call: 'terminal_topology' });
-  assert.deepEqual((await next()).payload, { call: 'terminal_pin_tab', with: { tab: 't1', pinned: true } });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_split_observed', with: { slot: 's1', generation: 4, revision: 7, division: 'below' },
+    call: 'terminal_pin_tab',
+    with: { tab: 't1', pinned: true },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_spawn_observed', with: { slot: 's1', generation: 4, revision: 7, command: ['printf', '%s\n', 'ready'] },
+    call: 'terminal_split_observed',
+    with: { slot: 's1', generation: 4, revision: 7, division: 'below' },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_write_pane', with: { slot: 's1', generation: 4, revision: 7, contents: [...new TextEncoder().encode('echo hello\n')] },
+    call: 'terminal_spawn_observed',
+    with: { slot: 's1', generation: 4, revision: 7, command: ['printf', '%s\n', 'ready'] },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_resize_grid_observed', with: { slot: 's1', generation: 4, revision: 7, columns: 120, rows: 40 },
+    call: 'terminal_write_pane',
+    with: {
+      slot: 's1',
+      generation: 4,
+      revision: 7,
+      contents: [...new TextEncoder().encode('echo hello\n')],
+    },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_ratio_observed', with: { slot: 's1', generation: 4, revision: 7, ratio: 0.6 },
-  });
-  assert.deepEqual((await next()).payload, { call: 'terminal_focus_pane_observed', with: { slot: 's1', generation: 4, revision: 7 } });
-  assert.deepEqual((await next()).payload, {
-    call: 'terminal_retitle_pane_observed', with: { slot: 's1', generation: 4, revision: 7, title: ' Build 🧪 ' },
+    call: 'terminal_resize_grid_observed',
+    with: { slot: 's1', generation: 4, revision: 7, columns: 120, rows: 40 },
   });
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_close_pane_observed', with: { slot: 's1', generation: 4, revision: 7 },
+    call: 'terminal_ratio_observed',
+    with: { slot: 's1', generation: 4, revision: 7, ratio: 0.6 },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_focus_pane_observed',
+    with: { slot: 's1', generation: 4, revision: 7 },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_retitle_pane_observed',
+    with: { slot: 's1', generation: 4, revision: 7, title: ' Build 🧪 ' },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_close_pane_observed',
+    with: { slot: 's1', generation: 4, revision: 7 },
   });
   const tree = { active_tab: 't1', tabs: [] };
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }));
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }),
+  );
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 's2' } }));
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 's2' } }),
+  );
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
@@ -1084,7 +1641,9 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   for (const title of ['', '   ', 'line\nbreak', 'nul\0byte', '🧪'.repeat(65)]) {
     assert.throws(() => terminal.retitle('s1', title), /pane title must/);
   }
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('terminal screen read preserves bounded text, truncation and cursor over framing', async () => {
@@ -1093,15 +1652,27 @@ test('terminal screen read preserves bounded text, truncation and cursor over fr
   await next();
   const reading = workspace(stage.session).terminal.read('s1', 25);
   assert.deepEqual((await next()).payload, {
-    call: 'terminal_read_pane', with: { slot: 's1', lines: 25 },
+    call: 'terminal_read_pane',
+    with: { slot: 's1', lines: 25 },
   });
   const screen = {
-    slot: 's1', generation: 7, revision: 11, columns: 132, rows: 41,
-    lines: ['ready'], cursor_column: 5, cursor_row: 2, truncated: true,
+    slot: 's1',
+    generation: 7,
+    revision: 11,
+    columns: 132,
+    rows: 41,
+    lines: ['ready'],
+    cursor_column: 5,
+    cursor_row: 2,
+    truncated: true,
   };
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen } }));
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen } }),
+  );
   assert.deepEqual(await reading, screen);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('pane discovery uses its distinct bounded inventory reply', async () => {
@@ -1110,10 +1681,26 @@ test('pane discovery uses its distinct bounded inventory reply', async () => {
   await next();
   const pending = workspace(stage.session).terminal.panes();
   assert.deepEqual((await next()).payload, { call: 'pane_list' });
-  const inventory = { panes: [{ slot: 'workspace', kind: 'native', provider: null, tab: null, title: 'Workspace', focused: false }], truncated: false };
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: inventory } }));
+  const inventory = {
+    panes: [
+      {
+        slot: 'workspace',
+        kind: 'native',
+        provider: null,
+        tab: null,
+        title: 'Workspace',
+        focused: false,
+      },
+    ],
+    truncated: false,
+  };
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: inventory } }),
+  );
   assert.deepEqual(await pending, inventory);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('filesystem controls use exact confined protocol request shapes', async () => {
@@ -1121,41 +1708,131 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   const next = frames(stage.host);
   await next();
   const files = workspace(stage.session).files;
-  const operations = [files.stat('logs/app.log'), files.mkdir('logs/new'), files.rename('logs/a', 'logs/b'), files.remove('logs/b')];
-  assert.deepEqual((await next()).payload, { call: 'filesystem_stat', with: { path: 'logs/app.log' } });
-  assert.deepEqual((await next()).payload, { call: 'filesystem_mkdir', with: { path: 'logs/new' } });
-  assert.deepEqual((await next()).payload, { call: 'filesystem_rename', with: { from: 'logs/a', to: 'logs/b' } });
+  const operations = [
+    files.stat('logs/app.log'),
+    files.mkdir('logs/new'),
+    files.rename('logs/a', 'logs/b'),
+    files.remove('logs/b'),
+  ];
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_stat',
+    with: { path: 'logs/app.log' },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_mkdir',
+    with: { path: 'logs/new' },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_rename',
+    with: { from: 'logs/a', to: 'logs/b' },
+  });
   assert.deepEqual((await next()).payload, { call: 'filesystem_remove', with: { path: 'logs/b' } });
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'entry', with: { path: 'logs/app.log', directory: false, size: 4 } } }));
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'entry', with: { path: 'logs/app.log', directory: false, size: 4 } },
+    }),
+  );
   for (let index = 1; index < operations.length; index += 1) {
     stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   }
-  const results = await Promise.all(operations); assert.equal(results[0].size, 4);
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  const results = await Promise.all(operations);
+  assert.equal(results[0].size, 4);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('observed filesystem ranges and creation preserve exact identities on the wire', async () => {
-  const stage = await pair(); const next = frames(stage.host); await next();
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
   const files = workspace(stage.session).files;
   const range = files.readRange('logs/app.log', 12, 34, 'v1:1:2:3:4:5:6:7');
-  assert.deepEqual((await next()).payload, { call: 'filesystem_read_range', with: { path: 'logs/app.log', offset: 12, limit: 34, observed: 'v1:1:2:3:4:5:6:7' } });
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'file_range', with: { path: 'logs/app.log', identity: 'v1:1:2:3:4:5:6:7', offset: 12, total: 14, contents: [111, 107], eof: true, truncated: false } } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_read_range',
+    with: { path: 'logs/app.log', offset: 12, limit: 34, observed: 'v1:1:2:3:4:5:6:7' },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_range',
+        with: {
+          path: 'logs/app.log',
+          identity: 'v1:1:2:3:4:5:6:7',
+          offset: 12,
+          total: 14,
+          contents: [111, 107],
+          eof: true,
+          truncated: false,
+        },
+      },
+    }),
+  );
   assert.equal((await range).identity, 'v1:1:2:3:4:5:6:7');
 
   const write = files.createObserved('logs/new.log', [110, 101, 119]);
-  assert.deepEqual((await next()).payload, { call: 'filesystem_create_observed', with: { path: 'logs/new.log', contents: [110, 101, 119] } });
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:7' } }));
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_create_observed',
+    with: { path: 'logs/new.log', contents: [110, 101, 119] },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:7' },
+    }),
+  );
   assert.equal(await write, 'v1:1:8:3:4:5:6:7');
 
-  const rename = files.renameObserved('logs/new.log', 'logs/final.log', 'v1:1:8:3:4:5:6:7');
-  assert.deepEqual((await next()).payload, { call: 'filesystem_rename_observed', with: { from: 'logs/new.log', to: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:7' } });
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:8' } }));
+  const replace = files.writeObserved(
+    'logs/new.log',
+    'v1:1:8:3:4:5:6:7',
+    [117, 112, 100, 97, 116, 101, 100],
+  );
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_write_observed',
+    with: {
+      path: 'logs/new.log',
+      observed: 'v1:1:8:3:4:5:6:7',
+      contents: [117, 112, 100, 97, 116, 101, 100],
+    },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:9' },
+    }),
+  );
+  assert.equal(await replace, 'v1:1:8:3:4:5:6:9');
+
+  const rename = files.renameObserved('logs/new.log', 'logs/final.log', 'v1:1:8:3:4:5:6:9');
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_rename_observed',
+    with: { from: 'logs/new.log', to: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:9' },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'identity', with: 'v1:1:8:3:4:5:6:8' },
+    }),
+  );
   assert.equal(await rename, 'v1:1:8:3:4:5:6:8');
   const remove = files.removeObserved('logs/final.log', 'v1:1:8:3:4:5:6:8');
-  assert.deepEqual((await next()).payload, { call: 'filesystem_remove_observed', with: { path: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:8' } });
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_remove_observed',
+    with: { path: 'logs/final.log', observed: 'v1:1:8:3:4:5:6:8' },
+  });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await remove;
-  stage.session.close(); stage.host.destroy(); stage.server.close();
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('pane semantics and actions preserve revision and node identity', async () => {

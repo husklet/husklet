@@ -212,11 +212,32 @@ impl Conversation {
     ///
     /// # Errors
     /// Returns the failure to duplicate the socket descriptor.
+    #[cfg(test)]
     pub fn new(
         stream: UnixStream,
         authority: Authority,
         workspace: impl Into<String>,
         queue: Queue,
+    ) -> io::Result<Self> {
+        Self::new_scoped(
+            stream,
+            authority,
+            workspace,
+            queue,
+            hl_extension::ContainerGrant {
+                selectors: vec![hl_extension::ContainerSelector::All { all: true }],
+                create: true,
+            },
+        )
+    }
+
+    /// Wraps a connection with its separately persisted container-resource consent.
+    pub fn new_scoped(
+        stream: UnixStream,
+        authority: Authority,
+        workspace: impl Into<String>,
+        queue: Queue,
+        containers: hl_extension::ContainerGrant,
     ) -> io::Result<Self> {
         let control = stream.try_clone()?;
         Ok(Self {
@@ -225,7 +246,7 @@ impl Conversation {
             // The workspace overview exists before the sidecar connects. Its
             // empty slot is the extension's primary surface; extra tab/split
             // surfaces are acquired explicitly through the terminal port.
-            session: Session::new(authority).with_surface(""),
+            session: Session::new(authority).with_containers(containers).with_surface(""),
             subscriptions: Subscriptions::new(),
             streams: Streams::new(),
             channels: Channels::new(),
@@ -355,11 +376,12 @@ impl Conversation {
         let mut snapshots = Vec::new();
         if self.may_observe(Topic::Containers) {
             if let Ok(containers) = services.containers.list() {
-                snapshots.push(Snapshot::Containers(containers));
+                snapshots.push(Snapshot::Containers(self.session.visible_containers(containers)));
             }
         }
         if self.may_observe(Topic::ContainerInventory) {
             if let Ok(mut containers) = services.containers.list() {
+                containers = self.session.visible_containers(containers);
                 const LIMIT: usize = 256;
                 let complete = containers.len() <= LIMIT;
                 containers.truncate(LIMIT);
@@ -370,8 +392,10 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::Executions) {
-            if let Ok(executions) = services.containers.executions() {
-                snapshots.push(Snapshot::Executions(executions));
+            if let (Ok(executions), Ok(containers)) = (services.containers.executions(), services.containers.list()) {
+                snapshots.push(Snapshot::Executions(
+                    self.session.visible_executions(executions, &containers),
+                ));
             }
         }
         if self.may_observe(Topic::Images) {
@@ -434,6 +458,11 @@ impl Conversation {
                         snapshots.push(Snapshot::WorkspaceLifecycle(change));
                     }
                 }
+            }
+        }
+        if self.may_observe(Topic::Filesystem) {
+            if let Ok(inventory) = services.files.inventory(self.session.authority().roots()) {
+                snapshots.push(Snapshot::Filesystem(inventory));
             }
         }
         for snapshot in snapshots {
@@ -982,7 +1011,7 @@ impl Conversation {
             return Ok(());
         };
         for message in self.outbox.drain(channel) {
-            let payload = if topic == Topic::PaneChanges && message.superseded > 0 {
+            let payload = if message.superseded > 0 {
                 match serde_json::from_slice::<Snapshot>(&message.payload) {
                     Ok(snapshot) => snapshot
                         .with_coalesced(message.superseded)
@@ -1014,8 +1043,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
-        Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
+        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1111,7 +1140,6 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
-                generation: 0,
             }])
         }
 
@@ -1593,7 +1621,6 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
-                generation: 0,
             }])
         );
         assert_eq!(ledger.reached(), vec!["containers.list"]);
@@ -1633,6 +1660,27 @@ mod tests {
             Ok(()),
             "a hangup after a pong stays clean"
         );
+    }
+
+    #[test]
+    fn semantic_flag_violations_are_refused_before_authority() {
+        for flag in [Flags::ERROR, Flags::COALESCED] {
+            let ledger = Arc::new(Ledger::default());
+            let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+            let mut wire = Wire::new(theirs);
+            shake(&mut wire, PROTOCOL);
+            let request = codec::request(&Request::ContainerList).expect("request").flagged(flag);
+            wire.send(&request).expect("malformed request sent");
+
+            let refusal = wire.receive().expect("flag refusal");
+            assert!(codec::is_failure(&refusal));
+            assert!(
+                matches!(codec::read_failure(&refusal), Ok(Failure::Unsupported { call }) if call.contains("complete, unflagged request"))
+            );
+            assert!(ledger.reached().is_empty(), "malformed flags reached authority");
+            drop(wire);
+            assert_eq!(served.join().expect("joined"), Ok(()));
+        }
     }
 
     #[test]
@@ -1744,6 +1792,36 @@ mod tests {
     }
 
     #[test]
+    fn container_and_execution_events_are_filtered_by_recorded_resource_consent() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let mut conversation = Conversation::new_scoped(
+            ours,
+            authority(),
+            "dev",
+            Queue::new(),
+            hl_extension::ContainerGrant {
+                selectors: vec![hl_extension::ContainerSelector::Name { name: "other".into() }],
+                create: false,
+            },
+        )
+        .expect("conversation");
+        let host = Host { ledger };
+        conversation.session.follow(hl_extension::Topic::Containers);
+        conversation.observe(&services(&host)).unwrap();
+        let mut wire = Wire::new(theirs);
+        let event = wire.receive().expect("filtered container event");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).unwrap();
+        assert!(matches!(snapshot, Snapshot::Containers(containers) if containers.is_empty()));
+
+        conversation.session.follow(hl_extension::Topic::Executions);
+        conversation.observe(&services(&host)).unwrap();
+        let event = wire.receive().expect("filtered execution event");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).unwrap();
+        assert!(matches!(snapshot, Snapshot::Executions(list) if list.executions.is_empty()));
+    }
+
+    #[test]
     fn an_extension_inventory_subscription_receives_one_changed_bounded_listing() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
@@ -1798,7 +1876,6 @@ mod tests {
                 image: "image".into(),
                 state: "running".into(),
                 created,
-                generation: 0,
             }])
         };
 
@@ -1856,7 +1933,6 @@ mod tests {
             image: "image".into(),
             state: "running".into(),
             created: 1,
-            generation: 0,
         }]);
         let mut peer = Wire::new(theirs);
 

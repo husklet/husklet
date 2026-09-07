@@ -90,14 +90,19 @@ fn a_clean_end_of_stream_is_closed_rather_than_an_error() {
 }
 
 #[test]
-fn a_hangup_partway_through_a_frame_is_closed() {
+fn a_hangup_partway_through_a_frame_is_malformed() {
     let mut sender = Wire::new(Vec::new());
     sender.send(&frame(1, b"truncated by a hangup")).expect("sent");
     let mut bytes = sender.into_stream();
     bytes.truncate(Frame::HEADER + 4);
 
     let mut receiver = Wire::new(Cursor::new(bytes));
-    assert_eq!(receiver.receive().expect_err("closed"), Transit::Closed);
+    assert_eq!(
+        receiver.receive().expect_err("truncated"),
+        Transit::Malformed(Malformed::Truncated {
+            buffered: Frame::HEADER + 4,
+        })
+    );
 }
 
 #[test]

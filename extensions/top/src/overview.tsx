@@ -50,9 +50,7 @@ export function Navigation({
   onSelect: (section: Section) => void;
 }) {
   return (
-    <Column grow={false} width={{ chars: 20 }} height="fill" pad={2} gap={1}>
-      <Heading label="Top" scale="title" />
-      <Text label="Workspace control" color="text-dim" />
+    <Column grow={false} width={{ chars: 14 }} height="fill" pad={1} gap={1}>
       <Scroll grow height="fill">
         <Column gap={1}>
           {SECTIONS.map((name) => (
@@ -108,7 +106,7 @@ export function Overview({
   );
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={3}>
+      <Column pad={2} gap={2}>
         <Heading label="Resource overview" scale="title" />
         <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
         <Row gap={1} align="center">
@@ -170,7 +168,7 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card width={{ minimum: { chars: 18 } }} variant="outline">
+    <Card width={{ minimum: { chars: 16 } }} variant="outline">
       <CardHeader label={label} />
       <CardContent gap={1}>
         <Heading label={value} scale="title" />

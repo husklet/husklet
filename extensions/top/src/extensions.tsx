@@ -9,6 +9,7 @@ import {
   Column,
   ConfirmAction,
   Entry,
+  FormControlLabel,
   Heading,
   InlineMessage,
   ResourceState,
@@ -20,10 +21,14 @@ import {
   type ExtensionAcquisitionStatus,
   type ExtensionCapability,
   type ExtensionSummary,
+  type ContainerGrant,
+  type ContainerSelector,
   type WorkspaceApi,
 } from '@husklet/react';
 
 type Change = { value?: unknown };
+
+const STORYBOOK_IMAGE = 'ghcr.io/husklet/husklet/extension-storybook:latest';
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
@@ -35,6 +40,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [reference, setReference] = React.useState('');
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
+  const [grantedContainers, setGrantedContainers] = React.useState<ContainerGrant>({
+    selectors: [],
+    create: false,
+  });
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
@@ -85,9 +94,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     };
   }, [api]);
 
-  const inspect = async () => {
-    const wanted = reference.trim();
+  const inspect = async (suggested?: string) => {
+    const wanted = (suggested ?? reference).trim();
     if (!wanted || busy) return;
+    setReference(wanted);
     setBusy('inspect');
     setError('');
     setNotice(null);
@@ -105,6 +115,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           if (candidateKey.current !== key) {
             candidateKey.current = key;
             setGranted(status.candidate.requested);
+            // Resource authority is opt-in. A review, including an update,
+            // starts from no container identities instead of silently widening
+            // authority to every selector in the manifest.
+            setGrantedContainers({ selectors: [], create: false });
           }
         }
         if (
@@ -145,6 +159,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.job,
         acquisition.revision,
         granted,
+        grantedContainers,
       );
       setAcquisition(null);
       setReference('');
@@ -216,36 +231,64 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       setBusy('');
     }
   };
+  const requestedContainers = acquisition?.candidate?.requested_containers ?? {
+    selectors: [],
+    create: false,
+  };
 
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={3}>
+      <Column pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
           color="text-dim"
           wrap
         />
+        <Heading label="Discover" scale="caption" />
+        {!installed.some((extension) => extension.name === 'storybook') && (
+          <Card variant="outline">
+            <CardHeader label="Component playground" detail="First-party · Storybook" />
+            <CardContent gap={1}>
+              <Text
+                label="Explore every extension UI component, including large tables, terminals, diffs, metrics, and confirmation flows."
+                color="text-dim"
+                wrap
+              />
+            </CardContent>
+            <CardActions>
+              <Button
+                label="Review access"
+                enabled={!busy}
+                onInvoke={() => inspect(STORYBOOK_IMAGE)}
+              />
+            </CardActions>
+          </Card>
+        )}
         <Card variant="outline">
-          <CardHeader label="Install an extension" detail="OCI image reference" />
+          <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
             <Row gap={1}>
               <Entry
                 value={reference}
                 placeholder="registry.example/extension:version"
                 onChange={(event: Change) => setReference(String(event.value ?? '').slice(0, 512))}
+                onSubmit={() => inspect()}
               />
               <Button
                 label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
                 enabled={Boolean(reference.trim()) && !busy}
-                onInvoke={inspect}
+                onInvoke={() => inspect()}
               />
             </Row>
           </CardContent>
           {acquisition?.candidate && (
             <CardContent gap={1}>
               <Text label={`${acquisition.candidate.name} ${acquisition.candidate.version}`} />
-              <Text label={acquisition.candidate.image_digest} wrap />
+              <Text
+                label={compactDigest(acquisition.candidate.image_digest)}
+                tooltip={acquisition.candidate.image_digest}
+              />
               <Text label="Capability access" color="text-dim" />
               {acquisition.candidate.requested.map((capability) => (
                 <Row key={capability} gap={2} align="center">
@@ -259,11 +302,63 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       )
                     }
                   />
-                  <Text label={capability} />
+                  <Column gap={0}>
+                    <Text label={capabilityLabel(capability)} />
+                    <Text label={capability} color="text-dim" />
+                  </Column>
                 </Row>
               ))}
               {acquisition.candidate.requested.length === 0 && (
                 <Text label="This extension requests no capabilities." />
+              )}
+              <Text label="Container access" color="text-dim" />
+              {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
+                <Text
+                  label="Container access starts off. Select only what this extension needs."
+                  color="text-dim"
+                  wrap
+                />
+              )}
+              {requestedContainers.selectors.map((selector) => {
+                const key = selectorKey(selector);
+                const selected = grantedContainers.selectors.some(
+                  (candidate) => selectorKey(candidate) === key,
+                );
+                return (
+                  <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                    <Switch
+                      checked={selected}
+                      onToggle={(event: Change) =>
+                        setGrantedContainers((current) => ({
+                          ...current,
+                          selectors: event.value
+                            ? current.selectors.some((candidate) => selectorKey(candidate) === key)
+                              ? current.selectors
+                              : [...current.selectors, selector]
+                            : current.selectors.filter(
+                                (candidate) => selectorKey(candidate) !== key,
+                              ),
+                        }))
+                      }
+                    />
+                  </FormControlLabel>
+                );
+              })}
+              {requestedContainers.create && (
+                <FormControlLabel label="Create new containers" gap={2}>
+                  <Switch
+                    checked={grantedContainers.create}
+                    onToggle={(event: Change) =>
+                      setGrantedContainers((current) => ({
+                        ...current,
+                        create: Boolean(event.value),
+                      }))
+                    }
+                  />
+                </FormControlLabel>
+              )}
+              {requestedContainers.selectors.length === 0 && !requestedContainers.create && (
+                <Text label="No container resources requested." color="text-dim" />
               )}
               <Button
                 label={
@@ -329,7 +424,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <CardContent>
                 <Row gap={2}>
                   <Badge label={extension.status} />
-                  <Text label={extension.image_digest} wrap />
+                  <Text
+                    label={compactDigest(extension.image_digest)}
+                    tooltip={extension.image_digest}
+                  />
                 </Row>
               </CardContent>
               <CardActions gap={1}>
@@ -373,6 +471,18 @@ function message(cause: unknown): string {
   return cause instanceof Error ? cause.message.slice(0, 500) : String(cause).slice(0, 500);
 }
 
+function selectorKey(selector: ContainerSelector): string {
+  if ('all' in selector) return 'all';
+  if ('id' in selector) return `id:${selector.id}`;
+  return `name:${selector.name}`;
+}
+
+function selectorLabel(selector: ContainerSelector): string {
+  if ('all' in selector) return 'All workspace containers';
+  if ('id' in selector) return `Exact container ${selector.id}`;
+  return `Container named ${selector.name}`;
+}
+
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const progress = acquisition.progress;
   if (!progress) return acquisition.state;
@@ -397,4 +507,62 @@ function lifecycleResult(action: 'enable' | 'disable' | 'retry' | 'remove'): str
 
 function capitalize(value: string): string {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function capabilityLabel(capability: ExtensionCapability): string {
+  const known: Partial<Record<ExtensionCapability, string>> = {
+    'workspaces:read': 'View workspace settings',
+    'workspaces:control': 'Modify workspace settings',
+    'workspaces:events': 'Observe workspace lifecycle',
+    'extensions:read': 'View installed extensions',
+    'extensions:control': 'Enable, disable, retry, and remove extensions',
+    'extensions:install': 'Install and update extensions',
+    'containers:read': 'View containers and processes',
+    'containers:control': 'Create, start, stop, and remove containers',
+    'containers:attach': 'Run commands inside containers',
+    'images:read': 'View images',
+    'images:write': 'Pull and remove images',
+    'volumes:read': 'View volumes',
+    'volumes:write': 'Create and remove volumes',
+    'networks:read': 'View networks',
+    'networks:write': 'Create and modify networks',
+    'terminals:read': 'View terminal tabs and panes',
+    'terminals:control': 'Create and rearrange terminal panes',
+    'terminals:output': 'Read and write terminal text',
+    'panes:observe': 'Observe pane interaction',
+    'panes:semantic-read': 'Read structured pane interfaces',
+    'panes:semantic-control': 'Operate structured pane interfaces',
+    'interface:render': 'Render this extension interface',
+  };
+  if (known[capability]) return known[capability];
+  const [resource, authority] = capability.split(':');
+  const action =
+    authority === 'read'
+      ? 'View'
+      : authority === 'control'
+        ? 'Control'
+        : authority === 'install'
+          ? 'Install'
+          : authority === 'write'
+            ? 'Modify'
+            : authority === 'output'
+              ? 'Read output from'
+              : authority === 'observe'
+                ? 'Observe'
+                : authority === 'render'
+                  ? 'Render'
+                  : titleWords(authority);
+  return `${action} ${titleWords(resource)}`;
+}
+
+function titleWords(value = ''): string {
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`)
+    .join(' ');
+}
+
+function compactDigest(digest: string): string {
+  return digest.length > 32 ? `${digest.slice(0, 19)}…${digest.slice(-8)}` : digest;
 }

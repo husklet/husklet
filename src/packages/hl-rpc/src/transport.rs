@@ -108,7 +108,13 @@ impl<S: Read> Wire<S> {
         let wanted = room.min(chunk.len());
         let count = self.stream.read(&mut chunk[..wanted]).map_err(Transit::from)?;
         if count == 0 {
-            return Err(Transit::Closed);
+            return if self.buffer.is_empty() {
+                Err(Transit::Closed)
+            } else {
+                Err(Transit::Malformed(Malformed::Truncated {
+                    buffered: self.buffer.len(),
+                }))
+            };
         }
         self.buffer.extend_from_slice(&chunk[..count]);
         Ok(())

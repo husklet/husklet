@@ -677,6 +677,32 @@
       "kind": "struct",
       "serde": {}
     },
+    "ContainerGrant": {
+      "fields": [
+        {
+          "name": "selectors",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerSelector"
+            }
+          }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
     "ContainerInventory": {
       "fields": [
         {
@@ -800,6 +826,59 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "ContainerSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Id",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Name",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "ContainerSummary": {
       "fields": [
@@ -1290,6 +1369,14 @@
           }
         },
         {
+          "name": "requested_containers",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ContainerGrant"
+          }
+        },
+        {
           "name": "installed_image_digest",
           "optional": true,
           "schema": {
@@ -1353,6 +1440,41 @@
               "kind": "ref",
               "name": "PaneProvider"
             }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "FileInventory": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
+          }
+        },
+        {
+          "name": "complete",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "coalesced",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
           }
         }
       ],
@@ -5180,6 +5302,12 @@
           "payload": {
             "kind": "unit"
           }
+        },
+        {
+          "name": "filesystem",
+          "payload": {
+            "kind": "unit"
+          }
         }
       ]
     },
@@ -6543,6 +6671,10 @@
     },
     {
       "capability": "filesystem:write",
+      "request": "filesystem_write_observed"
+    },
+    {
+      "capability": "filesystem:write",
       "request": "filesystem_create_observed"
     },
     {
@@ -6962,6 +7094,10 @@
     {
       "reply": "done",
       "request": "filesystem_write"
+    },
+    {
+      "reply": "identity",
+      "request": "filesystem_write_observed"
     },
     {
       "reply": "identity",
@@ -7841,6 +7977,14 @@
                   "kind": "ref",
                   "name": "Grant"
                 }
+              },
+              {
+                "name": "containers",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerGrant"
+                }
               }
             ],
             "kind": "struct"
@@ -7874,6 +8018,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "Grant"
+                }
+              },
+              {
+                "name": "containers",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ContainerGrant"
                 }
               }
             ],
@@ -9396,6 +9548,43 @@
           }
         },
         {
+          "name": "filesystem_write_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              },
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_create_observed",
           "payload": {
             "fields": [
@@ -9844,6 +10033,16 @@
             "of": {
               "kind": "ref",
               "name": "WorkspaceEventBatch"
+            }
+          }
+        },
+        {
+          "name": "filesystem",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "FileInventory"
             }
           }
         }
@@ -10728,7 +10927,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:a5f890d044ca5186",
+  "source_fingerprint": "fnv1a64:40793df1806457f1",
   "specification_version": 1,
   "topics": [
     {
@@ -10795,6 +10994,11 @@
       "capability": "workspaces:events",
       "snapshot": "workspace_events",
       "wire": "workspace-events"
+    },
+    {
+      "capability": "filesystem:read",
+      "snapshot": "filesystem",
+      "wire": "filesystem"
     }
   ]
 }
