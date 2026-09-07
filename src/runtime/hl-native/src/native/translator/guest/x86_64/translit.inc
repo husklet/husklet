@@ -2833,13 +2833,10 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
         return ranges;
     }
 #else
-    if (pre_flags_packed != NULL) {
-        ranges.save_end = pre_save_end;
-        ranges.flags_packed = pre_flags_packed;
-    } else {
-        hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
-        ranges.save_end = a->cursor;
-    }
+    (void)pre_save_end;
+    (void)pre_flags_packed;
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.save_end = a->cursor;
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
@@ -2849,8 +2846,13 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     ranges.end = a->cursor;
     return ranges;
 #endif
-    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
-    ranges.save_end = a->cursor;
+    if (pre_flags_packed != NULL) {
+        ranges.save_end = pre_save_end;
+        ranges.flags_packed = pre_flags_packed;
+    } else {
+        hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+        ranges.save_end = a->cursor;
+    }
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
     ranges.target_end = a->cursor;
     hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
