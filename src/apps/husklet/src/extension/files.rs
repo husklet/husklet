@@ -177,21 +177,26 @@ impl WorkspaceFiles for WorkspaceDirectory {
         let mut path_bytes = 0usize;
         let mut complete = true;
         while let Some(path) = pending.pop() {
-            let entry = match self.stat(&path) {
-                Ok(entry) => entry,
-                Err(HostError::Absent(_)) => continue,
-                Err(error) => return Err(error),
-            };
-            let directory = entry.directory;
-            let key = path.to_string();
-            if !entries.contains_key(&key) {
-                if entries.len() == LIMIT || path_bytes.saturating_add(key.len()) > PATH_BYTES_LIMIT {
-                    complete = false;
-                    break;
+            let directory = if path.parts().is_empty() {
+                true
+            } else {
+                let entry = match self.stat(&path) {
+                    Ok(entry) => entry,
+                    Err(HostError::Absent(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+                let directory = entry.directory;
+                let key = path.to_string();
+                if !entries.contains_key(&key) {
+                    if entries.len() == LIMIT || path_bytes.saturating_add(key.len()) > PATH_BYTES_LIMIT {
+                        complete = false;
+                        break;
+                    }
+                    path_bytes += key.len();
+                    entries.insert(key, entry);
                 }
-                path_bytes += key.len();
-                entries.insert(key, entry);
-            }
+                directory
+            };
             if !directory { continue; }
             let mut children = self.list(&path)?;
             children.sort_by(|left, right| left.path.to_string().cmp(&right.path.to_string()));
@@ -1009,6 +1014,8 @@ mod tests {
         assert_eq!(inventory.coalesced, 0);
         assert_eq!(inventory.entries.iter().map(|entry| entry.path.to_string()).collect::<Vec<_>>(), ["source", "source/main.ts", "source/nested", "source/nested/lib.ts"]);
         assert!(inventory.entries.iter().all(|entry| entry.identity.is_some()));
+        let whole = files.inventory(&[path("")]).expect("workspace-root inventory");
+        assert!(whole.entries.iter().any(|entry| entry.path.to_string() == "private/key"));
         for index in 0..260 { std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file"); }
         let bounded = files.inventory(&[path("source")]).expect("bounded inventory");
         assert_eq!(bounded.entries.len(), 256);
