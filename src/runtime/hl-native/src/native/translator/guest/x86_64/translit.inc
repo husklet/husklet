@@ -58,7 +58,7 @@ _Static_assert(TL_MAX_INSNS < 256,
 #define TL_STITCH_MAX_JMPS 8
 #endif
 #define TL_PCACHE_CENSUS_OWNER_RANGES 7u
-#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 1 + TL_PCACHE_CENSUS_OWNER_RANGES)
+#define TL_MAX_OWNER_RANGES (TL_MAX_INSNS + 3 * TL_STITCH_MAX_JMPS + 4 + TL_PCACHE_CENSUS_OWNER_RANGES)
 
 // ---- the host<->guest boundary
 //
@@ -2353,6 +2353,8 @@ typedef struct {
     uint8_t *save_end;
     uint8_t *target_end;
     uint8_t *rip_end;
+    uint8_t *flags_packed;
+    uint8_t *flags_live;
     uint8_t *restore_end;
     uint8_t *end;
 } translit_jcc_ibtc_site_ranges;
@@ -2362,6 +2364,8 @@ static uint8_t *translit_test_jcc_ibtc_instruction_start;
 static translit_jcc_ibtc_site_ranges translit_test_jcc_ibtc_site;
 static uint64_t translit_test_jcc_ibtc_source_guest;
 static int translit_test_jcc_ibtc_stub_fail;
+/* Test authority only: production deliberately keeps the candidate guard off until the discriminator wins. */
+static int translit_test_direct_call_pre_spill;
 static int translit_test_direct_jmp_ibtc_stub_fail;
 static int translit_test_jcc_guard = -1;
 #endif
@@ -2813,6 +2817,20 @@ static translit_jcc_ibtc_site_ranges translit_emit_jcc_ibtc(hl_x64_asm *a,
 
 static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *a, uint64_t target) {
     translit_jcc_ibtc_site_ranges ranges = {0};
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (!translit_test_direct_call_pre_spill) {
+        hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+        ranges.save_end = a->cursor;
+        hl_x64_mov_imm64(a, HL_X64_RAX, target);
+        ranges.target_end = a->cursor;
+        hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
+        ranges.rip_end = a->cursor;
+        hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
+        translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
+        ranges.end = a->cursor;
+        return ranges;
+    }
+#else
     hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
     ranges.save_end = a->cursor;
     hl_x64_mov_imm64(a, HL_X64_RAX, target);
@@ -2821,6 +2839,59 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_call_ibtc(hl_x64_asm *
     ranges.rip_end = a->cursor;
     hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
     translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
+    ranges.end = a->cursor;
+    return ranges;
+#endif
+    hl_x64_store_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.save_end = a->cursor;
+    hl_x64_mov_imm64(a, HL_X64_RAX, target);
+    ranges.target_end = a->cursor;
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_RIP);
+    ranges.rip_end = a->cursor;
+
+    /* Preserve the CALL's architectural flags without touching its just-committed guest stack.  This
+       is the same packed representation used by the pre-spill signal owner: the probe and its optional
+       counter may freely set host flags until the common restore below. */
+    hl_x64_u8(a, 0x9f); // lahf
+    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x90); hl_x64_u8(a, 0xc0); // seto %al
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    ranges.flags_packed = a->cursor;
+
+    hl_x64_cmp_gs_imm8(a, OFF_IRQ, 0);
+    uint8_t *irq = hl_x64_jcc_rel32(a, 5);
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_IBTC);
+    hl_x64_load_xmm_aligned_disp32(a, 0, HL_X64_RAX,
+                                   (int32_t)(ibtc_index(target) * sizeof(ibtc_ent)));
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
+    hl_x64_u8(a, 0x65); hl_x64_u8(a, 0x48); hl_x64_u8(a, 0x3b);
+    hl_x64_u8(a, 0x04); hl_x64_u8(a, 0x25); hl_x64_u32(a, OFF_RIP); // cmp %gs:OFF_RIP,%rax
+    uint8_t *miss_key = hl_x64_jcc_rel32(a, 5);
+    hl_x64_psrldq(a, 0, 8);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
+    hl_x64_test_reg(a, HL_X64_RAX);
+    uint8_t *miss_body = hl_x64_jcc_rel32(a, 4);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    uintptr_t hit_counter =
+        translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_HIT);
+    if (hit_counter != 0) hl_x64_atomic_inc_abs(a, hit_counter);
+    hl_x64_store_gs_imm32(a, 0, OFF_JCC_IBTC_MISS);
+    uint8_t *restore_hit = translit_emit_jmp_patch(a);
+
+    hl_x64_patch_rel32(a, irq, a->cursor);
+    hl_x64_patch_rel32(a, miss_key, a->cursor);
+    hl_x64_patch_rel32(a, miss_body, a->cursor);
+    hl_x64_store_gs_imm32(a, TL_DIRECT_CALL_IBTC_MISS, OFF_JCC_IBTC_MISS);
+    translit_helper_lea(a, HL_X64_RAX, translit_jcc_ibtc_stub_entry, 0);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+
+    hl_x64_patch_rel32(a, restore_hit, a->cursor);
+    hl_x64_load_gs(a, HL_X64_RAX, TL_MM_FLAGS);
+    hl_x64_u8(a, 0x04); hl_x64_u8(a, 0x7f); // restore OF
+    hl_x64_u8(a, 0x9e);                     // restore SF/ZF/AF/PF/CF
+    ranges.flags_live = a->cursor;
+    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges.restore_end = a->cursor;
+    hl_x64_jmp_gs_indirect(a, TL_MM_ENTRY);
     ranges.end = a->cursor;
     return ranges;
 }
@@ -3429,6 +3500,20 @@ static int translit_owner_append_direct_call(jit_body_owner_range ranges[TL_MAX_
     translit_test_call_source_guest = source;
     translit_test_call_target_guest = target;
 #endif
+    if (site->flags_packed != NULL)
+        return translit_owner_append(ranges, count, instruction_start, call_committed, source, 0) &&
+               translit_owner_append(ranges, count, call_committed, site->save_end, target, 0) &&
+               translit_owner_append(ranges, count, site->save_end, site->rip_end, target,
+                                     1u << HL_X64_RAX) &&
+               translit_owner_append(ranges, count, site->rip_end, site->flags_packed,
+                                     JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
+               translit_owner_append(ranges, count, site->flags_packed, site->flags_live,
+                                     JIT_BODY_OWNER_DYNAMIC_RIP,
+                                     (1u << HL_X64_RAX) | JIT_BODY_OWNER_FLAGS_FROM_PACKED) &&
+               translit_owner_append(ranges, count, site->flags_live, site->restore_end,
+                                     JIT_BODY_OWNER_DYNAMIC_RIP, 1u << HL_X64_RAX) &&
+               translit_owner_append(ranges, count, site->restore_end, site->end, target, 0) &&
+               translit_owner_append(ranges, count, site->end, instruction_end, target, 0);
     return translit_owner_append(ranges, count, instruction_start, call_committed, source, 0) &&
            translit_owner_append(ranges, count, call_committed, site->save_end, target, 0) &&
            translit_owner_append(ranges, count, site->save_end,
@@ -10076,6 +10161,8 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     translit_test_call_committed = NULL;
     translit_test_call_instruction_end = NULL;
     translit_test_call_site = (translit_jcc_ibtc_site_ranges){0};
+    translit_test_direct_call_pre_spill = scenario == 112 || scenario == 113 || scenario == 114 ||
+                                             scenario == 121 || scenario == 123;
     static _Alignas(4096) uint8_t guest_bytes[4096];
     memset(guest_bytes, 0x0f, sizeof guest_bytes);
     const size_t target_offset = 0x40;
@@ -10190,6 +10277,13 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     if (target_block == NULL || target_block->host_entry_off == 0) goto done_call_ibtc;
 
     if (scenario == 123) {
+        uintptr_t persisted_hit = translit_direct_call_ibtc_dynamic_counter(TL_DIRECT_CALL_IBTC_COUNT_HIT);
+        if (persisted_hit == 0 || translit_external_absolute_kind_for(persisted_hit) != TL_EXT_CALL_HIT ||
+            !translit_external_absolute_kind_valid(TL_EXT_CALL_HIT) ||
+            translit_external_absolute_address_for(TL_EXT_CALL_HIT) != persisted_hit) {
+            result = 181;
+            goto done_call_ibtc;
+        }
         translit_jcc_ibtc_fast_redispatch(&cpu, target_block);
         if (cpu.jcc_ibtc_miss != 0 ||
             __atomic_load_n(&translit_direct_call_ibtc_fill_count, __ATOMIC_RELAXED) != fill_before + 1 ||
@@ -10199,6 +10293,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         cpu.rip = source;
         cpu.r[4] = stack;
         cpu.ibtc_base = (uint64_t)g_ibtc;
+        cpu.jcc_ibtc_miss = UINT32_MAX;
         run_block(context, &cpu, source_block);
         memcpy(&return_word, (void *)(uintptr_t)(stack - 8), sizeof return_word);
         result = cpu.r[0] == 42 && cpu.rip == target + 5 && cpu.r[4] == stack - 8 &&
@@ -10356,6 +10451,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
 
 done_call_ibtc:
     translit_test_jcc_ibtc_stub_fail = 0;
+    translit_test_direct_call_pre_spill = 0;
     translit_fall_fixture_bytes = NULL;
     hl_x86_hot_context_destroy(context);
     jit_body_owner_drop_generation(g_cache_gen);
@@ -11282,6 +11378,8 @@ static int translit_direct_call_signal_stage_test(void) {
             cpu.r[reg] = UINT64_C(0xc000000000000000) + reg;
             gregs[g_translit_greg[reg]] = (greg_t)(UINT64_C(0xa000000000000000) + reg);
         }
+        cpu.mmscratch[0] = ((UINT64_C(0xad7) & UINT64_C(0xd5)) << 8) |
+                           ((UINT64_C(0xad7) >> 11) & 1);
         gregs[g_translit_greg[HL_X64_RSP]] =
             (greg_t)(committed ? original_rsp - 8 : original_rsp);
         gregs[HL_HOST_UC_REG_EFL] = (greg_t)UINT64_C(0xad7);
