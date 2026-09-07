@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import reactCatalogue from '../../../packages/react/catalogue.json' with { type: 'json' };
+import reactCatalogue from '../../../extensions/base/react/catalogue.json' with { type: 'json' };
 
 import { components } from '@husklet/react';
 
@@ -8,14 +8,21 @@ import catalogue, { enums, families, grouped, props, tags } from '../dist/catalo
 
 test('the catalogue describes the whole library', () => {
   assert.equal(catalogue.version, 1);
-  assert.ok(tags.length >= 120, `only ${tags.length} components; the catalogue is the whole library`);
+  assert.ok(
+    tags.length >= 120,
+    `only ${tags.length} components; the catalogue is the whole library`,
+  );
   assert.equal(props.length, 43);
   assert.ok(families.length > 0);
 });
 
 test('every component in the catalogue is constructible', () => {
   for (const tag of tags) {
-    assert.equal(components[tag.name], tag.name, `<${tag.name}> is not a component of @husklet/react`);
+    assert.equal(
+      components[tag.name],
+      tag.name,
+      `<${tag.name}> is not a component of @husklet/react`,
+    );
   }
 });
 
@@ -39,10 +46,7 @@ test('the sidebar covers every component exactly once', () => {
       seen.push(tag.name);
     }
   }
-  assert.deepEqual(
-    seen.slice().sort(),
-    tags.map((tag) => tag.name).sort(),
-  );
+  assert.deepEqual(seen.slice().sort(), tags.map((tag) => tag.name).sort());
   assert.equal(new Set(seen).size, seen.length, 'a component appears under two families');
   assert.equal(seen.length, tags.length);
 });

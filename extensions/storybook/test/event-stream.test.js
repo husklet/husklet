@@ -17,8 +17,13 @@ function labelled(patches, tag, label) {
   let candidate = null;
   for (const patch of patches) {
     if (patch.Create?.tag === tag) candidate = patch.Create.id;
-    if (candidate !== null && patch.SetProp?.id === candidate && patch.SetProp.prop === 'Label'
-      && patch.SetProp.value.Text === label) return candidate;
+    if (
+      candidate !== null &&
+      patch.SetProp?.id === candidate &&
+      patch.SetProp.prop === 'Label' &&
+      patch.SetProp.value.Text === label
+    )
+      return candidate;
   }
   return null;
 }
@@ -30,10 +35,20 @@ test('event timeline keeps logical history and materialized windows independentl
   assert.equal(frame.patches.filter((patch) => patch.Create?.tag === 'EventStream').length, 1);
   assert.equal(frame.patches.filter((patch) => patch.Create?.tag === 'TableRow').length, 0);
 
-  const window = source.answer({ source: EVENT_SOURCE, version: 1, id: 7, range: { start: 40, count: 1_000 } });
+  const window = source.answer({
+    source: EVENT_SOURCE,
+    version: 1,
+    id: 7,
+    range: { start: 40, count: 1_000 },
+  });
   assert.equal(window.rows.length, EVENT_WINDOW_LIMIT);
   assert.equal(source.generated, EVENT_WINDOW_LIMIT);
   assert.equal(EVENT_RETENTION_LIMIT, 10_000);
+  assert.equal(source.answer(null), null);
+  assert.equal(
+    source.answer({ source: EVENT_SOURCE, version: 1, id: 8, range: { start: -1, count: 4 } }),
+    null,
+  );
 });
 
 test('event timeline is selectable and its acknowledgement rerenders visibly', () => {
@@ -42,8 +57,11 @@ test('event timeline is selectable and its acknowledgement rerenders visibly', (
   const first = stage.render(h(EventStreamStory, { source }));
   const action = labelled(first.patches, 'Button', 'Acknowledge newest');
   stage.surface.dispatch({ trigger: 'Invoke', node: action, id: `${action}:Invoke` });
-  assert.ok(stage.frames.flatMap((frame) => frame.patches)
-    .some((patch) => patch.SetProp?.value?.Text === 'Acknowledged newest event 1 time.'));
+  assert.ok(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .some((patch) => patch.SetProp?.value?.Text === 'Acknowledged newest event 1 time.'),
+  );
 
   const browser = host();
   assert.ok(labelled(browser.render(h(Playground)).patches, 'ListItemButton', EVENT_STREAM_STORY));

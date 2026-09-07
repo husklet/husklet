@@ -284,7 +284,8 @@ impl<'a> WindowSession<'a> {
                 if visible.as_deref() == Some(page_name.as_str()) {
                     selected_tab = Some(tabs.len());
                 }
-                tabs.push(SessionTab { title, root });
+                let pinned = tw.entries.borrow().iter().find(|entry| entry.name == page_name).is_some_and(|entry| entry.pinned);
+                tabs.push(SessionTab { title, pinned, root });
             }
         }
         // Selecting the overview does not clear GTK's last-terminal cache. That stale terminal is
@@ -516,7 +517,7 @@ impl WindowSession<'_> {
             } else {
                 tab.title.clone()
             };
-            let name = Tabs::new(tw).add(&title, None, &paneroot, true);
+            let name = Tabs::new(tw).add_persisted(&title, None, &paneroot, true, tab.pinned);
             tw.pids.borrow_mut().entry(name.clone()).or_default().extend(pids);
             restored.push((name, first));
         }

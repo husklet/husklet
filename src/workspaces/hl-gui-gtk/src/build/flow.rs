@@ -101,10 +101,47 @@ impl LayoutManagerImpl for Weave {
         let vertical = self.direction.get() == gtk::Orientation::Vertical;
         let reverse = !vertical && widget.direction() == gtk::TextDirection::Rtl;
         let room = if vertical { height } else { width };
+        let cross_room = if vertical { width } else { height };
+        let lines = self.lines(widget, room);
+        let expanding = lines
+            .iter()
+            .filter(|line| {
+                line.children.iter().any(
+                    |(child, _, _)| {
+                        if vertical {
+                            child.hexpands()
+                        } else {
+                            child.vexpands()
+                        }
+                    },
+                )
+            })
+            .count();
+        let expanding = i32::try_from(expanding).unwrap_or(i32::MAX);
+        let spare = cross_room.saturating_sub(extent(&lines, spacing));
+        let share = if expanding == 0 { 0 } else { spare / expanding };
+        let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
         let mut cross = 0;
-        for line in self.lines(widget, room) {
-            self.line(&line, cross, vertical, room, reverse);
-            cross += line.cross + spacing;
+        for line in lines {
+            let cross_expands = line.children.iter().any(
+                |(child, _, _)| {
+                    if vertical {
+                        child.hexpands()
+                    } else {
+                        child.vexpands()
+                    }
+                },
+            );
+            let bonus = if cross_expands {
+                let bonus = share + i32::from(remainder > 0);
+                remainder = remainder.saturating_sub(1);
+                bonus
+            } else {
+                0
+            };
+            let line_cross = line.cross + bonus;
+            self.line(&line, cross, line_cross, vertical, room, reverse);
+            cross += line_cross + spacing;
         }
     }
 }
@@ -133,7 +170,7 @@ impl Weave {
 
     /// Places one line's children, sharing spare room among children that ask
     /// to grow just as a non-wrapping box does.
-    fn line(&self, line: &Line, cross: i32, vertical: bool, room: i32, reverse: bool) {
+    fn line(&self, line: &Line, cross: i32, line_cross: i32, vertical: bool, room: i32, reverse: bool) {
         let spacing = self.spacing.get();
         let expanding = line
             .children
@@ -145,7 +182,7 @@ impl Weave {
         let share = if expanding == 0 { 0 } else { spare / expanding };
         let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
         let mut main = if reverse { room } else { 0 };
-        for (child, extent, _) in &line.children {
+        for (child, extent, child_cross) in &line.children {
             let expands = if vertical { child.vexpands() } else { child.hexpands() };
             let bonus = if expands {
                 let bonus = share + i32::from(remainder > 0);
@@ -159,10 +196,15 @@ impl Weave {
                 main -= extent;
             }
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
-            let (width, height) = if vertical {
-                (line.cross, extent)
+            let cross_extent = if if vertical { child.hexpands() } else { child.vexpands() } {
+                line_cross
             } else {
-                (extent, line.cross)
+                *child_cross
+            };
+            let (width, height) = if vertical {
+                (cross_extent, extent)
+            } else {
+                (extent, cross_extent)
             };
             let shift = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x as f32, y as f32));
             child.allocate(width, height, -1, Some(shift));

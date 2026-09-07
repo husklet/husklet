@@ -1,4 +1,4 @@
-//! Husklet — a workspace manager, terminal, and host-surface composition root.
+//! Husklet — a workspace runtime, terminal, and extension-surface composition root.
 //! New-Workspace configuration window, and a per-workspace Terminal window you launch from the manager.
 //!
 //! * Native macOS title bars (real traffic lights); content — including the full-width tab strip — sits
@@ -39,16 +39,12 @@ mod screenshot;
 use screenshot::Screenshot;
 
 use components::dialog::RemoveWorkspace;
-use components::layout::Field;
 use components::theme::{css, ACCENT};
 use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::{ProcessGroup, Processes};
 use host::pty::PtyProcess;
-use host::{
-    command::application_path,
-    home::Home,
-};
+use host::{command::application_path, home::Home};
 use screens::workspace::overview::Overview;
 use screens::workspace::terminal::{Terminal, Window as TerminalWindow};
 
@@ -89,7 +85,6 @@ struct AppConfig {
     open_color_picker: bool,
     tabs: Option<usize>,
     split: Option<String>,
-    overview: bool,
     debug_log: Option<String>,
     typed_text: Option<String>,
     overview_pane: Option<String>,
@@ -118,7 +113,6 @@ impl AppConfig {
             open_color_picker: std::env::var("HL_TERM_OPEN_COLOR").is_ok(),
             tabs: std::env::var("HL_TERM_TABS").ok().and_then(|value| value.parse().ok()),
             split: std::env::var("HL_TERM_SPLIT").ok(),
-            overview: std::env::var("HL_TERM_OVERVIEW").is_ok(),
             debug_log: std::env::var("HL_TERM_DEBUG_LOG").ok(),
             typed_text: std::env::var("HL_TERM_TYPE").ok(),
             overview_pane: std::env::var("HL_TERM_OVERVIEW_PAGE").ok(),
@@ -352,23 +346,6 @@ mod application_identity_tests {
         assert_eq!(first, repeated);
         assert_ne!(first, second);
         assert!(first.starts_with("com.husklet.app.b0123456789abcdef.i"));
-    }
-}
-
-/// A prominent, color-coded os/arch badge (used beside a overview title). Shows the full
-/// `os/arch` label (e.g. `linux/aarch64`) rather than a terse `arm`/`amd`.
-struct ArchitectureView(Arch);
-
-impl ArchitectureView {
-    fn chip(&self) -> gtk::Label {
-        let l = gtk::Label::new(Some(self.0.os_arch_label()));
-        l.add_css_class("chip");
-        l.add_css_class(match self.0 {
-            Arch::Arm64 => "arm",
-            Arch::Amd64 => "amd",
-        });
-        l.set_valign(gtk::Align::Center);
-        l
     }
 }
 

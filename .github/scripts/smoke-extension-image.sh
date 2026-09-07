@@ -63,7 +63,7 @@ if [[ "$kind" == base ]]; then
 else
   [[ "$(inspect '{{index .Config.Labels "husklet.extension.manifest"}}')" == /etc/husklet/extension.toml ]] \
     || fail "$image does not point at its packaged manifest"
-  [[ "$(inspect '{{json .Config.Cmd}}')" == '["node","/app/src/main.js"]' ]] \
+  [[ "$(inspect '{{json .Config.Cmd}}')" == '["node","/app/dist/main.js"]' ]] \
     || fail "$image does not launch its packaged entrypoint"
   docker run --rm --platform "$platform" --entrypoint node \
     -e EXPECTED_VERSION="$version" -e EXPECTED_EXTENSION="$kind" "$image" --input-type=module --eval '
@@ -80,7 +80,7 @@ else
       if (!manifest.includes(`name = "${process.env.EXPECTED_EXTENSION}"`)) throw new Error("wrong manifest name");
       if (!manifest.includes(`version = "${process.env.EXPECTED_VERSION}"`)) throw new Error("wrong manifest version");
       if (!manifest.includes("protocol = 1")) throw new Error("wrong manifest protocol");
-      if (!fs.statSync("/app/src/main.js").isFile()) throw new Error("entrypoint missing");
+      if (!fs.statSync("/app/dist/main.js").isFile()) throw new Error("entrypoint missing");
     '
 fi
 

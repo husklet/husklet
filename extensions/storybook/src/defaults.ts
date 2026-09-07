@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 // What a component looks like the moment it is selected.
 //
 // A blank preview teaches nothing, so every component opens with enough
@@ -9,15 +8,19 @@
 
 import { component, tags } from './catalogue.js';
 
+type StoryValue = string | number | boolean | { value: string; label: string }[];
+export type StoryChild = { tag: string; props: Record<string, StoryValue> };
+export type StoryDefaults = { props: Record<string, unknown>; children: StoryChild[] };
+
 /** Children a container opens with, so an empty box is never shown as one. */
-const SAMPLE = [
+const SAMPLE: StoryChild[] = [
   { tag: 'Text', props: { label: 'One' } },
   { tag: 'Text', props: { label: 'Two' } },
   { tag: 'Text', props: { label: 'Three' } },
 ];
 
 /** What a family wants beyond its label, before any per-component taste. */
-const BY_FAMILY = {
+const BY_FAMILY: Record<string, Record<string, StoryValue>> = {
   layout: { gap: 2, pad: 2 },
   surface: { pad: 2 },
   display: {},
@@ -34,7 +37,7 @@ const BY_FAMILY = {
 };
 
 /** The components whose point is not a label. */
-const BY_TAG = {
+const BY_TAG: Record<string, Record<string, StoryValue>> = {
   Icon: { icon: 'star' },
   Avatar: { label: 'HK' },
   Image: { uri: 'https://example.invalid/picture.png' },
@@ -50,6 +53,7 @@ const BY_TAG = {
   Grid: { columns: 2 },
   Splitter: { orientation: 'horizontal', position: 160 },
   Slider: { value: 5, minimum: 0, maximum: 10, step: 1 },
+  ColorPicker: { value: '#336699' },
   NumberEntry: { value: 3, minimum: 0, maximum: 10, step: 1 },
   Rating: { value: 3, maximum: 5 },
   Stat: { label: 'Containers', value: '12' },
@@ -65,19 +69,38 @@ const BY_TAG = {
   Search: { placeholder: 'Search' },
   PasswordEntry: { value: 'hunter2', secret: true },
   Autocomplete: { placeholder: 'Start typing' },
-  Select: { choices: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }] },
-  RadioGroup: { choices: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }] },
+  Select: {
+    choices: [
+      { value: 'one', label: 'One' },
+      { value: 'two', label: 'Two' },
+    ],
+  },
+  RadioGroup: {
+    choices: [
+      { value: 'one', label: 'One' },
+      { value: 'two', label: 'Two' },
+    ],
+  },
   Code: { label: 'cargo test', monospace: true },
   CodeView: { label: 'fn main() {}', monospace: true },
-  HexView: { value: '00000000  7f 45 4c 46                                      |.ELF|', monospace: true },
+  HexView: {
+    value: '00000000  7f 45 4c 46                                      |.ELF|',
+    monospace: true,
+  },
   LogView: { label: 'starting…', monospace: true },
   Chart: { label: 'Load' },
   Sparkline: { value: '18,22,19,31,28,35,42,39' },
   FlameGraph: { value: '120\tcompiler::parse\n74\tcompiler::check\n31\tcompiler::emit' },
   MemoryMap: { value: '0000000000400000-0000000000410000\tr-xp\t65536\t/bin/app' },
-  DisassemblyView: { value: '0000000000401000\t55\tpush\trbp\n0000000000401001\t48 89 e5\tmov\trbp, rsp' },
-  TimelineView: { value: '1700000000123\tdeploy\trelease started\tv2\n1700000001456\thealth\tready\t3 replicas' },
-  TestReportView: { value: 'api\tcreates user\tpassed\t14\t\napi\trejects duplicate\tfailed\t8\texpected 409' },
+  DisassemblyView: {
+    value: '0000000000401000\t55\tpush\trbp\n0000000000401001\t48 89 e5\tmov\trbp, rsp',
+  },
+  TimelineView: {
+    value: '1700000000123\tdeploy\trelease started\tv2\n1700000001456\thealth\tready\t3 replicas',
+  },
+  TestReportView: {
+    value: 'api\tcreates user\tpassed\t14\t\napi\trejects duplicate\tfailed\t8\texpected 409',
+  },
   CoverageView: { value: '1\t3\tfn main() {\n2\t0\t    unreachable!();' },
   Badge: { label: '3' },
   Chip: { label: 'tag', variant: 'outline' },
@@ -103,7 +126,7 @@ const BY_TAG = {
  * Returns children as plain descriptors rather than elements, so the default
  * set can be inspected and tested without React and without a host.
  */
-export function defaults(name) {
+export function defaults(name: string): StoryDefaults {
   const tag = component(name);
   const props = { ...(BY_FAMILY[tag.family] ?? {}), ...(BY_TAG[name] ?? {}) };
   if (props.label === undefined && !tag.acceptsChildren) props.label = spaced(name);
@@ -118,12 +141,12 @@ export function defaults(name) {
 const LABELLESS = new Set(['layout']);
 
 /** `CardHeader` reads as `Card header` in a preview. */
-export function spaced(name) {
+export function spaced(name: string): string {
   return name.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
 /** Every component's default set, for tests and for a first selection. */
-export function all() {
+export function all(): Map<string, StoryDefaults> {
   return new Map(tags.map((tag) => [tag.name, defaults(tag.name)]));
 }
 

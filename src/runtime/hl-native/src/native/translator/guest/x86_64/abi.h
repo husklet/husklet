@@ -33,6 +33,9 @@
 #define G_PC_STAYS_CANONICAL 1
 #define G_SP(c) ((c)->r[4])     // rsp
 #define G_TLS(c) ((c)->fs_base) // x86 TLS base (arch_prctl SET_FS)
+// Legacy clone orders its final arguments as parent_tid, child_tid, tls on x86-64.
+#define G_CLONE_TLS(a3, a4) (a4)
+#define G_CLONE_CTID(a3, a4) (a3)
 // A JIT guest unmapped / remapped an executable VA range [lo,hi) -> drop stale cached translations for it
 // (jit86_drop_range_translations, defined in translate.c). Expanded in the shared os/linux munmap / MAP_FIXED
 // / mremap paths. Inert unless a JIT guest is present (g_rwx_guest). See the "stale translation after

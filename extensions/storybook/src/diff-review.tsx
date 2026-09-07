@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Button, Column, DiffLine, DiffViewer, Heading, Row, Text } from '@husklet/react';
 
@@ -13,19 +12,21 @@ export function DiffReviewStory() {
     ['-', '  api: image: app:v1', 'danger'],
     ['+', '  api: image: app:v2', 'positive'],
     ['+', '  api: replicas: 3', 'positive'],
-  ];
+  ] as const;
   return (
     <Column gap={2}>
       <Heading label={'Review configuration diff'} scale={'title'} />
-      <Text
-        label={'Every bounded line remains selectable and semantically inspectable.'} />
+      <Text label={'Every bounded line remains selectable and semantically inspectable.'} />
       <Row justify={'end'}>
         <Button
           label={sideBySide ? 'Show unified' : 'Show side by side'}
-          onInvoke={() => setSideBySide(!sideBySide)} />
+          onInvoke={() => setSideBySide(!sideBySide)}
+        />
       </Row>
       <DiffViewer orientation={sideBySide ? 'horizontal' : 'vertical'} gap={1}>
-        {lines.map(([status, value, tone], index) => <DiffLine key={index} label={status} value={value} tone={tone} />)}
+        {lines.map(([status, value, tone], index) => (
+          <DiffLine key={index} label={status} value={value} tone={tone} />
+        ))}
       </DiffViewer>
     </Column>
   );

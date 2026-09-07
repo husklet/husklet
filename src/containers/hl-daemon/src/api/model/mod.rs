@@ -23,14 +23,14 @@ pub use auth::{Authentication, Credentials};
 pub use configuration::{CompatibilityFields, Healthcheck, RestartPolicy, Update, UpdateResult};
 pub use container::{Container, ContainerDetails, ContainerMetadata, ContainerPrune, Wait};
 pub use create::{
-    BindOptions, BindReadOnly, ContainerCreation, CreateContainer, DockerMount, DriverConfig, EndpointsConfig,
-    HostConfig, NetworkingConfig, VolumeOptions,
+    BindOptions, BindReadOnly, ContainerCreation, CreateContainer, CreateExecution, DockerMount, DriverConfig,
+    EndpointsConfig, HostConfig, NetworkingConfig, VolumeOptions,
 };
 #[cfg(feature = "runtime")]
 pub(crate) use exec::console_size;
 pub use exec::{
-    Attachment, Console, ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecOutput,
-    ExecProcess, ExecStart,
+    Attachment, Console, ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork,
+    ExecOpen, ExecOutput, ExecProcess, ExecStart,
 };
 pub use filesystem::{Change, ChangeKind, PathStat};
 pub use image::{

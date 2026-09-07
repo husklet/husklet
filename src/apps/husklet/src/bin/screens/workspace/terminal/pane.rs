@@ -267,7 +267,12 @@ impl PaneChooser {
         if let Some(popover) = chooser.popover() {
             popover.popdown();
         }
-        if let Some(terminal) = window.focused.borrow().as_ref().filter(|terminal| terminal.parent().is_some()) {
+        if let Some(terminal) = window
+            .focused
+            .borrow()
+            .as_ref()
+            .filter(|terminal| terminal.parent().is_some())
+        {
             terminal.add_tick_callback(|terminal, _| {
                 if !terminal.is_mapped() {
                     return glib::ControlFlow::Continue;
@@ -287,10 +292,6 @@ impl PaneChooser {
             }
         }
         Panes::under(window, &window.stack.visible_child()?).into_iter().next()
-    }
-
-    pub(crate) fn provider(window: &Rc<TermWin>, extension: &str, provider: &str) {
-        let _ = Self::provider_in(window, None, extension, provider);
     }
 
     pub(crate) fn provider_in(window: &Rc<TermWin>, slot: Option<&str>, extension: &str, provider: &str) -> bool {
@@ -356,10 +357,6 @@ impl PaneChooser {
             Surface::restore(window, &previous, &current.content);
         }
         false
-    }
-
-    pub(crate) fn terminal(window: &Rc<TermWin>) {
-        let _ = Self::terminal_in(window, None);
     }
 
     pub(crate) fn terminal_in(window: &Rc<TermWin>, slot: Option<&str>) -> bool {
@@ -606,7 +603,18 @@ impl<'a> Tabs<'a> {
         content: &impl IsA<gtk::Widget>,
         closable: bool,
     ) -> String {
-        self.add_with_persistence(title, icon, content, closable, true)
+        self.add_with_persistence(title, icon, content, closable, true, false)
+    }
+
+    pub(crate) fn add_persisted(
+        &self,
+        title: &str,
+        icon: Option<&str>,
+        content: &impl IsA<gtk::Widget>,
+        closable: bool,
+        pinned: bool,
+    ) -> String {
+        self.add_with_persistence(title, icon, content, closable, true, pinned)
     }
 
     fn add_with_persistence(
@@ -616,6 +624,7 @@ impl<'a> Tabs<'a> {
         content: &impl IsA<gtk::Widget>,
         closable: bool,
         persisted: bool,
+        pinned: bool,
     ) -> String {
         let tw = self.window;
         let id = tw.counter.get();
@@ -638,13 +647,35 @@ impl<'a> Tabs<'a> {
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
         inner.append(&lbl);
         bx.append(&inner);
+        let mut close = None;
+        let mut pin = None;
         if closable {
+            let p = gtk::ToggleButton::new();
+            p.set_icon_name("view-pin-symbolic");
+            p.add_css_class("tabx");
+            p.set_tooltip_text(Some(if pinned { "Unpin tab" } else { "Pin tab" }));
+            p.set_active(pinned);
+            let tw2 = tw.clone();
+            let name2 = name.clone();
+            p.connect_clicked(move |_| {
+                let next = tw2
+                    .entries
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.name == name2)
+                    .is_some_and(|entry| !entry.pinned);
+                let _ = Tabs::new(&tw2).pin(&name2, next);
+            });
+            bx.append(&p);
+            pin = Some(p);
             let x = gtk::Button::from_icon_name("window-close-symbolic");
             x.add_css_class("tabx");
+            x.set_visible(!pinned);
             let tw2 = tw.clone();
             let name2 = name.clone();
             x.connect_clicked(move |_| Page::new(&tw2, &name2).close());
             bx.append(&x);
+            close = Some(x);
         }
         let click = gtk::GestureClick::new();
         let tw2 = tw.clone();
@@ -658,6 +689,9 @@ impl<'a> Tabs<'a> {
             button: bx,
             title: lbl,
             persisted,
+            pinned,
+            close,
+            pin,
         });
         Page::new(tw, &name).select();
         name
@@ -704,10 +738,33 @@ impl<'a> Tabs<'a> {
         let (term, pid) = make_container_terminal_ex(tw, &slot, container, command);
         paneroot.append(&PaneChrome::wrap(tw, &term));
         let title = format!("container {}", &container[..container.len().min(12)]);
-        let name = self.add_with_persistence(&title, None, &paneroot, true, false);
+        let name = self.add_with_persistence(&title, None, &paneroot, true, false, false);
         tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
         name
+    }
+
+    pub(crate) fn pin(&self, tab: &str, pinned: bool) -> Result<(), hl_extension::HostError> {
+        let mut entries = self.window.entries.borrow_mut();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.name == tab)
+            .ok_or_else(|| hl_extension::HostError::Absent(tab.to_owned()))?;
+        let Some(pin) = entry.pin.as_ref() else {
+            return Err(hl_extension::HostError::Conflict(
+                "the overview tab is always protected".into(),
+            ));
+        };
+        entry.pinned = pinned;
+        pin.set_active(pinned);
+        pin.set_tooltip_text(Some(if pinned { "Unpin tab" } else { "Pin tab" }));
+        if let Some(close) = &entry.close {
+            close.set_visible(!pinned);
+        }
+        drop(entries);
+        WindowSession::new(self.window)
+            .save()
+            .map_err(|error| hl_extension::HostError::Failed(error.to_string()))
     }
 }
 
@@ -737,6 +794,14 @@ impl<'a> Page<'a> {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    pub(crate) fn pinned(&self) -> bool {
+        self.window
+            .entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.name == self.name && entry.pinned)
     }
 
     pub(crate) fn select(&self) {
@@ -787,6 +852,9 @@ impl<'a> Page<'a> {
         let tw = self.window;
         let name = self.name.as_str();
         if tw.entries.borrow().first().map(|e| e.name.as_str()) == Some(name) {
+            return;
+        }
+        if self.pinned() {
             return;
         }
         for p in tw.pids.borrow_mut().remove(name).unwrap_or_default() {
@@ -905,12 +973,7 @@ impl<'a> PaneView<'a> {
     /// Divide a live pane while preserving its current occupant. A surface's
     /// displaced terminal remains the cwd source, while topology authority is
     /// the stable pane chrome and slot.
-    pub(crate) fn split_at(
-        tw: &Rc<TermWin>,
-        pane: &Occupancy,
-        old: &vte4::Terminal,
-        orient: gtk::Orientation,
-    ) {
+    pub(crate) fn split_at(tw: &Rc<TermWin>, pane: &Occupancy, old: &vte4::Terminal, orient: gtk::Orientation) {
         let page = Page::of(tw, &pane.widget).map(|page| page.name);
         // OSC-7: split panes inherit the source pane's cwd. A fresh split gets a fresh slot; never restores.
         let split_cwd = old
@@ -1084,6 +1147,91 @@ mod focus_ownership_tests {
             assert!(!persisted, "attachment tabs must not enter session restore state");
             Page::new(&tw, &tab).close();
             assert!(tw.entries.borrow().iter().all(|entry| entry.name != tab));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn pinned_tab_hides_close_and_refuses_page_close() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("pin-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let overview = gtk::Label::new(Some("overview"));
+            Tabs::new(&tw).add("overview", None, &overview, false);
+            let page = gtk::Label::new(Some("pinned"));
+            let tab = Tabs::new(&tw).add_persisted("notes", None, &page, true, true);
+            let entries = tw.entries.borrow();
+            let entry = entries.iter().find(|entry| entry.name == tab).unwrap();
+            assert!(entry.pinned);
+            assert!(!entry.close.as_ref().unwrap().is_visible());
+            drop(entries);
+            Page::new(&tw, &tab).close();
+            assert!(tw.entries.borrow().iter().any(|entry| entry.name == tab));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn pane_chooser_switches_a_stable_slot_to_an_extension_and_back() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("chooser-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let gallery = screens::workspace::extensions::Gallery::new();
+            Window::exhibit(&tw, gallery.clone());
+
+            let interface = gtk::Label::new(Some("Top resource view"));
+            let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            home.append(&interface);
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let recorded = selections.clone();
+            let provider = hl_extension::PaneProvider {
+                id: hl_extension::ExtensionName::new("resources").unwrap(),
+                title: "Resources".into(),
+                icon: Some("applications-system-symbolic".into()),
+            };
+            let generation = gallery.enrol(
+                "top",
+                &interface,
+                &home,
+                &[provider],
+                Rc::new(move |selection| recorded.borrow_mut().push(selection)),
+            );
+            gallery.enrol_semantics(
+                "top",
+                Rc::new(|_| Err(hl_extension::HostError::Unsupported("test fixture".into()))),
+                Rc::new(|_, _| Ok(())),
+            );
+            gallery.ready("top", generation);
+
+            let (terminal, _slave) = terminal_with_pty();
+            let slot = Slots::new(&tw).allocate();
+            Slots::new(&tw).hold(&terminal, slot.clone());
+            let chrome = PaneChrome::wrap(&tw, &terminal);
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            page.append(&chrome);
+            Tabs::new(&tw).add("terminal", None, &page, true);
+
+            assert!(PaneChooser::provider_in(&tw, Some(&slot), "top", "resources"));
+            let pane = Panes::at(&tw, &slot).expect("provider still occupies the pane slot");
+            assert_eq!(pane.occupant, hl_extension::port::Occupant::Surface);
+            assert_eq!(
+                Slots::new(&tw).surface(&pane.content),
+                Some((slot.clone(), "top".into(), Some("resources".into())))
+            );
+            assert_eq!(selections.borrow().len(), 1);
+            assert_eq!(selections.borrow()[0].slot, slot);
+            assert_eq!(selections.borrow()[0].pane_provider.as_str(), "resources");
+
+            assert!(PaneChooser::terminal_in(&tw, Some(&slot)));
+            let restored = Panes::at(&tw, &slot).expect("terminal restored into the pane slot");
+            assert_eq!(restored.occupant, hl_extension::port::Occupant::Terminal);
+            assert_eq!(restored.content, terminal.upcast::<gtk::Widget>());
             tw.closing.set(true);
         });
         if !ran {

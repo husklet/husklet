@@ -140,6 +140,8 @@ impl PaneNode {
 #[derive(Clone, PartialEq, Debug)]
 pub struct SessionTab {
     pub title: String,
+    /// Whether the tab is protected from closing until explicitly unpinned.
+    pub pinned: bool,
     pub root: PaneNode,
 }
 
@@ -175,7 +177,7 @@ impl Session {
     /// Serialize to the prefix-notation text format.
     #[must_use]
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# hl session layout\nversion 3\nview ");
+        let mut out = String::from("# hl session layout\nversion 4\nview ");
         let selected = self
             .selected_tab
             .map_or_else(|| "-".to_owned(), |index| index.to_string());
@@ -191,6 +193,7 @@ impl Session {
         out.push('\n');
         for tab in &self.tabs {
             out.push_str("tab ");
+            out.push_str(if tab.pinned { "pinned " } else { "loose " });
             out.push_str(&Layout::escape(&tab.title));
             out.push(' ');
             tab.root.write(&mut out);
@@ -218,9 +221,13 @@ impl Session {
         let version = layout
             .next()
             .ok_or_else(|| Layout::invalid("missing supported layout version"))?;
+        // Two development lines independently assigned version 2: one added view state and the other
+        // added pinned tabs. The next token makes those historical documents unambiguous.
+        let pinned_v2 = version == "2" && layout.peek() != Some("view");
         let (selected_tab, focused_pane, window_size) = match version {
             "1" => (None, None, None),
-            "2" | "3" => {
+            "2" if pinned_v2 => (None, None, None),
+            "2" | "3" | "4" => {
                 if layout.next() != Some("view") {
                     return Err(Layout::invalid("layout is missing its view state"));
                 }
@@ -241,7 +248,7 @@ impl Session {
                         .next()
                         .ok_or_else(|| Layout::invalid("view state is missing its focused pane"))?,
                 );
-                let window_size = if version == "3" {
+                let window_size = if version == "3" || version == "4" {
                     if layout.next() != Some("window") {
                         return Err(Layout::invalid("version 3 layout is missing its window size"));
                     }
@@ -281,12 +288,21 @@ impl Session {
             if layout.next() != Some("tab") {
                 return Err(Layout::invalid("expected `tab`"));
             }
+            let pinned = if version == "4" || pinned_v2 {
+                match layout.next() {
+                    Some("pinned") => true,
+                    Some("loose") => false,
+                    _ => return Err(Layout::invalid("tab is missing `pinned` or `loose` state")),
+                }
+            } else {
+                false
+            };
             let title = layout
                 .next()
                 .map(Layout::unescape)
                 .ok_or_else(|| Layout::invalid("tab is missing its title"))?;
             let root = layout.node()?;
-            tabs.push(SessionTab { title, root });
+            tabs.push(SessionTab { title, pinned, root });
         }
         if selected_tab.is_some_and(|index| index >= tabs.len()) {
             return Err(Layout::invalid("selected tab is outside the persisted tab list"));

@@ -9,6 +9,7 @@ import {
   FLOW_STORIES,
   Playground,
   Preview,
+  Sidebar,
   SEARCH_RESULT_LIMIT,
   interactionDetail,
   interactionProps,
@@ -19,8 +20,17 @@ import { defaults } from '../dist/defaults.js';
 import { components } from '@husklet/react';
 import { ACQUISITION_STORY, acquisitionStates } from '../dist/acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from '../dist/form.js';
-import { EVENT_LIMIT, KEYBOARD_STORY, KeyboardAccessibilityStory } from '../dist/keyboard-accessibility.js';
-import { QUERY_PLAN_MODES, QueryPlanStory, filterQueryPlan, queryPlan } from '../dist/query-plan.js';
+import {
+  EVENT_LIMIT,
+  KEYBOARD_STORY,
+  KeyboardAccessibilityStory,
+} from '../dist/keyboard-accessibility.js';
+import {
+  QUERY_PLAN_MODES,
+  QueryPlanStory,
+  filterQueryPlan,
+  queryPlan,
+} from '../dist/query-plan.js';
 
 import { host } from './host.js';
 
@@ -55,7 +65,9 @@ test('every component renders with its defaults as sane patches', () => {
       h(
         components[tag.name],
         opened.props,
-        ...opened.children.map((child, index) => h(components[child.tag], { key: index, ...child.props })),
+        ...opened.children.map((child, index) =>
+          h(components[child.tag], { key: index, ...child.props }),
+        ),
       ),
     );
     assert.ok(frame, `<${tag.name}> rendered nothing at all`);
@@ -85,6 +97,25 @@ test('the playground renders flows and only one bounded component family', () =>
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('NumberEntry'));
 });
 
+test('the sidebar uses one native scroller without nesting a List scroller', () => {
+  const frame = host().render(
+    h(Sidebar, {
+      families: grouped(),
+      selected: 'Button',
+      activeFamily: 'buttons',
+      onFamily: () => {},
+      onSelect: () => {},
+    }),
+  );
+  const built = created(frame.patches).map((entry) => entry.tag);
+  assert.equal(built.filter((tag) => tag === 'Scroll').length, 1);
+  assert.equal(
+    built.filter((tag) => tag === 'List').length,
+    0,
+    'nested native scrollers collapse the navigation',
+  );
+});
+
 test('global navigation finds an unknown-family component without materializing the catalogue', () => {
   const families = grouped();
   const broad = searchResults(families, 'a');
@@ -93,23 +124,42 @@ test('global navigation finds an unknown-family component without materializing 
 
   const stage = host();
   const first = stage.render(h(Playground));
-  const search = first.patches.find((patch) => patch.SetProp?.prop === 'Placeholder'
-    && patch.SetProp.value.Text === 'Search flows and components')?.SetProp.id;
+  const search = first.patches.find(
+    (patch) =>
+      patch.SetProp?.prop === 'Placeholder' &&
+      patch.SetProp.value.Text === 'Search flows and components',
+  )?.SetProp.id;
   assert.ok(search, 'global navigation is not discoverable before the long flow list');
   const beforeSearch = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: search, id: `${search}:Change`, value: 'DataTable' }));
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: search,
+      id: `${search}:Change`,
+      value: 'DataTable',
+    }),
+  );
   const matches = stage.since(beforeSearch);
   const dataTable = node(matches, 'ListItemButton', 'DataTable');
   assert.ok(dataTable, 'search still requires knowing the component family');
-  assert.ok(!node(matches, 'ListItemButton', FLOW_STORIES[0]), 'search retained the unrelated flow catalogue');
+  assert.ok(
+    !node(matches, 'ListItemButton', FLOW_STORIES[0]),
+    'search retained the unrelated flow catalogue',
+  );
 
   const beforeSelect = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: dataTable, id: `${dataTable}:Invoke` }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: dataTable, id: `${dataTable}:Invoke` }),
+  );
   assert.ok(node(stage.since(beforeSelect), 'Heading', 'Data Table'));
 });
 
 function labels(patches, tag) {
-  const ids = new Set(created(patches).filter((entry) => entry.tag === tag).map((entry) => entry.id));
+  const ids = new Set(
+    created(patches)
+      .filter((entry) => entry.tag === tag)
+      .map((entry) => entry.id),
+  );
   return patches
     .filter((patch) => patch.SetProp?.prop === 'Label' && ids.has(patch.SetProp.id))
     .map((patch) => patch.SetProp.value.Text);
@@ -122,12 +172,24 @@ function setsText(patches, prop, text) {
 test('query plan filters retain matching operators and every ancestor, but no unrelated sibling', () => {
   const hot = filterQueryPlan(queryPlan, 'hotspot');
   assert.equal(hot.id, 'root');
-  assert.deepEqual(hot.children.map((child) => child.id), ['join']);
-  assert.deepEqual(hot.children[0].children.map((child) => child.id), ['orders-hash']);
-  assert.deepEqual(hot.children[0].children[0].children.map((child) => child.id), ['orders']);
+  assert.deepEqual(
+    hot.children.map((child) => child.id),
+    ['join'],
+  );
+  assert.deepEqual(
+    hot.children[0].children.map((child) => child.id),
+    ['orders-hash'],
+  );
+  assert.deepEqual(
+    hot.children[0].children[0].children.map((child) => child.id),
+    ['orders'],
+  );
   const mismatch = filterQueryPlan(queryPlan, 'mismatch');
   assert.equal(mismatch.id, 'root');
-  assert.deepEqual(mismatch.children.map((child) => child.id), ['preferences']);
+  assert.deepEqual(
+    mismatch.children.map((child) => child.id),
+    ['preferences'],
+  );
   assert.equal(filterQueryPlan(queryPlan, 'full').children.length, 2);
 });
 
@@ -142,25 +204,48 @@ test('query plan callbacks switch among full, hotspot, and mismatch projections'
   assert.ok(hotspot && mismatch && full, 'the three projections are not independently selectable');
 
   let before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: hotspot, id: `${hotspot}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Invoke',
+      node: hotspot,
+      id: `${hotspot}:Invoke`,
+      value: null,
+    }),
+  );
   let patches = stage.since(before);
   assert.ok(setsText(patches, 'Label', 'Showing hotspots with their ancestor paths.'));
   assert.ok(setsText(patches, 'Label', '4 plan operators'));
-  assert.ok(patches.some((patch) => 'Remove' in patch), 'hotspot filtering retained unrelated siblings');
+  assert.ok(
+    patches.some((patch) => 'Remove' in patch),
+    'hotspot filtering retained unrelated siblings',
+  );
 
   before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: mismatch, id: `${mismatch}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Invoke',
+      node: mismatch,
+      id: `${mismatch}:Invoke`,
+      value: null,
+    }),
+  );
   patches = stage.since(before);
   assert.ok(setsText(patches, 'Label', 'Showing estimate mismatches with their ancestor paths.'));
   assert.ok(setsText(patches, 'Label', '2 plan operators'));
   assert.deepEqual(labels(patches, 'QueryPlanNode'), ['subquery_scan · Preference summary']);
 
   before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: full, id: `${full}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: full, id: `${full}:Invoke`, value: null }),
+  );
   patches = stage.since(before);
   assert.ok(setsText(patches, 'Label', 'Showing the complete captured plan.'));
   assert.ok(setsText(patches, 'Label', '6 plan operators'));
-  assert.equal(labels(patches, 'QueryPlanNode').length, 4, 'the four filtered operators were not restored');
+  assert.equal(
+    labels(patches, 'QueryPlanNode').length,
+    4,
+    'the four filtered operators were not restored',
+  );
 });
 
 test('keyboard accessibility story validates, confirms separately, and bounds focus history', () => {
@@ -170,27 +255,54 @@ test('keyboard accessibility story validates, confirms separately, and bounds fo
   const review = node(first.patches, 'Button', 'Review removal');
   const disabled = node(first.patches, 'Button', 'Unavailable');
   assert.ok(entry && review && disabled);
-  assert.ok(first.patches.some((patch) => 'SetProp' in patch && patch.SetProp.id === disabled
-    && patch.SetProp.prop === 'Enabled' && patch.SetProp.value.Flag === false));
+  assert.ok(
+    first.patches.some(
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.id === disabled &&
+        patch.SetProp.prop === 'Enabled' &&
+        patch.SetProp.value.Flag === false,
+    ),
+  );
 
   let before = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke`, value: null });
-  assert.ok(node(stage.since(before), 'InlineMessage', 'Resolve the validation error before confirmation.'));
+  assert.ok(
+    node(stage.since(before), 'InlineMessage', 'Resolve the validation error before confirmation.'),
+  );
 
-  stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'storybook' });
+  stage.surface.dispatch({
+    trigger: 'Change',
+    node: entry,
+    id: `${entry}:Change`,
+    value: 'storybook',
+  });
   before = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke`, value: null });
   const confirmation = stage.since(before);
   assert.ok(node(confirmation, 'Button', 'Cancel'));
   const confirm = node(confirmation, 'Button', 'Confirm removal');
   assert.ok(confirm);
-  assert.ok(confirmation.some((patch) => 'SetProp' in patch && patch.SetProp.id === confirm
-    && patch.SetProp.prop === 'Destructive' && patch.SetProp.value.Flag === true));
+  assert.ok(
+    confirmation.some(
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.id === confirm &&
+        patch.SetProp.prop === 'Destructive' &&
+        patch.SetProp.value.Flag === true,
+    ),
+  );
 
   for (let index = 0; index < EVENT_LIMIT + 3; index += 1) {
-    stage.surface.dispatch({ trigger: 'Focus', node: review, id: `${review}:Focus`, focused: true });
+    stage.surface.dispatch({
+      trigger: 'Focus',
+      node: review,
+      id: `${review}:Focus`,
+      focused: true,
+    });
   }
-  const labels = stage.frames.flatMap((frame) => frame.patches)
+  const labels = stage.frames
+    .flatMap((frame) => frame.patches)
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   assert.ok(labels.includes(`Event history (${EVENT_LIMIT}/${EVENT_LIMIT})`));
@@ -215,28 +327,47 @@ test('the form story validates submit, recovers on change, and confirms success'
   assert.ok(entry && save, 'the form has no editable field or save action');
 
   let before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Submit', node: entry, id: `${entry}:Submit`, value: null }),
+  );
   let patches = stage.since(before);
   assert.ok(node(patches, 'ValidationSummary', 'Fix workspace name.'));
   const review = node(patches, 'Button', 'Review workspace name');
   assert.ok(review, 'validation summary has no corrective action');
   const beforeReview = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Invoke', node: review, id: `${review}:Invoke` });
-  assert.ok(stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Ready to correct.'));
   assert.ok(
-    patches.some((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Tone' && patch.SetProp.value.Tone === 'Danger'),
+    stage.since(beforeReview).some((patch) => patch.SetProp?.value?.Text === 'Ready to correct.'),
+  );
+  assert.ok(
+    patches.some(
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.prop === 'Tone' &&
+        patch.SetProp.value.Tone === 'Danger',
+    ),
     'invalid submission does not mark the field or feedback as dangerous',
   );
 
   before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'api' }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'api' }),
+  );
   patches = stage.since(before);
-  assert.ok(patches.some((patch) => 'Remove' in patch), 'correcting the field leaves stale validation feedback');
+  assert.ok(
+    patches.some((patch) => 'Remove' in patch),
+    'correcting the field leaves stale validation feedback',
+  );
 
   before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: save, id: `${save}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: save, id: `${save}:Invoke`, value: null }),
+  );
   patches = stage.since(before);
-  assert.ok(node(patches, 'Banner', 'Defaults saved for api.'), 'valid submission has no success confirmation');
+  assert.ok(
+    node(patches, 'Banner', 'Defaults saved for api.'),
+    'valid submission has no success confirmation',
+  );
 });
 
 test('the tag input retains a submitted value and removes only the activated tag', () => {
@@ -246,15 +377,28 @@ test('the tag input retains a submitted value and removes only the activated tag
   const backend = node(first.patches, 'ToggleButton', 'backend');
   assert.ok(input && backend);
 
-  stage.surface.dispatch({ trigger: 'Change', node: input, id: `${input}:Change`, value: 'urgent' });
+  stage.surface.dispatch({
+    trigger: 'Change',
+    node: input,
+    id: `${input}:Change`,
+    value: 'urgent',
+  });
   const beforeAdd = stage.frames.length;
   stage.surface.dispatch({ trigger: 'Submit', node: input, id: `${input}:Submit` });
   assert.ok(node(stage.since(beforeAdd), 'ToggleButton', 'urgent'));
 
   const beforeRemove = stage.frames.length;
-  stage.surface.dispatch({ trigger: 'Toggle', node: backend, id: `${backend}:Toggle`, value: false });
+  stage.surface.dispatch({
+    trigger: 'Toggle',
+    node: backend,
+    id: `${backend}:Toggle`,
+    value: false,
+  });
   const removed = stage.since(beforeRemove);
-  assert.ok(removed.some((patch) => 'Remove' in patch), JSON.stringify(removed));
+  assert.ok(
+    removed.some((patch) => 'Remove' in patch),
+    JSON.stringify(removed),
+  );
 });
 
 test('the validated form is selectable as a canonical end-user flow', () => {
@@ -263,9 +407,14 @@ test('the validated form is selectable as a canonical end-user flow', () => {
   const item = node(first.patches, 'ListItemButton', FORM_STORY);
   assert.ok(item, 'the sidebar omits the form flow');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }),
+  );
   const patches = stage.since(before);
-  assert.ok(node(patches, 'Heading', 'Workspace defaults'), 'selecting the form flow does not render it');
+  assert.ok(
+    node(patches, 'Heading', 'Workspace defaults'),
+    'selecting the form flow does not render it',
+  );
 });
 
 test('the acquisition flow selects every semantic progress state without materializing them together', () => {
@@ -274,7 +423,9 @@ test('the acquisition flow selects every semantic progress state without materia
   const item = node(first.patches, 'ListItemButton', ACQUISITION_STORY);
   assert.ok(item, 'the sidebar has no acquisition flow');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }),
+  );
   const initial = stage.since(before);
   const select = created(initial).find((entry) => entry.tag === 'Select')?.id;
   assert.ok(select, 'the lifecycle state selector is absent');
@@ -282,7 +433,14 @@ test('the acquisition flow selects every semantic progress state without materia
   for (const [index, state] of acquisitionStates.entries()) {
     const start = stage.frames.length;
     if (index !== 0) {
-      assert.ok(stage.surface.dispatch({ trigger: 'Change', node: select, id: `${select}:Change`, value: state.key }));
+      assert.ok(
+        stage.surface.dispatch({
+          trigger: 'Change',
+          node: select,
+          id: `${select}:Change`,
+          value: state.key,
+        }),
+      );
       patches.push(...stage.since(start));
     }
     const visible = index === 0 ? initial : stage.since(start);
@@ -316,23 +474,35 @@ test('the preview is a real instance of the selected component', () => {
 test('the preview demonstrates declared interactions with a live bounded console', () => {
   const stage = host();
   const opened = defaults('Button');
-  const first = stage.render(h(Preview, {
-    name: 'Button',
-    opened,
-    triggers: ['Invoke', 'Key'],
-  }));
+  const first = stage.render(
+    h(Preview, {
+      name: 'Button',
+      opened,
+      triggers: ['Invoke', 'Key'],
+    }),
+  );
   const preview = node(first.patches, 'Button', 'Button');
   assert.ok(preview, 'the interactive preview button is absent');
-  assert.ok(node(first.patches, 'InlineMessage', 'Interact with the preview to inspect onInvoke, onKey.'));
+  assert.ok(
+    node(first.patches, 'InlineMessage', 'Interact with the preview to inspect onInvoke, onKey.'),
+  );
 
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: preview, id: `${preview}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Invoke',
+      node: preview,
+      id: `${preview}:Invoke`,
+      value: null,
+    }),
+  );
   const patches = stage.since(before);
   assert.ok(
     patches.some(
-      (patch) => 'SetProp' in patch
-        && patch.SetProp.prop === 'Label'
-        && patch.SetProp.value.Text === '#1 Invoke received · value=null',
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.prop === 'Label' &&
+        patch.SetProp.value.Text === '#1 Invoke received · value=null',
     ),
     'a real preview event never reaches the visible console',
   );
@@ -340,16 +510,23 @@ test('the preview demonstrates declared interactions with a live bounded console
 
 test('interaction handlers follow the catalogue and payload descriptions stay bounded', () => {
   const seen = [];
-  const handlers = interactionProps(['Change', 'Focus'], (trigger, event) => seen.push([trigger, event]));
+  const handlers = interactionProps(['Change', 'Focus'], (trigger, event) =>
+    seen.push([trigger, event]),
+  );
   assert.deepEqual(Object.keys(handlers), ['onChange', 'onFocus']);
   handlers.onFocus({ focused: true });
   assert.deepEqual(seen, [['Focus', { focused: true }]]);
-  assert.equal(interactionDetail({ key: 'a', pressed: true, private: 'not shown' }), 'key="a" pressed=true');
+  assert.equal(
+    interactionDetail({ key: 'a', pressed: true, private: 'not shown' }),
+    'key="a" pressed=true',
+  );
   const long = interactionDetail({ value: 'x'.repeat(500) });
   assert.ok(long.length <= 240);
   assert.ok(long.endsWith('…"'), 'a long value is not visibly marked as truncated');
   assert.equal(
-    interactionDetail({ rows: Array.from({ length: 100_000 }, (_, index) => ({ index, private: 'not shown' })) }),
+    interactionDetail({
+      rows: Array.from({ length: 100_000 }, (_, index) => ({ index, private: 'not shown' })),
+    }),
     'rows=[{"index":0,"private":"not shown"},{"index":1,"private":"not shown"},{"index":2,"private":"not shown"},"… 99997 more"]',
   );
 });
@@ -360,9 +537,17 @@ test('the interaction console preserves a bounded sequence and can be cleared', 
   const first = stage.render(h(Preview, { name: 'Button', opened, triggers: ['Invoke'] }));
   const preview = node(first.patches, 'Button', 'Button');
   for (let index = 0; index < 7; index += 1) {
-    assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: preview, id: `${preview}:Invoke`, value: index }));
+    assert.ok(
+      stage.surface.dispatch({
+        trigger: 'Invoke',
+        node: preview,
+        id: `${preview}:Invoke`,
+        value: index,
+      }),
+    );
   }
-  const labels = stage.frames.flatMap((frame) => frame.patches)
+  const labels = stage.frames
+    .flatMap((frame) => frame.patches)
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   assert.ok(labels.includes('#7 Invoke received · value=6'), 'the newest interaction is absent');
@@ -370,22 +555,41 @@ test('the interaction console preserves a bounded sequence and can be cleared', 
   const latest = stage.frames.at(-1).patches;
   const removed = latest.filter((patch) => 'Remove' in patch).length;
   assert.ok(removed > 0, 'the oldest interaction was not evicted from the bounded timeline');
-  const clear = node(stage.frames.flatMap((frame) => frame.patches), 'Button', 'Clear');
+  const clear = node(
+    stage.frames.flatMap((frame) => frame.patches),
+    'Button',
+    'Clear',
+  );
   assert.ok(clear, 'the populated console has no clear action');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: clear, id: `${clear}:Invoke`, value: null }));
-  assert.ok(node(stage.since(before), 'InlineMessage', 'Interact with the preview to inspect onInvoke.'));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: clear, id: `${clear}:Invoke`, value: null }),
+  );
+  assert.ok(
+    node(stage.since(before), 'InlineMessage', 'Interact with the preview to inspect onInvoke.'),
+  );
 });
 
 test('selecting a component in the sidebar renders that component', () => {
   const stage = host();
   const first = stage.render(h(Playground));
   const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
-  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'display' });
-  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Chip');
+  stage.surface.dispatch({
+    trigger: 'Change',
+    node: family,
+    id: `${family}:Change`,
+    value: 'display',
+  });
+  const item = node(
+    stage.frames.flatMap((frame) => frame.patches),
+    'ListItemButton',
+    'Chip',
+  );
   assert.ok(item, 'the sidebar has no row for <Chip>');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }),
+  );
   const patches = stage.since(before);
   assert.ok(
     created(patches).some((entry) => entry.tag === 'Chip'),
@@ -397,11 +601,22 @@ test('the inspector follows the selected component contract and shows its intera
   const stage = host();
   const first = stage.render(h(Playground));
   const family = created(first.patches).find((entry) => entry.tag === 'Select').id;
-  stage.surface.dispatch({ trigger: 'Change', node: family, id: `${family}:Change`, value: 'forms' });
-  const item = node(stage.frames.flatMap((frame) => frame.patches), 'ListItemButton', 'Switch');
+  stage.surface.dispatch({
+    trigger: 'Change',
+    node: family,
+    id: `${family}:Change`,
+    value: 'forms',
+  });
+  const item = node(
+    stage.frames.flatMap((frame) => frame.patches),
+    'ListItemButton',
+    'Switch',
+  );
   assert.ok(item, 'the sidebar has no row for <Switch>');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }));
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node: item, id: `${item}:Invoke`, value: null }),
+  );
   const patches = stage.since(before);
   assert.ok(node(patches, 'Text', 'checked'), '<Switch> does not expose its checked property');
   assert.ok(node(patches, 'Text', 'onToggle'), '<Switch> does not expose its Toggle interaction');
@@ -414,10 +629,18 @@ test('family navigation reaches every catalogue component without simultaneous m
   const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
   const seen = new Set();
   for (const family of grouped()) {
-    stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: family.name });
-    const labels = stage.frames.at(-1).patches.filter((patch) => patch.SetProp?.prop === 'Label')
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: selector,
+      id: `${selector}:Change`,
+      value: family.name,
+    });
+    const labels = stage.frames
+      .at(-1)
+      .patches.filter((patch) => patch.SetProp?.prop === 'Label')
       .map((patch) => patch.SetProp.value.Text);
-    for (const tag of family.tags) assert.ok(labels.includes(tag.name), `${family.name} omits ${tag.name}`);
+    for (const tag of family.tags)
+      assert.ok(labels.includes(tag.name), `${family.name} omits ${tag.name}`);
     family.tags.forEach((tag) => seen.add(tag.name));
   }
   assert.deepEqual([...seen].sort(), tags.map((tag) => tag.name).sort());
@@ -428,19 +651,50 @@ test('global search input is bounded and keeps the selected story visible', () =
   const first = stage.render(h(Playground));
   const selector = created(first.patches).find((entry) => entry.tag === 'Select').id;
   const search = created(first.patches).find((entry) => entry.tag === 'Entry').id;
-  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: selector, id: `${selector}:Change`, value: 'content' }));
-  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: search, id: `${search}:Change`, value: `Log${'x'.repeat(100)}` }));
-  const values = stage.frames.flatMap((frame) => frame.patches).filter((patch) =>
-    patch.SetProp?.id === search && patch.SetProp.prop === 'Value');
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: selector,
+      id: `${selector}:Change`,
+      value: 'content',
+    }),
+  );
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: search,
+      id: `${search}:Change`,
+      value: `Log${'x'.repeat(100)}`,
+    }),
+  );
+  const values = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === search && patch.SetProp.prop === 'Value');
   assert.equal(values.at(-1).SetProp.value.Text.length, 80);
-  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Heading', 'Button'), 'active preview disappears while browsing');
-  assert.ok(node(stage.frames.flatMap((frame) => frame.patches), 'Text', 'No flows or components match this search.'));
+  assert.ok(
+    node(
+      stage.frames.flatMap((frame) => frame.patches),
+      'Heading',
+      'Button',
+    ),
+    'active preview disappears while browsing',
+  );
+  assert.ok(
+    node(
+      stage.frames.flatMap((frame) => frame.patches),
+      'Text',
+      'No flows or components match this search.',
+    ),
+  );
 });
 
 test('the inspector exposes only the genuine extended interactions', () => {
   const triggers = tags.find((tag) => tag.name === 'IconButton').triggers;
   for (const interaction of ['onKey', 'onFocus', 'onPointer', 'onContext']) {
-    assert.ok(triggers.includes(interaction.slice(2)), `<IconButton> does not expose ${interaction}`);
+    assert.ok(
+      triggers.includes(interaction.slice(2)),
+      `<IconButton> does not expose ${interaction}`,
+    );
   }
   assert.equal(triggers.includes('Scroll'), false, '<IconButton> invents scrolling');
 });
@@ -453,11 +707,21 @@ test('editing a property re-renders the preview with the new value', () => {
   const entry = labelEntry(first.patches);
   assert.ok(entry, 'the inspector has no text field for the label');
   const before = stage.frames.length;
-  assert.ok(stage.surface.dispatch({ trigger: 'Change', node: entry, id: `${entry}:Change`, value: 'Pressed' }));
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: entry,
+      id: `${entry}:Change`,
+      value: 'Pressed',
+    }),
+  );
   const patches = stage.since(before);
   assert.ok(
     patches.some(
-      (patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label' && patch.SetProp.value.Text === 'Pressed',
+      (patch) =>
+        'SetProp' in patch &&
+        patch.SetProp.prop === 'Label' &&
+        patch.SetProp.value.Text === 'Pressed',
     ),
     'the new label never reached the host',
   );

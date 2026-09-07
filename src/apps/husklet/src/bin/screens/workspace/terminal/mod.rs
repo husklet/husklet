@@ -92,6 +92,9 @@ pub(crate) struct TabEntry {
     button: gtk::Box,
     title: gtk::Label,
     persisted: bool,
+    pinned: bool,
+    close: Option<gtk::Button>,
+    pin: Option<gtk::ToggleButton>,
 }
 
 /// The minimalist search bar: a slim black overlay with a query field + a match-state hint.
@@ -363,10 +366,7 @@ impl Window {
         let pane = Panes::at(window, slot)?;
         let point = pane.widget.compute_point(
             &window.stack,
-            &gtk::graphene::Point::new(
-                pane.widget.width() as f32 / 2.0,
-                pane.widget.height() as f32 / 2.0,
-            ),
+            &gtk::graphene::Point::new(pane.widget.width() as f32 / 2.0, pane.widget.height() as f32 / 2.0),
         )?;
         Some((f64::from(point.x()), f64::from(point.y())))
     }
@@ -391,6 +391,15 @@ impl Window {
                 (name, widget, slots)
             })
             .collect()
+    }
+
+    pub(crate) fn tab_pinned(window: &Rc<TermWin>, name: &str) -> bool {
+        window
+            .entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.name == name)
+            .is_some_and(|entry| entry.pinned)
     }
 
     /// The layout slots of every pane under one tab's widget, shells and
@@ -435,9 +444,13 @@ impl Window {
     }
 
     pub(crate) fn retitle_pane(window: &Rc<TermWin>, pane: &gtk::Widget, title: &str) -> bool {
-        let Some(page) = Page::of(window, pane) else { return false };
+        let Some(page) = Page::of(window, pane) else {
+            return false;
+        };
         let mut entries = window.entries.borrow_mut();
-        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else { return false };
+        let Some(entry) = entries.iter_mut().find(|entry| entry.name == page.name()) else {
+            return false;
+        };
         entry.retitle(title);
         true
     }
@@ -490,7 +503,7 @@ impl Window {
     }
 
     pub(crate) fn settings(app: &gtk::Application, ws: &WorkspaceConfig) {
-        Self::open_page(app, ws, Some(screens::workspace::Page::Settings));
+        Self::open_page(app, ws, Some(screens::workspace::Page::Workspace));
     }
 
     pub(crate) fn open_page(
@@ -571,7 +584,9 @@ impl Window {
             keys.connect_key_pressed(move |_, key, _c, state| {
                 let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
+                    key: key
+                        .name()
+                        .map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: true,
                     slot,
@@ -637,7 +652,9 @@ impl Window {
             keys.connect_key_released(move |_, key, _c, state| {
                 let (slot, generation) = TermWin::focused_event_identity(&tw, gtk::prelude::RootExt::focus(&root));
                 tw.broadcast(hl_extension::WorkspaceEvent::Key {
-                    key: key.name().map_or_else(String::new, |name| name.chars().take(64).collect()),
+                    key: key
+                        .name()
+                        .map_or_else(String::new, |name| name.chars().take(64).collect()),
                     modifiers: modifier_names(state),
                     pressed: false,
                     slot,
@@ -651,11 +668,13 @@ impl Window {
         {
             let tw = tw.clone();
             motion.connect_motion(move |controller, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 let previous = tw.last_pointer.replace(Some(target.clone()));
-                if let Some(previous) = previous.filter(|previous| {
-                    previous.slot != target.slot || previous.generation != target.generation
-                }) {
+                if let Some(previous) =
+                    previous.filter(|previous| previous.slot != target.slot || previous.generation != target.generation)
+                {
                     tw.broadcast(TermWin::pointer_event(
                         &previous,
                         hl_extension::PointerPhase::Leave,
@@ -683,7 +702,9 @@ impl Window {
         {
             let tw = tw.clone();
             motion.connect_enter(move |controller, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 tw.broadcast(TermWin::pointer_event(
                     &target,
                     hl_extension::PointerPhase::Enter,
@@ -715,7 +736,9 @@ impl Window {
         {
             let tw = tw.clone();
             clicks.connect_pressed(move |gesture, _, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 tw.broadcast(TermWin::pointer_event(
                     &target,
                     hl_extension::PointerPhase::Press,
@@ -729,7 +752,9 @@ impl Window {
         {
             let tw = tw.clone();
             clicks.connect_released(move |gesture, _, x, y| {
-                let Some(target) = TermWin::pointer_target(&tw, x, y) else { return };
+                let Some(target) = TermWin::pointer_target(&tw, x, y) else {
+                    return;
+                };
                 let button = gesture.current_button();
                 tw.broadcast(TermWin::pointer_event(
                     &target,
@@ -835,16 +860,26 @@ impl Window {
                 PaneView::new(&tw, &t).split(o);
             }
         }
-        // Debug: HL_TERM_OVERVIEW selects the overview (first) tab for screenshotting.
-        if AppConfig::get().overview {
-            let first = tw.entries.borrow().first().map(|e| e.name.clone());
-            if let Some(n) = first {
-                Page::new(&tw, &n).select();
-            }
+        // Top is the workspace's home surface. Session restoration may select
+        // its last shell as a side effect, so restore focus to the first,
+        // non-persisted overview tab once every saved tab has been rebuilt.
+        let first = tw.entries.borrow().first().map(|e| e.name.clone());
+        if let Some(n) = first {
+            Page::new(&tw, &n).select();
         }
 
         window.set_child(Some(&root));
         window.present();
+        // A restored VTE can claim the visible stack page while it is first
+        // mapped. Reassert the home tab after that mapping turn so opening a
+        // workspace consistently lands in Top, independent of saved shells.
+        let home = Rc::clone(&tw);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+            let first = home.entries.borrow().first().map(|entry| entry.name.clone());
+            if let Some(name) = first {
+                Page::new(&home, &name).select();
+            }
+        });
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
         Screenshot::schedule_resize(&window);
@@ -979,14 +1014,23 @@ mod workspace_event_identity_tests {
 
     #[test]
     fn focused_terminal_identity_is_reported_and_search_focus_is_explicitly_absent() {
-        assert!(crate::test_support::on_the_toolkit_thread(|| {
-            let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
-            let tw = Window::bench(&workspace);
-            let terminal = vte4::Terminal::new();
-            Slots::new(&tw).hold(&terminal, "pane-stable".into());
-            assert_eq!(TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())), (Some("pane-stable".into()), Some(0)));
+        assert!(
+            crate::test_support::on_the_toolkit_thread(|| {
+                let workspace = WorkspaceConfig::new("event-identity", "offline.invalid", hl_ws::Arch::Amd64);
+                let tw = Window::bench(&workspace);
+                let terminal = vte4::Terminal::new();
+                Slots::new(&tw).hold(&terminal, "pane-stable".into());
+                assert_eq!(
+                    TermWin::focused_event_identity(&tw, Some(terminal.clone().upcast())),
+                    (Some("pane-stable".into()), Some(0))
+                );
 
-            assert_eq!(TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())), (None, None));
-        }), "workspace event identity requires an Xvfb display");
+                assert_eq!(
+                    TermWin::focused_event_identity(&tw, Some(tw.search.entry.clone().upcast())),
+                    (None, None)
+                );
+            }),
+            "workspace event identity requires an Xvfb display"
+        );
     }
 }

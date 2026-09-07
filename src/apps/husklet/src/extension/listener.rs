@@ -381,6 +381,7 @@ mod tests {
                 reference: "extension:1".to_owned(),
                 digest: "sha256:aaaa".to_owned(),
                 entrypoint: vec!["/usr/bin/extension".to_owned()],
+                command: Vec::new(),
                 user: "1000:1000".to_owned(),
             },
             socket,

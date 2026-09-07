@@ -48,6 +48,10 @@ fn lines() -> gtk::Box {
 fn button() -> gtk::Button {
     let widget = axis::item();
     widget.set_hexpand(true);
+    let label = slot::caption_label();
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_hexpand(true);
+    widget.set_child(Some(&label));
     widget
 }
 

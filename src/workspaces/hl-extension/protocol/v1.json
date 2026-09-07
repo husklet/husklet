@@ -5,6 +5,7 @@
     "pane_input_bytes": 65536,
     "pane_inventory_items": 512,
     "pane_text_bytes": 524288,
+    "resource_inventory_items": 256,
     "semantic_action_value_bytes": 4096,
     "semantic_depth": 32,
     "semantic_nodes": 256,
@@ -1604,6 +1605,30 @@
       "kind": "struct",
       "serde": {}
     },
+    "ImageInventory": {
+      "fields": [
+        {
+          "name": "images",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSummary"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ImagePruneResult": {
       "fields": [
         {
@@ -2046,6 +2071,30 @@
           }
         }
       ]
+    },
+    "NetworkInventory": {
+      "fields": [
+        {
+          "name": "networks",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "NetworkSummary"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "NetworkSummary": {
       "fields": [
@@ -3861,6 +3910,13 @@
           }
         },
         {
+          "name": "pinned",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "panes",
           "optional": false,
           "schema": {
@@ -3889,6 +3945,13 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "pinned",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
           }
         },
         {
@@ -5368,6 +5431,30 @@
       },
       "serde": {}
     },
+    "VolumeInventory": {
+      "fields": [
+        {
+          "name": "volumes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "VolumeSummary"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "VolumeSummary": {
       "fields": [
         {
@@ -6352,6 +6439,10 @@
     },
     {
       "capability": "terminals:control",
+      "request": "terminal_pin_tab"
+    },
+    {
+      "capability": "terminals:control",
       "request": "terminal_split"
     },
     {
@@ -6769,6 +6860,10 @@
       "request": "terminal_open_tab"
     },
     {
+      "reply": "done",
+      "request": "terminal_pin_tab"
+    },
+    {
       "reply": "identity",
       "request": "terminal_split"
     },
@@ -7173,11 +7268,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "ImageSummary"
-              }
+              "kind": "ref",
+              "name": "ImageInventory"
             }
           }
         },
@@ -7236,11 +7328,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "VolumeSummary"
-              }
+              "kind": "ref",
+              "name": "VolumeInventory"
             }
           }
         },
@@ -7259,11 +7348,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "NetworkSummary"
-              }
+              "kind": "ref",
+              "name": "NetworkInventory"
             }
           }
         },
@@ -8491,6 +8577,28 @@
           }
         },
         {
+          "name": "terminal_pin_tab",
+          "payload": {
+            "fields": [
+              {
+                "name": "tab",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "pinned",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "terminal_split",
           "payload": {
             "fields": [
@@ -9638,11 +9746,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "ImageSummary"
-              }
+              "kind": "ref",
+              "name": "ImageInventory"
             }
           }
         },
@@ -9661,11 +9766,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "VolumeSummary"
-              }
+              "kind": "ref",
+              "name": "VolumeInventory"
             }
           }
         },
@@ -9674,11 +9776,8 @@
           "payload": {
             "kind": "newtype",
             "of": {
-              "kind": "array",
-              "of": {
-                "kind": "ref",
-                "name": "NetworkSummary"
-              }
+              "kind": "ref",
+              "name": "NetworkInventory"
             }
           }
         },
@@ -10629,7 +10728,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:697cd96ca3fcf691",
+  "source_fingerprint": "fnv1a64:a5f890d044ca5186",
   "specification_version": 1,
   "topics": [
     {

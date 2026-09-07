@@ -39,7 +39,7 @@ allowed = [
     "todo.md",
     # An extension package is published on its own; its readme is how anyone
     # depending on it learns the interface.
-    "packages/react/README.md",
+    "extensions/base/react/README.md",
     "extensions/storybook/README.md",
 ]
 examples = ["lint/examples/negative.md", "lint/examples/positive.md"]

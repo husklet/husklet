@@ -21,6 +21,7 @@ const REPORT_LIMIT: usize = 1024;
 pub struct Reports {
     queue: Rc<RefCell<VecDeque<Event>>>,
     authorities: Rc<RefCell<HashMap<(NodeId, Trigger), EventId>>>,
+    choices: Rc<RefCell<HashMap<NodeId, Vec<String>>>>,
 }
 
 impl Reports {
@@ -65,6 +66,21 @@ impl Reports {
             event_authority(event)
                 .is_none_or(|(held, kind)| held != node || trigger.is_some_and(|wanted| wanted != kind))
         });
+        if trigger.is_none() {
+            self.choices.borrow_mut().remove(&node);
+        }
+    }
+
+    pub(crate) fn set_choices(&self, node: NodeId, values: Vec<String>) {
+        self.choices.borrow_mut().insert(node, values);
+    }
+
+    fn choice(&self, node: NodeId, index: u32) -> Option<String> {
+        self.choices
+            .borrow()
+            .get(&node)?
+            .get(usize::try_from(index).ok()?)
+            .cloned()
     }
 
     /// Takes everything reported since the previous drain.
@@ -342,12 +358,26 @@ fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
 /// editable too, and connecting both would report the same keystroke twice —
 /// once as the number it now stands at and once as the text showing it.
 fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) {
+    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) || color(widget, node, slot, reports) {
         return;
     }
     entry(widget, node, slot, reports);
     text_view(widget, node, slot, reports);
     scale(widget, node, slot, reports);
+}
+
+fn color(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else { return false };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    picker.connect_rgba_notify(move |picker| {
+        identified(&reports, &slot, |id| Event::Change {
+            node,
+            id,
+            value: PropValue::text(crate::component::field::color_value(&picker.rgba())),
+        });
+    });
+    true
 }
 
 fn text_view(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
@@ -688,10 +718,13 @@ fn chosen(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) ->
         let Some(id) = slot.id() else {
             return;
         };
+        let selected = drop.selected();
         reports.push(Event::Change {
             node,
             id,
-            value: PropValue::Integer(i64::from(drop.selected())),
+            value: reports
+                .choice(node, selected)
+                .map_or(PropValue::Nothing, PropValue::text),
         });
     });
     true

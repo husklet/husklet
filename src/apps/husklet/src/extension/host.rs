@@ -50,9 +50,17 @@ pub const EVENTS: ChannelId = ChannelId::new(3);
 /// visible as lag on a click.
 const POLL: Duration = Duration::from_millis(20);
 
+/// How often startup asks the daemon whether a sidecar that has not connected
+/// is still alive. Container inspection is local but not free, so it should not
+/// run at the UI pump's 20 ms cadence.
+const HEALTH_POLL: Duration = Duration::from_millis(200);
+
 /// The longest a connected extension may hold a sidecar without producing its
 /// first interface frame.
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+// Cold translated JavaScript must load Node, React, and the renderer before it
+// can answer the greeting. Process-exit polling still reports real crashes
+// immediately, while this bound gives a healthy first generation room to boot.
+const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What is shown when the workspace has no extension installed.
 ///
@@ -181,7 +189,9 @@ impl WeakEvents {
     /// Observes while the subscribed Host still owns the queue.
     /// Returns false once the observer is stale so callers can prune it.
     pub fn observe(&self, event: hl_extension::WorkspaceEvent) -> bool {
-        let Some(events) = self.inner.upgrade() else { return false };
+        let Some(events) = self.inner.upgrade() else {
+            return false;
+        };
         Events { inner: events }.observe(event);
         true
     }
@@ -233,7 +243,10 @@ mod event_buffer_tests {
         events.observe(press.clone());
         events.observe(motion(4.0));
 
-        assert_eq!(events.drain().unwrap().events, vec![motion(1.0), other, press, motion(4.0)]);
+        assert_eq!(
+            events.drain().unwrap().events,
+            vec![motion(1.0), other, press, motion(4.0)]
+        );
     }
 
     #[test]
@@ -372,10 +385,18 @@ pub trait Supply: Send + Sync + 'static {
     /// How long a newly connected generation may take to draw its first frame.
     ///
     /// Supplies normally use the product deadline. The hook exists so the
-    /// socket lifecycle can be tested deterministically without a ten-second
+    /// socket lifecycle can be tested deterministically without a production
     /// sleep.
     fn ready_timeout(&self) -> Duration {
         READY_TIMEOUT
+    }
+
+    /// Reports a sidecar that stopped before opening a conversation.
+    ///
+    /// `None` means it is still viable. Supplies without a supervised process
+    /// need no health source and keep the default.
+    fn startup_failure(&self, _plan: &Plan) -> Result<Option<String>, String> {
+        Ok(None)
     }
 
     /// Takes the extension's container down.
@@ -570,6 +591,7 @@ impl Hall {
 
     /// Says why the extension stopped, once, to both the page and the standing.
     fn loss(&self, reason: String) {
+        hl_log::hl_error!(hl_log::tag::RUNTIME, "extension host stopped: {reason}");
         self.stand(Standing::Loss(reason.clone()));
         self.deliver(Report::Loss(reason));
     }
@@ -754,7 +776,9 @@ fn session<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) -> Passage {
     }
     hall.duty();
     let extension = plan.record.name.to_string();
-    let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension);
+    let passage = pump(hall, &queue, &voice, &ended, supply.ready_timeout(), &extension, || {
+        supply.startup_failure(plan)
+    });
     if matches!(passage, Passage::Unready(_)) {
         // Stop the process before joining the conversation that process owns;
         // reversing this order can make listener teardown wait on a peer that
@@ -826,8 +850,10 @@ fn pump(
     ended: &mpsc::Receiver<String>,
     ready_timeout: Duration,
     extension: &str,
+    mut startup_failure: impl FnMut() -> Result<Option<String>, String>,
 ) -> Passage {
     let ready_deadline = Instant::now() + ready_timeout;
+    let mut health_deadline = Instant::now();
     let mut ready = false;
     loop {
         ready |= collect(hall, queue);
@@ -839,6 +865,13 @@ fn pump(
             // shown rather than lost to the ending.
             collect(hall, queue);
             return Passage::End(reason);
+        }
+        if !ready && Instant::now() >= health_deadline {
+            match startup_failure() {
+                Ok(Some(reason)) | Err(reason) => return Passage::Unready(reason),
+                Ok(None) => (),
+            }
+            health_deadline = Instant::now() + HEALTH_POLL;
         }
         if !ready && Instant::now() >= ready_deadline {
             return Passage::Unready(format!(
@@ -896,6 +929,16 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const REFERENCE_SOCKET: &str = "HUSKLET_TEST_REFERENCE_SOCKET";
+    const REFERENCE_MANIFEST: &str = r#"
+name = "sample"
+display_name = "Protocol fixture"
+version = "0.1.0"
+protocol = 1
+capabilities = ["interface:render"]
+
+[interface]
+tab_title = "Sample"
+"#;
 
     /// The source the fake extension's table draws from.
     const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
@@ -1122,6 +1165,7 @@ mod tests {
                 reference: "extension:1".to_owned(),
                 digest: "sha256:aaaa".to_owned(),
                 entrypoint: vec!["/usr/bin/extension".to_owned()],
+                command: Vec::new(),
                 user: "1000:1000".to_owned(),
             },
             socket,
@@ -1154,6 +1198,7 @@ mod tests {
         peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
         token: Arc<()>,
         ready_timeout: Duration,
+        startup_failure: Option<String>,
         halts: AtomicUsize,
         live: Arc<Mutex<Vec<UnixStream>>>,
     }
@@ -1169,6 +1214,7 @@ mod tests {
                 peers: Mutex::new(Vec::new()),
                 token: Arc::clone(token),
                 ready_timeout: READY_TIMEOUT,
+                startup_failure: None,
                 halts: AtomicUsize::new(0),
                 live: Arc::new(Mutex::new(Vec::new())),
             }
@@ -1176,6 +1222,11 @@ mod tests {
 
         fn with_ready_timeout(mut self, ready_timeout: Duration) -> Self {
             self.ready_timeout = ready_timeout;
+            self
+        }
+
+        fn with_startup_failure(mut self, reason: &str) -> Self {
+            self.startup_failure = Some(reason.to_owned());
             self
         }
 
@@ -1233,6 +1284,10 @@ mod tests {
 
         fn ready_timeout(&self) -> Duration {
             self.ready_timeout
+        }
+
+        fn startup_failure(&self, _plan: &Plan) -> Result<Option<String>, String> {
+            Ok(self.startup_failure.clone())
         }
 
         fn halt(&self, _plan: &Plan) {
@@ -1341,7 +1396,7 @@ mod tests {
             let child = Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
                 .args([
                     "--exact",
-                    "extension::host::tests::reference_extension_sidecar_process",
+                    "extension::host::tests::protocol_sidecar_process",
                     "--ignored",
                     "--nocapture",
                 ])
@@ -1391,20 +1446,24 @@ mod tests {
 
     #[test]
     #[ignore = "subprocess entrypoint for the reference-sidecar lifecycle test"]
-    fn reference_extension_sidecar_process() {
+    fn protocol_sidecar_process() {
         let socket = PathBuf::from(std::env::var(REFERENCE_SOCKET).expect("reference socket"));
         let stream = connect(&socket).expect("host listener");
-        extension::serve(stream, extension::Extension::new()).expect("reference extension session");
+        let mut wire = Wire::new(stream);
+        shake(&mut wire).expect("protocol handshake");
+        describe(&mut wire, 1).expect("interface description");
+        answer(&mut wire);
     }
 
     #[test]
     fn a_roster_enabled_reference_extension_runs_as_a_real_host_sidecar_process() {
         let storage = tempfile::TempDir::new().expect("storage");
         let directory = hl_ws::storage::Directory::open(storage.path()).expect("directory");
-        let manifest = extension::manifest().expect("reference manifest");
+        let manifest = Manifest::parse(REFERENCE_MANIFEST, PROTOCOL).expect("reference manifest");
+        let requested = Grant::new([Capability::Interface]);
         let mut roster = Roster::open(directory).expect("roster");
         roster
-            .register(&manifest, "sha256:reference", &extension::requested(), 1)
+            .register(&manifest, "sha256:reference", &requested, 1)
             .expect("installed with consent");
         roster.enable(&manifest.name).expect("enabled");
         let record = roster
@@ -1419,6 +1478,7 @@ mod tests {
                 reference: record.image_digest.clone(),
                 digest: record.image_digest.clone(),
                 entrypoint: Vec::new(),
+                command: Vec::new(),
                 user: String::new(),
             },
             socket_root.path().join("reference.sock"),
@@ -1645,6 +1705,32 @@ mod tests {
 
         host.close().expect("closed");
         assert!(!socket.exists(), "closing retires the replacement socket");
+    }
+
+    #[test]
+    fn a_sidecar_crash_is_reported_instead_of_waiting_for_the_render_timeout() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let token = Arc::new(());
+        let gallery = Gallery::default();
+        let bench = Bench::new(&socket, &[], &token)
+            .with_ready_timeout(Duration::from_secs(2))
+            .with_startup_failure("top stopped before rendering its first interface: terminated by signal 11");
+        let host = Host::open(bench, gallery.audience());
+
+        assert!(
+            until(|| gallery
+                .losses()
+                .iter()
+                .any(|loss| loss.contains("terminated by signal 11"))),
+            "the durable container result becomes the visible failure"
+        );
+        assert!(
+            gallery.losses().iter().all(|loss| !loss.contains("did not render")),
+            "the generic deadline must not hide a known process exit"
+        );
+
+        host.close().expect("closed");
     }
 
     #[test]

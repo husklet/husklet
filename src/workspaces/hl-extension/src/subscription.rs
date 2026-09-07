@@ -5,10 +5,7 @@
 
 use hl_rpc::Coding;
 
-use crate::port::{
-    ContainerSummary, ExecutionList, ExtensionSummary, ImagePullChange, ImageSummary, NetworkSummary, TabSummary,
-    VolumeSummary,
-};
+use crate::port::{ContainerSummary, ExecutionList, ExtensionSummary, ImagePullChange, TabSummary};
 use crate::request::Topic;
 
 /// What produced a pane notification. Contents remain behind their separate
@@ -147,10 +144,10 @@ pub enum Snapshot {
     Containers(Vec<ContainerSummary>),
     ContainerInventory(ContainerInventory),
     Executions(ExecutionList),
-    Images(Vec<ImageSummary>),
+    Images(crate::port::ImageInventory),
     ImagePulls(ImagePullChange),
-    Volumes(Vec<VolumeSummary>),
-    Networks(Vec<NetworkSummary>),
+    Volumes(crate::port::VolumeInventory),
+    Networks(crate::port::NetworkInventory),
     Terminal(Vec<TabSummary>),
     PaneChanges(PaneChange),
     Extensions(Vec<ExtensionSummary>),
@@ -217,9 +214,9 @@ mod tests {
     #[test]
     fn a_listing_names_the_topic_it_belongs_to() {
         assert_eq!(Snapshot::Containers(Vec::new()).topic(), Topic::Containers);
-        assert_eq!(Snapshot::Images(Vec::new()).topic(), Topic::Images);
-        assert_eq!(Snapshot::Volumes(Vec::new()).topic(), Topic::Volumes);
-        assert_eq!(Snapshot::Networks(Vec::new()).topic(), Topic::Networks);
+        assert_eq!(Snapshot::Images(crate::port::ImageInventory::bounded(Vec::new())).topic(), Topic::Images);
+        assert_eq!(Snapshot::Volumes(crate::port::VolumeInventory::bounded(Vec::new())).topic(), Topic::Volumes);
+        assert_eq!(Snapshot::Networks(crate::port::NetworkInventory::bounded(Vec::new())).topic(), Topic::Networks);
         assert_eq!(Snapshot::Terminal(Vec::new()).topic(), Topic::Terminal);
         assert_eq!(Snapshot::Extensions(Vec::new()).topic(), Topic::Extensions);
         let acquisition = Snapshot::ExtensionAcquisitions(ExtensionAcquisitionChange {

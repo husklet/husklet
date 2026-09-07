@@ -7,7 +7,9 @@ import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from '../dist/term
 import { host } from './host.js';
 
 function labels(patches) {
-  return patches.filter((patch) => patch.SetProp?.prop === 'Label').map((patch) => patch.SetProp.value.Text);
+  return patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
 }
 
 test('terminal transcript story composes a selectable cursor-bearing bounded inspection flow', () => {
@@ -17,7 +19,11 @@ test('terminal transcript story composes a selectable cursor-bearing bounded ins
   assert.ok(text.some((label) => label.includes('422 12:04:08.415 $ ▉')));
   assert.ok(text.some((label) => label.includes('413 earlier lines omitted')));
   assert.ok(text.includes('Copy visible'));
-  assert.ok(frame.patches.some((patch) => patch.SetProp?.prop === 'Destructive' && patch.SetProp.value.Flag));
+  assert.ok(
+    frame.patches.some(
+      (patch) => patch.SetProp?.prop === 'Destructive' && patch.SetProp.value.Flag,
+    ),
+  );
 
   const browser = host();
   const catalogue = browser.render(h(Playground));

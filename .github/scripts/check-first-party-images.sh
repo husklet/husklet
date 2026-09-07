@@ -20,11 +20,11 @@ expect_literal .dockerignore 'node_modules'
 expect_literal .dockerignore '**/node_modules'
 expect_literal .dockerignore 'npm-debug.log*'
 expect_literal .dockerignore '**/npm-debug.log*'
-expect_literal extensions/base/Dockerfile 'ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32'
+expect_literal extensions/base/Dockerfile 'ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5'
 expect_literal extensions/base/Dockerfile 'ARG NODE_VERSION=22.23.2'
 expect_literal extensions/base/Dockerfile 'ARG NPM_VERSION=10.9.8'
 expect_literal extensions/base/Dockerfile 'COPY extensions/base/package.json extensions/base/package-lock.json ./'
-expect_literal extensions/base/Dockerfile '    && npm install --global --ignore-scripts --no-audit --no-fund \'
+expect_literal extensions/base/Dockerfile 'RUN npm install --global --ignore-scripts --no-audit --no-fund \'
 expect_literal extensions/base/Dockerfile '    && ln -s "$(npm root --global)/@husklet/client" node_modules/@husklet/client \'
 expect_literal extensions/base/Dockerfile '    && ln -s "$(npm root --global)/@husklet/react" node_modules/@husklet/react \'
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
@@ -34,6 +34,8 @@ expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.npm.version="
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
 expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
+expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Cmd}}'"'"')" == '"'"'["node","/app/dist/main.js"]'"'"' ]] \'
+expect_literal .github/scripts/smoke-extension-image.sh '      if (!fs.statSync("/app/dist/main.js").isFile()) throw new Error("entrypoint missing");'
 
 node -e '
   const fs = require("node:fs");
@@ -48,7 +50,7 @@ node -e '
       if (entry[field] !== undefined) throw new Error(`${name} restricts ${field}; the React base must run unchanged on amd64 and arm64`);
     }
     if (entry.hasInstallScript || entry.gypfile) {
-      throw new Error(`${name} requires native or lifecycle installation despite the base image using npm ci --ignore-scripts`);
+      throw new Error(`${name} requires native or lifecycle installation despite the base image using npm install --ignore-scripts`);
     }
   }
 ' "$root"
@@ -57,8 +59,8 @@ workflow="$root/.github/workflows/release.yml"
 node -e '
   const fs = require("node:fs");
   const workflow = fs.readFileSync(process.argv[1], "utf8");
-  const job = workflow.match(/^  react-extension-base:\n(?<body>[\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n)/m)?.groups.body;
-  if (!job) throw new Error("release lacks react-extension-base job");
+  const job = workflow.match(/^  extension-base:\n(?<body>[\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n)/m)?.groups.body;
+  if (!job) throw new Error("release lacks extension-base job");
   const needs = job.match(/^    needs: \[(?<jobs>[^\]]+)\]$/m)?.groups.jobs.split(",").map((item) => item.trim()) ?? [];
   if (!needs.includes("react-package")) throw new Error("React base publication must wait for the exact published npm package pair");
 ' "$workflow"
@@ -71,22 +73,24 @@ node -e '
 [[ "$(grep -Fc '.github/scripts/verify-published-extension-image.sh' "$workflow")" == 2 ]] \
   || fail "release must verify both published multi-architecture registry manifests"
 
-for extension in extensions storybook top workspace; do
+for extension in storybook top; do
   dockerfile="extensions/$extension/Dockerfile"
   manifest="extensions/$extension/extension.toml"
 
-  expect_literal "$dockerfile" 'ARG HUSKLET_REACT_IMAGE'
+  expect_literal "$dockerfile" 'ARG HUSKLET_BASE_IMAGE'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
-  expect_literal "$dockerfile" 'FROM ${HUSKLET_REACT_IMAGE}'
+  expect_literal "$dockerfile" 'FROM ${HUSKLET_BASE_IMAGE}'
   expect_literal "$dockerfile" 'ARG HUSKLET_EXTENSION_VERSION'
   expect_literal "$dockerfile" 'ARG HUSKLET_REACT_VERSION'
+  expect_literal "$dockerfile" 'ENTRYPOINT ["/usr/local/bin/node"]'
+  expect_literal "$dockerfile" 'CMD ["/app/dist/main.js"]'
   expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/client/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" '    && test "$(node -p "require('"'"'@husklet/react/package.json'"'"').version")" = "${HUSKLET_REACT_VERSION}" \'
   expect_literal "$dockerfile" 'LABEL husklet.extension.manifest="/etc/husklet/extension.toml"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.version="${HUSKLET_EXTENSION_VERSION}"'
   # shellcheck disable=SC2016 # This is a literal Dockerfile variable reference.
-  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_REACT_IMAGE}"'
+  expect_literal "$dockerfile" 'LABEL org.opencontainers.image.base.name="${HUSKLET_BASE_IMAGE}"'
   expect_literal "$dockerfile" 'LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"'
 
   [[ "$(sed -n 's/^name = "\([^"]*\)"$/\1/p' "$root/$manifest")" == "$extension" ]] \

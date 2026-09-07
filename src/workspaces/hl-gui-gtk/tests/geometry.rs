@@ -107,13 +107,41 @@ fn geometry_is_what_the_description_asked_for() {
     a_removed_child_closes_the_hole_it_left();
     a_wrapping_row_moves_a_child_onto_a_second_line();
     a_wrapping_row_shares_spare_width_between_growing_children();
+    a_wrapping_row_gives_a_growing_child_the_available_height();
     every_wrapped_line_distributes_its_own_spare_width();
     a_wrapping_column_shares_spare_height_between_growing_children();
     a_wrapping_row_follows_right_to_left_order();
     padding_lands_on_the_side_it_names();
     alignment_follows_the_axis_of_its_container();
     a_size_range_becomes_a_floor_the_toolkit_honours();
+    a_character_width_applies_to_a_scrolling_container();
+    a_list_button_ellipsizes_from_its_reading_edge();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
+}
+
+fn a_character_width_applies_to_a_scrolling_container() {
+    let mut stage = Stage::new();
+    let list = stage.producer.create(Tag::List);
+    stage.producer.set(list, Prop::Width, PropValue::Length(Length::Chars(26)));
+    stage.producer.append(NodeId::ROOT, list);
+    stage.draw();
+
+    let widget = stage.tagged(Tag::List);
+    let (minimum, _, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    assert!(minimum >= 130, "26 character navigation collapsed to {minimum}px");
+}
+
+fn a_list_button_ellipsizes_from_its_reading_edge() {
+    let mut stage = Stage::new();
+    let item = stage.producer.create(Tag::ListItemButton);
+    stage.producer.set(item, Prop::Label, PropValue::text("A deliberately long navigation destination"));
+    stage.producer.append(NodeId::ROOT, item);
+    stage.draw();
+
+    let button = stage.tagged(Tag::ListItemButton).downcast::<gtk::Button>().expect("list item is a button");
+    let label = button.child().and_then(|child| child.downcast::<gtk::Label>().ok()).expect("list item owns its label");
+    assert_eq!(label.xalign(), 0.0);
+    assert_eq!(label.ellipsize(), gtk::pango::EllipsizeMode::End);
 }
 
 /// Storybook's catalogue and inspector are scrolling panes. They must share the
@@ -295,6 +323,23 @@ fn a_wrapping_row_shares_spare_width_between_growing_children() {
     assert_eq!(panes[1].width(), 300);
 }
 
+/// A wrapping row is still a full two-dimensional container. A child that
+/// grows vertically must receive the host height, not the line's natural
+/// height; otherwise full-height panes collapse to their headings.
+fn a_wrapping_row_gives_a_growing_child_the_available_height() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    let pane = stage.producer.create(Tag::Scroll);
+    stage.producer.set(pane, Prop::Height, PropValue::Length(Length::Fill));
+    stage.producer.append(row, pane);
+    stage.draw();
+    stage.allocate(600, 400);
+
+    assert_eq!(stage.tagged(Tag::Scroll).height(), 400);
+}
+
 fn every_wrapped_line_distributes_its_own_spare_width() {
     let mut stage = Stage::new();
     let row = stage.producer.create(Tag::Row);
@@ -348,8 +393,16 @@ fn a_wrapping_row_follows_right_to_left_order() {
     stage.allocate(100, 100);
 
     let children = offspring(&widget);
-    assert_eq!(children[0].allocation().x(), 52, "the first child starts at the right edge");
-    assert_eq!(children[1].allocation().x(), 4, "the second child follows toward the left");
+    assert_eq!(
+        children[0].allocation().x(),
+        52,
+        "the first child starts at the right edge"
+    );
+    assert_eq!(
+        children[1].allocation().x(),
+        4,
+        "the second child follows toward the left"
+    );
 }
 
 /// One property, four sides, each landing where it was named.

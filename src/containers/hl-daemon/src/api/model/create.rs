@@ -21,6 +21,12 @@ pub struct CreateContainer {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    #[serde(
+        default,
+        rename = "HuskletExecution",
+        skip_serializing_if = "CreateExecution::is_auto"
+    )]
+    pub execution: CreateExecution,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_signal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,6 +47,24 @@ pub struct CreateContainer {
     pub networking_config: Option<NetworkingConfig>,
     #[serde(flatten, default)]
     pub unsupported: BTreeMap<String, serde_json::Value>,
+}
+
+/// Husklet-specific initial-process backend selection.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreateExecution {
+    #[default]
+    Auto,
+    Interpreted,
+    Translit,
+    Native,
+}
+
+impl CreateExecution {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
 }
 
 /// Docker create-time network endpoint selection.

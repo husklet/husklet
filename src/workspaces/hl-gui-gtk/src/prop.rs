@@ -11,6 +11,7 @@ use crate::text;
 pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropValue, reports: &crate::event::Reports) {
     match prop {
         Prop::Label => text::caption(widget, node.tag, value),
+        Prop::Value if node.tag == Tag::Select => select_value(widget, node),
         Prop::Value => text::body(widget, node.tag, value),
         Prop::Detail => text::detail(widget, value),
         Prop::Help | Prop::Tooltip => tooltip(widget, value),
@@ -41,7 +42,7 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Position => position(widget, value),
         Prop::Minimum | Prop::Maximum | Prop::Step => range(widget, prop, value),
         Prop::Fraction => fraction(widget, value),
-        Prop::Choices => choices(widget, value),
+        Prop::Choices => choices(widget, node, value, reports),
         Prop::Columns => columns(widget, value),
         Prop::Schema | Prop::Source | Prop::RowHeight => {
             crate::collection::configure(widget, node, prop, value, reports);
@@ -237,7 +238,17 @@ fn characters(widget: &gtk::Widget, count: u16) {
     }
     if let Some(label) = widget.downcast_ref::<gtk::Label>() {
         label.set_width_chars(count.into());
+        return;
     }
+    // Containers and scrolling views do not expose `width-chars`, but Chars is
+    // a universal layout value. Resolve it through the widget's actual font so
+    // a 26-character navigation pane does not silently collapse to a few pixels.
+    let units = widget.pango_context().metrics(None, None).approximate_char_width();
+    let pixels = units
+        .saturating_mul(i32::from(count))
+        .saturating_add(gtk::pango::SCALE - 1)
+        / gtk::pango::SCALE;
+    widget.set_size_request(pixels.max(1), widget.height_request());
 }
 
 /// A floor and a ceiling on one axis.
@@ -368,16 +379,41 @@ fn fraction(widget: &gtk::Widget, value: &PropValue) {
     }
 }
 
-fn choices(widget: &gtk::Widget, value: &PropValue) {
+fn choices(widget: &gtk::Widget, node: &Node, value: &PropValue, reports: &crate::event::Reports) {
     let PropValue::Choices(choices) = value else {
+        reports.set_choices(node.id, Vec::new());
+        if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
+            drop.set_model(Some(&gtk::StringList::new(&[])));
+        }
         return;
     };
+    reports.set_choices(node.id, choices.iter().map(|choice| choice.value.clone()).collect());
     let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
     if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
         drop.set_model(Some(&gtk::StringList::new(&labels)));
+        select_value(widget, node);
         return;
     }
     radios(widget, &labels);
+}
+
+/// Selects the option whose stable producer value matches `value`.
+///
+/// GTK's model displays labels while Husklet's retained value is deliberately
+/// independent of those labels, so changing copy cannot change application state.
+fn select_value(widget: &gtk::Widget, node: &Node) {
+    let Some(drop) = widget.downcast_ref::<gtk::DropDown>() else {
+        return;
+    };
+    let wanted = node.prop(Prop::Value).and_then(PropValue::as_text);
+    let Some(PropValue::Choices(choices)) = node.prop(Prop::Choices) else {
+        return;
+    };
+    let selected = wanted
+        .and_then(|wanted| choices.iter().position(|choice| choice.value == wanted))
+        .and_then(|index| u32::try_from(index).ok())
+        .unwrap_or(gtk::INVALID_LIST_POSITION);
+    drop.set_selected(selected);
 }
 
 fn radios(widget: &gtk::Widget, labels: &[&str]) {

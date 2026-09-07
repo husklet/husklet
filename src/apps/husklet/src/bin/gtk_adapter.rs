@@ -310,10 +310,6 @@ impl ColorPicker {
         }
     }
 
-    pub fn connect_value_changed(&self, listener: impl Fn(&str) + 'static) {
-        self.changed.borrow_mut().push(Rc::new(listener));
-    }
-
     pub fn value(&self) -> String {
         self.stored.borrow().clone()
     }
@@ -399,10 +395,6 @@ impl FontPicker {
         for listener in self.changed.borrow().iter() {
             listener(family);
         }
-    }
-
-    pub fn connect_value_changed(&self, listener: impl Fn(&str) + 'static) {
-        self.changed.borrow_mut().push(Rc::new(listener));
     }
 
     pub fn value(&self) -> String {

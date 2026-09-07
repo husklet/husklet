@@ -6,7 +6,7 @@
 //! are not mixed in one file.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hl_extension::port::{
     Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceConfiguration, WorkspaceControl,
@@ -54,6 +54,10 @@ pub struct Workspace {
     /// which case an extension asking is told so plainly.
     terminal: Option<Arc<dyn TerminalSurface + Send + Sync>>,
     events: super::Events,
+    /// One host speaks to one workspace daemon for its whole lifetime. Reusing
+    /// this bridge keeps startup health observation to a cheap local inspect
+    /// instead of re-entering domain setup on every bounded poll.
+    bridge: Mutex<Option<Arc<Bridge>>>,
 }
 
 impl Workspace {
@@ -65,6 +69,7 @@ impl Workspace {
             wanted: None,
             terminal: None,
             events: super::Events::default(),
+            bridge: Mutex::new(None),
         }
     }
 
@@ -80,6 +85,7 @@ impl Workspace {
             wanted: Some(name.clone()),
             terminal: None,
             events: super::Events::default(),
+            bridge: Mutex::new(None),
         }
     }
 
@@ -104,7 +110,10 @@ impl Workspace {
     /// The socket one extension is given, in a directory of its own so
     /// [`SidecarSpec::prepare`] can confine it without touching anything else.
     fn socket(&self, name: &ExtensionName) -> PathBuf {
-        self.root().join("extensions").join(format!("{name}.sock"))
+        self.root()
+            .join("extensions")
+            .join(name.as_str())
+            .join("extension.sock")
     }
 
     /// The record of the extension that should be running, if there is one.
@@ -142,6 +151,7 @@ impl Workspace {
             reference: record.image_digest.clone(),
             digest: record.image_digest.clone(),
             entrypoint: Vec::new(),
+            command: Vec::new(),
             user: String::new(),
         };
         let spec = SidecarSpec::new(&manifest, &record.granted, &image, supply.socket(name));
@@ -152,9 +162,15 @@ impl Workspace {
 
     /// The workspace's own container daemon, started if it is not up.
     fn bridge(&self) -> Result<Arc<Bridge>, String> {
+        let mut held = self.bridge.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(bridge) = held.as_ref() {
+            return Ok(Arc::clone(bridge));
+        }
         let domain = crate::runtime::domain::Domain::new(&self.config);
         let socket = domain.ensure(&self.config).map_err(|error| error.to_string())?;
-        Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())
+        let bridge = Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())?;
+        held.replace(Arc::clone(&bridge));
+        Ok(bridge)
     }
 
     /// Connects to the workspace daemon only when it is already live.
@@ -220,6 +236,29 @@ impl Supply for Workspace {
             .ensure(&plan.spec)
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    fn startup_failure(&self, plan: &Plan) -> Result<Option<String>, String> {
+        let bridge = self.bridge()?;
+        let client = bridge.client();
+        let container = bridge
+            .wait(client.containers().inspect(plan.spec.container()))
+            .map_err(|error| error.to_string())?;
+        if container.state.activity.running {
+            return Ok(None);
+        }
+        let state = &container.state;
+        let detail = if !state.error.is_empty() {
+            state.error.clone()
+        } else if state.exit_code != 0 {
+            format!("exit code {}", state.exit_code)
+        } else {
+            format!("status {}", state.status)
+        };
+        Ok(Some(format!(
+            "{} stopped before rendering its first interface: {detail}",
+            plan.record.name
+        )))
     }
 
     /// # Errors
@@ -520,7 +559,9 @@ impl WorkspaceControl for Store {
 
     fn adopt(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         if !configuration.generation.is_empty() {
-            return Err(HostError::Conflict("only a generation-less legacy workspace can be adopted".into()));
+            return Err(HostError::Conflict(
+                "only a generation-less legacy workspace can be adopted".into(),
+            ));
         }
         let mut expected = Self::configured(configuration)?;
         expected.generation.clear();
@@ -545,12 +586,12 @@ impl WorkspaceControl for Store {
         if configuration.name != name {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
-        if Self::running(&old) {
+        let mut workspace = Self::configured(configuration)?;
+        if Self::running(&old) && workspace.storage != old.storage {
             return Err(HostError::Conflict(
-                "stop the workspace before changing its configuration".into(),
+                "workspace storage cannot change while the workspace is running".into(),
             ));
         }
-        let mut workspace = Self::configured(configuration)?;
         workspace.generation.clone_from(&old.generation);
         crate::config::WorkspaceStore::load(Self::path())
             .and_then(|mut store| store.upsert_if_generation(generation, workspace.clone()))
@@ -606,8 +647,27 @@ impl WorkspaceControl for Store {
 #[cfg(test)]
 mod workspace_control_tests {
     use hl_extension::port::WorkspaceControl as _;
+    use hl_extension::ExtensionName;
 
-    use super::Store;
+    use super::{Store, Workspace};
+
+    #[test]
+    fn each_extension_gets_one_private_socket_directory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let mut configuration = crate::config::WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        configuration.storage = Some(temporary.path().join("workspace"));
+        let top = ExtensionName::new("top").expect("name");
+        let storybook = ExtensionName::new("storybook").expect("name");
+
+        assert_eq!(
+            Workspace::extension(&configuration, &top).socket(&top),
+            temporary.path().join("workspace/extensions/top/extension.sock")
+        );
+        assert_eq!(
+            Workspace::extension(&configuration, &storybook).socket(&storybook),
+            temporary.path().join("workspace/extensions/storybook/extension.sock")
+        );
+    }
 
     #[test]
     fn extension_configuration_round_trips_every_persisted_core_field() {

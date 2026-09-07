@@ -118,20 +118,31 @@ fn every_composite_field_caption_names_its_editable_widget() {
         let mut session = Session::new();
         let node = session.producer.create(*tag);
         session.producer.append(NodeId::ROOT, node);
-        session.producer.set(node, Prop::Label, PropValue::text("Accessible name"));
+        session
+            .producer
+            .set(node, Prop::Label, PropValue::text("Accessible name"));
         session.flush().unwrap();
         let widgets = session.widgets();
         let caption = widgets
             .iter()
             .find(|candidate| candidate.has_css_class("hl-caption"))
             .and_then(|candidate| candidate.clone().downcast::<gtk::Label>().ok());
-        let focusable = widgets.iter().find(|candidate| candidate.has_css_class("hl-field")).cloned();
-        let (Some(caption), Some(focusable)) = (caption, focusable) else { continue };
+        let focusable = widgets
+            .iter()
+            .find(|candidate| candidate.has_css_class("hl-field"))
+            .cloned();
+        let (Some(caption), Some(focusable)) = (caption, focusable) else {
+            continue;
+        };
         if !focusable.is_focusable() {
             continue;
         }
         let labelled = caption.mnemonic_widget().as_ref() == Some(&focusable);
-        assert!(labelled, "{} draws a caption that does not name its editable GTK widget", tag.as_str());
+        assert!(
+            labelled,
+            "{} draws a caption that does not name its editable GTK widget",
+            tag.as_str()
+        );
         covered.push(*tag);
     }
     assert!(!covered.is_empty(), "catalogue contains composite labelled controls");
@@ -150,18 +161,19 @@ fn query_plan_is_nested_selectable_and_hot() {
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-hot"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::QueryPlanMetric).is_some());
     s.producer.set(n, Prop::Value, PropValue::text("id=j state=normal"));
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-normal"));
-    assert!(!node.has_css_class("query-plan-hot"), "a changed query state retained stale hotspot styling");
+    assert!(
+        !node.has_css_class("query-plan-hot"),
+        "a changed query state retained stale hotspot styling"
+    );
 }
 fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     let mut s = Session::new();
@@ -182,12 +194,10 @@ fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     s.flush().unwrap();
     let node = s.tagged(Tag::DependencyNode).unwrap();
     assert!(node.has_css_class("dependency-conflict"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::DependencyEdge).is_some())
 }
 
@@ -218,12 +228,10 @@ fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
     let phase = session.tagged(Tag::NetworkPhase).unwrap();
     assert!(request.has_css_class("network-failure"));
     assert!(phase.has_css_class("network-phase"));
-    assert!(
-        subtree(&request)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&request)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     let bar = subtree(&phase)
         .into_iter()
         .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
@@ -528,6 +536,13 @@ fn portrait(tag: Tag, prop: Prop, value: Option<&PropValue>) -> String {
     let node = session.producer.create(tag);
     session.producer.append(host, node);
     fill(&mut session, node, tag);
+    if tag == Tag::Select && prop == Prop::Value {
+        session.producer.set(
+            node,
+            Prop::Choices,
+            PropValue::Choices(vec![Choice::new("other", "Other"), Choice::new(CONTENT, "Nginx")]),
+        );
+    }
     if let Some(value) = value {
         session.producer.set(node, prop, value.clone());
     }
@@ -636,6 +651,9 @@ fn shown(value: &gtk::glib::Value) -> String {
 /// property of its own: what a view's buffer holds, and where a control's
 /// adjustment stands.
 fn held(widget: &gtk::Widget) -> String {
+    if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
+        return format!("color {}", color_text(&picker.rgba()));
+    }
     if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
         let buffer = view.buffer();
         return format!(
@@ -652,6 +670,15 @@ fn held(widget: &gtk::Widget) -> String {
         adjustment.upper(),
         adjustment.value(),
         adjustment.step_increment()
+    )
+}
+
+fn color_text(color: &gtk::gdk::RGBA) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (color.red().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.green().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.blue().clamp(0.0, 1.0) * 255.0).round() as u8,
     )
 }
 
@@ -692,6 +719,7 @@ fn offers(prop: Prop) -> Vec<PropValue> {
             PropValue::Number(3.0),
             PropValue::text("2024-03-05"),
             PropValue::text("14:30"),
+            PropValue::text("#336699"),
         ],
         Prop::Icon => vec![PropValue::text(EMBLEM)],
         Prop::Uri => vec![PropValue::text(REFERENCE)],
@@ -791,6 +819,7 @@ enum Aspect {
     Measure,
     Date,
     Time,
+    ColorValue,
 }
 
 /// The text every label-shaped scenario writes, and reads back.
@@ -831,7 +860,7 @@ fn every_tag_honours_the_property_it_is_for() {
 fn asked(aspect: Aspect) -> Prop {
     match aspect {
         Aspect::Label => Prop::Label,
-        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time => Prop::Value,
+        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time | Aspect::ColorValue => Prop::Value,
         Aspect::Revealed => Prop::Expanded,
         Aspect::Icon => Prop::Icon,
         Aspect::Uri => Prop::Uri,
@@ -866,6 +895,7 @@ fn written(aspect: Aspect) -> PropValue {
         Aspect::Measure => PropValue::Length(Length::Step(4)),
         Aspect::Date => PropValue::text("2024-03-05"),
         Aspect::Time => PropValue::text("14:30"),
+        Aspect::ColorValue => PropValue::text("#336699"),
     }
 }
 
@@ -888,6 +918,8 @@ fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
         Aspect::Measure => widget.size_request().0 == 16,
         Aspect::Date => dated(widget),
         Aspect::Time => timed(widget),
+        Aspect::ColorValue => widget.downcast_ref::<gtk::ColorDialogButton>()
+            .is_some_and(|picker| color_text(&picker.rgba()) == "#336699"),
     }
 }
 
@@ -1102,7 +1134,8 @@ fn principal(tag: Tag) -> Aspect {
         Tag::DrawerPanel => Aspect::Revealed,
         Tag::Rating => Aspect::Stars,
         Tag::TablePagination => Aspect::Value,
-        Tag::Popover | Tag::ContextMenu | Tag::ColorPicker => Aspect::Grow,
+        Tag::Popover | Tag::ContextMenu => Aspect::Grow,
+        Tag::ColorPicker => Aspect::ColorValue,
         Tag::AvatarGroup => Aspect::Gap,
         Tag::Icon | Tag::IconButton | Tag::Fab | Tag::SpeedDial | Tag::Overflow => Aspect::Icon,
         Tag::ListItemIcon | Tag::StepIcon => Aspect::Icon,
@@ -1278,16 +1311,12 @@ fn stack_frames_keep_selectable_function_and_location() {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Label>().ok())
         .collect::<Vec<_>>();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
-    );
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "host::dispatch" && label.is_selectable()));
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {

@@ -7,5 +7,12 @@ export function host() {
   const frames = [];
   const surface = new Surface((frame) => frames.push(frame));
   const container = reconciler.createContainer(surface, 0, null, false, null, '', () => {}, null);
-  return { frames, surface, render(element) { reconciler.updateContainer(element, container, null, null); return frames.at(-1); } };
+  return {
+    frames,
+    surface,
+    render(element) {
+      reconciler.updateContainer(element, container, null, null);
+      return frames.at(-1);
+    },
+  };
 }

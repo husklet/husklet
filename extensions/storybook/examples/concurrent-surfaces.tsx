@@ -3,7 +3,16 @@
 // the canonical component catalogue rather than opening surprise panes.
 
 import React, { useState } from 'react';
-import { Button, Column, Heading, Row, Text, render, type RenderHandle, type Session } from '@husklet/react';
+import {
+  Button,
+  Column,
+  Heading,
+  Row,
+  Text,
+  render,
+  type RenderHandle,
+  type Session,
+} from '@husklet/react';
 
 function Counter({ name, close }: { name: string; close?: () => void }) {
   const [count, setCount] = useState(0);
@@ -12,9 +21,7 @@ function Counter({ name, close }: { name: string; close?: () => void }) {
       <Heading label={name} />
       <Text label={`Independent count: ${count}`} />
       <Row gap={2}>
-        <Button
-          label={`Increment ${name}`}
-          onInvoke={() => setCount((value) => value + 1)} />
+        <Button label={`Increment ${name}`} onInvoke={() => setCount((value) => value + 1)} />
         {close && <Button label={`Close ${name}`} onInvoke={() => void close()} />}
       </Row>
     </Column>

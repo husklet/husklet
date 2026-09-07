@@ -50,6 +50,10 @@ pub enum Request {
     PaneList,
     /// A new tab under this title.
     OpenTab(String),
+    PinTab {
+        tab: String,
+        pinned: bool,
+    },
     /// A pane split off the named slot.
     Split {
         /// The pane being divided.
@@ -293,6 +297,13 @@ impl TerminalSurface for Relay {
     /// Returns a host failure when no window is drawing this workspace.
     fn open_tab(&self, title: &str) -> Result<String, HostError> {
         self.slot(Request::OpenTab(title.to_owned()))
+    }
+
+    fn pin_tab(&self, tab: &str, pinned: bool) -> Result<(), HostError> {
+        self.done(Request::PinTab {
+            tab: tab.to_owned(),
+            pinned,
+        })
     }
 
     /// # Errors

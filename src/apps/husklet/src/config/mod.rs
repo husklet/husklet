@@ -319,7 +319,11 @@ impl WorkspaceStore {
             std::fs::create_dir_all(dir)?;
         }
         let lock_path = self.path.with_extension("conf.lock");
-        let lock = std::fs::OpenOptions::new().create(true).read(true).write(true).open(lock_path)?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
         lock.lock_exclusive()?;
         self.items = match std::fs::read_to_string(&self.path) {
             Ok(text) => WorkspaceDocument::parse(&text)?,
@@ -366,6 +370,19 @@ impl WorkspaceStore {
     pub fn upsert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
         #[cfg(feature = "runtime")]
         let _lock = self.lock_and_reload()?;
+        self.upsert_unlocked(ws)
+    }
+
+    /// Add a workspace only when its name is still unused.
+    pub fn insert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
+        #[cfg(feature = "runtime")]
+        let _lock = self.lock_and_reload()?;
+        if self.get(&ws.name).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("A workspace named {:?} already exists.", ws.name),
+            ));
+        }
         self.upsert_unlocked(ws)
     }
 

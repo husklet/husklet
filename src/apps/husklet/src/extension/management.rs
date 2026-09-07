@@ -47,6 +47,7 @@ impl ExtensionManagement {
 
     fn changed(&self, result: Result<(), HostError>) -> Result<(), HostError> {
         result?;
+        super::revision::publish_inventory_change(&self.workspace);
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
         }
@@ -121,6 +122,7 @@ impl ExtensionStore for ExtensionManagement {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.install(job, revision, granted)?;
+        super::revision::publish_inventory_change(&self.workspace);
         let installed = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
@@ -132,6 +134,7 @@ impl ExtensionStore for ExtensionManagement {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision)?;
         self.acquisitions.update(job, revision, granted)?;
+        super::revision::publish_inventory_change(&self.workspace);
         let updated = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
             self.events.inventory(entries);
@@ -286,7 +289,9 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management.remove("absent", &format!("sha256:{}", "a".repeat(64))).is_err());
+        assert!(management
+            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
         assert!(events.drain().is_none());
     }
 
@@ -294,11 +299,13 @@ mod tests {
     fn summary_exposes_enabled_digest_bound_provider_declarations() {
         let provider = hl_extension::PaneProvider {
             id: ExtensionName::new("main").unwrap(),
-            title: "Workspace manager".into(),
+            title: "Top".into(),
             icon: Some("applications-system-symbolic".into()),
         };
         let value = summary(super::super::roster::Entry {
-            name: ExtensionName::new("manager").unwrap(),
+            name: ExtensionName::new("top").unwrap(),
+            display_name: "Top".into(),
+            interface: None,
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),

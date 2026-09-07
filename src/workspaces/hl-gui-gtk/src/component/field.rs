@@ -34,6 +34,22 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     }
 }
 
+pub(crate) fn set_color(widget: &gtk::Widget, value: &str) -> bool {
+    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else { return false };
+    let Ok(color) = gtk::gdk::RGBA::parse(value) else { return true };
+    picker.set_rgba(&color);
+    true
+}
+
+pub(crate) fn color_value(color: &gtk::gdk::RGBA) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (color.red().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.green().clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.blue().clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
 fn command_palette() -> gtk::Box {
     let widget = axis::column(4);
     let search = gtk::SearchEntry::new();

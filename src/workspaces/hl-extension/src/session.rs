@@ -93,6 +93,13 @@ impl Session {
         }
     }
 
+    /// Adds a surface the host already owns, such as the workspace overview.
+    #[must_use]
+    pub fn with_surface(mut self, slot: impl Into<String>) -> Self {
+        self.surfaces.insert(slot.into());
+        self
+    }
+
     /// The tab this session owns, if it has opened one.
     #[must_use]
     pub fn tab(&self) -> Option<&str> {
@@ -198,6 +205,7 @@ impl Session {
             Request::TerminalTabs
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
+            | Request::TerminalPinTab { .. }
             | Request::TerminalSplit { .. }
             | Request::TerminalSplitObserved { .. }
             | Request::TerminalSpawn { .. }
@@ -404,7 +412,7 @@ impl Session {
     fn images(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let port = self.peer.authority().port(request.capability(), services.images)?;
         match request {
-            Request::ImageList => Ok(Reply::Images(port.list()?)),
+            Request::ImageList => Ok(Reply::Images(crate::port::ImageInventory::bounded(port.list()?))),
             Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
             Request::ImagePullStart { reference } => Ok(Reply::ImagePullJob(port.pull_start(reference)?)),
             Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(job)?)),
@@ -425,7 +433,7 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.volumes)?;
         match request {
-            Request::VolumeList => Ok(Reply::Volumes(port.list()?)),
+            Request::VolumeList => Ok(Reply::Volumes(crate::port::VolumeInventory::bounded(port.list()?))),
             Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
             Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
             Request::VolumeRemove { name, generation } => {
@@ -442,7 +450,7 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.networks)?;
         match request {
-            Request::NetworkList => Ok(Reply::Networks(port.list()?)),
+            Request::NetworkList => Ok(Reply::Networks(crate::port::NetworkInventory::bounded(port.list()?))),
             Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
             Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
             Request::NetworkRemove { reference } => {
@@ -601,10 +609,11 @@ impl Session {
     fn command(request: &Request, port: &dyn TerminalSurface) -> Result<Reply, Failure> {
         match request {
             Request::TerminalOpenTab { title } => Ok(Reply::Identity(port.open_tab(title)?)),
-            Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
-            Request::TerminalSplitObserved { slot, division, .. } => {
-                Ok(Reply::Identity(port.split(slot, *division)?))
+            Request::TerminalPinTab { tab, pinned } => {
+                port.pin_tab(tab, *pinned).map(|()| Reply::Done).map_err(Failure::from)
             }
+            Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
+            Request::TerminalSplitObserved { slot, division, .. } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {
                 validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
@@ -613,16 +622,25 @@ impl Session {
                 validate_terminal_command(command)?;
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::TerminalWritePane { slot, generation, revision, contents } => {
+            Request::TerminalWritePane {
+                slot,
+                generation,
+                revision,
+                contents,
+            } => {
                 if contents.len() > PANE_INPUT_BYTES {
                     return Err(Failure::Conflict {
                         detail: format!("terminal input exceeds the {PANE_INPUT_BYTES} byte limit"),
                     });
                 }
-                port.write(slot, *generation, *revision, contents).map(|()| Reply::Done).map_err(Failure::from)
+                port.write(slot, *generation, *revision, contents)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             Request::TerminalResizeGrid { slot, columns, rows }
-            | Request::TerminalResizeGridObserved { slot, columns, rows, .. } => {
+            | Request::TerminalResizeGridObserved {
+                slot, columns, rows, ..
+            } => {
                 if *columns == 0 || *rows == 0 || *columns > PANE_GRID_EDGE || *rows > PANE_GRID_EDGE {
                     return Err(Failure::Conflict {
                         detail: format!("terminal grid must be within 1..={PANE_GRID_EDGE} rows and columns"),
@@ -642,9 +660,10 @@ impl Session {
             Request::TerminalClosePaneObserved { slot, .. } => {
                 port.close(slot).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::TerminalFocusPane { slot } | Request::TerminalFocusPaneObserved { slot, .. } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
-            Request::TerminalRetitlePane { slot, title }
-            | Request::TerminalRetitlePaneObserved { slot, title, .. } => {
+            Request::TerminalFocusPane { slot } | Request::TerminalFocusPaneObserved { slot, .. } => {
+                port.focus(slot).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::TerminalRetitlePane { slot, title } | Request::TerminalRetitlePaneObserved { slot, title, .. } => {
                 validate_pane_title(title)?;
                 port.retitle(slot, title).map(|()| Reply::Done).map_err(Failure::from)
             }
@@ -659,7 +678,12 @@ impl Session {
                 generation,
                 target,
             }
-            | Request::TerminalSwitchOccupantObserved { slot, generation, target, .. } => {
+            | Request::TerminalSwitchOccupantObserved {
+                slot,
+                generation,
+                target,
+                ..
+            } => {
                 if let crate::port::PaneOccupantTarget::Surface { extension, provider } = target {
                     crate::ExtensionName::new(extension.clone()).map_err(|_| Failure::Conflict {
                         detail: "invalid extension name".into(),
@@ -703,13 +727,28 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
             }
-            Request::FilesystemReadRange { path, offset, limit, observed } => {
-                if *limit == 0 || *limit > 64 * 1024 || *offset > 1_040_384
-                    || observed.as_ref().is_some_and(|value| value.len() > 256) {
-                    return Err(Failure::Failed { detail: "filesystem range exceeds protocol bounds".into() });
+            Request::FilesystemReadRange {
+                path,
+                offset,
+                limit,
+                observed,
+            } => {
+                if *limit == 0
+                    || *limit > 64 * 1024
+                    || *offset > 1_040_384
+                    || observed.as_ref().is_some_and(|value| value.len() > 256)
+                {
+                    return Err(Failure::Failed {
+                        detail: "filesystem range exceeds protocol bounds".into(),
+                    });
                 }
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
-                Ok(Reply::FileRange(port.read_range(path, *offset, *limit, observed.as_deref())?))
+                Ok(Reply::FileRange(port.read_range(
+                    path,
+                    *offset,
+                    *limit,
+                    observed.as_deref(),
+                )?))
             }
             Request::FilesystemStat { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
@@ -717,7 +756,9 @@ impl Session {
             }
             Request::FilesystemWrite { path, contents } => {
                 if contents.len() > 64 * 1024 {
-                    return Err(Failure::Failed { detail: "filesystem write exceeds 65536 bytes".into() });
+                    return Err(Failure::Failed {
+                        detail: "filesystem write exceeds 65536 bytes".into(),
+                    });
                 }
                 let port = self
                     .peer
@@ -727,9 +768,14 @@ impl Session {
             }
             Request::FilesystemCreateObserved { path, contents } => {
                 if contents.len() > 64 * 1024 {
-                    return Err(Failure::Failed { detail: "filesystem creation exceeds 65536 bytes".into() });
+                    return Err(Failure::Failed {
+                        detail: "filesystem creation exceeds 65536 bytes".into(),
+                    });
                 }
-                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
                 Ok(Reply::Identity(port.create_observed(path, contents)?))
             }
             Request::FilesystemMkdir { path } => {
@@ -747,8 +793,15 @@ impl Session {
                 port.rename(from, to).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::FilesystemRenameObserved { from, to, observed } => {
-                if observed.is_empty() || observed.len() > 256 { return Err(Failure::Failed { detail: "filesystem observation exceeds protocol bounds".into() }); }
-                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
+                if observed.is_empty() || observed.len() > 256 {
+                    return Err(Failure::Failed {
+                        detail: "filesystem observation exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
                 Ok(Reply::Identity(port.rename_observed(from, to, observed)?))
             }
             Request::FilesystemRemove { path } => {
@@ -759,9 +812,18 @@ impl Session {
                 port.remove(path).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::FilesystemRemoveObserved { path, observed } => {
-                if observed.is_empty() || observed.len() > 256 { return Err(Failure::Failed { detail: "filesystem observation exceeds protocol bounds".into() }); }
-                let port = self.peer.authority().port(Capability::FilesystemWrite, services.files)?;
-                port.remove_observed(path, observed).map(|()| Reply::Done).map_err(Failure::from)
+                if observed.is_empty() || observed.len() > 256 {
+                    return Err(Failure::Failed {
+                        detail: "filesystem observation exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self
+                    .peer
+                    .authority()
+                    .port(Capability::FilesystemWrite, services.files)?;
+                port.remove_observed(path, observed)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "filesystem".into(),
@@ -1117,7 +1179,10 @@ mod immutable_identity_tests {
     #[test]
     fn container_execution_refuses_names_prefixes_and_malformed_ids() {
         for value in ["worker", "abcdef123456", &"A".repeat(32), &"g".repeat(64)] {
-            assert!(immutable_identity(value, &[32, 64], "container").is_err(), "accepted {value}");
+            assert!(
+                immutable_identity(value, &[32, 64], "container").is_err(),
+                "accepted {value}"
+            );
         }
         assert!(immutable_identity(&"a".repeat(32), &[32, 64], "container").is_ok());
         assert!(immutable_identity(&"b".repeat(64), &[32, 64], "container").is_ok());

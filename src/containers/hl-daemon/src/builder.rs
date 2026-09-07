@@ -23,8 +23,8 @@ pub(crate) enum BuildError {
     Container(#[from] hl_container::Error),
     #[error("build context failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("RUN exited with {0:?}")]
-    Run(ExitStatus),
+    #[error("RUN exited with {status:?}: {output}")]
+    Run { status: ExitStatus, output: String },
     #[error("Dockerfile is not valid UTF-8")]
     Dockerfile,
     #[error("COPY source {0:?} is outside the build context")]

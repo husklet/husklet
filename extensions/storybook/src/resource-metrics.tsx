@@ -1,13 +1,14 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Card, CardContent, Column, Heading, Row, Sparkline, Stat, Text } from '@husklet/react';
-
 
 export const METRICS_STORY = 'Inspect resource trends';
 export const SAMPLE_LIMIT = 64;
 
-export function boundedSamples(samples) {
-  return samples.filter(Number.isFinite).slice(-SAMPLE_LIMIT).join(',');
+export function boundedSamples(samples: readonly unknown[]): string {
+  return samples
+    .filter((sample): sample is number => typeof sample === 'number' && Number.isFinite(sample))
+    .slice(-SAMPLE_LIMIT)
+    .join(',');
 }
 
 export function ResourceMetricsStory() {
@@ -16,8 +17,7 @@ export function ResourceMetricsStory() {
   return (
     <Column gap={2} grow={true}>
       <Heading label={'Workspace resources'} scale={'title'} />
-      <Text
-        label={'Compact trends preserve their bounded samples in the semantic tree.'} />
+      <Text label={'Compact trends preserve their bounded samples in the semantic tree.'} />
       <Row gap={2} wrap={true}>
         <Card>
           <CardContent gap={1}>

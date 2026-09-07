@@ -6,14 +6,61 @@ activation = "tab"
 
 # Process inspection and execution are container authorities in the host. Image
 # pulls are separate from image reads. Resource mutation is likewise distinct
-# from inventory so the consent prompt describes every control authority.
-capabilities = ["containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "interface:render"]
+# from inventory. Pane inventory, live terminal output, semantic UI text, and
+# revision-bound input are separate authorities, so consent describes every
+# operation this compact control surface exercises.
+capabilities = ["workspaces:read", "workspaces:control", "workspaces:events", "extensions:read", "extensions:control", "extensions:install", "containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "interface:render"]
 
 [interface]
 tab_title = "Top"
 icon = "utilities-system-monitor-symbolic"
 
 [[pane_providers]]
-id = "main"
-title = "Top"
+id = "overview"
+title = "Top overview"
 icon = "utilities-system-monitor-symbolic"
+
+[[pane_providers]]
+id = "workspace"
+title = "Workspace settings"
+icon = "preferences-system-symbolic"
+
+[[pane_providers]]
+id = "extensions"
+title = "Extensions"
+icon = "application-x-addon-symbolic"
+
+[[pane_providers]]
+id = "containers"
+title = "Containers"
+icon = "package-x-generic-symbolic"
+
+[[pane_providers]]
+id = "processes"
+title = "Container processes"
+icon = "system-run-symbolic"
+
+[[pane_providers]]
+id = "executions"
+title = "Container executions"
+icon = "utilities-terminal-symbolic"
+
+[[pane_providers]]
+id = "images"
+title = "Images"
+icon = "drive-harddisk-symbolic"
+
+[[pane_providers]]
+id = "volumes"
+title = "Volumes"
+icon = "folder-symbolic"
+
+[[pane_providers]]
+id = "networks"
+title = "Networks"
+icon = "network-workgroup-symbolic"
+
+[[pane_providers]]
+id = "terminals"
+title = "Terminal panes"
+icon = "utilities-terminal-symbolic"

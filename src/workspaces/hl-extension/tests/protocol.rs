@@ -15,8 +15,10 @@ fn omitted_and_null_ui_slots_both_preserve_legacy_unaddressed_events() {
         if let Some(slot) = slot {
             value.as_object_mut().unwrap().insert("slot".into(), slot);
         }
-        assert!(matches!(serde_json::from_value::<hl_extension::UiEvent>(value).unwrap(),
-            hl_extension::UiEvent::Invoke { slot: None, .. }));
+        assert!(matches!(
+            serde_json::from_value::<hl_extension::UiEvent>(value).unwrap(),
+            hl_extension::UiEvent::Invoke { slot: None, .. }
+        ));
     }
 }
 
@@ -50,8 +52,7 @@ fn pane_selection_names_the_provider_and_its_independent_mount() {
         selection
     );
     assert!(
-        serde_json::from_value::<PaneSelection>(serde_json::json!({"pane_provider": "database"}))
-            .is_err(),
+        serde_json::from_value::<PaneSelection>(serde_json::json!({"pane_provider": "database"})).is_err(),
         "a global provider selection is no longer an adequate wire event"
     );
 }
@@ -356,8 +357,8 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
         .join("..")
         .join("..");
     let shipped = [
+        root.join("extensions/top/extension.toml"),
         root.join("extensions/storybook/extension.toml"),
-        root.join("src/apps/extension/extension.toml"),
     ];
 
     for path in shipped {
@@ -371,7 +372,11 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
             path.display()
         );
         if path.ends_with("extensions/storybook/extension.toml") {
-            assert_eq!(manifest.pane_providers.len(), 1, "the playground is discoverable from a terminal pane");
+            assert_eq!(
+                manifest.pane_providers.len(),
+                1,
+                "the playground is discoverable from a terminal pane"
+            );
             assert_eq!(manifest.pane_providers[0].id.as_str(), "playground");
             assert_eq!(manifest.pane_providers[0].title, "Component playground");
         }
@@ -381,5 +386,46 @@ fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
             "{} does not survive being written back",
             path.display()
         );
+    }
+}
+
+#[test]
+fn retired_extension_locations_and_uncompiled_sources_stay_absent() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..");
+    for retired in [
+        "apps/storybook",
+        "src/apps/storybook",
+        "extensions/workspace-manager",
+        "extensions/workspace",
+        "extensions/extensions",
+    ] {
+        assert!(
+            !root.join(retired).exists(),
+            "retired extension location returned: {retired}"
+        );
+    }
+
+    fn inspect(directory: &std::path::Path) {
+        for entry in
+            std::fs::read_dir(directory).unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        {
+            let entry = entry.expect("extension source entry");
+            let path = entry.path();
+            if entry.file_type().expect("extension source type").is_dir() {
+                inspect(&path);
+            } else if matches!(path.extension().and_then(std::ffi::OsStr::to_str), Some("js" | "jsx")) {
+                panic!("production extension source must be TypeScript/TSX: {}", path.display());
+            }
+        }
+    }
+
+    for entry in std::fs::read_dir(root.join("extensions")).expect("extensions directory") {
+        let path = entry.expect("extension entry").path().join("src");
+        if path.is_dir() {
+            inspect(&path);
+        }
     }
 }

@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import { Card, CardContent, Column, Heading, StackFrame, StackTrace, Text } from '@husklet/react';
 export const STACK_STORY = 'Inspect crash stack';
@@ -6,8 +5,7 @@ export function StackTraceStory() {
   return (
     <Column gap={2}>
       <Heading label={'Extension host exited unexpectedly'} scale={'title'} />
-      <Text
-        value={'Every function and source location remains independently selectable.'} />
+      <Text value={'Every function and source location remains independently selectable.'} />
       <Card>
         <CardContent>
           <StackTrace gap={1}>

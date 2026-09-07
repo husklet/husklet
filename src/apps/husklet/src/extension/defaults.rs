@@ -8,22 +8,25 @@ use crate::config::WorkspaceConfig;
 /// Ordered identities and release-matched image references for a new workspace.
 ///
 /// This order is also their default order in the workspace sidebar.
-pub const DEFAULT_EXTENSIONS: [(&str, &str); 2] = [
+pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [
     (
-        "workspace",
-        concat!("ghcr.io/husklet/husklet/extension-workspace:", env!("CARGO_PKG_VERSION")),
-    ),
-    (
-        "extensions",
-        concat!("ghcr.io/husklet/husklet/extension-extensions:", env!("CARGO_PKG_VERSION")),
+        "top",
+        concat!("ghcr.io/husklet/husklet/extension-top:", env!("CARGO_PKG_VERSION")),
     ),
 ];
 
-/// Acquires, grants, records, and enables the two trusted first-party surfaces.
+/// Acquires, grants, records, and enables the trusted first-party control surface.
 ///
 /// Completed entries are retained when a later acquisition fails, so retrying
 /// provisioning resumes instead of pulling and recording the same image again.
 pub fn install_defaults(workspace: &WorkspaceConfig) -> Result<(), String> {
+    install_defaults_with(workspace, Candidate::read)
+}
+
+fn install_defaults_with(
+    workspace: &WorkspaceConfig,
+    mut read: impl FnMut(&WorkspaceConfig, &str) -> Result<Candidate, String>,
+) -> Result<(), String> {
     let mut roster = Roster::workspace(workspace).map_err(|error| error.to_string())?;
     for (expected, reference) in DEFAULT_EXTENSIONS {
         let name = ExtensionName::new(expected).map_err(|error| error.to_string())?;
@@ -36,7 +39,7 @@ pub fn install_defaults(workspace: &WorkspaceConfig) -> Result<(), String> {
             }
             continue;
         }
-        let candidate = Candidate::read(workspace, reference)?;
+        let candidate = read(workspace, reference)?;
         if candidate.manifest.name != name {
             return Err(format!(
                 "{reference} declares extension {}, expected {expected}",
@@ -65,19 +68,68 @@ fn moment() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hl_extension::{Activation, Capability, Grant, Manifest, Presentation, Resources};
 
     #[test]
     fn defaults_are_release_matched_and_sidebar_ordered() {
-        assert_eq!(DEFAULT_EXTENSIONS[0].0, "workspace");
-        assert_eq!(DEFAULT_EXTENSIONS[1].0, "extensions");
+        assert_eq!(DEFAULT_EXTENSIONS[0].0, "top");
         for (name, reference) in DEFAULT_EXTENSIONS {
             assert_eq!(
                 reference,
-                format!(
-                    "ghcr.io/husklet/husklet/extension-{name}:{}",
-                    env!("CARGO_PKG_VERSION")
-                )
+                format!("ghcr.io/husklet/husklet/extension-{name}:{}", env!("CARGO_PKG_VERSION"))
             );
         }
+    }
+
+    #[test]
+    fn provisioning_records_the_enabled_top_surface() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let mut acquired = Vec::new();
+
+        install_defaults_with(&workspace, |_, reference| {
+            acquired.push(reference.to_owned());
+            let name = if reference.contains("extension-top:") {
+                "top"
+            } else {
+                panic!("unexpected default reference {reference}");
+            };
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: format!("sha256:{name}"),
+                manifest: Manifest {
+                    name: ExtensionName::new(name).unwrap(),
+                    display_name: name.to_owned(),
+                    version: "0.1.0".to_owned(),
+                    protocol: hl_extension::PROTOCOL,
+                    capabilities: Grant::new([
+                        Capability::WorkspaceRead,
+                        Capability::ExtensionRead,
+                        Capability::Interface,
+                    ]),
+                    entrypoint: None,
+                    activation: Activation::Workspace,
+                    interface: Some(Presentation {
+                        tab_title: name.to_owned(),
+                        icon: None,
+                    }),
+                    pane_providers: Vec::new(),
+                    resources: Resources::default(),
+                    filesystem_roots: Vec::new(),
+                },
+            })
+        })
+        .unwrap();
+
+        assert_eq!(acquired, DEFAULT_EXTENSIONS.map(|(_, reference)| reference.to_owned()));
+        let mut entries = Roster::workspace(&workspace).unwrap().entries();
+        entries.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name.as_str(), "top");
+        assert_eq!(entries[0].image_digest, "sha256:top");
+        assert_eq!(entries[0].stage, Stage::Duty);
+        assert!(entries[0].granted.holds(Capability::ExtensionRead));
+        assert!(entries[0].granted.holds(Capability::WorkspaceRead));
     }
 }

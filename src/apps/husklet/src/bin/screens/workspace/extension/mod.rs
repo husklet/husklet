@@ -405,6 +405,10 @@ impl Interface {
     }
 
     fn draw_at(&mut self, slot: &str, frame: &Frame) {
+        if slot.is_empty() {
+            self.draw(frame);
+            return;
+        }
         // Only `pane` registers slot authority. A frame may have been queued
         // before terminal/lifecycle withdrawal retired that slot; accepting it
         // here must not recreate an unmounted renderer with no owning pane.
@@ -440,6 +444,10 @@ impl Interface {
     }
 
     fn feed_at(&mut self, slot: &str, mutation: &SourceMutation) {
+        if slot.is_empty() {
+            self.feed(mutation);
+            return;
+        }
         let Some(pane) = self.panes.get_mut(slot) else { return };
         match mutation {
             SourceMutation::Length { source, version, rows } => {

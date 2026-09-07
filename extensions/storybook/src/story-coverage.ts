@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import { families, props, tags } from './catalogue.js';
 import { defaults } from './defaults.js';
 
@@ -8,7 +7,9 @@ export function storyCoverage() {
     story: tag.name,
     component: tag.name,
     family: tag.family,
-    propertyGroups: [...new Set(props.filter((prop) => tag.props.includes(prop.name)).map((prop) => prop.group))],
+    propertyGroups: [
+      ...new Set(props.filter((prop) => tag.props.includes(prop.name)).map((prop) => prop.group)),
+    ],
     interactions: tag.triggers,
     state: defaults(tag.name),
   }));

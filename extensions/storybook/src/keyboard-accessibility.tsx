@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 import React from 'react';
 import {
   Button,
@@ -23,10 +22,10 @@ export function KeyboardAccessibilityStory() {
   const [name, setName] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [events, setEvents] = useState([]);
+  const [events, setEvents] = useState<string[]>([]);
   const sequence = useRef(0);
   const invalid = attempted && name.trim().length < 3;
-  const record = (label) => {
+  const record = (label: string) => {
     const event = `#${++sequence.current} ${label}`;
     setEvents((current) => [...current, event].slice(-EVENT_LIMIT));
   };
@@ -44,9 +43,12 @@ export function KeyboardAccessibilityStory() {
     <Column gap={3} width={{ maximum: { chars: 62 } }}>
       <Heading label={'Keyboard-safe extension removal'} scale={'title'} wrap={true} />
       <Text
-        label={'Tab through the enabled controls. Focus events and actions appear in the bounded history below.'}
+        label={
+          'Tab through the enabled controls. Focus events and actions appear in the bounded history below.'
+        }
         color={'text-dim'}
-        wrap={true} />
+        wrap={true}
+      />
       <FormControl gap={1}>
         <FormLabel label={'Extension name'} />
         <Entry
@@ -59,33 +61,47 @@ export function KeyboardAccessibilityStory() {
             setAttempted(false);
             record('changed Extension name');
           }}
-          onSubmit={review} />
+          onSubmit={review}
+        />
         <FormHelperText
-          label={invalid ? 'Enter at least 3 characters before continuing.' : 'Confirmation is a separate step.'}
-          tone={invalid ? 'danger' : 'neutral'} />
+          label={
+            invalid
+              ? 'Enter at least 3 characters before continuing.'
+              : 'Confirmation is a separate step.'
+          }
+          tone={invalid ? 'danger' : 'neutral'}
+        />
       </FormControl>
       <Row gap={2} justify={'end'} wrap={true}>
         <Button
           label={'Unavailable'}
           enabled={false}
           tooltip={'Disabled controls are skipped by keyboard traversal.'}
-          onFocus={() => record('ERROR disabled control focused')} />
+          onFocus={() => record('ERROR disabled control focused')}
+        />
         <Button
           label={'Review removal'}
           tone={'accent'}
           onFocus={() => record('focused Review removal')}
-          onInvoke={review} />
+          onInvoke={review}
+        />
       </Row>
       {invalid
-        ? [<InlineMessage key={'validation'}
-        label={'Resolve the validation error before confirmation.'}
-        tone={'danger'} />]
+        ? [
+            <InlineMessage
+              key={'validation'}
+              label={'Resolve the validation error before confirmation.'}
+              tone={'danger'}
+            />,
+          ]
         : []}
       {confirming
         ? [
-            <InlineMessage key={'confirmation'}
+            <InlineMessage
+              key={'confirmation'}
               label={`Remove ${name.trim()}? This confirmation is intentionally explicit.`}
-              tone={'warning'} />,
+              tone={'warning'}
+            />,
             <Row key={'confirmation-actions'} gap={2} justify={'end'} wrap={true}>
               <Button
                 label={'Cancel'}
@@ -93,7 +109,8 @@ export function KeyboardAccessibilityStory() {
                 onInvoke={() => {
                   setConfirming(false);
                   record('confirmation cancelled');
-                }} />
+                }}
+              />
               <Button
                 label={'Confirm removal'}
                 destructive={true}
@@ -102,15 +119,20 @@ export function KeyboardAccessibilityStory() {
                 onInvoke={() => {
                   setConfirming(false);
                   record('removal confirmed');
-                }} />
+                }}
+              />
             </Row>,
           ]
         : []}
-      <Text
-        label={`Event history (${events.length}/${EVENT_LIMIT})`}
-        color={'text-dim'} />
+      <Text label={`Event history (${events.length}/${EVENT_LIMIT})`} color={'text-dim'} />
       {events.length === 0
-        ? [<InlineMessage key={'empty-events'} label={'No keyboard or semantic events yet.'} tone={'neutral'} />]
+        ? [
+            <InlineMessage
+              key={'empty-events'}
+              label={'No keyboard or semantic events yet.'}
+              tone={'neutral'}
+            />,
+          ]
         : events.map((event) => <InlineMessage key={event} label={event} tone={'positive'} />)}
     </Column>
   );

@@ -184,12 +184,12 @@ fn run_configured(
             Default::default()
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let streams = if std::env::var_os("HL_NATIVE_TEST_NO_STREAMS").is_some() {
+        StandardStreams::default()
+    } else {
+        StandardStreams::default().with_output(output.clone())
+    };
+    let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     engine.start().unwrap();
     let status = engine.wait().unwrap().guest_status;
     engine.destroy().unwrap();

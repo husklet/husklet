@@ -45,6 +45,13 @@ fn mark(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
         label.set_text(content);
         return true;
     }
+    if tag == Tag::ListItemButton {
+        if let (Some(button), Some(label)) = (widget.downcast_ref::<gtk::Button>(), slot::caption(widget)) {
+            label.set_text(content);
+            button.update_property(&[gtk::accessible::Property::Label(content)]);
+            return true;
+        }
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.set_label(content);
         return true;
@@ -106,6 +113,9 @@ fn plotted(widget: &gtk::Widget, tag: Tag, content: &str) -> bool {
 /// The widgets that hold a value of their own.
 fn hold(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     let content = value.as_text().unwrap_or_default();
+    if tag == Tag::ColorPicker {
+        return field::set_color(widget, content);
+    }
     if tag == Tag::Sparkline {
         return content::samples(widget, content);
     }

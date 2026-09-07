@@ -54,6 +54,9 @@
 #define G_PC(c) ((c)->pc)
 #define G_SP(c) ((c)->sp)
 #define G_TLS(c) ((c)->tls)
+// Legacy clone orders its final arguments as parent_tid, tls, child_tid on AArch64.
+#define G_CLONE_TLS(a3, a4) (a3)
+#define G_CLONE_CTID(a3, a4) (a4)
 // x86 uses this to drop stale translations on munmap/MAP_FIXED/mremap of an executable VA. The aarch64
 // engine keeps its own guest-`ic ivau` (smc_icflush) coherence model, so the shared-path seam is a no-op.
 #define G_SMC_UNMAP(lo, hi) ((void)(lo), (void)(hi))

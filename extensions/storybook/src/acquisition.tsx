@@ -1,4 +1,3 @@
-// @ts-nocheck -- legacy story typing is migrated incrementally.
 // The complete end-user image-acquisition state model, shown together so
 // progress wording and available actions can be reviewed without a registry.
 
@@ -22,8 +21,26 @@ const { useState } = React;
 
 export const ACQUISITION_STORY = 'Extension acquisition';
 
-export const acquisitionStates = [
-  { key: 'checking', title: 'Checking', status: 'checking local images', activity: 'spinner', actions: ['Cancel download'] },
+type Tone = 'neutral' | 'positive' | 'danger';
+type Activity = 'spinner' | 'progress';
+export interface AcquisitionStateModel {
+  key: string;
+  title: string;
+  status: string;
+  activity?: Activity;
+  fraction?: number;
+  tone?: Tone;
+  actions: readonly string[];
+}
+
+export const acquisitionStates: readonly AcquisitionStateModel[] = [
+  {
+    key: 'checking',
+    title: 'Checking',
+    status: 'checking local images',
+    activity: 'spinner',
+    actions: ['Cancel download'],
+  },
   {
     key: 'pulling-indeterminate',
     title: 'Downloading — total unknown',
@@ -39,7 +56,13 @@ export const acquisitionStates = [
     fraction: 0.25,
     actions: ['Cancel download'],
   },
-  { key: 'manifest', title: 'Reading manifest', status: 'reading extension manifest', activity: 'spinner', actions: ['Cancel download'] },
+  {
+    key: 'manifest',
+    title: 'Reading manifest',
+    status: 'reading extension manifest',
+    activity: 'spinner',
+    actions: ['Cancel download'],
+  },
   {
     key: 'failure',
     title: 'Failed',
@@ -62,37 +85,44 @@ export function AcquisitionProgressStory() {
   const state = acquisitionStates.find(({ key }) => key === selected) ?? acquisitionStates[0];
   return (
     <Column gap={3} grow={true}>
-      <Heading
-        key={'title'}
-        label={'Extension acquisition states'}
-        scale={'title'}
-        wrap={true} />
+      <Heading key={'title'} label={'Extension acquisition states'} scale={'title'} wrap={true} />
       <Text
         key={'explanation'}
-        label={'Acquisition is read-only until the ready state. Cancel exists only while work is pending; Retry exists only after failure.'}
+        label={
+          'Acquisition is read-only until the ready state. Cancel exists only while work is pending; Retry exists only after failure.'
+        }
         wrap={true}
-        color={'text-dim'} />
+        color={'text-dim'}
+      />
       <Select
         key={'state'}
         value={state.key}
         choices={acquisitionStates.map(({ key, title }) => ({ value: key, label: title }))}
-        onChange={({ value }) => setSelected(String(value ?? acquisitionStates[0].key))} />
+        onChange={({ value }) => setSelected(String(value ?? acquisitionStates[0].key))}
+      />
       <AcquisitionState
         key={state.key}
         state={state}
-        onAction={(label) => setEvent(`${label} invoked for ${state.key}.`)} />
+        onAction={(label) => setEvent(`${label} invoked for ${state.key}.`)}
+      />
       <InlineMessage key={'event'} label={event} tone={'neutral'} />
     </Column>
   );
 }
 
-function AcquisitionState({ state, onAction }) {
+function AcquisitionState({
+  state,
+  onAction,
+}: {
+  state: AcquisitionStateModel;
+  onAction: (label: string) => void;
+}) {
   const activity =
-    state.activity === 'progress'
-      ? <Progress key={'activity'} fraction={state.fraction} tooltip={state.status} />
-      : state.activity === 'spinner'
-        ? <Spinner key={'activity'} busy={true} tooltip={state.status} />
-        : null;
+    state.activity === 'progress' ? (
+      <Progress key={'activity'} fraction={state.fraction} tooltip={state.status} />
+    ) : state.activity === 'spinner' ? (
+      <Spinner key={'activity'} busy={true} tooltip={state.status} />
+    ) : null;
   return (
     <Card label={state.title} tone={state.tone ?? 'neutral'} variant={'outline'}>
       <CardHeader key={'header'} label={state.title} detail={state.key} />
@@ -102,7 +132,9 @@ function AcquisitionState({ state, onAction }) {
       </CardContent>
       <CardActions key={'actions'} gap={2}>
         <Column gap={2}>
-          {state.actions.map((label) => <Button key={label} label={label} onInvoke={() => onAction(label)} />)}
+          {state.actions.map((label) => (
+            <Button key={label} label={label} onInvoke={() => onAction(label)} />
+          ))}
         </Column>
       </CardActions>
     </Card>

@@ -29,6 +29,7 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
                 tabs: vec![
                     SessionTab {
                         title: "source".into(),
+                        pinned: false,
                         root: PaneNode::Leaf(Pane {
                             slot: Some("source".into()),
                             ..Pane::default()
@@ -36,6 +37,7 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
                     },
                     SessionTab {
                         title: "build".into(),
+                        pinned: false,
                         root: PaneNode::Split {
                             dir: SplitDir::Horizontal,
                             ratio: 0.35,
@@ -51,6 +53,7 @@ fn selected_tab_and_focused_pane_survive_a_real_widget_round_trip() {
                     },
                     SessionTab {
                         title: "tests".into(),
+                        pinned: false,
                         root: PaneNode::Leaf(Pane {
                             slot: Some("tests".into()),
                             ..Pane::default()
@@ -221,6 +224,7 @@ fn characterize(panes: usize) {
     let session = Session {
         tabs: vec![SessionTab {
             title: format!("{panes} panes"),
+            pinned: false,
             root: layout(panes, 0),
         }],
         selected_tab: Some(0),

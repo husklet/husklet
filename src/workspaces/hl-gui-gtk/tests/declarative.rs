@@ -166,8 +166,50 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     a_keyed_reorder_moves_widgets_rather_than_rebuilding_them();
     a_described_handler_is_wired_to_the_real_signal();
     a_rebound_handler_reports_the_new_identity();
+    a_select_follows_its_stable_value();
     rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn a_select_follows_its_stable_value() {
+    let select = |value| {
+        Element::new(Tag::Select)
+            .key("mode")
+            .prop(Prop::Value, PropValue::text(value))
+            .prop(
+                Prop::Choices,
+                PropValue::Choices(vec![Choice::new("persisted", "Persisted"), Choice::new("live", "Live")]),
+            )
+            .on(Trigger::Change, EventId::new("mode-change"))
+    };
+    let mut session = Session::new();
+    session.render(&select("live"));
+    let drop = session
+        .tagged(Tag::Select)
+        .unwrap()
+        .downcast::<gtk::DropDown>()
+        .unwrap();
+    assert_eq!(
+        drop.selected(),
+        1,
+        "the stored value, not its label, selects the option"
+    );
+
+    session.render(&select("persisted"));
+    assert_eq!(
+        drop.selected(),
+        0,
+        "a retained value update controls the existing widget"
+    );
+    let _ = session.surface.reports().drain();
+    drop.set_selected(1);
+    assert!(
+        matches!(
+            session.surface.reports().drain().as_slice(),
+            [Event::Change { value: PropValue::Text(value), .. }] if value == "live"
+        ),
+        "selection reports the stable value rather than its display label or position"
+    );
 }
 
 fn rebinding_a_table_retires_its_previous_source() {
