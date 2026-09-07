@@ -97,6 +97,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.execution(...)` — `execution_inspect`, requires `containers:read`.
 - `host.containers.executions(...)` — `execution_list`, requires `containers:read`.
 - `host.containers.executionLogs(...)` — `execution_logs`, requires `containers:read`.
+- `host.containers.executionOutput(...)` — `execution_output`, requires `containers:read`.
 - `host.containers.waitExecution(...)` — `execution_wait`, requires `containers:read`.
 - `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:control`.
 - `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:control`.

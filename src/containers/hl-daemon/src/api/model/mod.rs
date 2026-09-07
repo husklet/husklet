@@ -30,7 +30,7 @@ pub use create::{
 pub(crate) use exec::console_size;
 pub use exec::{
     Attachment, Console, ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork,
-    ExecOpen, ExecOutput, ExecProcess, ExecStart,
+    ExecOpen, ExecOutput, ExecOutputEntry, ExecOutputPage, ExecProcess, ExecStart,
 };
 pub use filesystem::{Change, ChangeKind, PathStat};
 pub use image::{

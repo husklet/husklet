@@ -107,6 +107,23 @@ pub struct ContainerOutput {
     pub eof: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExecutionOutputEntry {
+    pub sequence: u64,
+    pub timestamp_ms: u64,
+    pub stream: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExecutionOutputPage {
+    pub entries: Vec<ExecutionOutputEntry>,
+    pub next: u64,
+    pub more: bool,
+    pub eof: bool,
+    pub gap: bool,
+}
+
 /// Bounded container creation authority with no host bind-mount path.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ContainerCreateSpec {
@@ -836,6 +853,12 @@ pub trait ContainerInventory {
     fn execution_logs(&self, _id: &str, _stdout: bool, _stderr: bool) -> Result<ContainerOutput, HostError> {
         Err(HostError::Unsupported(
             "execution logs are unsupported by this host".into(),
+        ))
+    }
+
+    fn execution_output(&self, _id: &str, _after: u64, _limit: u16) -> Result<ExecutionOutputPage, HostError> {
+        Err(HostError::Unsupported(
+            "paged execution output is unsupported by this host".into(),
         ))
     }
 

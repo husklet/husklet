@@ -239,6 +239,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "execution_inspect": "execution",
   "execution_list": "executions",
   "execution_logs": "logs",
+  "execution_output": "execution_output",
   "execution_wait": "execution",
   "execution_kill": "done",
   "execution_remove": "done",
@@ -348,6 +349,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "execution_inspect": "containers:read",
   "execution_list": "containers:read",
   "execution_logs": "containers:read",
+  "execution_output": "containers:read",
   "execution_wait": "containers:read",
   "execution_kill": "containers:control",
   "execution_remove": "containers:control",
@@ -1386,6 +1388,104 @@ const definitions = {
       },
       {
         "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExecutionOutputEntry": {
+    "fields": [
+      {
+        "name": "sequence",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "timestamp_ms",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "stream",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "bytes",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "bits": 8,
+            "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExecutionOutputPage": {
+    "fields": [
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ExecutionOutputEntry"
+          }
+        }
+      },
+      {
+        "name": "next",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "more",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "eof",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "gap",
         "optional": false,
         "schema": {
           "kind": "boolean"
@@ -6922,6 +7022,16 @@ const roots = {
         }
       },
       {
+        "name": "execution_output",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExecutionOutputPage"
+          }
+        }
+      },
+      {
         "name": "execution",
         "payload": {
           "kind": "newtype",
@@ -7719,6 +7829,43 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "execution_output",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "after",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 16,
+                "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],

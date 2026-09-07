@@ -1184,6 +1184,27 @@ mod tests {
                 truncated: false,
             })
         }
+
+        fn execution_output(
+            &self,
+            _id: &str,
+            after: u64,
+            _limit: u16,
+        ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+            self.ledger.note("executions.output");
+            Ok(hl_extension::port::ExecutionOutputPage {
+                entries: vec![hl_extension::port::ExecutionOutputEntry {
+                    sequence: after + 1,
+                    timestamp_ms: 9,
+                    stream: "stdout".into(),
+                    bytes: b"row-42\n".to_vec(),
+                }],
+                next: after + 1,
+                more: false,
+                eof: false,
+                gap: false,
+            })
+        }
     }
 
     impl ContainerControl for Host {
@@ -1766,6 +1787,28 @@ mod tests {
         let later = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
         assert_eq!(ledger.reached(), vec!["extensions.catalogue", "containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn paged_execution_output_crosses_the_real_unix_socket_with_its_cursor() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 41,
+                limit: 16,
+            },
+        );
+        assert!(matches!(codec::read_reply(&answer), Ok(Reply::ExecutionOutput(page))
+            if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row-42\n"));
+        assert_eq!(ledger.reached(), vec!["executions.output"]);
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }

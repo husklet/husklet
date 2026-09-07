@@ -216,6 +216,19 @@ export interface ContainerOutput {
   stderr_truncated: boolean;
   eof: boolean;
 }
+export interface ExecutionOutputEntry {
+  sequence: number;
+  timestamp_ms: number;
+  stream: 'stdout' | 'stderr';
+  bytes: number[];
+}
+export interface ExecutionOutputPage {
+  entries: ExecutionOutputEntry[];
+  next: number;
+  more: boolean;
+  eof: boolean;
+  gap: boolean;
+}
 export interface ExecutionSummary {
   id: string;
   container_id: string;
@@ -632,6 +645,7 @@ export interface WorkspaceApi {
     execution(id: string): Promise<ExecutionSummary>;
     executions(): Promise<ExecutionList>;
     executionLogs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
+    executionOutput(id: string, options?: { after?: number; limit?: number }): Promise<ExecutionOutputPage>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
     execAndWait(id: string, generation: number, options: {

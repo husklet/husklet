@@ -1398,6 +1398,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const api = workspace(stage.session);
   const containerId = 'a'.repeat(64);
   const executionId = 'b'.repeat(32);
+  await assert.rejects(
+    api.containers.executionOutput(executionId, { after: 0, limit: 17 }),
+    /between 1 and 16/,
+  );
   assert.throws(() => api.containers.signalExecution('7', 'SIGTERM'), /complete immutable ID/);
   assert.throws(() => api.containers.removeExecution('execution-name'), /complete immutable ID/);
   await assert.rejects(api.containers.execution('execution-name'), /complete immutable ID/);
@@ -1418,6 +1422,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     api.containers.execution(executionId),
     api.containers.executions(),
     api.containers.executionLogs(executionId, { stdout: true, stderr: false }),
+    api.containers.executionOutput(executionId, { after: 41, limit: 16 }),
     api.containers.waitExecution(executionId, { timeoutMs: 250 }),
     api.containers.start(containerId, 7),
     api.containers.pause(containerId, 7),
@@ -1445,6 +1450,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { call: 'execution_inspect', with: { id: executionId } },
     { call: 'execution_list' },
     { call: 'execution_logs', with: { id: executionId, stdout: true, stderr: false } },
+    { call: 'execution_output', with: { id: executionId, after: 41, limit: 16 } },
     { call: 'execution_wait', with: { id: executionId, timeout_ms: 250 } },
     { call: 'container_start', with: { id: containerId, generation: 7 } },
     { call: 'container_pause', with: { id: containerId, generation: 7 } },
@@ -1467,6 +1473,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { reply: 'execution', with: { id: 'e1', container_id: containerId, running: true, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     { reply: 'executions', with: { executions: [], truncated: false } },
     { reply: 'logs', with: { stdout: [], stderr: [], truncated: false, stdout_truncated: false, stderr_truncated: false, eof: true } },
+    { reply: 'execution_output', with: { entries: [{ sequence: 42, timestamp_ms: 9, stream: 'stdout', bytes: [114, 111, 119, 10] }], next: 42, more: false, eof: false, gap: false } },
     { reply: 'execution', with: { id: 'e1', container_id: containerId, running: false, exit_code: 0, pid: 2, command: ['true'], user: 'root' } },
     ...Array(10).fill({ reply: 'done' }),
     { reply: 'identity', with: 'e2' },
@@ -1485,8 +1492,65 @@ test('deep container methods and subscriptions use exact protocol request shapes
     { eof: results[4].eof, stdout: results[4].stdout_truncated, stderr: results[4].stderr_truncated },
     { eof: true, stdout: false, stderr: false },
   );
-  assert.equal(results[16], 'e2');
+  assert.equal(results[5].next, 42);
+  assert.equal(results[17], 'e2');
   stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('execution output cursor distinguishes live emptiness, later append, and final EOF', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const id = 'b'.repeat(32);
+
+  const live = api.containers.executionOutput(id, { after: 0, limit: 16 });
+  assert.deepEqual((await next()).payload, {
+    call: 'execution_output',
+    with: { id, after: 0, limit: 16 },
+  });
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: { reply: 'execution_output', with: { entries: [], next: 0, more: false, eof: false, gap: false } },
+  }));
+  assert.equal((await live).eof, false);
+
+  const appended = api.containers.executionOutput(id, { after: 0, limit: 16 });
+  await next();
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: {
+      reply: 'execution_output',
+      with: {
+        entries: [{ sequence: 9, timestamp_ms: 1, stream: 'stdout', bytes: [49, 10] }],
+        next: 9,
+        more: false,
+        eof: false,
+        gap: true,
+      },
+    },
+  }));
+  assert.deepEqual(await appended, {
+    entries: [{ sequence: 9, timestamp_ms: 1, stream: 'stdout', bytes: [49, 10] }],
+    next: 9,
+    more: false,
+    eof: false,
+    gap: true,
+  });
+
+  const final = api.containers.executionOutput(id, { after: 9, limit: 16 });
+  await next();
+  stage.host.write(encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: { reply: 'execution_output', with: { entries: [], next: 9, more: false, eof: true, gap: false } },
+  }));
+  assert.equal((await final).eof, true);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
 });
 
 test('configured container creation preserves its bounded typed specification', async () => {

@@ -15,6 +15,7 @@ const execution = new Set([
   'execution',
   'executions',
   'executionLogs',
+  'executionOutput',
   'waitExecution',
   'signalExecution',
   'removeExecution',

@@ -25,7 +25,7 @@ pub use model::{
     ContainerMetadata, ContainerPrune, ContainerState, Cpu, CpuUsage, CreateContainer, CreateExecution, Credentials,
     DiskUsage, Distribution, DockerError, DockerMount, DriverConfig, EndpointSettings, EndpointsConfig, EnvError,
     EnvVar, EnvVars, ExecAttach, ExecCatalogue, ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork,
-    ExecOpen, ExecOutput, ExecProcess, ExecStart, HealthLog, HealthState, Healthcheck, HostConfig, HostInspection,
+    ExecOpen, ExecOutput, ExecOutputEntry, ExecOutputPage, ExecProcess, ExecStart, HealthLog, HealthState, Healthcheck, HostConfig, HostInspection,
     ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary, InspectContainer,
     InspectImage, LogOptions, LogProtocolError, LogStreams, Memory, MountPoint, NetworkSettings, NetworkingConfig,
     PathStat, Pids, Plugin, ProgressDetail, PullProgress, PushAux, PushProgress, RestartPolicy, Search, Stats,

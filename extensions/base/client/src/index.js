@@ -433,6 +433,13 @@ export function workspace(session, { signal } = {}) {
       executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(
         await session.call('execution_logs', { id: immutableIdentity(id, [32], 'execution'), stdout, stderr }), 'logs',
       ),
+      executionOutput: async (id, { after = 0, limit = 16 } = {}) => {
+        if (!Number.isSafeInteger(after) || after < 0) throw new RangeError('execution output cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) throw new RangeError('execution output limit must be between 1 and 16');
+        return expect(await session.call('execution_output', {
+          id: immutableIdentity(id, [32], 'execution'), after, limit,
+        }), 'execution_output');
+      },
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(
         await session.call('execution_wait', { id: immutableIdentity(id, [32], 'execution'), timeout_ms: timeoutMs }), 'execution',
       ),
@@ -2085,6 +2092,7 @@ const facadeOverrides = Object.freeze({
   execution_inspect: 'containers.execution',
   execution_list: 'containers.executions',
   execution_logs: 'containers.executionLogs',
+  execution_output: 'containers.executionOutput',
   execution_wait: 'containers.waitExecution',
   execution_kill: 'containers.signalExecution',
   execution_remove: 'containers.removeExecution',
@@ -2139,7 +2147,7 @@ export const protocolSurface = Object.freeze({
 export const protocolCoverage = Object.freeze({
   available: Object.freeze({
     workspace: ['info', 'list', 'inspect', 'create', 'adopt', 'update', 'delete', 'start', 'stop', 'restart'],
-    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
+    containers: ['list', 'inspect', 'processes', 'logs', 'execution', 'executions', 'executionLogs', 'executionOutput', 'waitExecution', 'signalExecution', 'removeExecution', 'create', 'start', 'stop', 'remove', 'pause', 'unpause', 'restart', 'rename', 'kill', 'exec', 'execAndWait', 'attachTerminal'],
     images: ['inventory', 'list', 'inspect', 'pull', 'startPull', 'pullStatus', 'cancelPull', 'remove', 'prune', 'removeAndWait'],
     volumes: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait'],
     networks: ['inventory', 'list', 'inspect', 'create', 'remove', 'removeAndWait', 'connect', 'disconnect'],

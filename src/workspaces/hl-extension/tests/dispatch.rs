@@ -204,6 +204,26 @@ impl ContainerInventory for Host {
             eof: true,
         })
     }
+    fn execution_output(
+        &self,
+        _id: &str,
+        after: u64,
+        _limit: u16,
+    ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+        self.ledger.note("executions.output");
+        Ok(hl_extension::port::ExecutionOutputPage {
+            entries: vec![hl_extension::port::ExecutionOutputEntry {
+                sequence: after + 1,
+                timestamp_ms: 7,
+                stream: "stdout".into(),
+                bytes: b"row\n".to_vec(),
+            }],
+            next: after + 1,
+            more: false,
+            eof: false,
+            gap: false,
+        })
+    }
 
     fn execution_wait(&self, id: &str, _timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         self.ledger.note("executions.wait");
@@ -1048,6 +1068,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 id: "e".repeat(32),
                 stdout: true,
                 stderr: true,
+            },
+            Capability::ContainerRead,
+        ),
+        (
+            Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 0,
+                limit: 16,
             },
             Capability::ContainerRead,
         ),
@@ -2713,6 +2741,19 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         .expect("execution output");
     assert!(matches!(output, Reply::Logs(output) if output.eof && !output.truncated));
 
+    let page = session
+        .dispatch(
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 41,
+                limit: 16,
+            },
+            &services(&host),
+        )
+        .expect("paged execution output");
+    assert!(matches!(page, Reply::ExecutionOutput(page)
+        if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row\n"));
+
     let waited = session
         .dispatch(
             &Request::ExecutionWait {
@@ -2780,6 +2821,26 @@ fn execution_logs_require_a_stream_before_calling_host() {
         )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
+}
+
+#[test]
+fn execution_output_window_is_bounded_before_inventory_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    for limit in [0, 17] {
+        assert!(matches!(
+            session.dispatch(
+                &Request::ExecutionOutput {
+                    id: "e".repeat(32),
+                    after: 0,
+                    limit,
+                },
+                &services(&host),
+            ),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

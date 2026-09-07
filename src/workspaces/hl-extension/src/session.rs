@@ -311,6 +311,7 @@ impl Session {
             | Request::ExecutionInspect { .. }
             | Request::ExecutionList
             | Request::ExecutionLogs { .. }
+            | Request::ExecutionOutput { .. }
             | Request::ExecutionWait { .. } => self.containers(request, services),
             Request::ContainerAttachTerminal { id, command } => {
                 immutable_identity(id, &[32, 64], "container")?;
@@ -481,6 +482,51 @@ impl Session {
                     });
                 }
                 Ok(Reply::Logs(port.execution_logs(id, *stdout, *stderr)?))
+            }
+            Request::ExecutionOutput { id, after, limit } => {
+                immutable_identity(id, &[32], "execution")?;
+                if *limit == 0 || *limit > 16 {
+                    return Err(Failure::Conflict {
+                        detail: "execution output limit must be between 1 and 16".into(),
+                    });
+                }
+                let page = port.execution_output(id, *after, *limit)?;
+                let ordered = page
+                    .entries
+                    .iter()
+                    .try_fold(*after, |previous, entry| {
+                        (entry.sequence > previous).then_some(entry.sequence)
+                    })
+                    .is_some();
+                let contiguous = page
+                    .entries
+                    .windows(2)
+                    .all(|pair| pair[1].sequence == pair[0].sequence.saturating_add(1));
+                let gap = page
+                    .entries
+                    .first()
+                    .is_some_and(|entry| entry.sequence != after.saturating_add(1));
+                let bytes = page
+                    .entries
+                    .iter()
+                    .fold(0usize, |total, entry| total.saturating_add(entry.bytes.len()));
+                if page.entries.len() > usize::from(*limit)
+                    || (page.eof && page.more)
+                    || bytes > 256 * 1024
+                    || !ordered
+                    || !contiguous
+                    || page.gap != gap
+                    || page.next != page.entries.last().map_or(*after, |entry| entry.sequence)
+                    || page
+                        .entries
+                        .iter()
+                        .any(|entry| !matches!(entry.stream.as_str(), "stdout" | "stderr"))
+                {
+                    return Err(Failure::Failed {
+                        detail: "host returned invalid or oversized execution output page".into(),
+                    });
+                }
+                Ok(Reply::ExecutionOutput(page))
             }
             Request::ExecutionWait { id, timeout_ms } => {
                 immutable_identity(id, &[32], "execution")?;

@@ -110,6 +110,39 @@ impl ContainerInventory for ContainerCatalog {
         ))
     }
 
+    fn execution_output(
+        &self,
+        id: &str,
+        after: u64,
+        limit: u16,
+    ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+        let client = self.bridge.client();
+        let page = self
+            .bridge
+            .wait(client.executions().output(id, after, limit))
+            .map_err(|error| failure(&error))?;
+        Ok(hl_extension::port::ExecutionOutputPage {
+            entries: page
+                .entries
+                .into_iter()
+                .map(|entry| hl_extension::port::ExecutionOutputEntry {
+                    sequence: entry.sequence,
+                    timestamp_ms: entry.timestamp_ms,
+                    stream: match entry.stream {
+                        hl_container::Stream::Stdout => "stdout",
+                        hl_container::Stream::Stderr => "stderr",
+                    }
+                    .into(),
+                    bytes: entry.bytes,
+                })
+                .collect(),
+            next: page.next,
+            more: page.more,
+            eof: page.eof,
+            gap: page.gap,
+        })
+    }
+
     fn execution_wait(&self, id: &str, timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         let client = self.bridge.client();
         self.bridge.wait(async {

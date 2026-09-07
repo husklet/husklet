@@ -73,6 +73,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("execution_inspect", "execution"),
     ("execution_list", "executions"),
     ("execution_logs", "logs"),
+    ("execution_output", "execution_output"),
     ("execution_wait", "execution"),
     ("execution_kill", "done"),
     ("execution_remove", "done"),
@@ -176,6 +177,7 @@ fn request_capability(request: &str) -> Capability {
         | "execution_inspect"
         | "execution_list"
         | "execution_logs"
+        | "execution_output"
         | "execution_wait" => Capability::ContainerRead,
         "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause"
         | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec"

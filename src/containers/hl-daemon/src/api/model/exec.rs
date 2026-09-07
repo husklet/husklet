@@ -8,6 +8,23 @@ pub struct ExecOutput {
     pub stderr: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExecOutputEntry {
+    pub sequence: u64,
+    pub timestamp_ms: u64,
+    pub stream: hl_container::Stream,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExecOutputPage {
+    pub entries: Vec<ExecOutputEntry>,
+    pub next: u64,
+    pub more: bool,
+    pub eof: bool,
+    pub gap: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ExecCatalogue {
     pub executions: Vec<ExecInspect>,

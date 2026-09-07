@@ -1103,6 +1103,104 @@
       "kind": "struct",
       "serde": {}
     },
+    "ExecutionOutputEntry": {
+      "fields": [
+        {
+          "name": "sequence",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "timestamp_ms",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "stream",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "bytes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
+              "signed": false
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExecutionOutputPage": {
+      "fields": [
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionOutputEntry"
+            }
+          }
+        },
+        {
+          "name": "next",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "eof",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "gap",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ExecutionSummary": {
       "fields": [
         {
@@ -6579,6 +6677,10 @@
     },
     {
       "capability": "containers:read",
+      "request": "execution_output"
+    },
+    {
+      "capability": "containers:read",
       "request": "execution_wait"
     },
     {
@@ -7006,6 +7108,10 @@
     {
       "reply": "logs",
       "request": "execution_logs"
+    },
+    {
+      "reply": "execution_output",
+      "request": "execution_output"
     },
     {
       "reply": "execution",
@@ -7546,6 +7652,16 @@
             "of": {
               "kind": "ref",
               "name": "ContainerOutput"
+            }
+          }
+        },
+        {
+          "name": "execution_output",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExecutionOutputPage"
             }
           }
         },
@@ -8347,6 +8463,43 @@
                 "optional": false,
                 "schema": {
                   "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_output",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -11251,7 +11404,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:abeea3010ecd4f94",
+  "source_fingerprint": "fnv1a64:2ae8464a2d043261",
   "specification_version": 1,
   "topics": [
     {

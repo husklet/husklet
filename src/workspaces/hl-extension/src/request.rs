@@ -145,6 +145,11 @@ pub enum Request {
         stdout: bool,
         stderr: bool,
     },
+    ExecutionOutput {
+        id: String,
+        after: u64,
+        limit: u16,
+    },
     ExecutionWait {
         id: String,
         timeout_ms: u32,
@@ -478,6 +483,7 @@ impl Request {
             | Self::ExecutionInspect { .. }
             | Self::ExecutionList
             | Self::ExecutionLogs { .. }
+            | Self::ExecutionOutput { .. }
             | Self::ExecutionWait { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
@@ -671,6 +677,7 @@ pub enum Reply {
     Container(ContainerSummary),
     Processes(ProcessList),
     Logs(ContainerOutput),
+    ExecutionOutput(crate::port::ExecutionOutputPage),
     Execution(ExecutionSummary),
     Executions(ExecutionList),
     Images(crate::port::ImageInventory),
