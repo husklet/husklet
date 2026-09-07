@@ -1252,6 +1252,9 @@ static int hl_native_checkpoint_locks_admissible(const char *proc_root, pid_t pr
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic int hl_native_checkpoint_test_scan_stopped;
 static int hl_native_checkpoint_test_observe_stop;
+static int hl_native_checkpoint_test_race_command = -1;
+static int hl_native_checkpoint_test_race_reply = -1;
+static pid_t hl_native_checkpoint_test_kill_after_stop = -1;
 static int hl_native_supervised_stopped(pid_t process);
 #endif
 
@@ -1272,11 +1275,13 @@ static int hl_native_checkpoint_admissible_at(const char *proc_root, pid_t proce
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
 static int hl_native_checkpoint_phase1_test(void);
 static int hl_native_checkpoint_empty_fds_test(void);
+static int hl_native_checkpoint_domain_freeze_test(void);
 HL_API int hl_native_checkpoint_admission_test(const char *proc_root, int process,
                                                const int *private_fds, size_t private_count) {
     if (proc_root == NULL || (private_count != 0 && private_fds == NULL)) return -1;
     if (strcmp(proc_root, "phase1:test") == 0) return hl_native_checkpoint_phase1_test();
     if (strcmp(proc_root, "empty-fds:test") == 0) return hl_native_checkpoint_empty_fds_test();
+    if (strcmp(proc_root, "domain-freeze:test") == 0) return hl_native_checkpoint_domain_freeze_test();
     return hl_native_checkpoint_admissible_at(proc_root, (pid_t)process, private_fds, private_count);
 }
 #endif
@@ -1294,45 +1299,237 @@ static int hl_native_supervised_stopped(pid_t process) {
     return state != NULL && (state[8] == 'T' || state[8] == 't');
 }
 
-static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t generation, const hl_options *options) {
-    if (workload <= 0 || kill(workload, SIGSTOP) != 0) return -1;
-    int frozen = 0;
-    for (int attempt = 0; attempt < 1000 && !frozen; ++attempt) {
-        frozen = hl_native_supervised_stopped(workload);
-        if (!frozen) usleep(1000);
+#define HL_NATIVE_CHECKPOINT_MEMBER_MAX 4096
+
+typedef struct {
+    pid_t pid;
+    int pidfd;
+    int was_stopped;
+} hl_native_checkpoint_member;
+
+typedef struct {
+    hl_native_checkpoint_member members[HL_NATIVE_CHECKPOINT_MEMBER_MAX];
+    size_t count;
+} hl_native_checkpoint_domain;
+
+static void hl_native_checkpoint_domain_close(hl_native_checkpoint_domain *domain) {
+    for (size_t index = 0; index < domain->count; ++index) {
+        if (domain->members[index].pidfd >= 0) close(domain->members[index].pidfd);
+        domain->members[index].pidfd = -1;
     }
-    if (!frozen || hl_native_checkpoint_admissible_at("/proc", workload, NULL, 0) != 0) {
+    domain->count = 0;
+}
+
+static ssize_t hl_native_checkpoint_domain_find(const hl_native_checkpoint_domain *domain, pid_t pid) {
+    for (size_t index = 0; index < domain->count; ++index)
+        if (domain->members[index].pid == pid) return (ssize_t)index;
+    return -1;
+}
+
+/* Open the capability before retaining the numeric name. Every later signal uses the pidfd, so an exit
+ * followed by reuse can only make the operation fail; it can never stop or resume the replacement. */
+static int hl_native_checkpoint_domain_add(hl_native_checkpoint_domain *domain, pid_t pid) {
+    if (pid <= 0 || hl_native_checkpoint_domain_find(domain, pid) >= 0) return pid > 0 ? 0 : -1;
+    if (domain->count == HL_NATIVE_CHECKPOINT_MEMBER_MAX) return -1;
+    int pidfd = (int)syscall(SYS_pidfd_open, pid, 0u);
+    if (pidfd < 0) return -1;
+    hl_native_checkpoint_member *member = &domain->members[domain->count++];
+    member->pid = pid;
+    member->pidfd = pidfd;
+    member->was_stopped = hl_native_supervised_stopped(pid);
+    return 0;
+}
+
+/* Enumerate every process below one native-supervised workload. Children is per task, not per process:
+ * walking only task/<tgid>/children misses a fork performed by another thread. Clone/fork/vfork are held
+ * in the seccomp listener while this runs; the second scan catches a syscall that was continued just
+ * before the generation trigger won the listener. */
+static int hl_native_checkpoint_domain_collect(pid_t root, hl_native_checkpoint_domain *domain) {
+    memset(domain, 0, sizeof(*domain));
+    if (hl_native_checkpoint_domain_add(domain, root) != 0) return -1;
+    for (size_t process_index = 0; process_index < domain->count; ++process_index) {
+        pid_t process = domain->members[process_index].pid;
+        char task_path[64];
+        if (snprintf(task_path, sizeof task_path, "/proc/%d/task", process) >= (int)sizeof task_path) goto failed;
+        DIR *tasks = opendir(task_path);
+        if (tasks == NULL) goto failed;
+        int scan_failed = 0;
+        for (;;) {
+            errno = 0;
+            struct dirent *task = readdir(tasks);
+            if (task == NULL) { scan_failed = errno != 0; break; }
+            char *end = NULL;
+            long tid = strtol(task->d_name, &end, 10);
+            if (task->d_name[0] == 0 || end == NULL || *end != 0 || tid <= 0 || tid > INT_MAX) continue;
+            char children_path[96];
+            if (snprintf(children_path, sizeof children_path, "/proc/%d/task/%ld/children", process, tid) >=
+                (int)sizeof children_path) {
+                closedir(tasks); goto failed;
+            }
+            FILE *children = fopen(children_path, "re");
+            if (children == NULL) { closedir(tasks); goto failed; }
+            long child;
+            while (fscanf(children, "%ld", &child) == 1) {
+                if (child <= 0 || child > INT_MAX ||
+                    hl_native_checkpoint_domain_add(domain, (pid_t)child) != 0) {
+                    fclose(children); closedir(tasks); goto failed;
+                }
+            }
+            int read_failed = ferror(children);
+            fclose(children);
+            if (read_failed) { closedir(tasks); goto failed; }
+        }
+        if (closedir(tasks) != 0 || scan_failed) goto failed;
+    }
+    return 0;
+failed:
+    hl_native_checkpoint_domain_close(domain);
+    return -1;
+}
+
+static int hl_native_checkpoint_member_signal(const hl_native_checkpoint_member *member, int signal) {
+    return (int)syscall(SYS_pidfd_send_signal, member->pidfd, signal, NULL, 0);
+}
+
+static int hl_native_checkpoint_domain_stop(hl_native_checkpoint_domain *domain) {
+    for (size_t index = 0; index < domain->count; ++index)
+        if (hl_native_checkpoint_member_signal(&domain->members[index], SIGSTOP) != 0) return -1;
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        int stopped = 1;
+        for (size_t index = 0; index < domain->count; ++index) {
+            if (hl_native_checkpoint_member_signal(&domain->members[index], 0) != 0 ||
+                !hl_native_supervised_stopped(domain->members[index].pid)) {
+                stopped = 0; break;
+            }
+        }
+        if (stopped) return 0;
+        usleep(1000);
+    }
+    return -1;
+}
+
+/* Resume only processes this ledger moved into the stopped state. ESRCH is success for rollback: the
+ * pidfd proves that exact incarnation is gone, and in particular prevents a reused numeric pid from being
+ * resumed. Every other failure is retained even while rollback continues over the rest of the domain. */
+static int hl_native_checkpoint_domain_thaw(hl_native_checkpoint_domain *domain) {
+    int result = 0;
+    for (size_t index = domain->count; index > 0; --index) {
+        hl_native_checkpoint_member *member = &domain->members[index - 1];
+        if (!member->was_stopped && hl_native_checkpoint_member_signal(member, SIGCONT) != 0 && errno != ESRCH)
+            result = -1;
+    }
+    return result;
+}
+
+static int hl_native_checkpoint_domain_same(const hl_native_checkpoint_domain *left,
+                                            const hl_native_checkpoint_domain *right) {
+    if (left->count != right->count) return 0;
+    for (size_t index = 0; index < left->count; ++index) {
+        ssize_t other = hl_native_checkpoint_domain_find(right, left->members[index].pid);
+        if (other < 0 || hl_native_checkpoint_member_signal(&left->members[index], 0) != 0 ||
+            hl_native_checkpoint_member_signal(&right->members[other], 0) != 0 ||
+            !hl_native_supervised_stopped(left->members[index].pid))
+            return 0;
+    }
+    return 1;
+}
+
+/* Preserve newly discovered incarnations in the rollback ledger before refusing. They are stopped as
+ * well: a racing child must not keep running while its parent and siblings are rolled back. */
+static int hl_native_checkpoint_domain_merge(hl_native_checkpoint_domain *ledger,
+                                             hl_native_checkpoint_domain *observed) {
+    for (size_t index = 0; index < observed->count; ++index) {
+        hl_native_checkpoint_member *member = &observed->members[index];
+        if (hl_native_checkpoint_domain_find(ledger, member->pid) >= 0) continue;
+        if (ledger->count == HL_NATIVE_CHECKPOINT_MEMBER_MAX) return -1;
+        ledger->members[ledger->count++] = *member;
+        member->pidfd = -1;
+    }
+    return 0;
+}
+
+/* 0 is a sealed and wholly stopped inventory; 1 is a topology race; -1 is any other refusal. On every
+ * return the ledger owns all capabilities acquired so far and the caller must thaw then close it. */
+static int hl_native_checkpoint_domain_freeze(pid_t root, hl_native_checkpoint_domain *ledger) {
+    hl_native_checkpoint_domain observed = {0};
+    if (hl_native_checkpoint_domain_collect(root, ledger) != 0) return -1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_native_checkpoint_test_race_command >= 0) {
+        unsigned char command = 1;
+        pid_t raced = -1;
+        if (write(hl_native_checkpoint_test_race_command, &command, 1) != 1 ||
+            read(hl_native_checkpoint_test_race_reply, &raced, sizeof(raced)) != (ssize_t)sizeof(raced))
+            return -1;
+    }
+#endif
+    if (hl_native_checkpoint_domain_stop(ledger) != 0) return -1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_native_checkpoint_test_kill_after_stop > 0) {
+        (void)kill(hl_native_checkpoint_test_kill_after_stop, SIGKILL);
+        usleep(10000);
+    }
+#endif
+    if (hl_native_checkpoint_domain_collect(root, &observed) != 0) return -1;
+    int same = hl_native_checkpoint_domain_same(ledger, &observed);
+    if (!same) {
+        int merged = hl_native_checkpoint_domain_merge(ledger, &observed);
+        hl_native_checkpoint_domain_close(&observed);
+        if (merged != 0 || hl_native_checkpoint_domain_stop(ledger) != 0) return -1;
+        return 1;
+    }
+    hl_native_checkpoint_domain_close(&observed);
+    return 0;
+}
+
+static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t generation, const hl_options *options) {
+    hl_native_checkpoint_domain domain = {0};
+    int freeze = workload > 0 ? hl_native_checkpoint_domain_freeze(workload, &domain) : -1;
+    int admissible = freeze == 0;
+    for (size_t index = 0; admissible && index < domain.count; ++index)
+        admissible = hl_native_checkpoint_admissible_at("/proc", domain.members[index].pid, NULL, 0) == 0;
+    if (!admissible) {
         hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
         (void)hl_ckpt_channel_acquire();
-        (void)hl_ckpt_channel_notify(&refusal, "native phase-1 read-only admission rejected process state");
-        int thawed = kill(workload, SIGCONT) == 0;
+        const char *reason = freeze == 1 ? "native phase-1 process-domain topology changed during freeze"
+                                         : "native phase-1 read-only admission rejected process state";
+        (void)hl_ckpt_channel_notify(&refusal, reason);
+        int thawed = hl_native_checkpoint_domain_thaw(&domain) == 0;
         const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
         if (receipt != NULL) {
-            char line[128];
-            snprintf(line, sizeof line, "registered=0 frozen=%d thawed=%d refusal=unsupported-state\n",
-                     frozen, thawed);
+            char line[192];
+            snprintf(line, sizeof line, "generation=%u registered=0 members=%zu frozen=%d thawed=%d refusal=%s\n",
+                     generation, domain.count, freeze >= 0, thawed,
+                     freeze == 1 ? "topology-race" : "unsupported-state");
             (void)hl_native_supervised_write_text(receipt, line);
         }
+        hl_native_checkpoint_domain_close(&domain);
         return -1;
     }
     int registered = 0;
-    if (frozen && hl_options_get(options, "HL_NATIVE_CKPT_TEST_SKIP_REGISTER") == NULL) {
+    if (hl_options_get(options, "HL_NATIVE_CKPT_TEST_SKIP_REGISTER") == NULL) {
         /* The trigger is bumped while the host still owns the capture-state lock; wait until the
          * matching membership ledger is visible before announcing this stopped participant. */
         usleep(10000);
-        unsigned char payload[12] = {0};
-        uint32_t one = 1, executor = (uint32_t)workload;
-        memcpy(payload, &one, 4);
-        memcpy(payload + 8, &executor, 4);
+        size_t payload_size = 8 + domain.count * sizeof(uint64_t);
+        unsigned char *payload = calloc(1, payload_size);
+        if (payload != NULL) {
+            uint32_t count = (uint32_t)domain.count;
+            memcpy(payload, &count, sizeof(count));
+            for (size_t index = 0; index < domain.count; ++index) {
+                uint64_t executor = (uint64_t)domain.members[index].pid;
+                memcpy(payload + 8 + index * sizeof(executor), &executor, sizeof(executor));
+            }
+        }
         hl_ckpt_reply reply = {0};
         int called = -1;
-        for (int attempt = 0; attempt < 1000 && !registered; ++attempt) {
+        for (int attempt = 0; payload != NULL && attempt < 1000 && !registered; ++attempt) {
             hl_ckpt_request request = {
-                .op = HL_CKPT_OP_REGISTER_READY, .length = sizeof(payload), .generation = generation};
+                .op = HL_CKPT_OP_REGISTER_READY, .length = payload_size, .generation = generation};
             called = hl_ckpt_channel_call(&request, NULL, payload, &reply, NULL, 0);
             registered = called == 0 && reply.status == HL_CKPT_STATUS_OK && reply.value != 0;
             if (!registered) usleep(1000);
         }
+        free(payload);
         if (!registered && hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
             fprintf(stderr, "[hl-native-checkpoint]\tregister_call=%d status=%d member=%llu failure=%s\n",
                     called, reply.status, (unsigned long long)reply.value,
@@ -1341,18 +1538,19 @@ static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t gener
     hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
     (void)hl_ckpt_channel_notify(&refusal, registered ? "native phase-1 supports freeze only, not image capture"
                                                        : "native phase-1 participant registration failed");
-    int thawed = kill(workload, SIGCONT) == 0;
+    int thawed = hl_native_checkpoint_domain_thaw(&domain) == 0;
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
-        fprintf(stderr, "[hl-native-checkpoint]\tgeneration=%u registered=%d frozen=%d thawed=%d\n",
-                generation, registered, frozen, thawed);
+        fprintf(stderr, "[hl-native-checkpoint]\tgeneration=%u registered=%d members=%zu frozen=1 thawed=%d\n",
+                generation, registered, domain.count, thawed);
     const char *receipt = hl_options_get(options, "HL_NATIVE_CKPT_TEST_RECEIPT");
     if (receipt != NULL) {
-        char line[128];
-        snprintf(line, sizeof(line), "generation=%u registered=%d frozen=%d thawed=%d\n",
-                 generation, registered, frozen, thawed);
+        char line[160];
+        snprintf(line, sizeof(line), "generation=%u registered=%d members=%zu frozen=1 thawed=%d\n",
+                 generation, registered, domain.count, thawed);
         (void)hl_native_supervised_write_text(receipt, line);
     }
-    return registered && frozen && thawed ? 0 : -1;
+    hl_native_checkpoint_domain_close(&domain);
+    return registered && thawed ? 0 : -1;
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS) && defined(HL_NATIVE_TEST_HOOK_EXPORT)
@@ -1393,6 +1591,104 @@ static int hl_native_checkpoint_empty_fds_test(void) {
     for (int attempt = 0; attempt < 1000 && !hl_native_supervised_stopped(child); ++attempt) usleep(1000);
     int result = hl_native_checkpoint_fds_admissible("/proc", child, NULL, 0);
     (void)kill(child, SIGKILL); (void)waitpid(child, NULL, 0);
+    return result;
+}
+
+static int hl_native_checkpoint_test_wait_state(pid_t process, int stopped) {
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        if (hl_native_supervised_stopped(process) == stopped) return 0;
+        usleep(1000);
+    }
+    return -1;
+}
+
+/* One non-vacuous native test exercises the production freeze primitive across the failure modes that
+ * matter as a unit: the second enumeration catches a fork between inventory and stop, the union ledger
+ * stops and thaws that missed child, stable generations repeat, a killed member refuses while its live
+ * peer resumes, and the dead member's pidfd cannot be redirected by changing its numeric pid field. */
+static int hl_native_checkpoint_domain_freeze_test(void) {
+    int command[2] = {-1, -1}, reply[2] = {-1, -1};
+    if (pipe2(command, O_CLOEXEC) != 0 || pipe2(reply, O_CLOEXEC) != 0) return 1;
+    pid_t root = fork();
+    if (root < 0) return 2;
+    if (root == 0) {
+        close(command[1]); close(reply[0]);
+        unsigned char byte;
+        if (read(command[0], &byte, 1) != 1) _exit(90);
+        pid_t child = fork();
+        if (child < 0 || write(reply[1], &child, sizeof(child)) != (ssize_t)sizeof(child)) _exit(91);
+        if (child == 0) for (;;) pause();
+        for (;;) pause();
+    }
+    close(command[0]); close(reply[1]);
+    usleep(10000);
+    hl_native_checkpoint_test_race_command = command[1];
+    hl_native_checkpoint_test_race_reply = reply[0];
+    hl_native_checkpoint_domain domain = {0};
+    int result = hl_native_checkpoint_domain_freeze(root, &domain);
+    hl_native_checkpoint_test_race_command = -1;
+    hl_native_checkpoint_test_race_reply = -1;
+    pid_t raced = domain.count == 2 ? domain.members[1].pid : -1;
+    int raced_refused = result == 1 && domain.count == 2 &&
+                        hl_native_supervised_stopped(root) && hl_native_supervised_stopped(raced);
+    int raced_thawed = hl_native_checkpoint_domain_thaw(&domain) == 0 &&
+                       hl_native_checkpoint_test_wait_state(root, 0) == 0 &&
+                       hl_native_checkpoint_test_wait_state(raced, 0) == 0;
+    hl_native_checkpoint_domain_close(&domain);
+    if (!raced_refused || !raced_thawed) { result = 3; goto done; }
+
+    for (int generation = 0; generation < 2; ++generation) {
+        memset(&domain, 0, sizeof(domain));
+        if (hl_native_checkpoint_domain_freeze(root, &domain) != 0 || domain.count != 2 ||
+            !hl_native_supervised_stopped(root) || !hl_native_supervised_stopped(raced) ||
+            hl_native_checkpoint_domain_thaw(&domain) != 0) {
+            hl_native_checkpoint_domain_close(&domain); result = 4; goto done;
+        }
+        hl_native_checkpoint_domain_close(&domain);
+        if (hl_native_checkpoint_test_wait_state(root, 0) != 0 ||
+            hl_native_checkpoint_test_wait_state(raced, 0) != 0) { result = 5; goto done; }
+    }
+
+    hl_native_checkpoint_test_kill_after_stop = raced;
+    memset(&domain, 0, sizeof(domain));
+    if (hl_native_checkpoint_domain_freeze(root, &domain) == 0) { result = 6; goto killed_done; }
+    hl_native_checkpoint_test_kill_after_stop = -1;
+    if (hl_native_checkpoint_domain_thaw(&domain) != 0 || hl_native_checkpoint_test_wait_state(root, 0) != 0) {
+        result = 7; goto killed_done;
+    }
+    hl_native_checkpoint_domain_close(&domain);
+    pid_t dead_process = fork();
+    if (dead_process < 0) { result = 8; goto done; }
+    if (dead_process == 0) for (;;) pause();
+    hl_native_checkpoint_member dead_member = {.pid = dead_process, .pidfd = -1, .was_stopped = 0};
+    dead_member.pidfd = (int)syscall(SYS_pidfd_open, dead_process, 0u);
+    if (dead_member.pidfd < 0) {
+        (void)kill(dead_process, SIGKILL); (void)waitpid(dead_process, NULL, 0); result = 8; goto done;
+    }
+    (void)kill(dead_process, SIGKILL); (void)waitpid(dead_process, NULL, 0);
+    pid_t replacement = fork();
+    if (replacement < 0) { close(dead_member.pidfd); result = 9; goto done; }
+    if (replacement == 0) for (;;) pause();
+    (void)kill(replacement, SIGSTOP);
+    if (hl_native_checkpoint_test_wait_state(replacement, 1) != 0) {
+        close(dead_member.pidfd); (void)kill(replacement, SIGKILL); (void)waitpid(replacement, NULL, 0);
+        result = 10; goto done;
+    }
+    dead_member.pid = replacement;
+    errno = 0;
+    int stale = hl_native_checkpoint_member_signal(&dead_member, SIGCONT);
+    int stale_errno = errno;
+    int replacement_still_stopped = hl_native_supervised_stopped(replacement);
+    close(dead_member.pidfd);
+    (void)kill(replacement, SIGCONT); (void)kill(replacement, SIGKILL); (void)waitpid(replacement, NULL, 0);
+    result = stale == 0 || stale_errno != ESRCH || !replacement_still_stopped ? 11 : 0;
+killed_done:
+    hl_native_checkpoint_test_kill_after_stop = -1;
+    hl_native_checkpoint_domain_close(&domain);
+done:
+    close(command[1]); close(reply[0]);
+    (void)kill(root, SIGCONT); (void)kill(root, SIGKILL); (void)waitpid(root, NULL, 0);
+    if (raced > 0) { (void)kill(raced, SIGKILL); (void)waitpid(raced, NULL, 0); }
     return result;
 }
 #endif
