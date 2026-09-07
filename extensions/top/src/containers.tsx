@@ -64,9 +64,12 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
     try {
       let verified: boolean | null = null;
       if (generation === undefined)
-        throw new Error(`Container ${id} has no observable generation; refresh before changing it.`);
+        throw new Error(
+          `Container ${id} has no observable generation; refresh before changing it.`,
+        );
       if (verb === 'start') verified = (await api.containers.startAndWait(id, generation)).changed;
-      else if (verb === 'stop') verified = (await api.containers.stopAndWait(id, generation)).changed;
+      else if (verb === 'stop')
+        verified = (await api.containers.stopAndWait(id, generation)).changed;
       else if (verb === 'restart') {
         if (generation === undefined)
           throw new Error(

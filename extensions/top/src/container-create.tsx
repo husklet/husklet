@@ -368,6 +368,9 @@ export function ContainerCreate({ api, blocked, onBusyChange, reload }: Containe
           ...containerCreateOptions(draft),
         });
         const observed = await api.containers.inspect(id);
+        if (observed.id !== id) {
+          throw new Error(`Created container ${id} could not be verified by immutable identity.`);
+        }
         target = { id, name, generation: observed.generation };
         setCreated(target);
       }

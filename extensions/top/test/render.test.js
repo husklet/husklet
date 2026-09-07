@@ -1973,7 +1973,7 @@ test('container stop and kill cannot call the API before final confirmation', as
     },
   };
   const resource = {
-    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -1990,18 +1990,22 @@ test('container stop and kill cannot call the API before final confirmation', as
   invoke(stage, 'Stop');
   invoke(stage, 'Confirm stop');
   await settled();
-  assert.deepEqual(calls, [['stop', immutable]]);
+  assert.deepEqual(calls, [['stop', immutable, 7]]);
 
   invoke(stage, 'Details');
   await settled();
   await settled();
   invoke(stage, 'Kill');
-  assert.deepEqual(calls, [['stop', immutable]], 'opening kill confirmation performs no operation');
+  assert.deepEqual(
+    calls,
+    [['stop', immutable, 7]],
+    'opening kill confirmation performs no operation',
+  );
   assert.ok(labelled(stage, `Force-kill api with immutable ID ${immutable}?`));
   assert.equal(isDestructive(stage, 'Confirm kill'), true);
   invoke(stage, 'Confirm kill');
   await settled();
-  assert.deepEqual(calls.at(-1), ['kill', immutable, 'SIGKILL']);
+  assert.deepEqual(calls.at(-1), ['kill', immutable, 7, 'SIGKILL']);
 });
 
 test('container rename validates locally, retries failure, and preserves immutable authority until refresh', async () => {
@@ -2018,7 +2022,7 @@ test('container rename validates locally, retries failure, and preserves immutab
     },
   };
   const resource = {
-    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: immutable, name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => calls.push(['reload']),
@@ -2053,8 +2057,8 @@ test('container rename validates locally, retries failure, and preserves immutab
   await settled();
   await settled();
   assert.deepEqual(calls, [
-    ['rename', immutable, 'worker_2.prod'],
-    ['rename', immutable, 'worker_2.prod'],
+    ['rename', immutable, 7, 'worker_2.prod'],
+    ['rename', immutable, 7, 'worker_2.prod'],
     ['reload'],
   ]);
   assert.ok(
@@ -2134,8 +2138,9 @@ test('container creation retains exact identity and retries only start after a p
         calls.push(['create', spec]);
         return 'container-new';
       },
-      start: async (id) => {
-        calls.push(['start', id]);
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => {
+        calls.push(['start', id, generation]);
         starts += 1;
         if (starts === 1) throw new Error('runtime temporarily unavailable');
       },
@@ -2195,12 +2200,41 @@ test('container creation retains exact identity and retries only start after a p
     calls,
     [
       ['create', { image: 'alpine:3.20', name: 'worker' }],
-      ['start', 'container-new'],
-      ['start', 'container-new'],
+      ['start', 'container-new', 0],
+      ['start', 'container-new', 0],
       ['reload'],
     ],
     'retry never creates a duplicate container',
   );
+});
+
+test('container creation refuses to start when inspection returns a different immutable identity', async () => {
+  const calls = [];
+  const created = 'a'.repeat(32);
+  const replacement = 'b'.repeat(32);
+  const controlled = {
+    containers: {
+      create: async () => created,
+      inspect: async () => ({ id: replacement, generation: 0 }),
+      start: async (...args) => calls.push(args),
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api: controlled,
+      resource: { data: [], loading: false, error: null, reload: async () => {} },
+    }),
+  );
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'worker');
+  invoke(stage, 'Create and start');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(stage, `Created container ${created} could not be verified by immutable identity.`),
+  );
+  assert.deepEqual(calls, []);
 });
 
 test('container creation validates exact resource bounds and retains them until success', async () => {
@@ -2214,7 +2248,8 @@ test('container creation validates exact resource bounds and retains them until 
         if (creates === 1) throw new Error('create temporarily unavailable');
         return 'limited-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2274,7 +2309,7 @@ test('container creation validates exact resource bounds and retains them until 
         pids_limit: 1_000_000,
       },
     ],
-    ['start', 'limited-container'],
+    ['start', 'limited-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, 'Memory limit MiB (optional)'), '');
@@ -2293,7 +2328,8 @@ test('container creation accepts only bounded named-volume mounts and retains th
         if (creates === 1) throw new Error('volume attachment temporarily unavailable');
         return 'mounted-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2357,7 +2393,7 @@ test('container creation accepts only bounded named-volume mounts and retains th
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'mounted-container'],
+    ['start', 'mounted-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2374,7 +2410,8 @@ test('container creation validates bounded published ports and retains them unti
         if (creates === 1) throw new Error('port publication temporarily unavailable');
         return 'published-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2441,7 +2478,7 @@ test('container creation validates bounded published ports and retains them unti
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'published-container'],
+    ['start', 'published-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2458,7 +2495,8 @@ test('container creation validates runtime identity and retains it until success
         if (creates === 1) throw new Error('identity temporarily unavailable');
         return 'identity-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2514,7 +2552,7 @@ test('container creation validates runtime identity and retains it until success
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'identity-container'],
+    ['start', 'identity-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, 'Hostname (optional)'), '');
@@ -2532,7 +2570,8 @@ test('container creation validates bounded labels and retains them until success
         if (creates === 1) throw new Error('label persistence temporarily unavailable');
         return 'labelled-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2592,7 +2631,7 @@ test('container creation validates bounded labels and retains them until success
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'labelled-container'],
+    ['start', 'labelled-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2609,7 +2648,8 @@ test('container creation validates entrypoint argv and retains it until success'
         if (creates === 1) throw new Error('entrypoint temporarily unavailable');
         return 'entrypoint-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2684,7 +2724,7 @@ test('container creation validates entrypoint argv and retains it until success'
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'entrypoint-container'],
+    ['start', 'entrypoint-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2701,7 +2741,8 @@ test('container creation validates an initial network reference and retains it u
         if (creates === 1) throw new Error('network attachment temporarily unavailable');
         return 'networked-container';
       },
-      start: async (id) => calls.push(['start', id]),
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async (id, generation) => calls.push(['start', id, generation]),
     },
   };
   const resource = {
@@ -2741,7 +2782,7 @@ test('container creation validates an initial network reference and retains it u
   assert.deepEqual(calls, [
     ['create', spec],
     ['create', spec],
-    ['start', 'networked-container'],
+    ['start', 'networked-container', 0],
     ['reload'],
   ]);
   assert.equal(fieldValue(stage, placeholder), '');
@@ -2821,7 +2862,7 @@ test('container lifecycle controls report only observation-backed completion', a
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Start completed and was verified.'));
-  assert.deepEqual(calls, [['start', id], ['reload']]);
+  assert.deepEqual(calls, [['start', id, 7], ['reload']]);
 
   render('running');
   invoke(stage, 'Restart');
@@ -2840,7 +2881,7 @@ test('container lifecycle controls report only observation-backed completion', a
       'Stop was sent, but the requested transition was not observed before the deadline.',
     ),
   );
-  assert.deepEqual(calls.slice(-2), [['stop', id], ['reload']]);
+  assert.deepEqual(calls.slice(-2), [['stop', id, 7], ['reload']]);
 
   render('exited', 8);
   invoke(stage, 'Remove');
@@ -2848,7 +2889,7 @@ test('container lifecycle controls report only observation-backed completion', a
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Container removal completed and its absence was verified.'));
-  assert.deepEqual(calls.slice(-2), [['remove', id], ['reload']]);
+  assert.deepEqual(calls.slice(-2), [['remove', id, 8], ['reload']]);
 });
 
 test('restart refuses a container without an observed generation', async () => {
@@ -2869,7 +2910,7 @@ test('restart refuses a container without an observed generation', async () => {
   await settled();
   await settled();
   assert.ok(
-    labelled(stage, 'Container old has no observable generation; refresh before restarting it.'),
+    labelled(stage, 'Container old has no observable generation; refresh before changing it.'),
   );
   assert.deepEqual(calls, []);
 });
@@ -2885,15 +2926,15 @@ test('container execution preserves argv and exposes the exact inspectable ident
         state: 'running',
         created: 0,
       }),
-      exec: async (id, options) => {
-        calls.push(['exec', id, options]);
+      exec: async (id, generation, options) => {
+        calls.push(['exec', id, generation, options]);
         return 'execution-exact-42';
       },
       logs: async () => new Uint8Array(),
     },
   };
   const resource = {
-    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running' }],
+    data: [{ id: 'container-one', name: 'api', image: 'alpine', state: 'running', generation: 7 }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -2926,6 +2967,7 @@ test('container execution preserves argv and exposes the exact inspectable ident
     [
       'exec',
       'container-one',
+      7,
       {
         command: ['sh', '-lc', 'printf hello world'],
         user: '1000:1000',
