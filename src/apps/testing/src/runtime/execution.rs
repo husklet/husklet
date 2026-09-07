@@ -587,6 +587,11 @@ impl<'a> CaseExecution<'a> {
         let output = state.join("output");
         let diagnostics = state.join("backend-diagnostics");
         let mut diagnostic_offset = 0;
+        let direct_call_guard = self
+            .case
+            .engine_options
+            .direct_call_pre_spill()
+            .filter(|_| self.target == Target::Amd64);
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
             .into_iter()
@@ -604,7 +609,7 @@ impl<'a> CaseExecution<'a> {
                 return Err(checkpoint_failure_diagnostic(&error.to_string(), logs.as_ref().ok()).into());
             }
             let generation_diagnostics = checkpoint_generation_diagnostics(&diagnostics, &mut diagnostic_offset)?;
-            validate_checkpoint_generation(&generation_diagnostics, generation, self.target)?;
+            validate_checkpoint_generation(&generation_diagnostics, generation, self.target, direct_call_guard)?;
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
@@ -618,7 +623,7 @@ impl<'a> CaseExecution<'a> {
         .await?;
         *observed = Some(status);
         let generation_diagnostics = checkpoint_generation_diagnostics(&diagnostics, &mut diagnostic_offset)?;
-        validate_checkpoint_generation(&generation_diagnostics, 2, self.target)?;
+        validate_checkpoint_generation(&generation_diagnostics, 2, self.target, direct_call_guard)?;
         let text = std::fs::read_to_string(output)?;
         validate_daily_dev_protocol(&text)?;
         if status != ExitStatus::Code(0) {
@@ -696,9 +701,18 @@ fn checkpoint_generation_diagnostics(path: &Path, offset: &mut usize) -> Result<
     Ok(generation)
 }
 
-fn validate_checkpoint_generation(generation: &[u8], ordinal: usize, target: Target) -> Result<(), Error> {
+fn validate_checkpoint_generation(
+    generation: &[u8],
+    ordinal: usize,
+    target: Target,
+    direct_call_guard: Option<bool>,
+) -> Result<(), Error> {
     output::validate_backend_tree(generation, true)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    if let Some(expected) = direct_call_guard {
+        output::validate_direct_call_guard_candidate(generation, expected)
+            .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;
+    }
     let aarch64_interpreter_product = target == Target::Arm64 && cfg!(target_arch = "x86_64");
     output::aarch64_opcode_product(generation, aarch64_interpreter_product, true, true)
         .map_err(|error| format!("generation {ordinal}: {error}; diagnostics={}", generation.preview()))?;

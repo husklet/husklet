@@ -18,4 +18,3 @@ cases:
     expect:
       exit: 0
       stdout_empty: true
-      diagnostics: [{ counter: direct_call_guard_candidate_enabled, equals: 1 }]

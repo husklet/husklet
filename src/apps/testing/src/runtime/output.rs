@@ -701,6 +701,20 @@ pub(super) fn validate_backend_tree(stderr: &[u8], enabled: bool) -> Result<(), 
     Ok(())
 }
 
+pub(super) fn validate_direct_call_guard_candidate(stderr: &[u8], expected: bool) -> Result<(), Error> {
+    let text = std::str::from_utf8(stderr).map_err(|_| "direct-call guard diagnostic is not UTF-8")?;
+    let shape = backend_shape(text)?;
+    let observed = shape["direct_call_guard_candidate_enabled"];
+    if observed != u64::from(expected) {
+        return Err(format!(
+            "direct-call guard candidate is {observed}, expected {}",
+            u64::from(expected)
+        )
+        .into());
+    }
+    Ok(())
+}
+
 pub(super) fn validate_translated_execution(stderr: &[u8]) -> Result<(), Error> {
     if product_backend_shape(stderr) {
         let shape = backend_shape_product(stderr, true)?.expect("product-shape detection established one record");
@@ -2103,6 +2117,17 @@ mod tests {
             digest.contains("crossings=5 translated_entries=2 interpreted_entries=3"),
             "{digest}"
         );
+    }
+
+    #[test]
+    fn direct_call_guard_candidate_uses_the_private_shape_record() {
+        validate_direct_call_guard_candidate(SHAPE.as_bytes(), false).unwrap();
+        let enabled = SHAPE.replace(
+            "direct_call_guard_candidate_enabled=0",
+            "direct_call_guard_candidate_enabled=1",
+        );
+        validate_direct_call_guard_candidate(enabled.as_bytes(), true).unwrap();
+        assert!(validate_direct_call_guard_candidate(enabled.as_bytes(), false).is_err());
     }
 
     #[test]
