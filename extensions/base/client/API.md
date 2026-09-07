@@ -43,6 +43,26 @@ yet carry an ID/name constraint; extensions receiving `containers:read` or
 `containers:control` can reach every container in the workspace, which must be
 shown honestly in installation consent.
 
+### Per-resource grants
+
+The smallest coherent container constraint is a second, persisted selector check
+after the exact capability check—not capabilities assembled from resource names.
+A future manifest should declare bounded exact selectors such as
+`container_scopes = [{ id = "<digest>" }, { name = "database" }]`. The host must
+persist the consented selectors with the image digest, filter list/event snapshots
+to that scope, and resolve a name to an immutable ID plus generation before any
+mutation. Mutation requests must carry that observed identity so a renamed or
+replaced container fails closed. Container creation additionally needs an explicit
+`create = true` selector; visibility of an existing container must not imply
+authority to create another one. An omitted scope must grant no container, while
+an explicit wildcard can represent the current workspace-wide authority during
+migration.
+
+Filesystem roots already implement this two-dimensional model: the capability
+decides the verb and exact roots decide the resource. Container scoping should use
+the same enforcement order and denial behavior; filtering only the JavaScript
+client would not be a security boundary.
+
 ## Workspace
 
 - `host.info(...)` — `workspace_info`, requires `workspaces:read`.
