@@ -201,6 +201,16 @@ function exactCommand(command) {
   return command;
 }
 
+function containerMutation(reference, generation) {
+  if (typeof reference !== 'string' || reference.length === 0 || reference.length > 128 || reference.includes('\0')) {
+    throw new TypeError('container mutation requires a nonempty NUL-free reference of at most 128 characters');
+  }
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new TypeError('container mutation requires an observed nonnegative safe generation');
+  }
+  return { id: reference, generation };
+}
+
 function exactPaneInput(input) {
   if (typeof input === 'string') {
     const bytes = new TextEncoder().encode(input);
@@ -431,27 +441,27 @@ export function workspace(session, { signal } = {}) {
         };
         return expect(await session.call('container_create', { spec: normalized }), 'identity');
       },
-      start: (id) => done('container_start', { id: immutableIdentity(id, [32, 64], 'container') }),
-      stop: (id) => done('container_stop', { id: immutableIdentity(id, [32, 64], 'container') }),
-      remove: (id) => done('container_remove', { id: immutableIdentity(id, [32, 64], 'container') }),
-      pause: (id) => done('container_pause', { id: immutableIdentity(id, [32, 64], 'container') }),
-      unpause: (id) => done('container_unpause', { id: immutableIdentity(id, [32, 64], 'container') }),
-      restart: (id) => done('container_restart', { id: immutableIdentity(id, [32, 64], 'container') }),
-      rename: (id, name) => done('container_rename', {
-        id: immutableIdentity(id, [32, 64], 'container'), name: exactContainerName(name),
+      start: (id, generation) => done('container_start', containerMutation(id, generation)),
+      stop: (id, generation) => done('container_stop', containerMutation(id, generation)),
+      remove: (id, generation) => done('container_remove', containerMutation(id, generation)),
+      pause: (id, generation) => done('container_pause', containerMutation(id, generation)),
+      unpause: (id, generation) => done('container_unpause', containerMutation(id, generation)),
+      restart: (id, generation) => done('container_restart', containerMutation(id, generation)),
+      rename: (id, generation, name) => done('container_rename', {
+        ...containerMutation(id, generation), name: exactContainerName(name),
       }),
-      kill: (id, signal) => done('container_kill', { id: immutableIdentity(id, [32, 64], 'container'), signal }),
-      exec: async (id, { command, user, workingDirectory } = {}) => expect(
+      kill: (id, generation, signal) => done('container_kill', { ...containerMutation(id, generation), signal }),
+      exec: async (id, generation, { command, user, workingDirectory } = {}) => expect(
         await session.call('container_exec', {
-          id: immutableIdentity(id, [32, 64], 'container'), command,
+          ...containerMutation(id, generation), command,
           user: user ?? null, working_directory: workingDirectory ?? null,
         }), 'identity',
       ),
-      execAndWait: async (id, { command, user, workingDirectory, ...waitOptions } = {}) => {
+      execAndWait: async (id, generation, { command, user, workingDirectory, ...waitOptions } = {}) => {
         const containerId = immutableIdentity(id, [32, 64], 'container');
         const argv = exactCommand(command);
         const { timeoutMs, stdout, stderr } = exactExecutionWaitOptions(waitOptions);
-        const executionId = await api.containers.exec(containerId, { command: argv, user, workingDirectory });
+        const executionId = await api.containers.exec(containerId, generation, { command: argv, user, workingDirectory });
         let phase = 'wait';
         let execution;
         try {
@@ -771,7 +781,7 @@ export function workspace(session, { signal } = {}) {
   };
   api.watchContainers = (listener) => watch('containers', 'containers', listener, 'container');
   api.watchContainerInventory = (listener) => watch('container-inventory', 'container_inventory', listener, 'container inventory');
-  api.containers.startAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+  api.containers.startAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('container start wait timeout must be between 1 and 30000ms');
@@ -789,7 +799,7 @@ export function workspace(session, { signal } = {}) {
     baseline = sequence;
     try {
       started = true;
-      await api.containers.start(identity);
+      await api.containers.start(identity, generation);
       const container = await Promise.race([
         running,
         new Promise((resolve) => {
@@ -804,7 +814,7 @@ export function workspace(session, { signal } = {}) {
       await stop();
     }
   };
-  api.containers.stopAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+  api.containers.stopAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('container stop wait timeout must be between 1 and 30000ms');
@@ -826,7 +836,7 @@ export function workspace(session, { signal } = {}) {
     baseline = sequence;
     try {
       stopped = true;
-      await api.containers.stop(identity);
+      await api.containers.stop(identity, generation);
       const container = await Promise.race([
         exited,
         new Promise((resolve) => {
@@ -841,7 +851,7 @@ export function workspace(session, { signal } = {}) {
       await stopWatching();
     }
   };
-  api.containers.removeAndWait = async (id, { timeoutMs = 30_000 } = {}) => {
+  api.containers.removeAndWait = async (id, generation, { timeoutMs = 30_000 } = {}) => {
     const identity = immutableIdentity(id, [32, 64], 'container');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
       throw new RangeError('container remove wait timeout must be between 1 and 30000ms');
@@ -861,7 +871,7 @@ export function workspace(session, { signal } = {}) {
     baseline = sequence;
     try {
       removing = true;
-      await api.containers.remove(identity);
+      await api.containers.remove(identity, generation);
       const removed = await Promise.race([
         absent.then(() => true),
         new Promise((resolve) => {
@@ -892,7 +902,7 @@ export function workspace(session, { signal } = {}) {
     });
     const stopWatching = await api.watchContainers(observed);
     try {
-      await api.containers.restart(identity);
+      await api.containers.restart(identity, generation);
       const container = await Promise.race([
         restarted,
         new Promise((resolve) => {

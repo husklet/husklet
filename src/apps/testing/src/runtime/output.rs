@@ -130,9 +130,8 @@ pub(crate) fn aarch64_opcode_product(
         return Err("aarch64-opcode dedicated fixture retired no instructions".into());
     }
     if reconcile_shape {
-        let shape =
-            backend_shape_product(stderr.as_bytes(), true)?.ok_or("aarch64-opcode product omitted backend-shape")?;
-        if shape["interpreted_steps"] != values["body_retired"] {
+        let tree = backend_tree(stderr)?.ok_or("aarch64-opcode product omitted backend-tree")?;
+        if tree["interpreted_steps"] != values["body_retired"] {
             return Err("aarch64-opcode retired total differs from aggregated interpreted steps".into());
         }
     }
@@ -1624,6 +1623,9 @@ mod tests {
             + "\n";
         aarch64_opcode_product(zero.as_bytes(), true, false, false).unwrap();
         assert!(aarch64_opcode_product(zero.as_bytes(), true, true, false).is_err());
+        let translated_only = format!("{}{zero}", TREE.replace("interpreted_steps=13", "interpreted_steps=0"));
+        aarch64_opcode_product(translated_only.as_bytes(), true, false, true).unwrap();
+        assert!(aarch64_opcode_product(format!("{TREE}{zero}").as_bytes(), true, false, true).is_err());
     }
 
     #[test]

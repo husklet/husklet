@@ -1,0 +1,28 @@
+/* One million stage-two ALU operations. The 50-instruction generated body
+ * remains below the 64-instruction IRQ bound; CBNZ is interpreter-owned and
+ * supplies the loop decision without widening this backend stage. */
+__asm__(".global _start\n"
+        ".type _start,%function\n"
+        "_start:\n"
+        "movz x1,#1\n"
+        "movz x2,#3\n"
+        "movz x3,#5\n"
+        "movz x4,#7\n"
+        "movz x10,#0x4240\n"
+        "movk x10,#0xf,lsl #16\n"
+        "b 1f\n"
+        "1:\n"
+        ".rept 12\n"
+        "add x1,x1,x2,lsl #1\n"
+        "eor x3,x3,x1,ror #7\n"
+        "and x3,x3,#0x00ffffffffffffff\n"
+        "orr x4,x4,x3\n"
+        ".endr\n"
+        "subs x10,x10,#1\n"
+        "b 2f\n"
+        "2:\n"
+        "cbnz x10,1b\n"
+        "movz x0,#42\n"
+        "movz x8,#93\n"
+        "svc #0\n"
+        ".size _start,.-_start\n");

@@ -1041,15 +1041,15 @@ tab_title = "Sample"
             Ok(format!("id-{name}"))
         }
 
-        fn start(&self, _id: &str) -> Result<(), HostError> {
+        fn start(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
 
-        fn stop(&self, _id: &str) -> Result<(), HostError> {
+        fn stop(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
 
-        fn remove(&self, _id: &str) -> Result<(), HostError> {
+        fn remove(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             Ok(())
         }
     }

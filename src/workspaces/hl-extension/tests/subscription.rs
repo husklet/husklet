@@ -35,15 +35,15 @@ impl ContainerControl for Host {
         Ok("c1".into())
     }
 
-    fn start(&self, _id: &str) -> Result<(), HostError> {
+    fn start(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Ok(())
     }
 
-    fn stop(&self, _id: &str) -> Result<(), HostError> {
+    fn stop(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Ok(())
     }
 
-    fn remove(&self, _id: &str) -> Result<(), HostError> {
+    fn remove(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         Ok(())
     }
 }

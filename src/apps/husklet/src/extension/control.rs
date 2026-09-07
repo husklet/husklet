@@ -89,19 +89,19 @@ impl ContainerControl for ContainerLifecycle {
 
     /// # Errors
     /// Returns `HostError::Absent` when no such container exists.
-    fn start(&self, id: &str) -> Result<(), HostError> {
+    fn start(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().start(id))
+            .wait(client.containers().start_if_generation(id, expected_id, generation))
             .map_err(|error| failure(&error))
     }
 
     /// # Errors
     /// Returns `HostError::Absent` when no such container exists.
-    fn stop(&self, id: &str) -> Result<(), HostError> {
+    fn stop(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().stop(id, Some(STOP_SECONDS)))
+            .wait(client.containers().stop_if_generation(id, expected_id, generation, Some(STOP_SECONDS)))
             .map_err(|error| failure(&error))
     }
 
@@ -113,45 +113,45 @@ impl ContainerControl for ContainerLifecycle {
     /// # Errors
     /// Returns `HostError::Absent` when no such container exists and
     /// `HostError::Conflict` when it is still running.
-    fn remove(&self, id: &str) -> Result<(), HostError> {
+    fn remove(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().remove(id, false, false))
+            .wait(client.containers().remove_if_generation(id, expected_id, generation, false, false))
             .map_err(|error| failure(&error))
     }
 
-    fn pause(&self, id: &str) -> Result<(), HostError> {
+    fn pause(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().pause(id))
+            .wait(client.containers().pause_if_generation(id, expected_id, generation))
             .map_err(|error| failure(&error))
     }
 
-    fn unpause(&self, id: &str) -> Result<(), HostError> {
+    fn unpause(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().unpause(id))
+            .wait(client.containers().unpause_if_generation(id, expected_id, generation))
             .map_err(|error| failure(&error))
     }
 
-    fn restart(&self, id: &str) -> Result<(), HostError> {
+    fn restart(&self, id: &str, expected_id: &str, generation: u64) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().restart(id, Some(STOP_SECONDS)))
+            .wait(client.containers().restart_if_generation(id, expected_id, generation, Some(STOP_SECONDS)))
             .map_err(|error| failure(&error))
     }
 
-    fn rename(&self, id: &str, name: &str) -> Result<(), HostError> {
+    fn rename(&self, id: &str, expected_id: &str, generation: u64, name: &str) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().rename(id, name))
+            .wait(client.containers().rename_if_generation(id, expected_id, generation, name))
             .map_err(|error| failure(&error))
     }
 
-    fn kill(&self, id: &str, signal: &str) -> Result<(), HostError> {
+    fn kill(&self, id: &str, expected_id: &str, generation: u64, signal: &str) -> Result<(), HostError> {
         let client = self.bridge.client();
         self.bridge
-            .wait(client.containers().kill(id, signal))
+            .wait(client.containers().kill_if_generation(id, expected_id, generation, signal))
             .map_err(|error| failure(&error))
     }
 
@@ -170,6 +170,8 @@ impl ContainerControl for ContainerLifecycle {
     fn execute(
         &self,
         id: &str,
+        expected_id: &str,
+        generation: u64,
         command: &[String],
         user: Option<&str>,
         working_directory: Option<&str>,
@@ -183,7 +185,7 @@ impl ContainerControl for ContainerLifecycle {
         let client = self.bridge.client();
         let created = self
             .bridge
-            .wait(client.executions().create(id, &config))
+            .wait(client.executions().create_if_generation(id, expected_id, generation, &config))
             .map_err(|error| failure(&error))?;
         let start = ExecStart {
             detach: true,
@@ -257,8 +259,8 @@ mod tests {
         });
         let lifecycle = ContainerLifecycle::new(Arc::new(super::super::Bridge::new(socket).unwrap()));
         let id = "a".repeat(64);
-        lifecycle.rename(&id, "worker_2.prod").unwrap();
+        lifecycle.rename(&id, &id, 7, "worker_2.prod").unwrap();
         let request = serving.join().unwrap();
-        assert!(request.starts_with(&format!("POST /v1.43/containers/{id}/rename?name=worker%5F2%2Eprod HTTP/1.1\r\n")), "{request}");
+        assert!(request.starts_with(&format!("POST /v1.43/containers/{id}/rename?generation=7&container_id={id}&name=worker%5F2%2Eprod HTTP/1.1\r\n")), "{request}");
     }
 }

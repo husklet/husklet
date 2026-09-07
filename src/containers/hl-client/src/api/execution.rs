@@ -32,6 +32,10 @@ impl<'a> Executions<'a> {
             .await
     }
 
+    pub async fn create_if_generation(&self, container: &str, expected_id: &str, generation: u64, config: &ExecConfig) -> Result<ExecCreated> {
+        self.transport.json(Method::POST, &format!("/containers/{}/exec?generation={generation}&container_id={}", Component::segment(container), Component::opaque(expected_id)), Some(config)).await
+    }
+
     /// Inspect an execution by ID.
     ///
     /// # Errors

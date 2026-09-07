@@ -66,7 +66,11 @@ test(
           if (!name) continue;
           calls.push(name);
           requests.push(frame.payload);
-          const inspectAttempt = name === 'container_inspect' ? ++containerInspectAttempts : 0;
+          const inspectedContainerId = frame.payload?.with?.id;
+          const inspectAttempt =
+            name === 'container_inspect' && inspectedContainerId === containerId
+              ? ++containerInspectAttempts
+              : 0;
           const imageInspectAttempt = name === 'image_inspect' ? ++imageInspectAttempts : 0;
           const payload =
             name === 'interface_open_tab'
@@ -81,6 +85,7 @@ test(
                         image: 'alpine:3.20',
                         state: 'running',
                         created: 0,
+                        generation: 7,
                       },
                     ],
                   }
@@ -95,6 +100,15 @@ test(
                           image: 'alpine:3.20',
                           state: 'running',
                           created: 0,
+                          generation: 7,
+                          ...(inspectedContainerId === createdContainerId
+                            ? {
+                                id: createdContainerId,
+                                name: 'worker',
+                                state: 'created',
+                                generation: 0,
+                              }
+                            : {}),
                         },
                       }
                   : name === 'container_create'
@@ -588,6 +602,7 @@ test(
       await until(() => calls.includes('container_rename'));
       assert.deepEqual(requests.find((request) => request.call === 'container_rename').with, {
         id: containerId,
+        generation: 7,
         name: 'api-renamed',
       });
       peer.write(
@@ -733,7 +748,20 @@ test(
           payload: invocation(requests, 'Create and start'),
         }),
       );
-      await until(() => calls.includes('container_create') && calls.includes('container_start'));
+      try {
+        await until(() => calls.includes('container_create') && calls.includes('container_start'));
+      } catch (error) {
+        throw new Error(
+          `${error.message}; tail=${JSON.stringify(calls.slice(-12))}; labels=${JSON.stringify(
+            requests
+              .filter((request) => request.call === 'interface_render_at')
+              .slice(-4)
+              .flatMap((request) => request.with.frame.patches)
+              .filter((patch) => patch.SetProp?.prop === 'Label')
+              .map((patch) => patch.SetProp.value?.Text),
+          )}; stderr=${JSON.stringify(stderr)}`,
+        );
+      }
       assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
         image: 'alpine:3.20',
         name: 'worker',
@@ -765,6 +793,7 @@ test(
       });
       assert.deepEqual(requests.find((request) => request.call === 'container_start').with, {
         id: createdContainerId,
+        generation: 0,
       });
       peer.write(
         encode({ channel: 12, kind: KIND.event, payload: invocation(requests, 'Details') }),
@@ -876,6 +905,7 @@ test(
       }
       assert.deepEqual(requests.find((request) => request.call === 'container_exec').with, {
         id: containerId,
+        generation: 7,
         command: ['sh', '-lc', 'printf hello world'],
         user: '1000:1000',
         working_directory: '/work tree',

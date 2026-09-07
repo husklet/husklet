@@ -7614,6 +7614,17 @@ const roots = {
               "schema": {
                 "kind": "string"
               }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
             }
           ],
           "kind": "struct"
@@ -7628,6 +7639,17 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],
@@ -7644,6 +7666,17 @@ const roots = {
               "schema": {
                 "kind": "string"
               }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
             }
           ],
           "kind": "struct"
@@ -7658,6 +7691,17 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],
@@ -7674,6 +7718,17 @@ const roots = {
               "schema": {
                 "kind": "string"
               }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
             }
           ],
           "kind": "struct"
@@ -7689,6 +7744,17 @@ const roots = {
               "schema": {
                 "kind": "string"
               }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
             }
           ],
           "kind": "struct"
@@ -7703,6 +7769,17 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             },
             {
@@ -7728,6 +7805,17 @@ const roots = {
               }
             },
             {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
               "name": "signal",
               "optional": false,
               "schema": {
@@ -7747,6 +7835,17 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             },
             {

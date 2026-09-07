@@ -23,10 +23,11 @@ _Static_assert(offsetof(struct cpu, sp) == OFF_SP, "AArch64 x86 DBT sp offset dr
 _Static_assert(offsetof(struct cpu, pc) == 256, "AArch64 x86 DBT pc offset drifted");
 _Static_assert(offsetof(struct cpu, reason) == 272, "AArch64 x86 DBT reason offset drifted");
 _Static_assert(offsetof(struct cpu, host_sp) == 280, "AArch64 x86 DBT host-sp offset drifted");
+_Static_assert(offsetof(struct cpu, nzcv) == OFF_NZCV, "AArch64 x86 DBT nzcv offset drifted");
 _Static_assert(R_SYSCALL == 1, "AArch64 x86 DBT syscall reason drifted");
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-extern void hl_a64_x86_dbt_enter(struct cpu *cpu, void *code) __attribute__((visibility("hidden")));
+extern uint64_t hl_a64_x86_dbt_enter(struct cpu *cpu, void *code) __attribute__((visibility("hidden")));
 extern void hl_a64_x86_dbt_return(void) __attribute__((visibility("hidden")));
 
 __asm__(".pushsection .text\n.p2align 4\n"
@@ -149,6 +150,147 @@ static int hl_a64_x86_emit_add_sub_immediate(hl_x64_asm *assembler, uint32_t ins
     return 1;
 }
 
+static void hl_a64_x86_load_gpr(hl_x64_asm *assembler, int host_register, unsigned guest_register,
+                                int sp_allowed) {
+    if (guest_register == 31u && !sp_allowed) {
+        hl_x64_mov_imm64(assembler, host_register, 0);
+        return;
+    }
+    int offset = guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t);
+    hl_x64_reg_mem_disp32(assembler, 0x8B, host_register, HL_A64_X86_CPU_REG, offset);
+}
+
+static void hl_a64_x86_store_gpr(hl_x64_asm *assembler, int host_register, unsigned guest_register,
+                                 int sp_allowed) {
+    if (guest_register == 31u && !sp_allowed) return;
+    int offset = guest_register == 31u ? OFF_SP : (int)guest_register * (int)sizeof(uint64_t);
+    hl_x64_reg_mem_disp32(assembler, 0x89, host_register, HL_A64_X86_CPU_REG, offset);
+}
+
+static void hl_a64_x86_emit_binary(hl_x64_asm *assembler, uint8_t opcode, unsigned sf) {
+    if (sf) hl_x64_u8(assembler, 0x48);
+    hl_x64_u8(assembler, opcode);
+    hl_x64_u8(assembler, 0xC8); /* operation %rcx,%rax (or 32-bit equivalents) */
+}
+
+static void hl_a64_x86_emit_shift(hl_x64_asm *assembler, int host_register, unsigned operation,
+                                  unsigned amount, unsigned sf) {
+    if (!amount) return;
+    if (sf) hl_x64_u8(assembler, (uint8_t)(0x48 | (host_register >= 8 ? 1 : 0)));
+    else if (host_register >= 8)
+        hl_x64_u8(assembler, 0x41);
+    hl_x64_u8(assembler, 0xC1);
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | ((operation & 7u) << 3) | (host_register & 7)));
+    hl_x64_u8(assembler, (uint8_t)amount);
+}
+
+static void hl_a64_x86_emit_setcc(hl_x64_asm *assembler, int host_register, unsigned condition) {
+    if (host_register >= 4) hl_x64_u8(assembler, (uint8_t)(0x40 | (host_register >= 8 ? 1 : 0)));
+    hl_x64_u8(assembler, 0x0F);
+    hl_x64_u8(assembler, (uint8_t)(0x90 | (condition & 15u)));
+    hl_x64_u8(assembler, (uint8_t)(0xC0 | (host_register & 7)));
+}
+
+static void hl_a64_x86_prepare_nzcv(hl_x64_asm *assembler) {
+    for (int reg = 2; reg <= 8; reg += reg == 2 ? 4 : 1) {
+        if (reg >= 8) hl_x64_u8(assembler, 0x45);
+        hl_x64_u8(assembler, 0x31);
+        hl_x64_u8(assembler, (uint8_t)(0xC0 | ((reg & 7) << 3) | (reg & 7)));
+    }
+}
+
+static void hl_a64_x86_emit_nzcv(hl_x64_asm *assembler, int subtract, int logical) {
+    /* Scratch registers were zeroed before the arithmetic operation.
+     * Consecutive SETcc instructions preserve its flags, so all four host
+     * conditions are captured before shifts normalize architectural NZCV. */
+    hl_a64_x86_emit_setcc(assembler, 2, 0);                 /* V: OF */
+    if (!logical)
+        hl_a64_x86_emit_setcc(assembler, 6, subtract ? 3 : 2); /* C: no-borrow/carry */
+    hl_a64_x86_emit_setcc(assembler, 7, 4);                 /* Z: ZF */
+    hl_a64_x86_emit_setcc(assembler, 8, 8);                 /* N: SF */
+    hl_x64_shl_imm8(assembler, 2, 28);
+    hl_x64_shl_imm8(assembler, 6, 29);
+    hl_x64_shl_imm8(assembler, 7, 30);
+    hl_x64_shl_imm8(assembler, 8, 31);
+    hl_a64_x86_or_reg(assembler, 2, 6);
+    hl_a64_x86_or_reg(assembler, 2, 7);
+    hl_a64_x86_or_reg(assembler, 2, 8);
+    hl_x64_reg_mem_disp32(assembler, 0x89, 2, HL_A64_X86_CPU_REG, OFF_NZCV);
+}
+
+static int hl_a64_x86_emit_stage_two_alu(hl_x64_asm *assembler, uint32_t instruction) {
+    unsigned sf = instruction >> 31;
+    unsigned amount = (instruction >> 10) & 0x3Fu;
+
+    /* ADDS/SUBS immediate. Rn names SP, Rd names ZR; the oracle leaf owns
+     * precisely that distinction and canonical N:Z:C:V placement. */
+    if ((instruction & 0x3F000000u) == 0x31000000u) {
+        unsigned subtract = (instruction >> 30) & 1u;
+        uint64_t immediate = (instruction >> 10) & 0xFFFu;
+        if (instruction & (1u << 22)) immediate <<= 12;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 1);
+        hl_x64_mov_imm64(assembler, 1, immediate);
+        hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf);
+        hl_a64_x86_emit_nzcv(assembler, (int)subtract, 0);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
+        return 1;
+    }
+
+    /* Logical immediate, including ANDS. DecodeBitMasks rejects reserved
+     * element shapes before any generated prefix can be published. */
+    if ((instruction & 0x1F800000u) == 0x12000000u) {
+        uint64_t ignored;
+        if (!interp_bit_masks(sf, (instruction >> 22) & 1u, (instruction >> 10) & 0x3Fu,
+                              (instruction >> 16) & 0x3Fu, 1, &ignored, NULL))
+            return 0;
+        unsigned opc = (instruction >> 29) & 3u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_x64_mov_imm64(assembler, 1, ignored);
+        if (opc == 3u) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, opc == 0u || opc == 3u ? 0x21 : opc == 1u ? 0x09 : 0x31, sf);
+        if (opc == 3u) hl_a64_x86_emit_nzcv(assembler, 0, 1);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, opc != 3u);
+        return 1;
+    }
+
+    /* ADD/SUB shifted register only: bit21 distinguishes the deliberately
+     * deferred extended-register family, and ROR is architecturally invalid. */
+    if ((instruction & 0x1F200000u) == 0x0B000000u) {
+        unsigned shift_type = (instruction >> 22) & 3u;
+        if (shift_type == 3u || (!sf && (amount & 0x20u))) return 0;
+        unsigned subtract = (instruction >> 30) & 1u;
+        unsigned setflags = (instruction >> 29) & 1u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_a64_x86_load_gpr(assembler, 1, (instruction >> 16) & 31u, 0);
+        hl_a64_x86_emit_shift(assembler, 1, shift_type == 0u ? 4u : shift_type == 1u ? 5u : 7u, amount, sf);
+        if (setflags) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf);
+        if (setflags) hl_a64_x86_emit_nzcv(assembler, (int)subtract, 0);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
+        return 1;
+    }
+
+    /* Non-inverting AND/ORR/EOR/ANDS shifted register. BIC/ORN/EON/BICS
+     * remain interpreter-owned until their own measured stage. */
+    if ((instruction & 0x1F200000u) == 0x0A000000u) {
+        if (!sf && (amount & 0x20u)) return 0;
+        unsigned opc = (instruction >> 29) & 3u;
+        unsigned shift_type = (instruction >> 22) & 3u;
+        hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+        hl_a64_x86_load_gpr(assembler, 1, (instruction >> 16) & 31u, 0);
+        hl_a64_x86_emit_shift(assembler, 1,
+                              shift_type == 0u ? 4u : shift_type == 1u ? 5u : shift_type == 2u ? 7u : 1u,
+                              amount, sf);
+        if (opc == 3u) hl_a64_x86_prepare_nzcv(assembler);
+        hl_a64_x86_emit_binary(assembler, opc == 0u || opc == 3u ? 0x21 : opc == 1u ? 0x09 : 0x31, sf);
+        if (opc == 3u) hl_a64_x86_emit_nzcv(assembler, 0, 1);
+        hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
+        return 1;
+    }
+    return 0;
+}
+
 static int hl_a64_x86_emit_mov_wide(hl_x64_asm *assembler, uint32_t instruction) {
     if ((instruction & 0x1F800000u) != 0x12800000u) return 0;
     unsigned sf = instruction >> 31;
@@ -192,6 +334,10 @@ struct hl_a64_x86_block_header {
     uint64_t retired_steps;
     uint64_t exit_kind;
     uint64_t reserved;
+    uint64_t branch_target;
+    uint64_t branch_fallthrough;
+    uint64_t loop_steps;
+    uint64_t reserved2;
 };
 _Static_assert(sizeof(struct hl_a64_x86_block_header) % 16u == 0, "AArch64 x86 DBT entry lost alignment");
 
@@ -200,9 +346,118 @@ _Static_assert(HL_A64_X86_MAX_BLOCK_BYTES <= CACHE_EMIT_HEADROOM,
                "AArch64 x86 DBT block exceeds dispatcher cache admission");
 
 static void hl_a64_x86_emit_return(hl_x64_asm *assembler) {
+    /* r14 counts completed in-body backedges and is the return value used to
+     * reconcile dynamically retired guest instructions. */
+    hl_x64_u8(assembler, 0x4C); hl_x64_u8(assembler, 0x89); hl_x64_u8(assembler, 0xF0); /* mov %r14,%rax */
     hl_x64_mov_imm64(assembler, 1, (uintptr_t)hl_a64_x86_dbt_return);
     hl_x64_u8(assembler, 0xFF);
     hl_x64_u8(assembler, 0xE1); /* jmp *%rcx */
+}
+
+static uint8_t *hl_a64_x86_emit_jcc32(hl_x64_asm *assembler, unsigned condition) {
+    hl_x64_u8(assembler, 0x0F);
+    hl_x64_u8(assembler, (uint8_t)(0x80 | (condition & 15u)));
+    uint8_t *displacement = assembler->cursor;
+    hl_x64_u32(assembler, 0);
+    return displacement;
+}
+
+static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target) {
+    intptr_t relative = target - (displacement + 4);
+    if (relative < INT32_MIN || relative > INT32_MAX) abort();
+    int32_t encoded = (int32_t)relative;
+    memcpy(displacement, &encoded, sizeof encoded);
+}
+
+enum { HL_A64_X86_BACKEDGE_BUDGET = 8 };
+_Static_assert(HL_A64_X86_BACKEDGE_BUDGET == 8,
+               "AArch64 x86 DBT poll budget must match dispatcher redispatch budget");
+enum { HL_A64_X86_MAX_BLOCK_INSNS = 64 };
+_Static_assert(HL_A64_X86_MAX_BLOCK_INSNS +
+                       (HL_A64_X86_BACKEDGE_BUDGET - 1) * HL_A64_X86_MAX_BLOCK_INSNS <=
+                   UINT16_MAX,
+               "AArch64 x86 DBT dynamic retired count must not overflow");
+
+static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
+                                                 uint64_t cursor, uint64_t *target_out,
+                                                 uint8_t *direct_target) {
+    int64_t displacement;
+    unsigned branch_condition;
+    if ((instruction & 0xFF000010u) == 0x54000000u ||
+        (instruction & 0xFF000010u) == 0x54000010u) {
+        displacement = interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4;
+        struct cpu condition_cpu = {0};
+        uint16_t truth = 0;
+        for (unsigned nzcv = 0; nzcv < 16u; ++nzcv) {
+            condition_cpu.nzcv = (uint64_t)nzcv << 28;
+            if (interp_cond_holds(&condition_cpu, instruction & 15u)) truth |= (uint16_t)(1u << nzcv);
+        }
+        hl_x64_reg_mem_disp32(assembler, 0x8B, 0, HL_A64_X86_CPU_REG, OFF_NZCV);
+        hl_x64_shift_imm8(assembler, 0, 5, 28);
+        hl_x64_mov_imm64(assembler, 1, truth);
+        hl_x64_u8(assembler, 0x48); /* bt %rax,%rcx */
+        hl_x64_u8(assembler, 0x0F);
+        hl_x64_u8(assembler, 0xA3);
+        hl_x64_u8(assembler, 0xC1);
+        branch_condition = 2; /* JC */
+    } else if ((instruction & 0x7E000000u) == 0x34000000u) {
+        unsigned sf = instruction >> 31;
+        displacement = interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4;
+        hl_a64_x86_load_gpr(assembler, 0, instruction & 31u, 0);
+        if (sf) hl_x64_u8(assembler, 0x48);
+        hl_x64_u8(assembler, 0x85); /* test %rax,%rax / %eax,%eax */
+        hl_x64_u8(assembler, 0xC0);
+        branch_condition = ((instruction >> 24) & 1u) ? 5u : 4u; /* JNZ / JZ */
+    } else if ((instruction & 0x7E000000u) == 0x36000000u) {
+        unsigned bit = ((instruction >> 31) & 1u) << 5 | ((instruction >> 19) & 31u);
+        displacement = interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4;
+        hl_a64_x86_load_gpr(assembler, 0, instruction & 31u, 0);
+        hl_x64_u8(assembler, 0x48); /* bt $bit,%rax */
+        hl_x64_u8(assembler, 0x0F);
+        hl_x64_u8(assembler, 0xBA);
+        hl_x64_u8(assembler, 0xE0);
+        hl_x64_u8(assembler, (uint8_t)bit);
+        branch_condition = ((instruction >> 24) & 1u) ? 2u : 3u; /* JC / JNC */
+    } else {
+        return 0;
+    }
+
+    uint8_t *taken_patch = hl_a64_x86_emit_jcc32(assembler, branch_condition);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, cursor + 4);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    hl_a64_x86_emit_return(assembler);
+    if (!assembler->overflow) hl_a64_x86_patch_rel32(taken_patch, assembler->cursor);
+    *target_out = cursor + (uint64_t)displacement;
+    if (direct_target != NULL) {
+        /* The condition's host flags are consumed by taken_patch before this
+         * counter compare changes them; guest NZCV remains canonical in cpu.
+         * Escape on the same eight-edge budget
+         * used by dispatcher redispatch so IRQ, signal, checkpoint and SMC
+         * invalidation observe a safepoint within a bounded interval. */
+        hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xFE);
+        hl_x64_u8(assembler, HL_A64_X86_BACKEDGE_BUDGET - 1); /* cmp $7,%r14 */
+        uint8_t *budget_patch = hl_a64_x86_emit_jcc32(assembler, 3); /* JAE external exit */
+        hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xC6); /* inc %r14 */
+        hl_x64_u8(assembler, 0xE9);
+        uint8_t *loop_patch = assembler->cursor;
+        hl_x64_u32(assembler, 0);
+        if (!assembler->overflow) hl_a64_x86_patch_rel32(loop_patch, direct_target);
+        if (!assembler->overflow) hl_a64_x86_patch_rel32(budget_patch, assembler->cursor);
+    }
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, *target_out);
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
+    hl_a64_x86_emit_return(assembler);
+    return 1;
+}
+
+static int hl_a64_x86_conditional_is_next(uint32_t instruction) {
+    if ((instruction & 0xFF000010u) == 0x54000000u ||
+        (instruction & 0xFF000010u) == 0x54000010u ||
+        (instruction & 0x7E000000u) == 0x34000000u)
+        return ((instruction >> 5) & 0x7FFFFu) == 1u;
+    if ((instruction & 0x7E000000u) == 0x36000000u)
+        return ((instruction >> 5) & 0x3FFFu) == 1u;
+    return 0;
 }
 
 static void *translate_block(uint64_t guest_pc) {
@@ -230,19 +485,48 @@ static void *translate_block(uint64_t guest_pc) {
         .overflow = 0,
     };
     uint64_t cursor = guest_pc;
+    uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
+    /* r14 is callee-saved by the entry trampoline and unused by the ALU
+     * lowering. It counts only completed direct backedges. */
+    hl_x64_u8(&assembler, 0x45); hl_x64_u8(&assembler, 0x31); hl_x64_u8(&assembler, 0xF6); /* xor %r14d,%r14d */
 
     /* A generated prefix is published only when a supported terminal is present.
      * Otherwise rewind the arena and let the interpreter translate the
      * ORIGINAL PC; no emitted prefix has executed or retired. */
-    for (unsigned count = 0; count < 64u; ++count, cursor += 4) {
+    /* Translation stops at the first terminal, so a published body has at
+     * most one direct backedge even when its target lies inside a nested guest
+     * loop. Forward edges remain ordinary dispatcher exits. */
+    for (unsigned count = 0; count < HL_A64_X86_MAX_BLOCK_INSNS; ++count, cursor += 4) {
+        host_for_instruction[count] = assembler.cursor;
         int fetch_ok = 0;
         uint32_t instruction = a64_fetch_instruction(cursor, &fetch_ok);
         if (!fetch_ok) break;
         if (hl_a64_x86_emit_mov_wide(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
-        unsigned exit_kind;
-        if (hl_a64_x86_is_svc(instruction)) {
+        if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if ((instruction & 0xFC000000u) == 0x14000000u &&
+            interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4)
+            continue; /* B to the next instruction: retire inside this bounded block. */
+        if (hl_a64_x86_conditional_is_next(instruction))
+            continue; /* Both conditional outcomes are the next instruction. */
+        uint64_t exit_kind;
+        uint64_t conditional_target = 0;
+        uint8_t *direct_target = NULL;
+        uint64_t decoded_target = 0;
+        if ((instruction & 0xFF000010u) == 0x54000000u ||
+            (instruction & 0xFF000010u) == 0x54000010u ||
+            (instruction & 0x7E000000u) == 0x34000000u)
+            decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x7FFFFu, 19) * 4);
+        else if ((instruction & 0x7E000000u) == 0x36000000u)
+            decoded_target = cursor + (uint64_t)(interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4);
+        if (decoded_target >= guest_pc && decoded_target < cursor && ((decoded_target - guest_pc) & 3u) == 0)
+            direct_target = host_for_instruction[(decoded_target - guest_pc) / 4];
+        int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
+                                                                &conditional_target, direct_target);
+        if (conditional) {
+            exit_kind = UINT64_MAX;
+        } else if (hl_a64_x86_is_svc(instruction)) {
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_PC, cursor);
             hl_a64_x86_emit_cpu_u64(&assembler, OFF_RSN, R_SYSCALL);
             exit_kind = HL_BACKEND_SHAPE_T_SYSCALL;
@@ -258,12 +542,16 @@ static void *translate_block(uint64_t guest_pc) {
             hl_backend_tree_a64_unsupported(instruction);
             break;
         }
-        hl_a64_x86_emit_return(&assembler);
+        if (!conditional) hl_a64_x86_emit_return(&assembler);
         if (assembler.overflow) break;
         header->magic = HL_A64_X86_BLOCK_MAGIC;
         header->retired_steps = (uint64_t)count + 1;
         header->exit_kind = exit_kind;
         header->reserved = 0;
+        header->branch_target = conditional_target;
+        header->branch_fallthrough = conditional ? cursor + 4 : 0;
+        header->loop_steps = direct_target == NULL ? 0 : (cursor - decoded_target) / 4 + 1;
+        header->reserved2 = 0;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, cursor + 4, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
@@ -293,8 +581,9 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 static void run_block(struct cpu *cpu, void *code) {
     /* Both representations are wholly inside a map entry: interpreter blocks
      * begin with an eight-byte descriptor magic. Generated blocks begin with
-     * either movabs (48 b8: MOV-wide/ADR) or a cpu-record load (49 8b:
-     * ADD/SUB immediate), while a terminal-only block also begins with movabs.
+     * either movabs (48 b8: MOV-wide/ADR or a zero-register ALU source) or a
+     * cpu-record load (49 8b: ADD/SUB/ALU), while a terminal-only block also
+     * begins with movabs.
      * None can equal descriptor magic (little-endian 54 42), and reading the
      * first word is within the published source object in either case. */
     const struct interp_block *descriptor = (const struct interp_block *)code;
@@ -309,12 +598,33 @@ static void run_block(struct cpu *cpu, void *code) {
             cpu->reason = R_BRANCH;
             return;
         }
-        /* MOV-wide touches registers and the two terminal stores touch only
-         * the always-live cpu record. There is no guest-memory instruction in
-         * this slice, hence no synchronous-fault provenance interval to add. */
-        hl_backend_tree_run_begin(1, header->retired_steps);
-        hl_a64_x86_dbt_enter(cpu, code);
-        hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);
+        /* Every lowered instruction touches only registers/NZCV and the two
+         * terminal stores touch only the always-live cpu record. There is no
+         * guest-memory instruction, hence no synchronous-fault provenance
+         * interval to add. */
+        uint64_t repetitions = hl_a64_x86_dbt_enter(cpu, code);
+        if (repetitions >= HL_A64_X86_BACKEDGE_BUDGET ||
+            (header->loop_steps == 0 && repetitions != 0)) {
+            static const char message[] = "AArch64 x86 DBT returned invalid backedge accounting";
+            (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
+            cpu->reason = R_BRANCH;
+            return;
+        }
+        hl_backend_tree_run_begin(1, header->retired_steps + repetitions * header->loop_steps);
+        unsigned exit_kind = (unsigned)header->exit_kind;
+        if (header->exit_kind == UINT64_MAX) {
+            if (cpu->pc == header->branch_target)
+                exit_kind = HL_BACKEND_SHAPE_T_COND_TAKEN;
+            else if (cpu->pc == header->branch_fallthrough)
+                exit_kind = HL_BACKEND_SHAPE_T_COND_NOT_TAKEN;
+            else {
+                static const char message[] = "AArch64 x86 DBT conditional returned an impossible PC";
+                (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
+                cpu->reason = R_BRANCH;
+                return;
+            }
+        }
+        hl_a64_x86_record_translated_exit(exit_kind);
         hl_backend_tree_reason(cpu->reason);
     }
 }

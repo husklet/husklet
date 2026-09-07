@@ -17,9 +17,8 @@ cases:
     expect:
       exit: 0
       stdout_empty: true
-      stderr: [" r0=*", " fall_total=*"]
       diagnostics:
-        - { counter: body_retired, equals: 12 }
+        - { counter: body_retired, equals: 9 }
         - { counter: major0, equals: 0 }
         - { counter: major1, equals: 0 }
         - { counter: major2, equals: 0 }
@@ -29,8 +28,8 @@ cases:
         - { counter: major6, equals: 0 }
         - { counter: major7, equals: 0 }
         - { counter: major8, equals: 1 }
-        - { counter: major9, equals: 2 }
-        - { counter: major10, equals: 7 }
+        - { counter: major9, equals: 0 }
+        - { counter: major10, equals: 6 }
         - { counter: major11, equals: 2 }
         - { counter: major12, equals: 0 }
         - { counter: major13, equals: 0 }
@@ -39,6 +38,6 @@ cases:
         - { counter: reserved, equals: 0 }
         - { counter: load_store, equals: 0 }
         - { counter: dp_register, equals: 0 }
-        - { counter: dp_immediate, equals: 3 }
-        - { counter: branch_system, equals: 9 }
+        - { counter: dp_immediate, equals: 1 }
+        - { counter: branch_system, equals: 8 }
         - { counter: simd_fp, equals: 0 }

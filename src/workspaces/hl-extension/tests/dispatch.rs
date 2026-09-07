@@ -226,42 +226,42 @@ impl ContainerControl for Host {
         Ok(format!("id-{}", spec.name))
     }
 
-    fn start(&self, _id: &str) -> Result<(), HostError> {
+    fn start(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.start");
         Ok(())
     }
 
-    fn stop(&self, _id: &str) -> Result<(), HostError> {
+    fn stop(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.stop");
         Ok(())
     }
 
-    fn remove(&self, _id: &str) -> Result<(), HostError> {
+    fn remove(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.remove");
         Ok(())
     }
 
-    fn pause(&self, _id: &str) -> Result<(), HostError> {
+    fn pause(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.pause");
         Ok(())
     }
 
-    fn unpause(&self, _id: &str) -> Result<(), HostError> {
+    fn unpause(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.unpause");
         Ok(())
     }
 
-    fn restart(&self, _id: &str) -> Result<(), HostError> {
+    fn restart(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
         self.ledger.note("containers.restart");
         Ok(())
     }
 
-    fn rename(&self, _id: &str, _name: &str) -> Result<(), HostError> {
+    fn rename(&self, _id: &str, _expected_id: &str, _generation: u64, _name: &str) -> Result<(), HostError> {
         self.ledger.note("containers.rename");
         Ok(())
     }
 
-    fn kill(&self, _id: &str, _signal: &str) -> Result<(), HostError> {
+    fn kill(&self, _id: &str, _expected_id: &str, _generation: u64, _signal: &str) -> Result<(), HostError> {
         self.ledger.note("containers.kill");
         Ok(())
     }
@@ -278,6 +278,8 @@ impl ContainerControl for Host {
     fn execute(
         &self,
         _id: &str,
+        _expected_id: &str,
+        _generation: u64,
         _command: &[String],
         _user: Option<&str>,
         _working_directory: Option<&str>,
@@ -1049,39 +1051,39 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerStart { id: "c".repeat(64) },
+            Request::ContainerStart { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerStop { id: "c".repeat(64) },
+            Request::ContainerStop { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRemove { id: "c".repeat(64) },
+            Request::ContainerRemove { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerPause { id: "c".repeat(64) },
+            Request::ContainerPause { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerUnpause { id: "c".repeat(64) },
+            Request::ContainerUnpause { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
-            Request::ContainerRestart { id: "c".repeat(64) },
+            Request::ContainerRestart { id: "c".repeat(64) , generation: 4,},
             Capability::ContainerControl,
         ),
         (
             Request::ContainerRename {
-                id: "c".repeat(64),
+                id: "c".repeat(64), generation: 4,
                 name: "worker-2".into(),
             },
             Capability::ContainerControl,
         ),
         (
             Request::ContainerKill {
-                id: "c".repeat(64),
+                id: "c".repeat(64), generation: 4,
                 signal: "SIGTERM".into(),
             },
             Capability::ContainerControl,
@@ -1099,7 +1101,7 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::ContainerExec {
-                id: "c".repeat(64),
+                id: "c".repeat(64), generation: 4,
                 command: vec!["worker".into()],
                 user: None,
                 working_directory: None,
@@ -2009,27 +2011,27 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
         Request::ContainerStart {
-            id: "friendly-name".into(),
+            id: "friendly-name".into(), generation: 4,
         },
-        Request::ContainerPause { id: "a".repeat(12) },
+        Request::ContainerPause { id: "a".repeat(12) , generation: 4,},
         Request::ContainerUnpause {
-            id: "friendly-name".into(),
+            id: "friendly-name".into(), generation: 4,
         },
-        Request::ContainerRestart { id: "1".into() },
+        Request::ContainerRestart { id: "1".into() , generation: 4,},
         Request::ContainerStop {
-            id: "friendly-name".into(),
+            id: "friendly-name".into(), generation: 4,
         },
-        Request::ContainerRemove { id: "a".repeat(12) },
+        Request::ContainerRemove { id: "a".repeat(12) , generation: 4,},
         Request::ContainerKill {
-            id: "1".into(),
+            id: "1".into(), generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ContainerKill {
-            id: "friendly-name".into(),
+            id: "friendly-name".into(), generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ContainerKill {
-            id: "a".repeat(12),
+            id: "a".repeat(12), generation: 4,
             signal: "SIGTERM".into(),
         },
         Request::ExecutionKill {
@@ -2049,15 +2051,15 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
     assert!(host.ledger.reached().is_empty());
 
     session
-        .dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host))
+        .dispatch(&Request::ContainerStop { id: "a".repeat(64) , generation: 4,}, &services(&host))
         .unwrap();
     session
-        .dispatch(&Request::ContainerRemove { id: "a".repeat(64) }, &services(&host))
+        .dispatch(&Request::ContainerRemove { id: "a".repeat(64) , generation: 4,}, &services(&host))
         .unwrap();
     session
         .dispatch(
             &Request::ContainerKill {
-                id: "a".repeat(64),
+                id: "a".repeat(64), generation: 4,
                 signal: "SIGTERM".into(),
             },
             &services(&host),
@@ -2094,23 +2096,23 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     let mut session = session(&[Capability::ContainerControl], &[]);
     for request in [
         Request::ContainerRename {
-            id: "friendly-name".into(),
+            id: "friendly-name".into(), generation: 4,
             name: "worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(12),
+            id: "a".repeat(12), generation: 4,
             name: "worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64),
+            id: "a".repeat(64), generation: 4,
             name: ".worker".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64),
+            id: "a".repeat(64), generation: 4,
             name: "worker/name".into(),
         },
         Request::ContainerRename {
-            id: "a".repeat(64),
+            id: "a".repeat(64), generation: 4,
             name: "x".repeat(129),
         },
     ] {
@@ -2123,7 +2125,7 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     session
         .dispatch(
             &Request::ContainerRename {
-                id: "a".repeat(64),
+                id: "a".repeat(64), generation: 4,
                 name: "worker_2.prod".into(),
             },
             &services(&host),
@@ -2295,7 +2297,7 @@ fn container_capabilities_without_resource_consent_expose_nothing() {
         Reply::Containers(Vec::new())
     );
     let failure = session
-        .dispatch(&Request::ContainerStop { id: "a".repeat(64) }, &services(&host))
+        .dispatch(&Request::ContainerStop { id: "a".repeat(64) , generation: 4,}, &services(&host))
         .expect_err("an unselected container is denied");
     assert!(matches!(failure, Failure::Denied { .. }));
     assert!(!host.ledger.reached().contains(&"containers.stop"));
@@ -2345,7 +2347,7 @@ fn exact_name_scope_filters_inventory_and_create_is_independent() {
     assert!(matches!(
         session.dispatch(
             &Request::ContainerStop {
-                id: "c".repeat(64),
+                id: "c".repeat(64), generation: 4,
             },
             &services(&host),
         ),
@@ -2407,12 +2409,12 @@ fn holding_read_never_permits_the_matching_write() {
         )
         .is_err());
     assert!(session
-        .dispatch(&Request::ContainerStop { id: "c1".into() }, &services(&host))
+        .dispatch(&Request::ContainerStop { id: "c1".into() , generation: 4,}, &services(&host))
         .is_err());
     assert!(session
         .dispatch(
             &Request::ContainerKill {
-                id: "c1".into(),
+                id: "c1".into(), generation: 4,
                 signal: "SIGKILL".into(),
             },
             &services(&host),
@@ -2421,7 +2423,7 @@ fn holding_read_never_permits_the_matching_write() {
     assert!(session
         .dispatch(
             &Request::ContainerExec {
-                id: "c1".into(),
+                id: "c1".into(), generation: 4,
                 command: vec!["sh".into()],
                 user: None,
                 working_directory: None,
@@ -2553,7 +2555,7 @@ fn container_exec_returns_the_real_execution_identity() {
     let immutable = "c".repeat(64);
     let refused = session.dispatch(
         &Request::ContainerExec {
-            id: "worker".into(),
+            id: "worker".into(), generation: 4,
             command: vec!["worker".into()],
             user: None,
             working_directory: None,
@@ -2568,7 +2570,7 @@ fn container_exec_returns_the_real_execution_identity() {
     let reply = session
         .dispatch(
             &Request::ContainerExec {
-                id: immutable,
+                id: immutable, generation: 4,
                 command: vec!["worker".into()],
                 user: Some("1000".into()),
                 working_directory: Some("/work".into()),

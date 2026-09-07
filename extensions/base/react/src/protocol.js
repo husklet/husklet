@@ -250,6 +250,12 @@ function schema(given) {
   return columns;
 }
 
+/** Translate the public React-friendly column schema on a windowed source open. */
+export function sourceMutation(given) {
+  if (given?.Open === undefined) return given;
+  return { Open: { ...given.Open, columns: schema(given.Open.columns) } };
+}
+
 /**
  * Splits a React element's props into what the host understands.
  *

@@ -114,10 +114,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           const key = `${status.job}:${status.candidate.image_digest}`;
           if (candidateKey.current !== key) {
             candidateKey.current = key;
-            setGranted(status.candidate.requested);
-            // Resource authority is opt-in. A review, including an update,
-            // starts from no container identities instead of silently widening
-            // authority to every selector in the manifest.
+            // Every authority is opt-in. Inspection must never grant access,
+            // including during an update where a manifest may have widened.
+            setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
           }
         }
@@ -238,7 +237,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   return (
     <Scroll grow height="fill">
-      <Column pad={2} gap={2}>
+      <Column pad={2} gap={1}>
         <Heading label="Extensions" scale="title" />
         <Text
           label="Install, update, enable, disable, and remove workspace extensions."
@@ -246,25 +245,37 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           wrap
         />
         <Heading label="Discover" scale="caption" />
-        {!installed.some((extension) => extension.name === 'storybook') && (
-          <Card variant="outline">
-            <CardHeader label="Component playground" detail="First-party · Storybook" />
+        <Row gap={1} wrap>
+          <Card grow={false} width={{ chars: 28 }} variant="outline">
+            <CardHeader label="Workspace control" detail="First-party · Included" />
             <CardContent gap={1}>
               <Text
-                label="Explore every extension UI component, including large tables, terminals, diffs, metrics, and confirmation flows."
+                label="Settings, runtime resources, and terminal panes in one compact tab."
                 color="text-dim"
                 wrap
               />
             </CardContent>
-            <CardActions>
-              <Button
-                label="Review access"
-                enabled={!busy}
-                onInvoke={() => inspect(STORYBOOK_IMAGE)}
-              />
-            </CardActions>
           </Card>
-        )}
+          {!installed.some((extension) => extension.name === 'storybook') && (
+            <Card grow={false} width={{ chars: 28 }} variant="outline">
+              <CardHeader label="Component playground" detail="First-party · Storybook" />
+              <CardContent gap={1}>
+                <Text
+                  label="Explore extension components, large tables, terminals, diffs, and metrics."
+                  color="text-dim"
+                  wrap
+                />
+              </CardContent>
+              <CardActions>
+                <Button
+                  label="Review access"
+                  enabled={!busy}
+                  onInvoke={() => inspect(STORYBOOK_IMAGE)}
+                />
+              </CardActions>
+            </Card>
+          )}
+        </Row>
         <Card variant="outline">
           <CardHeader label="Install from image" detail="OCI image reference" />
           <CardContent>
@@ -290,6 +301,29 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 tooltip={acquisition.candidate.image_digest}
               />
               <Text label="Capability access" color="text-dim" />
+              {acquisition.candidate.requested.length > 0 && (
+                <Row gap={1} align="center">
+                  <Text
+                    label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
+                    color="text-dim"
+                  />
+                  <Button
+                    label={
+                      granted.length === acquisition.candidate.requested.length
+                        ? 'Clear access'
+                        : 'Allow requested'
+                    }
+                    variant="ghost"
+                    onInvoke={() =>
+                      setGranted(
+                        granted.length === acquisition.candidate!.requested.length
+                          ? []
+                          : acquisition.candidate!.requested,
+                      )
+                    }
+                  />
+                </Row>
+              )}
               {acquisition.candidate.requested.map((capability) => (
                 <Row key={capability} gap={2} align="center">
                   <Switch
@@ -422,43 +456,41 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 detail={extension.version ?? extension.image_digest}
               />
               <CardContent>
-                <Row gap={2}>
+                <Row gap={1} align="center" wrap>
                   <Badge label={extension.status} />
                   <Text
                     label={compactDigest(extension.image_digest)}
                     tooltip={extension.image_digest}
                   />
+                  {extension.status.startsWith('fault:') ? (
+                    <Button
+                      label="Retry"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'retry')}
+                    />
+                  ) : extension.enabled ? (
+                    <Button
+                      label="Disable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'disable')}
+                    />
+                  ) : (
+                    <Button
+                      label="Enable"
+                      enabled={!busy}
+                      onInvoke={() => lifecycle(extension, 'enable')}
+                    />
+                  )}
+                  <ConfirmAction
+                    label="Remove"
+                    confirmLabel={`Remove ${extension.name}`}
+                    question={`Remove ${extension.name} from this workspace?`}
+                    authorityKey={extension.image_digest}
+                    enabled={!busy}
+                    onConfirm={() => lifecycle(extension, 'remove')}
+                  />
                 </Row>
               </CardContent>
-              <CardActions gap={1}>
-                {extension.status.startsWith('fault:') ? (
-                  <Button
-                    label="Retry"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'retry')}
-                  />
-                ) : extension.enabled ? (
-                  <Button
-                    label="Disable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'disable')}
-                  />
-                ) : (
-                  <Button
-                    label="Enable"
-                    enabled={!busy}
-                    onInvoke={() => lifecycle(extension, 'enable')}
-                  />
-                )}
-                <ConfirmAction
-                  label="Remove"
-                  confirmLabel={`Remove ${extension.name}`}
-                  question={`Remove ${extension.name} from this workspace?`}
-                  authorityKey={extension.image_digest}
-                  enabled={!busy}
-                  onConfirm={() => lifecycle(extension, 'remove')}
-                />
-              </CardActions>
             </Card>
           ))}
         </ResourceState>

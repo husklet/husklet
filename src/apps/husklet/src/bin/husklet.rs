@@ -269,6 +269,7 @@ impl Application {
         window.set_child(Some(&home.widget));
         window.present();
         host::appearance::Appearance::apply();
+        Screenshot::schedule_resize(&window, "manager");
         Screenshot::schedule(&window, "manager");
 
         self.open_configured_view();
@@ -330,9 +331,38 @@ impl Application {
         if store.all().is_empty() {
             let row = gtk::ListBoxRow::new();
             row.set_selectable(false);
-            let e = gtk::Label::new(Some("No workspaces yet — click + New to create one."));
-            e.add_css_class("empty");
-            row.set_child(Some(&e));
+            let empty = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            empty.add_css_class("empty");
+            empty.set_halign(gtk::Align::Center);
+            let title = gtk::Label::new(Some("Create your first workspace"));
+            title.add_css_class("empty-title");
+            let detail = gtk::Label::new(Some(
+                "Choose an image and start a ready-to-use development environment.",
+            ));
+            detail.add_css_class("empty-detail");
+            detail.set_wrap(true);
+            detail.set_justify(gtk::Justification::Center);
+            detail.set_max_width_chars(42);
+            let create = gtk::Button::with_label("Create workspace");
+            create.add_css_class("btn");
+            create.add_css_class("primary");
+            create.set_halign(gtk::Align::Center);
+            let app = self.0.clone();
+            let refresh_list = list.downgrade();
+            create.connect_clicked(move |_| {
+                let app_for_refresh = app.clone();
+                let list_for_refresh = refresh_list.clone();
+                let refresh: Rc<dyn Fn()> = Rc::new(move || {
+                    if let Some(list) = list_for_refresh.upgrade() {
+                        Application(app_for_refresh.clone()).refresh_workspace_list(&list);
+                    }
+                });
+                Form::open(&app, &refresh);
+            });
+            empty.append(&title);
+            empty.append(&detail);
+            empty.append(&create);
+            row.set_child(Some(&empty));
             list.append(&row);
             return;
         }
@@ -401,6 +431,10 @@ impl Application {
 
         // ▶ Play — launch the workspace.
         let play = gtk::Button::from_icon_name("media-playback-start-symbolic");
+        play.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Launch workspace {}",
+            ws.name
+        ))]);
         play.add_css_class("rowbtn");
         play.set_valign(gtk::Align::Center);
         play.set_tooltip_text(Some("Launch workspace"));
@@ -413,6 +447,10 @@ impl Application {
 
         // ⋯ three-dots menu → a popover with per-workspace actions (Remove for now).
         let menu = gtk::Button::new();
+        menu.update_property(&[gtk::accessible::Property::Label(&format!(
+            "More actions for workspace {}",
+            ws.name
+        ))]);
         menu.add_css_class("rowbtn");
         menu.set_valign(gtk::Align::Center);
         menu.set_tooltip_text(Some("More"));

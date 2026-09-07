@@ -8236,6 +8236,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8250,6 +8261,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -8266,6 +8288,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8280,6 +8313,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -8296,6 +8340,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8311,6 +8366,17 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -8325,6 +8391,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               },
               {
@@ -8350,6 +8427,17 @@
                 }
               },
               {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
                 "name": "signal",
                 "optional": false,
                 "schema": {
@@ -8369,6 +8457,17 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               },
               {
@@ -10927,7 +11026,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:40793df1806457f1",
+  "source_fingerprint": "fnv1a64:926d66b038f6cbbe",
   "specification_version": 1,
   "topics": [
     {

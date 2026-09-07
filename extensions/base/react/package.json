@@ -30,12 +30,14 @@
   "files": [
     "catalogue.json",
     "examples/starter",
+    "examples/postgres-inspector.ts",
     "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test 'test/*.test.js' && node tools/package-smoke.js",
+    "test": "npm run types:examples && node --test 'test/*.test.js' && node tools/package-smoke.js",
+    "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --esModuleInterop --skipLibCheck --noEmit examples/postgres-inspector.ts",
     "pack:check": "node tools/package-smoke.js",
     "catalogue": "cargo run -q --manifest-path ../../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
     "types": "npm run catalogue && node tools/types.js"

@@ -1171,17 +1171,17 @@ mod tests {
             Ok(format!("id-{name}"))
         }
 
-        fn start(&self, _id: &str) -> Result<(), HostError> {
+        fn start(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             self.ledger.note("containers.start");
             Ok(())
         }
 
-        fn stop(&self, _id: &str) -> Result<(), HostError> {
+        fn stop(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             self.ledger.note("containers.stop");
             Ok(())
         }
 
-        fn remove(&self, _id: &str) -> Result<(), HostError> {
+        fn remove(&self, _id: &str, _expected_id: &str, _generation: u64) -> Result<(), HostError> {
             self.ledger.note("containers.remove");
             Ok(())
         }
@@ -2575,7 +2575,7 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned() });
+        let answer = ask(&mut wire, &Request::ContainerStop { id: "c1".to_owned(), generation: Some(4) });
 
         assert!(codec::is_failure(&answer), "a refusal is reported as one");
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {

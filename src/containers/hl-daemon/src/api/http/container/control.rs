@@ -32,8 +32,12 @@ pub(in super::super) fn stop_admission(state: &ContainerState) -> StatusCode {
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn start(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+pub(in super::super) async fn start(
+    State(state): State<DockerState>, Path(id): Path<String>, Query(query): Query<GenerationQuery>,
+) -> ApiResult<StatusCode> {
+    let container = if let Some(generation) = query.generation {
+        state.containers.inspect_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.inspect(&id).await }.map_err(ApiError::container)?;
     match start_admission(&container.state) {
         StartAdmission::AlreadyStarted => return Ok(StatusCode::NOT_MODIFIED),
         StartAdmission::Paused => {
@@ -44,7 +48,9 @@ pub(in super::super) async fn start(State(state): State<DockerState>, Path(id): 
         }
         StartAdmission::Launch => {}
     }
-    state.containers.start(&id).await.map_err(ApiError::container)?;
+    if let Some(generation) = query.generation {
+        state.containers.start_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.start(&id).await }.map_err(ApiError::container)?;
     state.events.volumes("mount", &container);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -68,7 +74,12 @@ pub(in super::super) struct TimeoutQuery {
     seconds: Option<u64>,
     #[serde(default)]
     signal: Option<String>,
+    generation: Option<u64>,
+    container_id: Option<String>,
 }
+
+#[derive(Default, Deserialize)]
+pub(in super::super) struct GenerationQuery { generation: Option<u64>, container_id: Option<String> }
 
 impl TimeoutQuery {
     // ApiResult keeps this uniform with the other query accessors.
@@ -113,6 +124,8 @@ pub(in super::super) async fn legacy_stop(
         Query(TimeoutQuery {
             seconds: query.seconds,
             signal: None,
+            generation: None,
+            container_id: None,
         }),
     )
     .await
@@ -129,6 +142,8 @@ pub(in super::super) async fn legacy_restart(
         Query(TimeoutQuery {
             seconds: query.seconds,
             signal: None,
+            generation: None,
+            container_id: None,
         }),
     )
     .await
@@ -139,14 +154,16 @@ pub(in super::super) async fn stop(
     Path(id): Path<String>,
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
-    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    let container = if let Some(generation) = query.generation {
+        state.containers.inspect_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.inspect(&id).await }.map_err(ApiError::container)?;
     if !container.state.is_active() {
         return Ok(stop_admission(&container.state));
     }
     query.validate_signal(container.spec.stop_signal)?;
     match state
         .containers
-        .stop(&id, query.duration(container.spec.stop_timeout_seconds)?)
+        .stop_if_generation(&id, query.container_id.as_deref().unwrap_or(container.id.as_str()), query.generation.unwrap_or(container.generation), query.duration(container.spec.stop_timeout_seconds)?)
         .await
     {
         Ok(_) | Err(ContainerError::InvalidState { .. }) => Ok(StatusCode::NO_CONTENT),
@@ -159,7 +176,10 @@ pub(in super::super) async fn restart(
     Path(id): Path<String>,
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
-    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    let container = if let Some(generation) = query.generation {
+        state.containers.inspect_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.inspect(&id).await }.map_err(ApiError::container)?;
+    let id = container.id.to_string();
     if container.state.is_active() {
         query.validate_signal(container.spec.stop_signal)?;
         match state
@@ -178,6 +198,8 @@ pub(in super::super) async fn restart(
 #[derive(Deserialize)]
 pub(in super::super) struct RenameQuery {
     name: String,
+    generation: Option<u64>,
+    container_id: Option<String>,
 }
 
 pub(in super::super) async fn rename(
@@ -185,21 +207,23 @@ pub(in super::super) async fn rename(
     Path(id): Path<String>,
     Query(query): Query<RenameQuery>,
 ) -> ApiResult<StatusCode> {
-    let container = state
-        .containers
-        .rename(&id, query.name)
-        .await
-        .map_err(ApiError::container)?;
+    let container = if let Some(generation) = query.generation {
+        state.containers.rename_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation, query.name).await
+    } else {
+        state.containers.rename(&id, query.name).await
+    }.map_err(ApiError::container)?;
     state.events.container("rename", &container);
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn pause(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    state
-        .containers
-        .pause(&id)
-        .await
+pub(in super::super) async fn pause(
+    State(state): State<DockerState>, Path(id): Path<String>, Query(query): Query<GenerationQuery>,
+) -> ApiResult<StatusCode> {
+    let result = if let Some(generation) = query.generation {
+        state.containers.pause_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.pause(&id).await };
+    result
         .map(|()| StatusCode::NO_CONTENT)
         .map_err(ApiError::container)
 }
@@ -208,11 +232,12 @@ pub(in super::super) async fn pause(State(state): State<DockerState>, Path(id): 
 pub(in super::super) async fn unpause(
     State(state): State<DockerState>,
     Path(id): Path<String>,
+    Query(query): Query<GenerationQuery>,
 ) -> ApiResult<StatusCode> {
-    state
-        .containers
-        .unpause(&id)
-        .await
+    let result = if let Some(generation) = query.generation {
+        state.containers.unpause_if_generation(&id, query.container_id.as_deref().unwrap_or(&id), generation).await
+    } else { state.containers.unpause(&id).await };
+    result
         .map(|()| StatusCode::NO_CONTENT)
         .map_err(ApiError::container)
 }
@@ -257,6 +282,7 @@ mod stop_timeout_tests {
             TimeoutQuery {
                 seconds: None,
                 signal: None,
+                ..TimeoutQuery::default()
             }
             .duration(23)
             .unwrap()
@@ -267,6 +293,7 @@ mod stop_timeout_tests {
             TimeoutQuery {
                 seconds: Some(0),
                 signal: None,
+                ..TimeoutQuery::default()
             }
             .duration(23)
             .unwrap()
@@ -277,6 +304,7 @@ mod stop_timeout_tests {
             TimeoutQuery {
                 seconds: Some(7),
                 signal: None,
+                ..TimeoutQuery::default()
             }
             .duration(23)
             .unwrap()
@@ -287,6 +315,7 @@ mod stop_timeout_tests {
             TimeoutQuery {
                 seconds: Some(86_401),
                 signal: None,
+                ..TimeoutQuery::default()
             }
             .duration(23)
             .unwrap()
@@ -325,6 +354,7 @@ mod stop_timeout_tests {
             let query = TimeoutQuery {
                 seconds: None,
                 signal: signal.map(str::to_owned),
+                ..TimeoutQuery::default()
             };
             query.validate_signal(Signal::TERMINATE).unwrap();
         }
@@ -332,6 +362,7 @@ mod stop_timeout_tests {
         let malformed = TimeoutQuery {
             seconds: None,
             signal: Some("SIGBOGUS".into()),
+                ..TimeoutQuery::default()
         };
         assert_eq!(
             malformed.validate_signal(Signal::TERMINATE).unwrap_err().status,
@@ -341,6 +372,7 @@ mod stop_timeout_tests {
         let unsupported = TimeoutQuery {
             seconds: None,
             signal: Some("KILL".into()),
+                ..TimeoutQuery::default()
         };
         assert_eq!(
             unsupported.validate_signal(Signal::TERMINATE).unwrap_err().status,

@@ -882,7 +882,7 @@ impl Window {
         });
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
-        Screenshot::schedule_resize(&window);
+        Screenshot::schedule_resize(&window, "terminal");
         LiveActions::schedule(&tw);
         #[cfg(feature = "gui-checkpoint-e2e")]
         journey::CheckpointJourney::schedule(app, &window, &tw);

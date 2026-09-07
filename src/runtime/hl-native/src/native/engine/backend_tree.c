@@ -65,6 +65,7 @@ static int hl_backend_x86_jcc_route_format(char *record, size_t capacity, const 
 #define HL_BACKEND_SSE_RIPREL_FORM_SLOTS 512u
 #define HL_BACKEND_SSE_RIPREL_FORM_TOP 8u
 #endif
+#define HL_BACKEND_A64_MAJOR_COUNT 16u
 
 enum hl_backend_finalize_caller {
     HL_BACKEND_FINALIZE_UNKNOWN,
@@ -700,6 +701,9 @@ struct hl_backend_tree_shared {
     _Atomic uint32_t duplicate_slot_first_caller;
     _Atomic int duplicate_slot_first_actor;
     _Atomic uint32_t reported;
+#if defined(HL_BACKEND_A64_OPCODE_CENSUS)
+    _Atomic uint64_t a64_major[HL_BACKEND_A64_MAJOR_COUNT];
+#endif
     struct hl_backend_shape_form fallback_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
     struct hl_backend_shape_form stop_forms[HL_BACKEND_SHAPE_FORM_SLOTS];
     _Atomic uint64_t fallback_form_total;
@@ -1043,7 +1047,14 @@ static inline void hl_backend_tree_interpreted_steps(uint64_t steps) {
     if (g_backend_tree_self != NULL)
         atomic_fetch_add_explicit(&g_backend_tree_self->interpreted_steps, steps, memory_order_relaxed);
 }
-static inline void hl_backend_tree_a64_body_retired(unsigned major) { (void)major; }
+static inline void hl_backend_tree_a64_body_retired(unsigned major) {
+#if defined(HL_BACKEND_A64_OPCODE_CENSUS)
+    if (g_backend_tree != NULL && major < HL_BACKEND_A64_MAJOR_COUNT)
+        atomic_fetch_add_explicit(&g_backend_tree->a64_major[major], 1, memory_order_relaxed);
+#else
+    (void)major;
+#endif
+}
 static inline void hl_backend_tree_a64_unsupported(uint32_t instruction) { (void)instruction; }
 
 static inline void hl_backend_tree_reason(unsigned reason) {
@@ -1832,6 +1843,40 @@ void hl_target_backend_tree_reap_report(void *opaque, size_t shared_size, hl_lin
     int would_link = hl_backend_would_link_format(shared, record + formatted, sizeof record - (size_t)formatted);
     if (would_link <= 0 || (size_t)would_link >= sizeof record - (size_t)formatted) return;
     formatted += would_link;
+#if defined(HL_BACKEND_A64_OPCODE_CENSUS)
+    uint64_t major[HL_BACKEND_A64_MAJOR_COUNT];
+    uint64_t family[6] = {0};
+    uint64_t body_retired = 0;
+    static const unsigned char family_for_major[HL_BACKEND_A64_MAJOR_COUNT] = {
+        0, 0, 0, 0, 1, 2, 1, 5, 3, 3, 4, 4, 1, 2, 1, 5,
+    };
+    for (unsigned i = 0; i < HL_BACKEND_A64_MAJOR_COUNT; ++i) {
+        major[i] = atomic_load_explicit(&shared->a64_major[i], memory_order_relaxed);
+        body_retired += major[i];
+        family[family_for_major[i]] += major[i];
+    }
+    int a64 = snprintf(record + formatted, sizeof record - (size_t)formatted,
+                       "[diag] aarch64-opcode version=1 available=1 body_retired=%llu "
+                       "major0=%llu major1=%llu major2=%llu major3=%llu major4=%llu major5=%llu "
+                       "major6=%llu major7=%llu major8=%llu major9=%llu major10=%llu major11=%llu "
+                       "major12=%llu major13=%llu major14=%llu major15=%llu "
+                       "reserved=%llu load_store=%llu dp_register=%llu dp_immediate=%llu "
+                       "branch_system=%llu simd_fp=%llu",
+                       (unsigned long long)body_retired,
+                       (unsigned long long)major[0], (unsigned long long)major[1],
+                       (unsigned long long)major[2], (unsigned long long)major[3],
+                       (unsigned long long)major[4], (unsigned long long)major[5],
+                       (unsigned long long)major[6], (unsigned long long)major[7],
+                       (unsigned long long)major[8], (unsigned long long)major[9],
+                       (unsigned long long)major[10], (unsigned long long)major[11],
+                       (unsigned long long)major[12], (unsigned long long)major[13],
+                       (unsigned long long)major[14], (unsigned long long)major[15],
+                       (unsigned long long)family[0], (unsigned long long)family[1],
+                       (unsigned long long)family[2], (unsigned long long)family[3],
+                       (unsigned long long)family[4], (unsigned long long)family[5]);
+    if (a64 <= 0 || (size_t)a64 >= sizeof record - (size_t)formatted) return;
+    formatted += a64;
+#endif
     size_t offset = 0;
     while (offset < (size_t)formatted) {
         int64_t written = hl_backend_report_write(box, record + offset, (size_t)formatted - offset);
@@ -2702,7 +2747,6 @@ enum hl_backend_mixed_sse_lifecycle {
 };
 
 #define HL_BACKEND_MIXED_SSE_SLOTS 4096u
-#define HL_BACKEND_A64_MAJOR_COUNT 16u
 #define HL_BACKEND_A64_UNSUPPORTED_FORM_COUNT 2048u
 #define HL_BACKEND_A64_UNSUPPORTED_TOP 16u
 

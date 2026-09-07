@@ -52,12 +52,23 @@ impl Service {
     }
 
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
+        self.start_generation(reference, None, None).await
+    }
+
+    pub(crate) async fn start_generation(
+        self: &Arc<Self>, reference: &str, expected_id: Option<&crate::ContainerId>, generation: Option<u64>,
+    ) -> Result<()> {
         let _guard = self.operations.lock().await;
-        self.start_locked(reference).await
+        let container = self.resolve_generation(reference, expected_id, generation).await?;
+        self.start_container_locked(container).await
     }
 
     pub(super) async fn start_locked(self: &Arc<Self>, reference: &str) -> Result<()> {
         let container = self.resolve(reference).await?;
+        self.start_container_locked(container).await
+    }
+
+    async fn start_container_locked(self: &Arc<Self>, container: Container) -> Result<()> {
         if container.state.is_active() {
             return Err(Error::AlreadyRunning(container.id));
         }

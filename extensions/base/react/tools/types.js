@@ -274,7 +274,7 @@ export function connect(options?: ConnectOptions): Promise<Session>;
 export function useHostEvents(session: Session, listener: (event: HostEvent, channel: number) => void): void;
 export function usePaneSelection(session: Session, provider?: string | null): PaneSelection | null;
 export type InterfaceSourceMutation =
-  | { Open: { source: number; columns: readonly unknown[] } }
+  | { Open: { source: number; columns: readonly ColumnSpec[] } }
   | { Length: { source: number; version: number; rows: number } }
   | { Window: { source: number; version: number; request: number; range: { start: number; count: number }; rows: readonly unknown[] } }
   | { Invalidate: { source: number; version: number; range: { start: number; count: number } | null } }

@@ -209,7 +209,7 @@ fn aarch64_x86_dbt_records_one_typed_exit_per_generated_return() {
         .and_then(|(_, tail)| tail.split_once("\n}\n\nstatic void block_return"))
         .map(|(body, _)| body)
         .expect("AArch64 x86 DBT run_block body");
-    let publication = "hl_a64_x86_record_translated_exit((unsigned)header->exit_kind);";
+    let publication = "hl_a64_x86_record_translated_exit(exit_kind);";
     assert_eq!(body.matches(publication).count(), 1, "{body}");
     let generated = body
         .split_once("} else {")
@@ -231,7 +231,21 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "interp_sext(instruction & 0x3FFFFFFu, 26) * 4",
         "cursor + (uint64_t)displacement",
         "guest_pc >= UINT64_MAX - UINT64_C(0xFFF)",
-        "count < 64u",
+        "count < HL_A64_X86_MAX_BLOCK_INSNS",
+        "uint64_t exit_kind;",
+        "HL_A64_X86_BACKEDGE_BUDGET = 8",
+        "HL_A64_X86_MAX_BLOCK_INSNS +",
+        "Translation stops at the first terminal",
+        "Forward edges remain ordinary dispatcher exits",
+        "guest NZCV remains canonical in cpu",
+        "decoded_target >= guest_pc && decoded_target < cursor",
+        "direct_target = host_for_instruction[(decoded_target - guest_pc) / 4]",
+        "header->loop_steps = direct_target == NULL ? 0",
+        "repetitions * header->loop_steps",
+        "repetitions >= HL_A64_X86_BACKEDGE_BUDGET",
+        "header->loop_steps == 0 && repetitions != 0",
+        "cmp $7,%r14",
+        "mov %r14,%rax",
     ] {
         assert!(source.contains(contract), "missing stage-one contract {contract}");
     }
@@ -246,6 +260,16 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
     ] {
         assert!(fixture.contains(instruction), "fixture omitted {instruction}");
     }
+    let signal_fixture = include_str!("../../../../tests/runtime/aarch64-dbt-signal/backedge_signal.c");
+    assert!(signal_fixture.contains("cbnz x0,1b"), "signal fixture lost generated backedge");
+    assert!(signal_fixture.contains("alarm(1)"), "signal fixture lost bounded asynchronous delivery");
+    assert!(signal_fixture.contains("_exit(42)"), "signal fixture no longer settles through its handler");
+    let smc_fixture = include_str!("../../../../tests/runtime/memory/source/aarch64_smctargeted.c");
+    for contract in ["0x54ffffc1u", "loop[2] = 0x11000800u", "publish_lines(loop, 1)"] {
+        assert!(smc_fixture.contains(contract), "SMC fixture lost stage-four contract {contract}");
+    }
+    let checkpoint = include_str!("../../../../tests/runtime/checkpoint-translated/test.yaml");
+    assert!(checkpoint.contains("container-checkpoint-cycles: 2"), "checkpoint fixture lost two-cycle gate");
 }
 
 #[test]
@@ -260,6 +284,180 @@ fn aarch64_x86_unsupported_census_is_observation_gated_and_at_the_rejection_seam
     assert!(dbt.contains(
         "hl_backend_tree_a64_unsupported(instruction);\n            break;"
     ));
+}
+
+#[test]
+fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "(instruction & 0x3F000000u) == 0x31000000u",
+        "(instruction & 0x1F800000u) == 0x12000000u",
+        "interp_bit_masks(sf, (instruction >> 22) & 1u",
+        "(instruction & 0x1F200000u) == 0x0B000000u",
+        "shift_type == 3u || (!sf && (amount & 0x20u))",
+        "(instruction & 0x1F200000u) == 0x0A000000u",
+        "hl_a64_x86_emit_binary(assembler, subtract ? 0x29 : 0x01, sf)",
+        "hl_a64_x86_emit_setcc(assembler, 2, 0)",
+        "hl_a64_x86_emit_setcc(assembler, 6, subtract ? 3 : 2)",
+        "hl_a64_x86_emit_setcc(assembler, 7, 4)",
+        "hl_a64_x86_emit_setcc(assembler, 8, 8)",
+        "hl_x64_reg_mem_disp32(assembler, 0x89, 2, HL_A64_X86_CPU_REG, OFF_NZCV)",
+        "if (guest_register == 31u && !sp_allowed)",
+    ] {
+        assert!(source.contains(contract), "missing stage-two contract {contract}");
+    }
+    assert!(!source.contains("hl_a64_x86_emit_alu_helper"), "supported ALU emitted a C helper call");
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
+    for instruction in [
+        "orr x2,xzr,#0x7fffffffffffffff",
+        "adds x3,x2,x1",
+        "b.vs 5f",
+        "b.mi 6f",
+        "cmp x1,x1",
+        "b.eq 8f",
+        "b.cs 9f",
+        "sub w4,wzr,w1,lsl #1",
+        "add w7,wzr,w1,lsl #2",
+        "adds w5,w4,w1,lsl #1",
+        "b.cs 92f",
+        "tst w5,#0xff",
+        "b.cc 12f",
+        "b.vc 13f",
+        "mov x6,x1",
+        "eor x6,x6,x1,lsl #1",
+        "and x6,x6,x1",
+        "orr sp,xzr,#0xff",
+        "cmp sp,#0xff",
+        "cmn sp,#0",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
+fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/alu_bench.c");
+    let interpreter_fixture = include_str!("../../../../tests/runtime/aarch64-dbt-interp/source/alu_bench.c");
+    assert_eq!(
+        fixture.split_once("__asm__").map(|(_, body)| body),
+        interpreter_fixture.split_once("__asm__").map(|(_, body)| body),
+        "translated and interpreter benchmark instruction streams drifted"
+    );
+    assert!(fixture.contains(".rept 12"), "{fixture}");
+    for instruction in [
+        "add x1,x1,x2,lsl #1",
+        "eor x3,x3,x1,ror #7",
+        "and x3,x3,#0x00ffffffffffffff",
+        "orr x4,x4,x3",
+        "subs x10,x10,#1",
+        "cbnz x10,1b",
+    ] {
+        assert!(fixture.contains(instruction), "benchmark omitted {instruction}");
+    }
+}
+
+#[test]
+fn aarch64_x86_stage_three_binds_conditional_sense_width_target_and_accounting() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "(instruction & 0xFF000010u) == 0x54000000u",
+        "interp_cond_holds(&condition_cpu, instruction & 15u)",
+        "(instruction & 0x7E000000u) == 0x34000000u",
+        "((instruction >> 24) & 1u) ? 5u : 4u",
+        "(instruction & 0x7E000000u) == 0x36000000u",
+        "((instruction >> 31) & 1u) << 5",
+        "interp_sext((instruction >> 5) & 0x3FFFu, 14) * 4",
+        "cpu->pc == header->branch_target",
+        "exit_kind = HL_BACKEND_SHAPE_T_COND_TAKEN",
+        "HL_BACKEND_SHAPE_T_COND_NOT_TAKEN",
+        "interp_sext(instruction & 0x3FFFFFFu, 26) * 4 == 4",
+        "count < HL_A64_X86_MAX_BLOCK_INSNS",
+    ] {
+        assert!(source.contains(contract), "missing stage-three contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/movwide.c");
+    for instruction in [
+        "cbz x9,16f",
+        "cbnz x1,17f",
+        "tbnz x11,#63,18f",
+        "tbz x11,#31,19f",
+        "tbnz x11,#31,20f",
+        "b.hi 21f",
+        "b.ls 22f",
+        "b.lt 23f",
+        "b.ge 24f",
+        "cbz x12,25b",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
+fn aarch64_x86_stage_four_backedge_model_matches_interpreter_retirement_and_terminals() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct Outcome {
+        entries: u64,
+        retired: u64,
+        taken_exits: u64,
+        fall_exits: u64,
+    }
+
+    fn direct(prefix: u64, loop_steps: u64, mut taken: u64, budget: u64) -> Outcome {
+        let mut outcome = Outcome { entries: 0, retired: 0, taken_exits: 0, fall_exits: 0 };
+        let mut first = true;
+        loop {
+            outcome.entries += 1;
+            let body = if first { prefix } else { loop_steps };
+            first = false;
+            if taken >= budget {
+                outcome.retired += body + (budget - 1) * loop_steps;
+                outcome.taken_exits += 1;
+                taken -= budget;
+            } else {
+                outcome.retired += body + taken * loop_steps;
+                outcome.fall_exits += 1;
+                return outcome;
+            }
+        }
+    }
+
+    fn interpreter_sampled(prefix: u64, loop_steps: u64, taken: u64, budget: u64) -> Outcome {
+        let retired = prefix + taken * loop_steps;
+        let taken_exits = taken / budget;
+        Outcome {
+            entries: taken_exits + 1,
+            retired,
+            taken_exits,
+            fall_exits: 1,
+        }
+    }
+
+    let translator = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    let dispatcher = include_str!("../src/native/engine/dispatch.c");
+    let direct_budget = translator
+        .split_once("HL_A64_X86_BACKEDGE_BUDGET = ")
+        .and_then(|(_, tail)| tail.split_once(' '))
+        .and_then(|(number, _)| number.parse::<u64>().ok())
+        .expect("direct backedge budget");
+    let dispatch_budget = dispatcher
+        .split_once("redispatch_chain >= ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .and_then(|(number, _)| number.parse::<u64>().ok())
+        .expect("dispatcher redispatch budget");
+    assert_eq!(direct_budget, dispatch_budget, "direct and dispatcher poll budgets drifted");
+    assert_eq!(direct_budget, 8, "the latency evidence is specifically bounded to eight bodies");
+
+    for taken in [0, 1, 7, 8, 9, 63, 64, 65, 1_000_000] {
+        for target_offset in 0..64_u64 {
+            let prefix = 64;
+            let loop_steps = prefix - target_offset;
+            assert_eq!(
+                direct(prefix, loop_steps, taken, direct_budget),
+                interpreter_sampled(prefix, loop_steps, taken, direct_budget),
+                "taken={taken} target_offset={target_offset}"
+            );
+        }
+    }
 }
 
 #[test]

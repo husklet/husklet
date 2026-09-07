@@ -46,7 +46,10 @@ impl Screenshot {
     /// its layout, so a grid set directly is overwritten by the next allocation and the
     /// tty never learns anything -- measured, the guest still reported the old geometry
     /// while the hook reported success.
-    pub(crate) fn schedule_resize(window: &gtk::ApplicationWindow) {
+    pub(crate) fn schedule_resize(window: &gtk::ApplicationWindow, tag: &str) {
+        if AppConfig::get().view.as_deref().unwrap_or("manager") != tag {
+            return;
+        }
         let Some(request) = AppConfig::get().resize.clone() else {
             return;
         };

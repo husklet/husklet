@@ -4,7 +4,17 @@ use super::{
 };
 
 impl Service {
-    pub(crate) async fn create_exec(&self, reference: &str, mut spec: ExecSpec) -> Result<Exec> {
+    pub(crate) async fn create_exec(&self, reference: &str, spec: ExecSpec) -> Result<Exec> {
+        self.create_exec_generation(reference, None, None, spec).await
+    }
+
+    pub(crate) async fn create_exec_generation(
+        &self,
+        reference: &str,
+        expected_id: Option<&crate::ContainerId>,
+        generation: Option<u64>,
+        mut spec: ExecSpec,
+    ) -> Result<Exec> {
         spec.process.validate()?;
         if spec.privileged {
             return Err(Error::InvalidSpec(
@@ -12,7 +22,7 @@ impl Service {
             ));
         }
         let _guard = self.operations.lock().await;
-        let container = self.resolve(reference).await?;
+        let container = self.resolve_generation(reference, expected_id, generation).await?;
         container.require_exec()?;
         // A named user only resolves against the container's own root filesystem, so this must
         // happen after the container is known. For an overlay this is the same lower directory
