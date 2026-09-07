@@ -10,6 +10,7 @@ import {
   ColorPicker,
   Column,
   Entry,
+  FormControlLabel,
   Heading,
   InlineMessage,
   Row,
@@ -328,6 +329,7 @@ function Environment({
   values: [string, string][];
   onChange: (value: [string, string][]) => void;
 }) {
+  const [revealed, setRevealed] = React.useState(false);
   const replace = (index: number, part: 0 | 1, value: unknown) =>
     onChange(
       values.map((row, at) =>
@@ -338,6 +340,14 @@ function Environment({
     );
   return (
     <Column gap={2}>
+      {values.length > 0 && (
+        <FormControlLabel label="Show environment values" gap={2}>
+          <Switch
+            checked={revealed}
+            onToggle={(event: Change) => setRevealed(Boolean(event.value))}
+          />
+        </FormControlLabel>
+      )}
       {values.map((row, index) => (
         <Row key={`${index}:${row[0]}`} gap={1}>
           <Entry
@@ -348,6 +358,7 @@ function Environment({
           <Entry
             value={row[1]}
             placeholder="value"
+            secret={!revealed}
             grow
             onChange={(event: Change) => replace(index, 1, event.value)}
           />

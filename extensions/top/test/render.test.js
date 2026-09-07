@@ -126,7 +126,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
       shell: '/bin/sh',
       cpus: 2,
       memory_mb: 1024,
-      environment: [],
+      environment: [['TOKEN', 'hunter2']],
       mounts: [],
       docker_socket: false,
       scrollback: 10000,
@@ -174,6 +174,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Start',
     'cross-axis alignment lets the settings width govern native layout',
   );
+  expand(stage, 'Environment variables');
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  toggleLatestSwitch(stage, true);
+  await settled();
+  assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
   invoke(stage, 'Extensions');
   await settled();
   await settled();
@@ -4124,6 +4130,15 @@ function toggleSwitch(stage, index, value) {
   );
 }
 
+function toggleLatestSwitch(stage, value) {
+  const node = switchNodes(stage).at(-1);
+  assert.notEqual(node, undefined, 'a switch is visible');
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Toggle', node, id: `${node}:Toggle`, value }),
+    'the latest switch toggles',
+  );
+}
+
 function invoke(stage, label) {
   const nodes = stage.frames
     .flatMap((frame) => frame.patches)
@@ -4139,6 +4154,20 @@ function invoke(stage, label) {
       stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
     ),
     `${label} invokes`,
+  );
+}
+
+function expand(stage, label) {
+  const nodes = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id)
+    .reverse();
+  assert.ok(
+    nodes.some((node) =>
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, value: true }),
+    ),
+    `${label} expands`,
   );
 }
 
@@ -4257,6 +4286,17 @@ function fieldValue(stage, placeholder) {
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
     .at(-1)?.SetProp.value?.Text;
+}
+
+function placeholderProperty(stage, placeholder, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const node = patches
+    .filter(
+      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+    )
+    .at(-1)?.SetProp.id;
+  return patches.filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop).at(-1)
+    ?.SetProp.value;
 }
 
 function ancestorTags(stage, label) {
