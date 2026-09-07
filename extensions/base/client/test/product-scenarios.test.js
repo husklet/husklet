@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
+import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples');
 const reactExamples = path.resolve(examples, '../../react/examples');

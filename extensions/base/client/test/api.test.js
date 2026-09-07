@@ -12,9 +12,9 @@ import {
   requestCapability,
   validateUiEvent,
   workspace,
-} from '../src/index.js';
-import { KIND, Reader, encode } from '../src/wire.js';
-import { PROTOCOL } from '../src/session.js';
+} from '../dist/index.js';
+import { KIND, Reader, encode } from '../dist/wire.js';
+import { PROTOCOL } from '../dist/session.js';
 
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
   const calls = [];
@@ -757,7 +757,7 @@ test('the schema-derived public surface covers every Rust request and topic', ()
 });
 
 test('every fixed public facade request is classified with its Rust host capability', () => {
-  const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
   const calls = new Set(
     [...source.matchAll(/(?:session\.call|done)\('([a-z_]+)'/g)].map((match) => match[1]),
   );

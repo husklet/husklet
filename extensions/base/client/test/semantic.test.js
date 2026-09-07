@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { semanticXml } from '../src/index.js';
+import { semanticXml } from '../dist/index.js';
 
 test('semantic XML is deterministic, escaped, redacted, and bounded', () => {
   const xml = semanticXml({ slot: 'pane<&', generation: 2, revision: 3, truncated: false, root: {

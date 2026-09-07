@@ -8,10 +8,7 @@ const repository = path.resolve(here, '../../../..');
 const schemaPath = path.join(repository, 'src/workspaces/hl-extension/protocol/v1.json');
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const fingerprint = fs
-  .readFileSync(
-    path.join(repository, 'src/workspaces/hl-extension/protocol/v1.fnv1a64'),
-    'utf8',
-  )
+  .readFileSync(path.join(repository, 'src/workspaces/hl-extension/protocol/v1.fnv1a64'), 'utf8')
   .trim();
 assert.match(fingerprint, /^[0-9a-f]{16}$/, 'Rust protocol fingerprint must be canonical');
 const provenance = `// Protocol artifact fnv1a64:${fingerprint}\n`;
@@ -164,41 +161,72 @@ export function encodeRequest(call, payload) {
 
 function type(schemaNode) {
   switch (schemaNode.kind) {
-    case 'unit': return 'undefined';
-    case 'string': return 'string';
-    case 'boolean': return 'boolean';
-    case 'integer': case 'float': return 'number';
-    case 'optional': return `${type(schemaNode.of)} | null`;
-    case 'newtype': return type(schemaNode.of);
-    case 'array': return `Array<${type(schemaNode.of)}>`;
+    case 'unit':
+      return 'undefined';
+    case 'string':
+      return 'string';
+    case 'boolean':
+      return 'boolean';
+    case 'integer':
+    case 'float':
+      return 'number';
+    case 'optional':
+      return `${type(schemaNode.of)} | null`;
+    case 'newtype':
+      return type(schemaNode.of);
+    case 'array':
+      return `Array<${type(schemaNode.of)}>`;
     case 'tuple': {
       const fields = schemaNode.items ?? schemaNode.fields?.map((field) => field.schema) ?? [];
       return fields.length === 1 ? type(fields[0]) : `[${fields.map(type).join(', ')}]`;
     }
-    case 'map': return `Record<string, ${type(schemaNode.value)}>`;
-    case 'ref': return schemaNode.name;
-    case 'struct': return `{ ${schemaNode.fields.map((field) => `${JSON.stringify(field.name)}${field.optional ? '?' : ''}: ${type(field.schema)}`).join('; ')} }`;
-    case 'enum': return enumType(schemaNode);
-    default: throw new Error(`unsupported TypeScript schema kind ${schemaNode.kind}`);
+    case 'map':
+      return `Record<string, ${type(schemaNode.value)}>`;
+    case 'ref':
+      return schemaNode.name;
+    case 'struct':
+      return `{ ${schemaNode.fields.map((field) => `${JSON.stringify(field.name)}${field.optional ? '?' : ''}: ${type(field.schema)}`).join('; ')} }`;
+    case 'enum':
+      return enumType(schemaNode);
+    default:
+      throw new Error(`unsupported TypeScript schema kind ${schemaNode.kind}`);
   }
 }
 function enumType(node) {
   const { tag, content, untagged } = node.serde ?? {};
-  return node.variants.map((variant) => {
-    const payload = type(variant.payload);
-    if (untagged) return payload;
-    if (tag && content) return variant.payload.kind === 'unit' ? `{ ${tag}: ${JSON.stringify(variant.name)} }` : `{ ${tag}: ${JSON.stringify(variant.name)}; ${content}: ${payload} }`;
-    if (tag) return variant.payload.kind === 'unit' ? `{ ${tag}: ${JSON.stringify(variant.name)} }` : `{ ${tag}: ${JSON.stringify(variant.name)} } & ${payload}`;
-    return variant.payload.kind === 'unit' ? JSON.stringify(variant.name) : `{ ${JSON.stringify(variant.name)}: ${payload} }`;
-  }).join(' | ');
+  return node.variants
+    .map((variant) => {
+      const payload = type(variant.payload);
+      if (untagged) return payload;
+      if (tag && content)
+        return variant.payload.kind === 'unit'
+          ? `{ ${tag}: ${JSON.stringify(variant.name)} }`
+          : `{ ${tag}: ${JSON.stringify(variant.name)}; ${content}: ${payload} }`;
+      if (tag)
+        return variant.payload.kind === 'unit'
+          ? `{ ${tag}: ${JSON.stringify(variant.name)} }`
+          : `{ ${tag}: ${JSON.stringify(variant.name)} } & ${payload}`;
+      return variant.payload.kind === 'unit'
+        ? JSON.stringify(variant.name)
+        : `{ ${JSON.stringify(variant.name)}: ${payload} }`;
+    })
+    .join(' | ');
 }
 const declarations = `// Generated from Rust hl-extension protocol/v1.json. Do not edit.
 ${provenance.trimEnd()}
 export const PROTOCOL_SPECIFICATION_VERSION: ${schema.specification_version};
 export const PROTOCOL_VERSION: ${schema.protocol_version};
-export const PROTOCOL_BOUNDS: Readonly<${type({ kind: 'struct', fields: Object.entries(schema.bounds).map(([name]) => ({name, optional:false, schema:{kind:'integer',signed:false}})) })}>;
-export type ExtensionCapability = ${schema.capabilities.map(({wire}) => JSON.stringify(wire)).join(' | ')};
-${Object.entries(schema.definitions).map(([name, definition]) => `export type ${name} = ${type(definition)};`).join('\n')}
+export const PROTOCOL_BOUNDS: Readonly<${type({ kind: 'struct', fields: Object.entries(schema.bounds).map(([name]) => ({ name, optional: false, schema: { kind: 'integer', signed: false } })) })}>;
+export type ExtensionCapability = ${schema.capabilities.map(({ wire }) => JSON.stringify(wire)).join(' | ')};
+export const PROTOCOL_CAPABILITIES: ReadonlyArray<Readonly<{ wire: ExtensionCapability }>>;
+export const PROTOCOL_TOPICS: ReadonlyArray<Readonly<{
+  wire: string;
+  snapshot: string;
+  capability: ExtensionCapability;
+}>>;
+${Object.entries(schema.definitions)
+  .map(([name, definition]) => `export type ${name} = ${type(definition)};`)
+  .join('\n')}
 export type WireRequest = ${type(schema.roots.request)};
 export type WireReply = ${type(schema.roots.reply)};
 export type WireCall = WireRequest['call'];

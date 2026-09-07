@@ -20,9 +20,22 @@ function hostWelcome(extension, granted) {
   };
 }
 
-async function runPackedStarter(consumer, starter, signal, hostEof = false, malformedRender = false, oversizedRender = false, partialRender = false) {
-  const socket = path.join(consumer, `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}${partialRender ? '-partial' : ''}.sock`);
-  const wire = await import(new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+async function runPackedStarter(
+  consumer,
+  starter,
+  signal,
+  hostEof = false,
+  malformedRender = false,
+  oversizedRender = false,
+  partialRender = false,
+) {
+  const socket = path.join(
+    consumer,
+    `starter-${signal}${hostEof ? '-eof' : ''}${malformedRender ? '-malformed' : ''}${oversizedRender ? '-oversized' : ''}${partialRender ? '-partial' : ''}.sock`,
+  );
+  const wire = await import(
+    new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`)
+  );
   const calls = [];
   let peer;
   const server = net.createServer((stream) => {
@@ -43,11 +56,12 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
           response = wire.encode({
             channel: frame.channel,
             kind: wire.KIND.response,
-            payload: malformedRender && frame.payload.call === 'interface_render_at'
-              ? Buffer.from('{', 'utf8')
-              : frame.payload.call === 'interface_open_tab'
-              ? { reply: 'identity', with: 'packed-starter' }
-              : { reply: 'done' },
+            payload:
+              malformedRender && frame.payload.call === 'interface_render_at'
+                ? Buffer.from('{', 'utf8')
+                : frame.payload.call === 'interface_open_tab'
+                  ? { reply: 'identity', with: 'packed-starter' }
+                  : { reply: 'done' },
           });
         }
         if (partialRender && frame.payload.call === 'interface_render_at') {
@@ -59,11 +73,13 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
         }
       }
     });
-    stream.write(wire.encode({
-      channel: 0,
-      kind: wire.KIND.open,
-      payload: hostWelcome('react-starter', ['interface:render']),
-    }));
+    stream.write(
+      wire.encode({
+        channel: 0,
+        kind: wire.KIND.open,
+        payload: hostWelcome('react-starter', ['interface:render']),
+      }),
+    );
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -79,7 +95,11 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => (stderr += chunk));
   try {
-    for (let attempt = 0; attempt < 400 && !calls.some(({ call }) => call === 'interface_render_at'); attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < 400 && !calls.some(({ call }) => call === 'interface_render_at');
+      attempt += 1
+    ) {
       if (child.exitCode !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -90,39 +110,76 @@ async function runPackedStarter(consumer, starter, signal, hostEof = false, malf
     assert.equal(rendered.with.frame.sequence, 1);
     assert(rendered.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Increment'));
     if (hostEof || malformedRender || oversizedRender || partialRender) {
-      exit = child.exitCode !== null ? { code: child.exitCode, signal: child.signalCode } : await Promise.race([
-        new Promise((resolve) => child.once('exit', (code, receivedSignal) => resolve({ code, signal: receivedSignal }))),
-        new Promise((_, reject) => setTimeout(() => reject(new Error(`packed React starter did not stop after host failure; stderr=${stderr}`)), 2_000)),
-      ]);
+      exit =
+        child.exitCode !== null
+          ? { code: child.exitCode, signal: child.signalCode }
+          : await Promise.race([
+              new Promise((resolve) =>
+                child.once('exit', (code, receivedSignal) =>
+                  resolve({ code, signal: receivedSignal }),
+                ),
+              ),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(
+                      new Error(
+                        `packed React starter did not stop after host failure; stderr=${stderr}`,
+                      ),
+                    ),
+                  2_000,
+                ),
+              ),
+            ]);
     } else {
       assert.equal(stderr, '');
     }
   } finally {
     if (child.exitCode === null) child.kill(signal);
-    exit ??= child.exitCode === null
-      ? await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
-      : { code: child.exitCode, signal: child.signalCode };
+    exit ??=
+      child.exitCode === null
+        ? await new Promise((resolve) =>
+            child.once('exit', (code, signal) => resolve({ code, signal })),
+          )
+        : { code: child.exitCode, signal: child.signalCode };
     peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
   }
-  assert.deepEqual(exit, hostEof || malformedRender || oversizedRender || partialRender ? { code: 1, signal: null } : { code: 0, signal: null },
-    `packed React starter did not stop cleanly; stderr=${stderr}`);
+  assert.deepEqual(
+    exit,
+    hostEof || malformedRender || oversizedRender || partialRender
+      ? { code: 1, signal: null }
+      : { code: 0, signal: null },
+    `packed React starter did not stop cleanly; stderr=${stderr}`,
+  );
   if (partialRender) {
-    assert.match(stderr, /^react-starter: host connection ended: extension host closed with an unfinished frame \([1-9][0-9]* bytes buffered\)\n$/);
+    assert.match(
+      stderr,
+      /^react-starter: host connection ended: extension host closed with an unfinished frame \([1-9][0-9]* bytes buffered\)\n$/,
+    );
   } else if (oversizedRender) {
-    assert.equal(stderr, `react-starter: host connection ended: frame declares ${wire.PAYLOAD_LIMIT + 1} bytes, above the ${wire.PAYLOAD_LIMIT} limit\n`);
+    assert.equal(
+      stderr,
+      `react-starter: host connection ended: frame declares ${wire.PAYLOAD_LIMIT + 1} bytes, above the ${wire.PAYLOAD_LIMIT} limit\n`,
+    );
   } else if (malformedRender) {
-    assert.match(stderr, /^react-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/);
+    assert.match(
+      stderr,
+      /^react-starter: host connection ended: frame payload is not valid UTF-8 JSON: .{1,256}\n$/,
+    );
   } else {
-    assert.equal(stderr, hostEof
-      ? 'react-starter: host connection ended: extension host connection closed\n'
-      : '');
+    assert.equal(
+      stderr,
+      hostEof ? 'react-starter: host connection ended: extension host connection closed\n' : '',
+    );
   }
 }
 
 async function runPackedStarterDenied(consumer, starter) {
   const socket = path.join(consumer, 'starter-interface-denied.sock');
-  const wire = await import(new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`));
+  const wire = await import(
+    new URL('dist/wire.js', `file://${path.join(consumer, 'node_modules/@husklet/react/')}`)
+  );
   const requests = [];
   let peer;
   const server = net.createServer((stream) => {
@@ -133,13 +190,18 @@ async function runPackedStarterDenied(consumer, starter) {
         if (frame.kind === wire.KIND.request) requests.push(frame.payload);
       }
     });
-    stream.write(wire.encode({
-      channel: 0,
-      kind: wire.KIND.open,
-      payload: hostWelcome('react-starter', []),
-    }));
+    stream.write(
+      wire.encode({
+        channel: 0,
+        kind: wire.KIND.open,
+        payload: hostWelcome('react-starter', []),
+      }),
+    );
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, resolve); });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socket, resolve);
+  });
   const child = spawn(process.execPath, ['main.js'], {
     cwd: starter,
     env: { ...process.env, HUSKLET_EXTENSION_SOCKET: socket },
@@ -147,15 +209,29 @@ async function runPackedStarterDenied(consumer, starter) {
   });
   let stderr = '';
   child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
   try {
     const exit = await Promise.race([
       new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('packed React starter did not report denied interface authority')), 2_000)),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('packed React starter did not report denied interface authority')),
+          2_000,
+        ),
+      ),
     ]);
     assert.deepEqual(exit, { code: 1, signal: null });
-    assert.deepEqual(requests, [], 'denied starter must not send an unauthorized interface request');
-    assert.equal(stderr, 'react-starter: startup failed: extension lacks negotiated capability interface:render\n');
+    assert.deepEqual(
+      requests,
+      [],
+      'denied starter must not send an unauthorized interface request',
+    );
+    assert.equal(
+      stderr,
+      'react-starter: startup failed: extension lacks negotiated capability interface:render\n',
+    );
   } finally {
     peer?.destroy();
     if (child.exitCode === null) child.kill('SIGKILL');
@@ -169,11 +245,15 @@ function packageStageFiles(dockerfile, destination) {
   for (const line of packageStage.matchAll(/^COPY ([^\n]+)$/gm)) {
     const fields = line[1].trim().split(/\s+/);
     const target = fields.pop();
-    assert(!fields.some((field) => field.startsWith('--')), 'package-stage COPY must remain directly reproducible');
+    assert(
+      !fields.some((field) => field.startsWith('--')),
+      'package-stage COPY must remain directly reproducible',
+    );
     for (const source of fields) {
-      const output = target === './'
-        ? path.join(destination, path.basename(source))
-        : path.join(destination, target.replace(/^\.\//, ''));
+      const output =
+        target === './'
+          ? path.join(destination, path.basename(source))
+          : path.join(destination, target.replace(/^\.\//, ''));
       fs.cpSync(path.join(repository, source), output, { recursive: true });
     }
   }
@@ -181,42 +261,103 @@ function packageStageFiles(dockerfile, destination) {
 
 try {
   const greetingFields = Object.keys(hostWelcome('react-starter', [])).sort();
-  assert.deepEqual(greetingFields, ['extension', 'granted', 'host', 'limits', 'protocol', 'workspace']);
-  assert(!greetingFields.includes('architecture'), 'architecture is workspace data, not part of authoritative Welcome');
-  const dryRun = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: root, encoding: 'utf8',
-  }));
+  assert.deepEqual(greetingFields, [
+    'extension',
+    'granted',
+    'host',
+    'limits',
+    'protocol',
+    'workspace',
+  ]);
+  assert(
+    !greetingFields.includes('architecture'),
+    'architecture is workspace data, not part of authoritative Welcome',
+  );
+  const dryRun = JSON.parse(
+    execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+      cwd: root,
+      encoding: 'utf8',
+    }),
+  );
   const names = new Set(dryRun[0].files.map(({ path: name }) => name));
   for (const required of [
-    'package.json', 'README.md', 'LICENSE', 'catalogue.json', 'dist/index.js', 'dist/index.d.ts',
-    'examples/starter/.dockerignore', 'examples/starter/Dockerfile', 'examples/starter/extension.toml', 'examples/starter/main.js',
+    'package.json',
+    'README.md',
+    'LICENSE',
+    'catalogue.json',
+    'dist/index.js',
+    'dist/index.d.ts',
+    'examples/starter/.dockerignore',
+    'examples/starter/Dockerfile',
+    'examples/starter/extension.toml',
+    'examples/starter/main.js',
     'examples/starter/package.json',
   ]) {
     assert(names.has(required), `npm package omits ${required}`);
   }
-  assert(!names.has('Dockerfile'), 'context-dependent base Dockerfile must not masquerade as a standalone npm artifact');
-  assert(![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')), 'developer-only files leaked into package');
+  assert(
+    !names.has('Dockerfile'),
+    'context-dependent base Dockerfile must not masquerade as a standalone npm artifact',
+  );
+  assert(
+    ![...names].some((name) => name.startsWith('test/') || name.startsWith('tools/')),
+    'developer-only files leaked into package',
+  );
 
-  const tarball = execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
-    cwd: root, encoding: 'utf8',
-  });
+  const tarball = execFileSync(
+    'npm',
+    ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
   const filename = JSON.parse(tarball)[0].filename;
-  const clientTarball = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
-    cwd: path.join(root, '..', 'client'), encoding: 'utf8',
-  }))[0].filename;
+  const clientTarball = JSON.parse(
+    execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], {
+      cwd: path.join(root, '..', 'client'),
+      encoding: 'utf8',
+    }),
+  )[0].filename;
   const isolatedCache = path.join(scratch, 'npm-cache');
   const imageRuntime = path.join(scratch, 'base-runtime');
   fs.cpSync(path.resolve(root, '..'), imageRuntime, { recursive: true });
-  execFileSync('npm', ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--cache', isolatedCache], {
-    cwd: imageRuntime, stdio: 'pipe',
-  });
+  execFileSync(
+    'npm',
+    ['ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--cache', isolatedCache],
+    {
+      cwd: imageRuntime,
+      stdio: 'pipe',
+    },
+  );
   const consumer = path.join(scratch, 'consumer');
   fs.mkdirSync(consumer);
-  fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-  execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1'], {
-    cwd: consumer, stdio: 'pipe',
-  });
-  const runtime = execFileSync(process.execPath, ['--input-type=module', '--eval', `
+  fs.writeFileSync(
+    path.join(consumer, 'package.json'),
+    JSON.stringify({ private: true, type: 'module' }),
+  );
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      path.join(scratch, clientTarball),
+      path.join(scratch, filename),
+      'react@18.3.1',
+    ],
+    {
+      cwd: consumer,
+      stdio: 'pipe',
+    },
+  );
+  const runtime = execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      `
     import { Button, CommandPaletteView, ConfirmAction, ResourceState, TerminalTranscript, acceptsChildren, connect, protocolSurface, requestCapability, tags, validateUiEvent, workspace } from '@husklet/react';
     import catalogue from '@husklet/react/catalogue' with { type: 'json' };
     if (typeof connect !== 'function' || typeof workspace !== 'function' || typeof TerminalTranscript !== 'function' || typeof CommandPaletteView !== 'function' || typeof ConfirmAction !== 'function' || typeof ResourceState !== 'function') process.exit(1);
@@ -224,50 +365,102 @@ try {
     if (catalogue.tags.length !== tags.length || catalogue.tags[0].name !== tags[0]) process.exit(3);
     if (protocolSurface.requests.workspace_info.api !== 'info' || requestCapability('workspace_info') !== 'workspaces:read') process.exit(4);
     if (validateUiEvent({ interaction: 'focus', trigger: 'Focus', node: 1, id: 'focus-1', focused: true }).interaction !== 'focus') process.exit(5);
-  `], { cwd: consumer, encoding: 'utf8' });
+  `,
+    ],
+    { cwd: consumer, encoding: 'utf8' },
+  );
   assert.equal(runtime, '');
-  const manifest = JSON.parse(fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'));
-  const imageRuntimeManifest = JSON.parse(fs.readFileSync(path.resolve(root, '../package.json'), 'utf8'));
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(consumer, 'node_modules/@husklet/react/package.json'), 'utf8'),
+  );
+  const imageRuntimeManifest = JSON.parse(
+    fs.readFileSync(path.resolve(root, '../package.json'), 'utf8'),
+  );
   for (const field of ['cpu', 'os', 'libc']) {
-    assert.equal(manifest[field], undefined, `React SDK gained an architecture restriction in ${field}`);
+    assert.equal(
+      manifest[field],
+      undefined,
+      `React SDK gained an architecture restriction in ${field}`,
+    );
   }
-  assert.equal(manifest.dependencies['@husklet/client'], manifest.version, 'React SDK must depend on the same public client version');
-  assert.equal(manifest.dependencies['react-reconciler'], imageRuntimeManifest.dependencies['react-reconciler'],
-    'published SDK reconciler must exactly match the multi-architecture base runtime');
+  assert.equal(
+    manifest.dependencies['@husklet/client'],
+    manifest.version,
+    'React SDK must depend on the same public client version',
+  );
+  assert.equal(
+    manifest.dependencies['react-reconciler'],
+    imageRuntimeManifest.dependencies['react-reconciler'],
+    'published SDK reconciler must exactly match the multi-architecture base runtime',
+  );
   assert.equal(manifest.exports['.'].types, './dist/index.d.ts');
 
   const installedStarter = path.join(consumer, 'node_modules/@husklet/react/examples/starter');
-  const starterPackage = JSON.parse(fs.readFileSync(path.join(installedStarter, 'package.json'), 'utf8'));
+  const starterPackage = JSON.parse(
+    fs.readFileSync(path.join(installedStarter, 'package.json'), 'utf8'),
+  );
   const starterDockerignore = fs.readFileSync(path.join(installedStarter, '.dockerignore'), 'utf8');
   const starterDockerfile = fs.readFileSync(path.join(installedStarter, 'Dockerfile'), 'utf8');
   const starterManifest = fs.readFileSync(path.join(installedStarter, 'extension.toml'), 'utf8');
-  execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], { stdio: 'pipe' });
+  execFileSync(process.execPath, ['--check', path.join(installedStarter, 'main.js')], {
+    stdio: 'pipe',
+  });
   assert.equal(starterPackage.private, true);
   assert.equal(starterPackage.type, 'module');
-  assert.equal(starterPackage.engines.node, manifest.engines.node, 'starter Node requirement drifted from the installed React SDK');
-  assert.equal(starterDockerignore, 'node_modules\nnpm-debug.log*\n.git\n.gitignore\n',
-    'starter must not upload host dependencies or repository metadata in its image context');
+  assert.equal(
+    starterPackage.engines.node,
+    manifest.engines.node,
+    'starter Node requirement drifted from the installed React SDK',
+  );
+  assert.equal(
+    starterDockerignore,
+    'node_modules\nnpm-debug.log*\n.git\n.gitignore\n',
+    'starter must not upload host dependencies or repository metadata in its image context',
+  );
   assert.equal(starterPackage.scripts.start, 'node main.js');
-  assert.equal(starterPackage.scripts.test, 'node --check main.js && node --input-type=module --eval "await Promise.all([import(\'@husklet/client\'), import(\'@husklet/react\'), import(\'react\')])"');
+  assert.equal(
+    starterPackage.scripts.test,
+    "node --check main.js && node --input-type=module --eval \"await Promise.all([import('@husklet/client'), import('@husklet/react'), import('react')])\"",
+  );
   assert.equal(starterPackage.dependencies['@husklet/react'], manifest.version);
   assert.equal(starterPackage.dependencies['@husklet/client'], manifest.version);
   assert.equal(starterPackage.dependencies.react, '18.3.1');
   assert.match(
     starterDockerfile,
-    new RegExp(`^ARG HUSKLET_BASE_IMAGE=ghcr\\.io/husklet/husklet/extension-base:${manifest.version.replaceAll('.', '\\.')}$`, 'm'),
+    new RegExp(
+      `^ARG HUSKLET_BASE_IMAGE=ghcr\\.io/husklet/husklet/extension-base:${manifest.version.replaceAll('.', '\\.')}$`,
+      'm',
+    ),
   );
   assert.match(starterDockerfile, /^FROM \$\{HUSKLET_BASE_IMAGE\}$/m);
   assert.match(starterDockerfile, /COPY --chown=node:node main\.js \/app\/main\.js/);
-  assert.match(starterDockerfile, /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/);
-  assert.match(starterDockerfile, /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/);
+  assert.match(
+    starterDockerfile,
+    /COPY --chown=node:node extension\.toml \/etc\/husklet\/extension\.toml/,
+  );
+  assert.match(
+    starterDockerfile,
+    /LABEL husklet\.extension\.manifest="\/etc\/husklet\/extension\.toml"/,
+  );
   const standaloneStarter = path.join(scratch, 'standalone-starter');
   fs.cpSync(installedStarter, standaloneStarter, { recursive: true });
-  execFileSync('npm', [
-    'install', '--ignore-scripts', '--no-audit', '--no-fund',
-    path.join(scratch, clientTarball), path.join(scratch, filename), 'react@18.3.1',
-  ], { cwd: standaloneStarter, stdio: 'pipe' });
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      path.join(scratch, clientTarball),
+      path.join(scratch, filename),
+      'react@18.3.1',
+    ],
+    { cwd: standaloneStarter, stdio: 'pipe' },
+  );
   execFileSync('npm', ['test'], { cwd: standaloneStarter, stdio: 'pipe' });
-  const starterLock = JSON.parse(fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'));
+  const starterLock = JSON.parse(
+    fs.readFileSync(path.join(standaloneStarter, 'package-lock.json'), 'utf8'),
+  );
   assert.equal(starterLock.packages['node_modules/@husklet/react'].version, manifest.version);
   assert.equal(starterLock.packages['node_modules/@husklet/client'].version, manifest.version);
   assert.match(starterLock.packages['node_modules/@husklet/react'].resolved, /^file:/);
@@ -278,14 +471,25 @@ try {
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, false, true);
   await runPackedStarter(consumer, standaloneStarter, 'SIGTERM', false, false, false, true);
   await runPackedStarterDenied(consumer, standaloneStarter);
-  assert(!starterDockerfile.includes('--platform='), 'starter must inherit the selected image architecture');
-  assert(!/^USER root$/m.test(starterDockerfile), 'starter must not regain root after the base drops privileges');
+  assert(
+    !starterDockerfile.includes('--platform='),
+    'starter must inherit the selected image architecture',
+  );
+  assert(
+    !/^USER root$/m.test(starterDockerfile),
+    'starter must not regain root after the base drops privileges',
+  );
   assert.match(starterManifest, /^name = "react-starter"$/m);
-  assert.match(starterManifest, new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'));
+  assert.match(
+    starterManifest,
+    new RegExp(`^version = "${manifest.version.replaceAll('.', '\\.')}"$`, 'm'),
+  );
   assert.match(starterManifest, /^protocol = 1$/m);
   assert.match(starterManifest, /^capabilities = \["interface:render"\]$/m);
 
-  fs.writeFileSync(path.join(consumer, 'consumer.ts'), `
+  fs.writeFileSync(
+    path.join(consumer, 'consumer.ts'),
+    `
     import { CommandPaletteView, ConfirmAction, TerminalTranscript, protocolSurface, render, requestCapability, useHostEvents, usePaneSelection, validateUiEvent, workspace, type CommandPaletteViewProps, type ConfirmActionProps, type ExtensionCapability, type HostEvent, type InterfaceEvent, type InterfaceSourceMutation, type Session, type ProcessList, type TerminalTranscriptProps } from '@husklet/react';
     declare const session: Session;
     const api = workspace(session);
@@ -373,11 +577,23 @@ try {
       return selected?.slot ?? null;
     }
     void ProviderView;
-  `);
-  execFileSync(path.resolve(root, '../../node_modules/.bin/tsc'), [
-    '--noEmit', '--strict', '--target', 'ES2022',
-    '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'consumer.ts',
-  ], { cwd: consumer, stdio: 'pipe' });
+  `,
+  );
+  execFileSync(
+    path.resolve(root, '../../node_modules/.bin/tsc'),
+    [
+      '--noEmit',
+      '--strict',
+      '--target',
+      'ES2022',
+      '--module',
+      'NodeNext',
+      '--moduleResolution',
+      'NodeNext',
+      'consumer.ts',
+    ],
+    { cwd: consumer, stdio: 'pipe' },
+  );
 
   const dockerfile = fs.readFileSync(path.resolve(root, '../Dockerfile'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
@@ -386,10 +602,17 @@ try {
   assert.match(dockerfile, /^ARG NPM_VERSION=10\.9\.8$/m);
   assert.match(dockerfile, /FROM \$\{NODE_IMAGE\} AS package/);
   assert.match(dockerfile, /npm pack --ignore-scripts/);
-  assert.match(dockerfile, /COPY extensions\/base\/package\.json extensions\/base\/package-lock\.json \.\//);
+  assert.match(
+    dockerfile,
+    /COPY extensions\/base\/package\.json extensions\/base\/package-lock\.json \.\//,
+  );
   assert.match(dockerfile, /npm install --global --ignore-scripts/);
   assert.match(dockerfile, /npm root --global/);
-  assert(dockerfile.includes('sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml'));
+  assert(
+    dockerfile.includes(
+      'sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml',
+    ),
+  );
   assert.match(dockerfile, /^USER node$/m);
   assert.match(dockerfile, /process\.version !== 'v\$\{NODE_VERSION\}'/);
   assert.match(dockerfile, /package\.json'\)\.version !== '\$\{NPM_VERSION\}'/);
@@ -401,12 +624,21 @@ try {
   assert.match(readme, /complete `examples\/starter` Docker context/);
   assert.match(readme, /pin that argument to a\s+registry digest/);
   assert.match(readme, /offline OCI build still requires.*base image to\s+already exist/s);
-  assert(!readme.includes('immutable base-image tag'), 'a mutable version tag must not be documented as immutable');
+  assert(
+    !readme.includes('immutable base-image tag'),
+    'a mutable version tag must not be documented as immutable',
+  );
   assert.match(readme, /examples\/starter/);
   assert.match(readme, /render\(React\.createElement\(App\), session/);
-  assert(!readme.includes('```jsx'), 'Node-only starter documentation must not require a JSX transform');
+  assert(
+    !readme.includes('```jsx'),
+    'Node-only starter documentation must not require a JSX transform',
+  );
   assert.match(readme, /host\.update\('backend', configuration\.generation,/);
-  assert(!readme.includes('husklet.extension.manifest="{...}"'), 'README must not suggest an inline manifest');
+  assert(
+    !readme.includes('husklet.extension.manifest="{...}"'),
+    'README must not suggest an inline manifest',
+  );
 
   // Reproduce the first Docker stage without an OCI builder or a registry. Its
   // npm package must be the same SDK a clean npm consumer receives; otherwise
@@ -416,46 +648,107 @@ try {
   fs.mkdirSync(baseSource);
   fs.mkdirSync(baseOutput);
   packageStageFiles(dockerfile, baseSource);
-  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'client'), stdio: 'pipe' });
-  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], { cwd: path.join(baseSource, 'react'), stdio: 'pipe' });
-  execFileSync('npm', ['pkg', 'set', 'dependencies.@husklet/client=9.8.7'], { cwd: path.join(baseSource, 'react'), stdio: 'pipe' });
+  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], {
+    cwd: path.join(baseSource, 'client'),
+    stdio: 'pipe',
+  });
+  execFileSync('npm', ['pkg', 'set', 'version=9.8.7'], {
+    cwd: path.join(baseSource, 'react'),
+    stdio: 'pipe',
+  });
+  execFileSync('npm', ['pkg', 'set', 'dependencies.@husklet/client=9.8.7'], {
+    cwd: path.join(baseSource, 'react'),
+    stdio: 'pipe',
+  });
   const baseStarterManifest = path.join(baseSource, 'react/examples/starter/extension.toml');
-  fs.writeFileSync(baseStarterManifest, fs.readFileSync(baseStarterManifest, 'utf8')
-    .replace(/^version = .*$/m, 'version = "9.8.7"'));
+  fs.writeFileSync(
+    baseStarterManifest,
+    fs.readFileSync(baseStarterManifest, 'utf8').replace(/^version = .*$/m, 'version = "9.8.7"'),
+  );
   assert.match(fs.readFileSync(baseStarterManifest, 'utf8'), /^version = "9\.8\.7"$/m);
-  const basePack = JSON.parse(execFileSync('npm', [
-    'pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
-  ], { cwd: path.join(baseSource, 'react'), encoding: 'utf8' }));
+  const basePack = JSON.parse(
+    execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput], {
+      cwd: path.join(baseSource, 'react'),
+      encoding: 'utf8',
+    }),
+  );
   const baseNames = new Set(basePack[0].files.map(({ path: name }) => name));
   assert.deepEqual(baseNames, names, 'base image must install the complete published SDK package');
-  const baseClient = JSON.parse(execFileSync('npm', [
-    'pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput,
-  ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
-  assert(baseClient.files.some(({ path: name }) => name === 'src/index.js'), 'base image must include the framework-neutral client');
-  assert(baseClient.files.some(({ path: name }) => name === 'src/generated-protocol.js'), 'base image must include generated protocol validation');
-  assert(baseClient.files.some(({ path: name }) => name === 'src/generated-protocol.d.ts'), 'base image must include generated protocol types');
+  const baseClient = JSON.parse(
+    execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', baseOutput], {
+      cwd: path.join(baseSource, 'client'),
+      encoding: 'utf8',
+    }),
+  )[0];
+  assert(
+    baseClient.files.some(({ path: name }) => name === 'dist/index.js'),
+    'base image must include the framework-neutral client',
+  );
+  assert(
+    baseClient.files.some(({ path: name }) => name === 'dist/generated-protocol.js'),
+    'base image must include generated protocol validation',
+  );
+  assert(
+    baseClient.files.some(({ path: name }) => name === 'dist/generated-protocol.d.ts'),
+    'base image must include generated protocol types',
+  );
   const repeatedOutput = path.join(scratch, 'base-package-output-repeat');
   fs.mkdirSync(repeatedOutput);
-  const repeatedReact = JSON.parse(execFileSync('npm', [
-    'pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput,
-  ], { cwd: path.join(baseSource, 'react'), encoding: 'utf8' }))[0];
-  const repeatedClient = JSON.parse(execFileSync('npm', [
-    'pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput,
-  ], { cwd: path.join(baseSource, 'client'), encoding: 'utf8' }))[0];
-  assert.equal(repeatedReact.integrity, basePack[0].integrity, 'React SDK tarball assembly is not reproducible');
-  assert.equal(repeatedClient.integrity, baseClient.integrity, 'client SDK tarball assembly is not reproducible');
+  const repeatedReact = JSON.parse(
+    execFileSync(
+      'npm',
+      ['pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput],
+      { cwd: path.join(baseSource, 'react'), encoding: 'utf8' },
+    ),
+  )[0];
+  const repeatedClient = JSON.parse(
+    execFileSync(
+      'npm',
+      ['pack', '--json', '--ignore-scripts', '--pack-destination', repeatedOutput],
+      { cwd: path.join(baseSource, 'client'), encoding: 'utf8' },
+    ),
+  )[0];
+  assert.equal(
+    repeatedReact.integrity,
+    basePack[0].integrity,
+    'React SDK tarball assembly is not reproducible',
+  );
+  assert.equal(
+    repeatedClient.integrity,
+    baseClient.integrity,
+    'client SDK tarball assembly is not reproducible',
+  );
   const locked = fs.readFileSync(path.join(imageRuntime, 'package-lock.json'));
-  for (const [scope, archive] of [['client', baseClient.filename], ['react', basePack[0].filename]]) {
+  for (const [scope, archive] of [
+    ['client', baseClient.filename],
+    ['react', basePack[0].filename],
+  ]) {
     const destination = path.join(imageRuntime, 'node_modules/@husklet', scope);
     fs.mkdirSync(destination, { recursive: true });
-    execFileSync('tar', ['-xzf', path.join(baseOutput, archive), '--strip-components=1', '-C', destination], { stdio: 'pipe' });
+    execFileSync(
+      'tar',
+      ['-xzf', path.join(baseOutput, archive), '--strip-components=1', '-C', destination],
+      { stdio: 'pipe' },
+    );
   }
-  assert.deepEqual(fs.readFileSync(path.join(imageRuntime, 'package-lock.json')), locked, 'offline SDK install changed the committed third-party lock');
-  execFileSync(process.execPath, ['--input-type=module', '--eval', `
+  assert.deepEqual(
+    fs.readFileSync(path.join(imageRuntime, 'package-lock.json')),
+    locked,
+    'offline SDK install changed the committed third-party lock',
+  );
+  execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      `
     import { Session as ClientSession } from '@husklet/client';
     import { Session, connect, render } from '@husklet/react';
     if (Session !== ClientSession || typeof connect !== 'function' || typeof render !== 'function') process.exit(1);
-  `], { cwd: imageRuntime, stdio: 'pipe' });
+  `,
+    ],
+    { cwd: imageRuntime, stdio: 'pipe' },
+  );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

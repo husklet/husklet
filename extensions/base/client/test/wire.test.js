@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CONTROL, FLAG_END, HEADER, KIND, PAYLOAD_LIMIT, Reader, encode } from '../src/wire.js';
+import { CONTROL, FLAG_END, HEADER, KIND, PAYLOAD_LIMIT, Reader, encode } from '../dist/wire.js';
 
 test('a frame survives the codec unchanged', () => {
   const frame = {

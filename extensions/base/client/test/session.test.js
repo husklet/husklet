@@ -10,8 +10,8 @@ import {
   Session,
   TerminalOperationError,
   workspace,
-} from '../src/index.js';
-import { CONTROL, KIND, Reader, encode } from '../src/wire.js';
+} from '../dist/index.js';
+import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-client-'));

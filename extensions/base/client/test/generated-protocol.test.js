@@ -12,7 +12,7 @@ import {
   validateReplyFor,
   validateRequest,
   validateSnapshot,
-} from '../src/index.js';
+} from '../dist/index.js';
 
 test('generated validators follow authoritative request/reply/failure/snapshot roots', () => {
   assert.deepEqual(encodeRequest('workspace_info'), { call: 'workspace_info' });
