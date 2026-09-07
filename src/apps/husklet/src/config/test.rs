@@ -471,8 +471,8 @@ fn incomplete_workspace_is_not_mistaken_for_an_empty_store() {
 fn duplicate_workspace_names_are_rejected() {
     let path = tmp_path("duplicate-name");
     let original = concat!(
-        "[workspace]\nname = runtime\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu:24.04\narch = arm64\n",
-        "[workspace]\nname = runtime\nconfiguration_revision = fedcba9876543210fedcba9876543210\nimage = debian:bookworm\narch = arm64\n",
+        "[workspace]\nname = runtime\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu:24.04\narch = arm64\n",
+        "[workspace]\nname = runtime\ngeneration = fedcba9876543210fedcba9876543210\nconfiguration_revision = fedcba9876543210fedcba9876543210\nimage = debian:bookworm\narch = arm64\n",
     );
     std::fs::write(&path, original).unwrap();
 
@@ -487,7 +487,7 @@ fn duplicate_workspace_names_are_rejected() {
 #[test]
 fn empty_workspace_identity_is_rejected() {
     let path = tmp_path("empty-identity");
-    std::fs::write(&path, "[workspace]\nname = \nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu\narch = arm64\n").unwrap();
+    std::fs::write(&path, "[workspace]\nname = \ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = ubuntu\narch = arm64\n").unwrap();
 
     let error = WorkspaceStore::load(&path).unwrap_err();
 
