@@ -6,7 +6,7 @@ export const CONFIRM_ACTION_TEXT_BYTE_LIMIT = 1024;
 const LABEL_BYTE_LIMIT = 256;
 const encoder = new TextEncoder();
 
-function bounded(value, limit) {
+function bounded(value: unknown, limit: number): string {
   let output = '';
   for (const character of String(value ?? '')) {
     if (encoder.encode(output + character).byteLength > limit) break;
@@ -15,7 +15,7 @@ function bounded(value, limit) {
   return output;
 }
 
-function authority(value) {
+function authority(value: unknown): string {
   if (
     typeof value !== 'string' ||
     value.trim() === '' ||
@@ -28,12 +28,23 @@ function authority(value) {
   return value;
 }
 
-function failure(cause) {
+function failure(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause ?? 'The operation failed.');
   return bounded(message || 'The operation failed.', CONFIRM_ACTION_TEXT_BYTE_LIMIT);
 }
 
 /** A two-stage async destructive action whose confirmation belongs to one stable authority. */
+interface ConfirmActionProps extends Record<string, unknown> {
+  authorityKey: string;
+  label: string;
+  confirmLabel: string;
+  question: string;
+  onConfirm: (authorityKey: string) => void | Promise<void>;
+  enabled?: boolean;
+  cancelLabel?: string;
+  pendingLabel?: string;
+  onCancel?: (authorityKey: string) => void;
+}
 export function ConfirmAction({
   authorityKey,
   label,
@@ -45,7 +56,7 @@ export function ConfirmAction({
   pendingLabel = 'Working…',
   onCancel,
   ...props
-}) {
+}: ConfirmActionProps) {
   const currentAuthority = authority(authorityKey);
   if (typeof onConfirm !== 'function')
     throw new TypeError('ConfirmAction onConfirm must be a function');

@@ -9,7 +9,7 @@ export const TERMINAL_TRANSCRIPT_ACTION_LIMIT = 8;
 
 const encoder = new TextEncoder();
 
-function boundedText(value, limit) {
+function boundedText(value: unknown, limit: number): string {
   let result = '';
   for (const character of String(value ?? '')) {
     if (encoder.encode(result + character).byteLength > limit) break;
@@ -18,7 +18,7 @@ function boundedText(value, limit) {
   return result;
 }
 
-function cursorText(text, column) {
+function cursorText(text: string, column: number): string {
   if (!Number.isSafeInteger(column) || column < 0) return text;
   const characters = [...text];
   const at = Math.min(column, characters.length);
@@ -33,6 +33,35 @@ function cursorText(text, column) {
  * Husklet nodes rather than a browser terminal emulator, so the same content and
  * actions remain available to GTK, keyboard users, and semantic readers.
  */
+export interface TerminalTranscriptLine {
+  id?: string | number;
+  number?: number;
+  text: string;
+  timestamp?: string;
+  stream?: 'stdout' | 'stderr' | 'system';
+  tone?: 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
+}
+export interface TerminalTranscriptAction {
+  id?: string;
+  label: string;
+  tone?: TerminalTranscriptLine['tone'];
+  variant?: 'solid' | 'outline' | 'ghost' | 'text';
+  destructive?: boolean;
+  enabled?: boolean;
+  onInvoke?: () => void;
+}
+interface TerminalTranscriptProps extends Record<string, unknown> {
+  lines?: readonly (string | TerminalTranscriptLine)[];
+  cursor?: { line: number; column: number };
+  lineNumbers?: boolean;
+  timestamps?: boolean;
+  selected?: string | number;
+  truncated?: boolean;
+  droppedLines?: number;
+  actions?: readonly TerminalTranscriptAction[];
+  onSelect?: (line: TerminalTranscriptLine, sourceIndex: number) => void;
+  emptyLabel?: string;
+}
 export function TerminalTranscript({
   lines = [],
   cursor,
@@ -45,13 +74,13 @@ export function TerminalTranscript({
   onSelect,
   emptyLabel = 'No terminal output',
   ...props
-}) {
+}: TerminalTranscriptProps) {
   if (!Array.isArray(lines)) throw new TypeError('TerminalTranscript lines must be an array');
   if (!Array.isArray(actions)) throw new TypeError('TerminalTranscript actions must be an array');
 
   let bytes = 0;
   let clipped = Boolean(truncated) || lines.length > TERMINAL_TRANSCRIPT_LINE_LIMIT;
-  const retained = [];
+  const retained: Array<TerminalTranscriptLine & { sourceIndex: number }> = [];
   for (const [sourceIndex, source] of lines.slice(-TERMINAL_TRANSCRIPT_LINE_LIMIT).entries()) {
     const line = typeof source === 'string' ? { text: source } : source;
     if (line === null || typeof line !== 'object')

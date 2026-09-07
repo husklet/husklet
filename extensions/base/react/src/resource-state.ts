@@ -3,7 +3,7 @@ import { Button, Column, EmptyState, InlineMessage, Progress } from './component
 
 export const RESOURCE_STATE_TEXT_BYTE_LIMIT = 1024;
 const encoder = new TextEncoder();
-function bounded(value) {
+function bounded(value: unknown): string {
   let output = '';
   for (const character of String(value ?? '')) {
     if (encoder.encode(output + character).byteLength > RESOURCE_STATE_TEXT_BYTE_LIMIT) break;
@@ -13,6 +13,16 @@ function bounded(value) {
 }
 
 /** A consistent loading, empty, failure, or ready boundary for host resources. */
+interface ResourceStateProps extends Record<string, unknown> {
+  state: 'loading' | 'empty' | 'error' | 'ready';
+  loadingLabel?: string;
+  emptyLabel?: string;
+  emptyDetail?: string;
+  error?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+  children?: React.ReactNode;
+}
 export function ResourceState({
   state,
   loadingLabel = 'Loading…',
@@ -23,7 +33,7 @@ export function ResourceState({
   onRetry,
   children,
   ...props
-}) {
+}: ResourceStateProps) {
   if (!['loading', 'empty', 'error', 'ready'].includes(state)) {
     throw new TypeError('ResourceState state must be loading, empty, error, or ready');
   }

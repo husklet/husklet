@@ -8,7 +8,7 @@ export const COMMAND_PALETTE_TEXT_BYTE_LIMIT = 256;
 
 const encoder = new TextEncoder();
 
-function bounded(value, limit) {
+function bounded(value: unknown, limit: number): string {
   let output = '';
   for (const character of String(value ?? '')) {
     if (encoder.encode(output + character).byteLength > limit) break;
@@ -17,7 +17,19 @@ function bounded(value, limit) {
   return output;
 }
 
-function rank(command, query) {
+export interface CommandPaletteItem {
+  id: string;
+  title: string;
+  group?: string;
+  keywords?: readonly string[];
+  detail?: string;
+  shortcut?: string;
+  disabled?: boolean;
+  destructive?: boolean;
+  tone?: string;
+  onInvoke?: (command: CommandPaletteItem) => void;
+}
+function rank(command: CommandPaletteItem, query: string): number | null {
   const needle = query.trim().toLocaleLowerCase();
   if (needle === '') return 0;
   const haystack =
@@ -35,7 +47,10 @@ function rank(command, query) {
   return score;
 }
 
-export function filterCommands(commands, query) {
+export function filterCommands(
+  commands: readonly CommandPaletteItem[],
+  query: string,
+): CommandPaletteItem[] {
   if (!Array.isArray(commands)) throw new TypeError('CommandPaletteView commands must be an array');
   const safeQuery = bounded(query, COMMAND_PALETTE_QUERY_BYTE_LIMIT);
   return commands
@@ -61,11 +76,19 @@ export function filterCommands(commands, query) {
       return { command: normalized, score: rank(normalized, safeQuery), order };
     })
     .filter(({ score }) => score !== null)
-    .sort((left, right) => left.score - right.score || left.order - right.order)
+    .sort((left, right) => left.score! - right.score! || left.order - right.order)
     .map(({ command }) => command);
 }
 
 /** A bounded keyboard-first command picker composed entirely from native nodes. */
+interface CommandPaletteViewProps extends Record<string, unknown> {
+  commands?: readonly CommandPaletteItem[];
+  initialQuery?: string;
+  placeholder?: string;
+  emptyLabel?: string;
+  onQueryChange?: (query: string) => void;
+  onSelect?: (command: CommandPaletteItem) => void;
+}
 export function CommandPaletteView({
   commands = [],
   initialQuery = '',
@@ -74,25 +97,27 @@ export function CommandPaletteView({
   onQueryChange,
   onSelect,
   ...props
-}) {
+}: CommandPaletteViewProps) {
   const [query, setQuery] = useState(() => bounded(initialQuery, COMMAND_PALETTE_QUERY_BYTE_LIMIT));
   const [active, setActive] = useState(0);
   const matches = useMemo(() => filterCommands(commands, query), [commands, query]);
   const selectable = matches.filter((command) => !command.disabled);
   const chosen = selectable[Math.min(active, Math.max(0, selectable.length - 1))];
-  const update = (value) => {
+  const update = (value: unknown) => {
     const next = bounded(value, COMMAND_PALETTE_QUERY_BYTE_LIMIT);
     setQuery(next);
     setActive(0);
     onQueryChange?.(next);
   };
-  const invoke = (command = chosen) => {
+  const invoke = (command: CommandPaletteItem | undefined = chosen) => {
     if (!command || command.disabled) return;
     onSelect?.(command);
     command.onInvoke?.(command);
   };
-  const key = (event) => {
-    const pressed = event?.key ?? event?.value?.key ?? event?.value;
+  const key = (event: unknown) => {
+    const detail = event as { key?: string; value?: string | { key?: string } } | null;
+    const pressed =
+      detail?.key ?? (typeof detail?.value === 'object' ? detail.value.key : detail?.value);
     if (pressed === 'ArrowDown')
       setActive((current) => (selectable.length === 0 ? 0 : (current + 1) % selectable.length));
     else if (pressed === 'ArrowUp')
@@ -101,7 +126,7 @@ export function CommandPaletteView({
       );
     else if (pressed === 'Enter') invoke();
   };
-  const groups = new Map();
+  const groups = new Map<string, CommandPaletteItem[]>();
   for (const command of matches) {
     const held = groups.get(command.group) ?? [];
     held.push(command);
@@ -113,7 +138,7 @@ export function CommandPaletteView({
     React.createElement(CommandPalette, {
       value: query,
       placeholder: bounded(placeholder, COMMAND_PALETTE_TEXT_BYTE_LIMIT),
-      onChange: (event) => update(event?.value ?? ''),
+      onChange: (event: unknown) => update((event as { value?: unknown } | null)?.value ?? ''),
       onKey: key,
       onSubmit: () => invoke(),
     }),
