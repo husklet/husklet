@@ -11472,9 +11472,14 @@ static int translit_pre_spill_signal_stage_test(void) {
         uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
         executed.mmscratch[0] = translit_flags_in(&executed);
         hl_x86_translit_enter(&executed, arena);
+        uint64_t returned_flags;
+        /* Guest DF is observable at the translated boundary, but ordinary C requires DF clear. Snapshot
+           and contain it in one instruction block before the compiler may emit any string operation. */
+        __asm__ volatile("pushfq; pop %0; cld" : "=r"(returned_flags) : : "cc", "memory");
         translit_flags_out(&executed, executed.mmscratch[0]);
         exact = exact && executed.rip == guest + 1 && executed.reason == R_BRANCH &&
-                translit_flags_in(&executed) == guest_flags;
+                translit_flags_in(&executed) == guest_flags &&
+                (returned_flags & UINT64_C(0x400)) == (guest_flags & UINT64_C(0x400));
         for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
     }
     jit_body_owner_drop_generation(g_cache_gen);
