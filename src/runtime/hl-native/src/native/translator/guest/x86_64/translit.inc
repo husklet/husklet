@@ -593,6 +593,7 @@ static void translit_emit_spill(hl_x64_asm *a);
 static void translit_emit_reload(hl_x64_asm *a);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_pre_spill_signal_stage_test(void);
+static int translit_pre_spill_failure;
 #endif
 static void translit_note_external_absolute(uint8_t *slot, uintptr_t address, uint32_t emitter_kind);
 
@@ -3963,7 +3964,10 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
     if (scenario == 238) {
         pid_t child = fork();
         if (child < 0) return 238;
-        if (child == 0) _exit(translit_pre_spill_signal_stage_test() ? 0 : 238);
+        if (child == 0) {
+            int ok = translit_pre_spill_signal_stage_test();
+            _exit(ok ? 0 : translit_pre_spill_failure != 0 ? translit_pre_spill_failure : 238);
+        }
         int status = 0;
         if (waitpid(child, &status, 0) != child) return 238;
         if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -11409,6 +11413,7 @@ static int translit_pcache_census_signal_stage_test(void) {
 }
 
 static int translit_pre_spill_signal_stage_test(void) {
+    translit_pre_spill_failure = 238;
     const size_t arena_size = 4096;
     uint8_t *arena = mmap(NULL, arena_size, PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -11467,15 +11472,27 @@ static int translit_pre_spill_signal_stage_test(void) {
         }
         cpu.mmscratch[0] = packed; gregs[HL_HOST_UC_REG_EFL] = (greg_t)host_flags;
         HL_HOST_UC_PC(&context) = (greg_t)(uintptr_t)stages[stage].pc;
-        exact = translit_signal_capture(&cpu, &context) && cpu.rip == guest && cpu.reason == R_BRANCH;
+        unsigned point = pattern * (sizeof stages / sizeof stages[0]) + stage;
+        if (!translit_signal_capture(&cpu, &context)) {
+            dprintf(2, "pre-spill pattern=%u stage=%u capture\n", pattern, stage);
+            translit_pre_spill_failure = 10 + (int)point; exact = 0; break;
+        }
+        if (cpu.rip != guest) { dprintf(2, "pre-spill pattern=%u stage=%u rip\n", pattern, stage); translit_pre_spill_failure = 10 + (int)point; exact = 0; break; }
+        if (cpu.reason != R_BRANCH) { dprintf(2, "pre-spill pattern=%u stage=%u reason\n", pattern, stage); translit_pre_spill_failure = 10 + (int)point; exact = 0; break; }
         for (unsigned reg = 0; exact && reg < 16; reg++)
-            exact = cpu.r[reg] == ((stages[stage].mask & (1u << reg))
-                ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg);
+            if (cpu.r[reg] != ((stages[stage].mask & (1u << reg))
+                ? UINT64_C(0xc000000000000000) + reg : UINT64_C(0xa000000000000000) + reg)) {
+                dprintf(2, "pre-spill pattern=%u stage=%u gpr=%u\n", pattern, stage, reg);
+                translit_pre_spill_failure = 10 + (int)point; exact = 0;
+            }
         uint64_t recovered = stages[stage].packed ? translit_pre_spill_unpack_flags(packed, host_flags)
                                                   : host_flags;
         translit_flags_out(&expected_flags, recovered);
-        exact = exact && translit_flags_in(&cpu) == translit_flags_in(&expected_flags) &&
-                (!stages[stage].packed || recovered == guest_flags);
+        if (exact && (translit_flags_in(&cpu) != translit_flags_in(&expected_flags) ||
+                      (stages[stage].packed && recovered != guest_flags))) {
+            dprintf(2, "pre-spill pattern=%u stage=%u flags\n", pattern, stage);
+            translit_pre_spill_failure = 10 + (int)point; exact = 0;
+        }
     }
     /* Execute every pattern, including both DF states, through the actual LAHF/SETO/ADD/SAHF bytes. */
     for (unsigned pattern = 0; exact && pattern < sizeof patterns / sizeof patterns[0]; pattern++) {
@@ -11486,23 +11503,28 @@ static int translit_pre_spill_signal_stage_test(void) {
         translit_flags_out(&executed, guest_flags);
         uint64_t expected[16]; memcpy(expected, executed.r, sizeof expected);
         executed.mmscratch[0] = translit_flags_in(&executed);
-        if (!translit_bind_cpu(&executed)) { exact = 0; break; }
+        if (!translit_bind_cpu(&executed)) { translit_pre_spill_failure = 160 + (int)pattern; exact = 0; break; }
         hl_x86_translit_enter(&executed, arena);
         uint64_t returned_flags;
-        /* Guest DF is observable at the translated boundary, but ordinary C requires DF clear. Snapshot
-           and contain it in one instruction block before the compiler may emit any string operation. */
+        /* The emitted exit reconstructs guest DF in mmscratch and deliberately CLDs for the host ABI.
+           Snapshot that host-boundary fact before ordinary C can change flags. */
         __asm__ volatile("pushfq; pop %0; cld" : "=r"(returned_flags) : : "cc", "memory");
         translit_flags_out(&executed, executed.mmscratch[0]);
-        exact = exact && executed.rip == guest + 1 && executed.reason == R_BRANCH &&
-                translit_flags_in(&executed) == guest_flags &&
-                (returned_flags & UINT64_C(0x400)) == (guest_flags & UINT64_C(0x400));
-        for (unsigned reg = 0; exact && reg < 16; reg++) exact = executed.r[reg] == expected[reg];
+        if (executed.rip != guest + 1) { translit_pre_spill_failure = 168 + (int)pattern; exact = 0; }
+        else if (executed.reason != R_BRANCH) { translit_pre_spill_failure = 176 + (int)pattern; exact = 0; }
+        else if (translit_flags_in(&executed) != guest_flags) { translit_pre_spill_failure = 184 + (int)pattern; exact = 0; }
+        else if ((returned_flags & UINT64_C(0x400)) != 0)
+            { translit_pre_spill_failure = 192 + (int)pattern; exact = 0; }
+        for (unsigned reg = 0; exact && reg < 16; reg++) if (executed.r[reg] != expected[reg]) {
+            translit_pre_spill_failure = 200 + (int)pattern; exact = 0;
+        }
     }
     /* The synthetic CPU is stack-owned; no later C or fixture may inherit its GS provenance. */
-    if (!translit_bind_cpu(NULL)) exact = 0;
+    if (!translit_bind_cpu(NULL)) { translit_pre_spill_failure = 208; exact = 0; }
     jit_body_owner_drop_generation(g_cache_gen);
     g_cache = saved_cache; g_cp = saved_cp; g_cache_gen = saved_generation; translit_selected = saved_selected;
     munmap(arena, arena_size);
+    if (exact) translit_pre_spill_failure = 0;
     return exact;
 }
 
