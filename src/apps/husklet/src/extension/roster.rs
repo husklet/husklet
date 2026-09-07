@@ -85,6 +85,7 @@ pub struct Entry {
     pub version: String,
     /// Exactly what the person agreed to.
     pub granted: Grant,
+    pub workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     /// Where the extension stands under the lifecycle policy.
     pub stage: Stage,
     /// Named views this installed image offers to terminal panes.
@@ -158,6 +159,7 @@ impl<S: Storage> Roster<S> {
                 image_digest: record.image_digest.clone(),
                 version: record.version.clone(),
                 granted: record.granted.clone(),
+                workspace_environment: record.workspace_environment.clone(),
                 stage: self.installation.stage(&record.name),
                 pane_providers: record.pane_providers.clone(),
             })
@@ -565,6 +567,37 @@ mod tests {
             "only what was consented to is recorded"
         );
         assert_eq!(entries[0].stage, Stage::Standby, "an install starts off duty");
+    }
+
+    #[test]
+    fn exact_workspace_environment_consent_survives_reopen() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut asked = manifest("sample", &[Capability::WorkspaceEnvironmentRead]);
+        let exact = hl_extension::WorkspaceEnvironmentGrant {
+            selectors: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                workspace: "dev".into(),
+                name: "PGPASSWORD".into(),
+            }],
+        };
+        asked.workspace_environment = exact.clone();
+        let mut roster = opened(temporary.path());
+        roster
+            .register_resource_scoped(
+                &asked,
+                "sha256:exact",
+                &asked.capabilities,
+                &asked.containers,
+                &asked.filesystem,
+                &exact,
+                7,
+            )
+            .unwrap();
+        drop(roster);
+
+        let reopened = opened(temporary.path());
+        let record = reopened.installation.records().next().unwrap();
+        assert_eq!(record.workspace_environment, exact);
+        assert_eq!(described(record).workspace_environment, exact);
     }
 
     #[test]

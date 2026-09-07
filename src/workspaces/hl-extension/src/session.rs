@@ -786,6 +786,21 @@ impl Session {
                 configuration,
             } => {
                 immutable_identity(generation, &[32], "workspace generation")?;
+                if configuration.environment_redacted
+                    && configuration.environment.iter().any(|(variable, _)| {
+                        !self.workspace_environment.permits(name, variable)
+                            || !self
+                                .peer
+                                .authority()
+                                .granted::<Capability>()
+                                .holds(Capability::WorkspaceEnvironmentRead)
+                    })
+                {
+                    return Err(Failure::Denied {
+                        capability: Capability::WorkspaceEnvironmentRead.as_str().into(),
+                        detail: "redacted workspace updates may only include explicitly consented environment names".into(),
+                    });
+                }
                 Ok(Reply::WorkspaceConfiguration(port.update(
                     name,
                     generation,

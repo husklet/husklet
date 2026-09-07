@@ -388,6 +388,7 @@ mod tests {
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             stage: Stage::Duty,
             pane_providers: vec![provider.clone()],
         });

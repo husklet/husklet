@@ -522,7 +522,18 @@ impl Store {
         workspace: &mut crate::config::WorkspaceConfig,
     ) {
         if configuration.environment_redacted {
-            workspace.env.clone_from(&old.env);
+            let replacements = configuration
+                .environment
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            workspace.env = old
+                .env
+                .iter()
+                .map(|(name, value)| {
+                    (name.clone(), replacements.get(name).cloned().unwrap_or_else(|| value.clone()))
+                })
+                .collect();
         }
     }
     /// Whether one workspace's execution domain is accepting connections.
@@ -838,16 +849,20 @@ mod workspace_control_tests {
     #[test]
     fn redacted_update_preserves_the_environment_it_could_not_observe() {
         let mut old = crate::config::WorkspaceConfig::new("other", "alpine", hl_ws::Arch::Arm64);
-        old.env = vec![("DATABASE_PASSWORD".into(), "cycle19-preserved-secret".into())];
+        old.env = vec![
+            ("DATABASE_PASSWORD".into(), "cycle19-preserved-secret".into()),
+            ("MODE".into(), "old".into()),
+        ];
         let mut carried = Store::configuration(&old);
-        carried.environment.clear();
+        carried.environment = vec![("MODE".into(), "rotated".into())];
         carried.environment_redacted = true;
         carried.shell = Some("/bin/bash".into());
         let mut replacement = Store::configured(&carried).expect("otherwise valid update");
 
         Store::preserve_redacted_environment(&old, &carried, &mut replacement);
 
-        assert_eq!(replacement.env, old.env);
+        assert_eq!(replacement.env[0], old.env[0]);
+        assert_eq!(replacement.env[1], ("MODE".into(), "rotated".into()));
         assert_eq!(replacement.shell.as_deref(), Some("/bin/bash"));
     }
 

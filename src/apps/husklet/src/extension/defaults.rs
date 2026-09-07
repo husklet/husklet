@@ -134,6 +134,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name.as_str(), "top");
         assert_eq!(entries[0].image_digest, "sha256:top");
+        assert_eq!(
+            entries[0].workspace_environment.selectors,
+            vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }]
+        );
         assert_eq!(entries[0].stage, Stage::Duty);
         assert!(entries[0].granted.holds(Capability::ExtensionRead));
         assert!(entries[0].granted.holds(Capability::WorkspaceRead));
