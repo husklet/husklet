@@ -57,6 +57,12 @@ Creation additionally requires `create = true`. Visibility never implies create.
 Omitting `[containers]` means no container authority, even with a container verb
 capability. Workspace-wide authority is explicit: `selectors = [{ all = true }]`.
 
+Networks use the same two-dimensional model. Manifests request exact network IDs
+or names (or explicit `all`) under `[networks]`; installation consent intersects
+that request, and creation is separately consented. Inventory, inspection, removal,
+connection, disconnection, and snapshots are filtered or denied against the
+persisted selectors.
+
 Filesystem grants implement the same two-dimensional model: `filesystem:read` and
 `filesystem:write` permits the mutation domain, while independently consented write, create, delete, and rename roots decide
 the resource. Writable roots are not implicitly readable. Container enforcement follows that
@@ -183,8 +189,6 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.images.prune(...)` — `image_prune`, requires `images:write`.
 
 ## Networks
-
-Network verbs and resources are granted independently. A manifest requests exact network IDs or names (or explicit `all`) through `networks`; installation consent intersects that request, and `create` is separately consented. Inventory, inspection, removal, connection, disconnection, and snapshots are filtered or denied against persisted selectors.
 
 - `host.networks.list(...)` — `network_list`, requires `networks:read`.
 - `host.networks.inspect(...)` — `network_inspect`, requires `networks:read`.
