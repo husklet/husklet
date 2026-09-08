@@ -1228,7 +1228,10 @@ for (const updating of [false, true]) {
       'Rename or move entries folder · migrations/ and everything inside',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.ok(labelled(stage, 'Review decision · 0/10 selected'));
+    assert.ok(labelled(stage, 'Requested access'));
+    assert.ok(labelled(stage, 'Containers · 4'));
+    assert.ok(labelled(stage, 'Files · 6'));
+    assert.ok(labelled(stage, 'No access selected · 10 requested'));
     assert.ok(labelled(stage, 'Exact grants · 0/10 selected'));
     expand(stage, 'Exact grants · 0/10 selected');
     assert.ok(labelled(stage, 'Container access · 0/4'));
@@ -1417,7 +1420,9 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
-  assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
+  assert.ok(labelled(stage, 'Requested access'));
+  assert.ok(labelled(stage, 'Product · 2'));
+  assert.ok(labelled(stage, 'No access selected · 2 requested'));
   assert.ok(labelled(stage, 'Exact grants · 0/2 selected'));
   expand(stage, 'Exact grants · 0/2 selected');
   assert.ok(labelled(stage, 'Product access · 0/2'));

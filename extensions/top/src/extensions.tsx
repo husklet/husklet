@@ -267,6 +267,23 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
   );
 }
 
+function RequestedPermissionSummary({ groups }: { groups: { label: string; count: number }[] }) {
+  const requested = groups.filter(({ count }) => count > 0);
+  if (requested.length === 0) {
+    return <Badge label="No workspace access requested" tone="positive" />;
+  }
+  return (
+    <Column gap={1}>
+      <Text label="Requested access" color="text-dim" />
+      <Row gap={1} wrap>
+        {requested.map(({ label, count }) => (
+          <Badge key={label} label={`${label} · ${count}`} tone="neutral" />
+        ))}
+      </Row>
+    </Column>
+  );
+}
+
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
@@ -633,6 +650,30 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     filesystemGrantCount(grantedFilesystem) +
     grantedWorkspaceEnvironment.read.length +
     grantedWorkspaceEnvironment.write.length;
+  const requestedPermissionGroups = acquisition?.candidate
+    ? [
+        { label: 'Product', count: acquisition.candidate.requested.length },
+        {
+          label: 'Containers',
+          count: requestedContainers.selectors.length + Number(requestedContainers.create),
+        },
+        { label: 'Images', count: imageGrantCount(requestedImages) },
+        {
+          label: 'Networks',
+          count: requestedNetworks.selectors.length + Number(requestedNetworks.create),
+        },
+        {
+          label: 'Volumes',
+          count: requestedVolumes.selectors.length + Number(requestedVolumes.create),
+        },
+        { label: 'Files', count: filesystemGrantCount(requestedFilesystem) },
+        {
+          label: 'Environment',
+          count:
+            requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length,
+        },
+      ]
+    : [];
 
   const content = (
     <Scroll grow width="fill" height="fill">
@@ -803,6 +844,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                     ) : null}
                     <Heading label="Review permissions" scale="caption" />
+                    <RequestedPermissionSummary groups={requestedPermissionGroups} />
                     <InlineMessage
                       label="All access is off. Expand exact grants and enable only what this extension needs."
                       tone="warning"
@@ -1328,7 +1370,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           <Separator orientation="horizontal" />
           <Row gap={1} pad={{ top: 1, end: 2, bottom: 1, start: 2 }} wrap>
             <Text
-              label={`Review decision · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
+              label={
+                requestedPermissionCount > 0 && grantedPermissionCount === 0
+                  ? `No access selected · ${requestedPermissionCount} requested`
+                  : `Review decision · ${grantedPermissionCount}/${requestedPermissionCount} selected`
+              }
               color="text-dim"
             />
             <Button
