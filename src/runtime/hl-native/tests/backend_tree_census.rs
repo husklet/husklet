@@ -279,7 +279,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "if (decoded_target < cursor)",
         "guest_for_instruction[index] == decoded_target",
         "header->loop_steps = direct_target_loop_steps",
-        "repetitions * header->loop_steps",
+        "hl_backend_tree_run_begin(1, result.retired_steps)",
         "repetitions >= HL_A64_X86_BACKEDGE_BUDGET",
         "header->loop_steps == 0 && repetitions != 0",
         "cmp $7,%r14",
@@ -338,9 +338,9 @@ fn aarch64_x86_conditional_links_keep_publication_and_lifecycle_guards() {
         assert!(dbt.contains(contract), "missing conditional-link contract {contract}");
     }
     let cache = include_str!("../src/native/translator/cache.c");
-    assert_eq!(cache.matches("G_PENDING_RESET();").count(), 3);
+    assert_eq!(cache.matches("G_PENDING_RESET(").count(), 3);
     let dispatch = include_str!("../src/native/engine/dispatch.c");
-    assert_eq!(dispatch.matches("G_PENDING_RESET();").count(), 1);
+    assert_eq!(dispatch.matches("G_PENDING_RESET(").count(), 1);
 }
 
 #[test]
