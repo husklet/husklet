@@ -48,6 +48,8 @@ export interface ExtensionSummary {
   version?: string;
   enabled?: boolean;
   pane_providers?: ExtensionPaneProvider[];
+  /** Durable, manifest-intersected workspace file authority. */
+  filesystem?: FilesystemGrant;
 }
 export interface ExtensionProviderDeclaration {
   extension: string;
@@ -329,6 +331,7 @@ export interface NetworkSummary {
   name: string;
   driver: string;
   scope: string;
+  kind: 'builtin' | 'custom';
 }
 export interface NetworkInventory {
   networks: NetworkSummary[];

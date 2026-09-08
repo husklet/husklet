@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Badge,
   Button,
   Card,
   CardActions,
@@ -283,6 +284,11 @@ export function Networks({
               variant={inspection.id === id ? 'filled' : 'outline'}
             >
               <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />
+              {network.kind === 'builtin' ? (
+                <CardContent gap={1}>
+                  <Badge label="Built-in · protected" tone="accent" />
+                </CardContent>
+              ) : null}
               <CardActions gap={1}>
                 <Button
                   label={
@@ -297,20 +303,24 @@ export function Networks({
                   enabled={operation.state !== 'loading' && container.trim().length > 0}
                   onInvoke={() => begin(network, 'connect')}
                 />
-                <Button
-                  label="Disconnect"
-                  enabled={operation.state !== 'loading' && container.trim().length > 0}
-                  tone="danger"
-                  onInvoke={() => begin(network, 'disconnect')}
-                />
-                <ConfirmAction
-                  authorityKey={`network:${id}:remove`}
-                  label="Remove"
-                  confirmLabel="Confirm remove"
-                  pendingLabel="Confirm remove"
-                  question={`Remove immutable network ${id} (${network.name})?`}
-                  onConfirm={() => remove(network)}
-                />
+                {container.trim().length > 0 ? (
+                  <Button
+                    label="Disconnect"
+                    enabled={operation.state !== 'loading'}
+                    tone="danger"
+                    onInvoke={() => begin(network, 'disconnect')}
+                  />
+                ) : null}
+                {network.kind !== 'builtin' ? (
+                  <ConfirmAction
+                    authorityKey={`network:${id}:remove`}
+                    label="Remove"
+                    confirmLabel="Confirm remove"
+                    pendingLabel="Confirm remove"
+                    question={`Remove immutable network ${id} (${network.name})?`}
+                    onConfirm={() => remove(network)}
+                  />
+                ) : null}
               </CardActions>
               {disconnectRequest?.network === id ? (
                 <DisconnectConsent

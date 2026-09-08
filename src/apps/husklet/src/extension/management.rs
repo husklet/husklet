@@ -284,6 +284,7 @@ fn summary(entry: super::roster::Entry) -> ExtensionSummary {
         version: entry.version,
         enabled,
         pane_providers: entry.pane_providers,
+        filesystem: entry.filesystem,
         status: match entry.stage {
             Stage::Vacancy => "vacancy".into(),
             Stage::Standby => "standby".into(),
@@ -425,11 +426,23 @@ mod tests {
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+            filesystem: hl_extension::FilesystemGrant {
+                write: vec![hl_extension::FilesystemSelector::Exact {
+                    exact: hl_extension::RelativePath::new("settings.json").unwrap(),
+                }],
+                ..hl_extension::FilesystemGrant::default()
+            },
             stage: Stage::Duty,
             pane_providers: vec![provider.clone()],
         });
         assert!(value.enabled);
         assert_eq!(value.version, "2.1.0");
         assert_eq!(value.pane_providers, vec![provider]);
+        assert_eq!(
+            value.filesystem.write,
+            vec![hl_extension::FilesystemSelector::Exact {
+                exact: hl_extension::RelativePath::new("settings.json").unwrap()
+            }]
+        );
     }
 }

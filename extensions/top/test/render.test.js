@@ -426,6 +426,69 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
+  const references = [];
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: digest,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            return { job: 'storybook-update' };
+          },
+          acquisition: async () => ({
+            job: 'storybook-update',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            revision: 3,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '2.0.0',
+              image_digest: `sha256:${'b'.repeat(64)}`,
+              installed_image_digest: digest,
+              requested: [],
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Review update'));
+  assert.equal(
+    labelled(stage, 'Review Component playground'),
+    undefined,
+    'installed catalogue entries do not also appear as new installations',
+  );
+
+  invoke(stage, 'Review update');
+  await settled();
+  await settled();
+  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.ok(
+    labelled(
+      stage,
+      `Replaces installed image ${compactDigest(digest)}. Access below was reset and must be approved again.`,
+    ),
+  );
+  assert.ok(labelled(stage, 'Update with selected access'));
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
@@ -904,7 +967,7 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
 
   assert.ok(labelled(stage, 'Required workspace manager'));
   assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
-  assert.ok(labelled(stage, `Image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
+  assert.ok(labelled(stage, `Image · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
   assert.equal(labelled(stage, 'Disable'), undefined);
   assert.equal(labelled(stage, 'Remove'), undefined);
 });
@@ -987,6 +1050,45 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   await settled();
   assert.deepEqual(calls, ['disable', 'enable', 'retry']);
   assert.ok(labelled(stage, 'assistant recovered and verified.'));
+});
+
+test('installed extensions distinguish durable exact-file and subtree authority', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'indexer',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+              filesystem: {
+                read: [{ subtree: 'documents' }],
+                write: [{ exact: 'settings/index.json' }],
+                create: [],
+                delete: [],
+                rename: [],
+              },
+            },
+          ],
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  assert.ok(labelled(stage, 'Workspace file access · 2 grants'));
+  assert.ok(labelled(stage, 'View contents folder · documents/ and everything inside'));
+  assert.ok(labelled(stage, 'Modify existing contents file · settings/index.json'));
+  assert.equal(
+    labelled(stage, 'Modify existing contents folder · settings/ and everything inside'),
+    undefined,
+    'an exact persisted grant is never presented as subtree authority',
+  );
 });
 
 test('installed extensions translate the host duty stage into a developer-facing state', async () => {
@@ -2490,7 +2592,10 @@ test('volume and network panels render bounded real inventories and controls', (
   const networkFrame = host().render(
     h(Networks, {
       api,
-      resource: resource([{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }]),
+      resource: resource([
+        { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+        { id: 'n2', name: 'bridge', driver: 'bridge', scope: 'local', kind: 'builtin' },
+      ]),
     }),
   );
   const labels = (frame) =>
@@ -2499,8 +2604,18 @@ test('volume and network panels render bounded real inventories and controls', (
       .map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove'])
     assert.ok(labels(volumeFrame).includes(label), label);
-  for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove'])
+  for (const label of ['Networks', 'private', 'Connect', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  assert.ok(
+    !labels(networkFrame).includes('Disconnect'),
+    'destructive endpoint action waits for a target',
+  );
+  assert.ok(labels(networkFrame).includes('Built-in · protected'));
+  assert.equal(
+    labels(networkFrame).filter((label) => label === 'Remove').length,
+    1,
+    'only the custom network offers removal',
+  );
   const networkStage = stageFromFrame(networkFrame);
   assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
@@ -2531,12 +2646,12 @@ test('network inspection exposes loading, retry, empty and bounded typed details
       inspect: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
-        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' };
+        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' };
       },
     },
   };
   const resource = {
-    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -4090,7 +4205,7 @@ test('volume and network mutations expose danger only on final confirm and cance
 
   const networks = host();
   const initialNetworks = resource([
-    { id: networkId, name: 'private', driver: 'bridge', scope: 'local' },
+    { id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
   ]);
   networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
   change(networks, 'Complete container ID', containerId);
@@ -4114,7 +4229,7 @@ test('volume and network mutations expose danger only on final confirm and cance
   );
   const staleConfirm = labelled(networks, 'Confirm remove').SetProp.id;
   const refreshedNetworks = resource([
-    { id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local' },
+    { id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
   ]);
   networks.render(h(Networks, { api: controlled, resource: refreshedNetworks }));
   networks.surface.dispatch({
@@ -4241,7 +4356,9 @@ test('network connect validates aliases, exposes progress, success, bounded fail
     },
   };
   const resource = {
-    data: [{ id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [
+      { id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+    ],
     loading: false,
     error: null,
     reload: async () => calls.push(['reload']),
@@ -4378,7 +4495,7 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
     networks: { ...api.networks, disconnect: async (...args) => calls.push(args) },
   };
   const resource = {
-    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},

@@ -3,7 +3,7 @@ use hl_container::{EndpointSpec, NetworkDriver, NetworkSpec, Subnet};
 use std::{collections::BTreeMap, net::Ipv4Addr};
 
 use super::{ApiError, ApiResult};
-use crate::api::{ConfigFrom, Ipam, IpamConfig, Network, NetworkContainer, NetworkCreate};
+use crate::api::{ConfigFrom, Ipam, IpamConfig, Network, NetworkContainer, NetworkCreate, NetworkKind};
 
 impl NetworkCreate {
     pub(super) fn spec(self) -> ApiResult<NetworkSpec> {
@@ -146,6 +146,10 @@ impl Fields<'_> {
 
 impl From<hl_container::Network> for Network {
     fn from(value: hl_container::Network) -> Self {
+        let husklet_kind = match value.kind {
+            hl_container::NetworkKind::Builtin => NetworkKind::Builtin,
+            hl_container::NetworkKind::Custom => NetworkKind::Custom,
+        };
         let prefix = value.subnet.map(|subnet| subnet.prefix);
         let containers = value
             .endpoints
@@ -186,6 +190,7 @@ impl From<hl_container::Network> for Network {
                 NetworkDriver::Bridge => "bridge",
             }
             .into(),
+            husklet_kind,
             enable_ipv6: false,
             ipam: Ipam {
                 driver: "default".into(),
@@ -233,7 +238,9 @@ impl IpamConfig {
 mod tests {
     use crate::api::{EndpointConfig, Network, NetworkCreate};
     use axum::http::StatusCode;
-    use hl_container::{ContainerId, Endpoint, Network as RuntimeNetwork, NetworkDriver, NetworkId};
+    use hl_container::{
+        ContainerId, Endpoint, Network as RuntimeNetwork, NetworkDriver, NetworkId, NetworkKind as RuntimeNetworkKind,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -294,6 +301,7 @@ mod tests {
             id: "00000000000000000000000000000001".parse::<NetworkId>().unwrap(),
             name: "frontend".into(),
             driver: NetworkDriver::Bridge,
+            kind: RuntimeNetworkKind::Custom,
             subnet: Some(hl_container::Subnet::new("10.0.0.0".parse().unwrap(), 24).unwrap()),
             gateway: Some("10.0.0.1".parse().unwrap()),
             labels: BTreeMap::new(),
@@ -303,6 +311,7 @@ mod tests {
 
         let summary = Network::from_summary(runtime.clone());
         assert!(summary.containers.is_empty());
+        assert_eq!(summary.husklet_kind, crate::api::NetworkKind::Custom);
         assert_eq!(
             serde_json::to_value(summary).unwrap()["Containers"],
             serde_json::json!({})
@@ -313,12 +322,16 @@ mod tests {
             id: "00000000000000000000000000000002".parse().unwrap(),
             name: "none".into(),
             driver: NetworkDriver::None,
+            kind: RuntimeNetworkKind::Builtin,
             subnet: None,
             gateway: None,
             labels: BTreeMap::new(),
             endpoints: BTreeMap::new(),
             created_at_ms: 0,
         };
-        assert_eq!(Network::from_summary(isolated).driver, "null");
+        let isolated = Network::from_summary(isolated);
+        assert_eq!(isolated.driver, "null");
+        assert_eq!(isolated.husklet_kind, crate::api::NetworkKind::Builtin);
+        assert_eq!(serde_json::to_value(isolated).unwrap()["HuskletKind"], "builtin");
     }
 }

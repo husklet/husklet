@@ -34,7 +34,7 @@ pub use model::{
 };
 pub use network::{
     ConfigFrom, EndpointConfig, EndpointIpam, Ipam, IpamConfig, Network, NetworkConnect, NetworkContainer,
-    NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune,
+    NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkKind, NetworkPrune,
 };
 pub use port::{ExposedPorts, PortBinding, PortBindings, PortSummary};
 pub use volume::{Volume, VolumeCreate, VolumeList, VolumePrune};

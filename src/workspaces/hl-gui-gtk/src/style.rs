@@ -124,6 +124,14 @@ fn variants(css: &mut String, theme: &Theme) {
             );
         }
     }
+    let _ = writeln!(
+        css,
+        ".variant-filled:disabled, .variant-outline:disabled, .variant-ghost:disabled, .variant-plain:disabled {{ \
+         background: {surface}; color: {faint}; border-color: {line}; }}",
+        surface = theme.color(Token::Surface).hex(),
+        faint = theme.color(Token::TextFaint).hex(),
+        line = theme.color(Token::Line).hex(),
+    );
 }
 
 fn scales(css: &mut String, theme: &Theme) {
@@ -238,5 +246,9 @@ mod tests {
                 assert!(css.contains(&selector), "missing rule {selector}");
             }
         }
+        assert!(
+            css.contains(".variant-outline:disabled") && css.contains("color: #6b7179; border-color: #2e3238"),
+            "semantic variants must not override disabled affordance"
+        );
     }
 }

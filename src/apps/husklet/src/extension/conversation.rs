@@ -1373,18 +1373,39 @@ mod tests {
                 return Err(HostError::Unsupported("pane semantics are unavailable".into()));
             }
             Ok(hl_extension::PaneSemanticTree {
-                slot: slot.to_owned(),
+                slot: if revision == u64::MAX - 1 {
+                    "another-pane".to_owned()
+                } else {
+                    slot.to_owned()
+                },
                 generation: 0,
                 revision,
                 root: hl_extension::SemanticNode {
                     id: 1,
                     role: "status".into(),
-                    label: Some("Lifecycle notice".into()),
+                    label: Some(if revision == u64::MAX {
+                        "x".repeat(Frame::PAYLOAD_LIMIT)
+                    } else {
+                        "Lifecycle notice".into()
+                    }),
                     value: Some(format!("revision {revision}")),
                     disabled: false,
                     destructive: false,
                     actions: Vec::new(),
-                    children: Vec::new(),
+                    children: if revision == u64::MAX - 2 {
+                        vec![hl_extension::SemanticNode {
+                            id: 1,
+                            role: "button".into(),
+                            label: Some("Ambiguous action".into()),
+                            value: None,
+                            disabled: false,
+                            destructive: false,
+                            actions: vec![hl_extension::SemanticActionKind::Invoke],
+                            children: Vec::new(),
+                        }]
+                    } else {
+                        Vec::new()
+                    },
                 },
                 truncated: false,
             })
@@ -1529,6 +1550,7 @@ mod tests {
                 version: "1.0.0".into(),
                 enabled: true,
                 pane_providers: Vec::new(),
+                filesystem: hl_extension::FilesystemGrant::default(),
             }])
         }
 
@@ -1594,6 +1616,22 @@ mod tests {
         let served = std::thread::spawn(move || {
             let host = Host { ledger };
             let mut conversation = Conversation::new(ours, authority(), "dev", queue)?.settling(settle);
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn semantic_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("semantic-reader").expect("name"),
+                Grant::new([Capability::PaneSemanticRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
             conversation.greet()?;
             conversation.serve(&services(&host))
         });
@@ -1734,6 +1772,7 @@ mod tests {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }]);
         conversation.with_extension_events(events);
 
@@ -2300,6 +2339,38 @@ mod tests {
             drop(wire);
             assert_eq!(served.join().expect("joined"), Ok(()));
         }
+    }
+
+    #[test]
+    fn oversized_semantic_adapter_reply_is_refused_without_breaking_the_unix_conversation() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = semantic_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        for (revision, expected) in [
+            (u64::MAX, "invalid node"),
+            (u64::MAX - 1, "requested slot"),
+            (u64::MAX - 2, "duplicate node identities"),
+        ] {
+            ledger.semantic_revision(revision);
+            let refused = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".to_owned() });
+            assert!(matches!(
+                codec::read_failure(&refused),
+                Ok(Failure::Conflict { detail }) if detail.contains(expected)
+            ));
+            assert!(
+                refused.payload.len() < 512,
+                "a hostile adapter reply becomes a small typed refusal"
+            );
+        }
+
+        ledger.semantic_revision(1);
+        let recovered = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".to_owned() });
+        assert!(matches!(codec::read_reply(&recovered), Ok(Reply::Semantics(tree)) if tree.slot == "s1"));
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     #[test]

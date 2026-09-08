@@ -115,6 +115,7 @@ mod tests {
             version: "1.0.0".into(),
             enabled: false,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }]);
         events.inventory(vec![ExtensionSummary {
             name: "new".into(),
@@ -123,6 +124,7 @@ mod tests {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }]);
         let job = AcquisitionJob::test(7);
         events.acquisition(job, snapshot("first", 1));

@@ -124,6 +124,28 @@ function FilesystemConsent({
   );
 }
 
+function InstalledFilesystemAccess({ grant }: { grant?: FilesystemGrant }) {
+  if (!grant || filesystemGrantCount(grant) === 0) return null;
+  return (
+    <Column gap={1}>
+      <Text
+        label={`Workspace file access · ${filesystemGrantCount(grant)} grants`}
+        color="text-dim"
+      />
+      {FILESYSTEM_VERBS.flatMap(({ key, label }) =>
+        filesystemRoots(grant, key).map((selector) => (
+          <Text
+            key={`${key}:${filesystemSelectorKey(selector)}`}
+            label={filesystemConsentLabel(selector, label)}
+            color="text-dim"
+            wrap
+          />
+        )),
+      )}
+    </Column>
+  );
+}
+
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
@@ -762,73 +784,85 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               error={inventoryError || 'Installed extensions could not be loaded.'}
               onRetry={reload}
             >
-              {installed.map((extension) => (
-                <Card
-                  key={`${extension.name}:${extension.image_digest}`}
-                  grow={false}
-                  justify="start"
-                  width={CONTENT_WIDTH}
-                  variant="filled"
-                >
-                  <CardHeader
-                    label={extension.name}
-                    detail={
-                      extension.version ? `Version ${extension.version}` : 'Version unavailable'
-                    }
-                  />
-                  <CardContent gap={1}>
-                    <Row gap={1} wrap>
-                      <Badge
-                        label={extensionState(extension)}
-                        tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
-                      />
+              {installed.map((extension) => {
+                const update = catalogue?.entries.find((entry) => entry.id === extension.name);
+                return (
+                  <Card
+                    key={`${extension.name}:${extension.image_digest}`}
+                    grow={false}
+                    justify="start"
+                    width={CONTENT_WIDTH}
+                    variant="filled"
+                  >
+                    <CardHeader
+                      label={extension.name}
+                      detail={
+                        extension.version ? `Version ${extension.version}` : 'Version unavailable'
+                      }
+                    />
+                    <CardContent gap={1}>
+                      <Row gap={1} wrap>
+                        <Badge
+                          label={extensionState(extension)}
+                          tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
+                        />
+                        {extension.name === 'top' ? (
+                          <Badge label="Required workspace manager" tone="positive" />
+                        ) : null}
+                      </Row>
                       <Text
-                        label={`Image ${compactDigest(extension.image_digest)}`}
+                        label={`Image · ${compactDigest(extension.image_digest)}`}
                         tooltip={extension.image_digest}
                       />
-                    </Row>
-                    <ExtensionFault extension={extension} />
-                    <LifecycleFeedback
-                      extensionName={extension.name}
-                      pending={pendingLifecycle}
-                      failure={lifecycleFailure}
-                    />
-                    <Row gap={1} wrap>
-                      {extension.name === 'top' ? (
-                        <Badge label="Required workspace manager" tone="positive" />
-                      ) : extension.status.startsWith('fault:') ? (
-                        <Button
-                          label="Retry"
-                          enabled={!busy}
-                          onInvoke={() => lifecycle(extension, 'retry')}
-                        />
-                      ) : extension.enabled ? (
-                        <Button
-                          label="Disable"
-                          enabled={!busy}
-                          onInvoke={() => lifecycle(extension, 'disable')}
-                        />
-                      ) : (
-                        <Button
-                          label="Enable"
-                          enabled={!busy}
-                          onInvoke={() => lifecycle(extension, 'enable')}
-                        />
-                      )}
-                      {extension.name !== 'top' && (
-                        <ConfirmAction
-                          label="Remove"
-                          confirmLabel={`Remove ${extension.name}`}
-                          question={`Remove ${extension.name} from this workspace?`}
-                          authorityKey={extension.image_digest}
-                          enabled={!busy}
-                          onConfirm={() => lifecycle(extension, 'remove')}
-                        />
-                      )}
-                    </Row>
-                  </CardContent>
-                </Card>
-              ))}
+                      <ExtensionFault extension={extension} />
+                      <InstalledFilesystemAccess grant={extension.filesystem} />
+                      <LifecycleFeedback
+                        extensionName={extension.name}
+                        pending={pendingLifecycle}
+                        failure={lifecycleFailure}
+                      />
+                      <Row gap={1} wrap>
+                        {update && (
+                          <Button
+                            label="Review update"
+                            enabled={!busy}
+                            onInvoke={() => inspect(update.reference)}
+                          />
+                        )}
+                        {extension.name === 'top' ? null : extension.status.startsWith('fault:') ? (
+                          <Button
+                            label="Retry"
+                            enabled={!busy}
+                            onInvoke={() => lifecycle(extension, 'retry')}
+                          />
+                        ) : extension.enabled ? (
+                          <Button
+                            label="Disable"
+                            enabled={!busy}
+                            onInvoke={() => lifecycle(extension, 'disable')}
+                          />
+                        ) : (
+                          <Button
+                            label="Enable"
+                            enabled={!busy}
+                            onInvoke={() => lifecycle(extension, 'enable')}
+                          />
+                        )}
+                        {extension.name !== 'top' && (
+                          <ConfirmAction
+                            label="Remove"
+                            confirmLabel={`Remove ${extension.name}`}
+                            question={`Remove ${extension.name} from this workspace?`}
+                            authorityKey={extension.image_digest}
+                            enabled={!busy}
+                            onConfirm={() => lifecycle(extension, 'remove')}
+                          />
+                        )}
+                      </Row>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </ResourceState>
           </Column>
         </Row>

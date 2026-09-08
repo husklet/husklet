@@ -8,7 +8,7 @@ pub use hl_daemon::api::{
     ExecConfig, ExecCreated, ExecInspect, ExecLifetime, ExecNetwork, ExecOpen, ExecOutput, ExecOutputPage, ExecProcess, ExecStart,
     ExposedPorts, HealthLog, HealthState, Healthcheck, HostConfig, ImageCommit, ImageConfig, ImageDelete, ImageHistory,
     ImageLoad, ImagePrune, ImageSummary, InspectContainer, InspectImage, Ipam, IpamConfig, List, LogOptions,
-    LogStreams, Memory, MountPoint, Network, NetworkConnect, NetworkContainer, NetworkCreate, NetworkCreated,
+    LogStreams, Memory, MountPoint, Network, NetworkConnect, NetworkContainer, NetworkCreate, NetworkCreated, NetworkKind,
     NetworkDisconnect, NetworkPrune, NetworkSettings, NetworkingConfig, PathStat, Pids, Plugin, PortBinding,
     PortBindings, PortSummary, ProgressDetail, PullProgress, PushAux, PushProgress, RestartPolicy, Search, Stats,
     SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData, Version, Volume, VolumeCreate,

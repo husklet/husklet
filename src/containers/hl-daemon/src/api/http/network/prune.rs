@@ -96,7 +96,7 @@ fn matches_label(labels: &BTreeMap<String, String>, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Filters;
-    use hl_container::{Network, NetworkDriver};
+    use hl_container::{Network, NetworkDriver, NetworkKind};
     use std::collections::BTreeMap;
 
     fn network(labels: &[(&str, &str)], created_at_ms: u64) -> Network {
@@ -108,6 +108,7 @@ mod tests {
             id: "00000000000000000000000000000000".parse().unwrap(),
             name: "candidate".into(),
             driver: NetworkDriver::None,
+            kind: NetworkKind::Custom,
             subnet: None,
             gateway: None,
             labels: stored,

@@ -302,7 +302,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
       respond(socket, frame, {
         reply: 'networks',
         with: {
-          networks: [{ id: 'n1', name: 'backend', driver: 'bridge', scope: 'local' }],
+          networks: [{ id: 'n1', name: 'backend', driver: 'bridge', scope: 'local', kind: 'custom' }],
           truncated: false,
         },
       });

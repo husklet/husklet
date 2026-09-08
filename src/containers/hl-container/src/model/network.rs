@@ -38,6 +38,14 @@ pub enum NetworkDriver {
     Bridge,
 }
 
+/// The authority that created and owns a network's lifecycle.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkKind {
+    Builtin,
+    Custom,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Subnet {
     pub address: Ipv4Addr,
@@ -268,6 +276,7 @@ pub struct Network {
     pub id: NetworkId,
     pub name: String,
     pub driver: NetworkDriver,
+    pub kind: NetworkKind,
     pub subnet: Option<Subnet>,
     pub gateway: Option<Ipv4Addr>,
     pub labels: BTreeMap<String, String>,
@@ -279,10 +288,18 @@ impl Network {
     /// Whether this is one of the Docker-compatible networks created with the service.
     #[must_use]
     pub fn predefined(&self) -> bool {
-        matches!(self.name.as_str(), "bridge" | "none")
+        self.kind == NetworkKind::Builtin
     }
 
     pub(crate) fn from_spec(spec: NetworkSpec, created_at_ms: u64) -> Self {
+        Self::from_spec_with_kind(spec, NetworkKind::Custom, created_at_ms)
+    }
+
+    pub(crate) fn from_builtin_spec(spec: NetworkSpec, created_at_ms: u64) -> Self {
+        Self::from_spec_with_kind(spec, NetworkKind::Builtin, created_at_ms)
+    }
+
+    fn from_spec_with_kind(spec: NetworkSpec, kind: NetworkKind, created_at_ms: u64) -> Self {
         let gateway = spec
             .gateway
             .or_else(|| spec.subnet.map(|subnet| Ipv4Addr::from(u32::from(subnet.address) + 1)));
@@ -290,6 +307,7 @@ impl Network {
             id: NetworkId::new(),
             name: spec.name,
             driver: spec.driver,
+            kind,
             subnet: spec.subnet,
             gateway,
             labels: spec.labels,
@@ -405,6 +423,16 @@ mod tests {
             aliases: Vec::new(),
         };
         assert_eq!(endpoint.mac_address().as_deref(), Some("02:42:ac:12:00:02"));
+    }
+
+    #[test]
+    fn persisted_network_kind_is_required_and_round_trips() {
+        let network = Network::from_spec(NetworkSpec::none("bridge"), 7);
+        let mut value = serde_json::to_value(&network).unwrap();
+        assert_eq!(value["kind"], "custom");
+        assert_eq!(serde_json::from_value::<Network>(value.clone()).unwrap(), network);
+        value.as_object_mut().unwrap().remove("kind");
+        assert!(serde_json::from_value::<Network>(value).is_err());
     }
 
     #[test]
