@@ -42,14 +42,14 @@ fn installed(requested: &[Capability], consented: &[Capability]) -> Installation
 #[test]
 fn an_install_records_the_intersection_rather_than_the_request() {
     let installation = installed(
-        &[Capability::ContainerRead, Capability::ContainerControl],
+        &[Capability::ContainerRead, Capability::ContainerLifecycle],
         &[Capability::ContainerRead],
     );
     let record = installation.record(&name()).expect("recorded");
 
     assert!(record.granted.holds(Capability::ContainerRead));
     assert!(
-        !record.granted.holds(Capability::ContainerControl),
+        !record.granted.holds(Capability::ContainerLifecycle),
         "a request is not consent"
     );
     assert_eq!(record.granted.len(), 1);
@@ -79,7 +79,7 @@ fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
 
     let update = manifest(&[
         Capability::ContainerRead,
-        Capability::ContainerControl,
+        Capability::ContainerLifecycle,
         Capability::FilesystemWrite,
     ]);
     let prepared = installation
@@ -89,7 +89,7 @@ fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
     assert_eq!(prepared.candidate_version, "1.0.0");
     assert_eq!(
         prepared.additional,
-        vec![Capability::ContainerControl, Capability::FilesystemWrite]
+        vec![Capability::ContainerLifecycle, Capability::FilesystemWrite]
     );
 
     let record = installation.record(&name()).expect("recorded");
@@ -103,7 +103,7 @@ fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
     installation
         .commit_update(
             prepared,
-            &Grant::new([Capability::ContainerControl, Capability::FilesystemWrite]),
+            &Grant::new([Capability::ContainerLifecycle, Capability::FilesystemWrite]),
             2_000,
             |old, new| {
                 assert_eq!(old.image_digest, "sha256:first");
@@ -118,8 +118,8 @@ fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
 #[test]
 fn an_update_asking_for_less_narrows_without_prompting() {
     let mut installation = installed(
-        &[Capability::ContainerRead, Capability::ContainerControl],
-        &[Capability::ContainerRead, Capability::ContainerControl],
+        &[Capability::ContainerRead, Capability::ContainerLifecycle],
+        &[Capability::ContainerRead, Capability::ContainerLifecycle],
     );
 
     let update = manifest(&[Capability::ContainerRead]);
@@ -127,19 +127,19 @@ fn an_update_asking_for_less_narrows_without_prompting() {
         .prepare_update(&update, "sha256:second")
         .expect("inspected");
     assert!(prepared.additional.is_empty());
-    assert_eq!(prepared.removed, vec![Capability::ContainerControl]);
+    assert_eq!(prepared.removed, vec![Capability::ContainerLifecycle]);
     installation
         .commit_update(prepared, &Grant::default(), 2_000, |_, _| Ok::<_, ()>(()))
         .expect("updated");
     let record = installation.record(&name()).expect("recorded");
     assert_eq!(record.granted, Grant::new([Capability::ContainerRead]));
-    assert!(!record.granted.holds(Capability::ContainerControl));
+    assert!(!record.granted.holds(Capability::ContainerLifecycle));
 }
 
 #[test]
 fn a_failed_replacement_and_cancellation_preserve_old_record_and_runtime() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
-    let update = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+    let update = manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]);
     let cancelled = installation
         .prepare_update(&update, "sha256:second")
         .expect("inspected");
@@ -149,19 +149,22 @@ fn a_failed_replacement_and_cancellation_preserve_old_record_and_runtime() {
     let prepared = installation
         .prepare_update(&update, "sha256:second")
         .expect("inspected");
-    let failure = installation.commit_update(prepared, &Grant::new([Capability::ContainerControl]), 2_000, |_, _| {
-        Err("swap failed")
-    });
+    let failure = installation.commit_update(
+        prepared,
+        &Grant::new([Capability::ContainerLifecycle]),
+        2_000,
+        |_, _| Err("swap failed"),
+    );
     assert!(matches!(failure, Err(UpdateFailure::Replacement("swap failed"))));
     let record = installation.record(&name()).unwrap();
     assert_eq!(record.image_digest, "sha256:first");
-    assert!(!record.granted.holds(Capability::ContainerControl));
+    assert!(!record.granted.holds(Capability::ContainerLifecycle));
 }
 
 #[test]
 fn unselected_optional_update_authority_is_not_granted() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
-    let update = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+    let update = manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]);
     let prepared = installation
         .prepare_update(&update, "sha256:second")
         .expect("inspected");
@@ -174,15 +177,20 @@ fn unselected_optional_update_authority_is_not_granted() {
     assert!(invoked);
     let record = installation.record(&name()).unwrap();
     assert_eq!(record.image_digest, "sha256:second");
-    assert!(!record.granted.holds(Capability::ContainerControl));
+    assert!(!record.granted.holds(Capability::ContainerLifecycle));
 }
 
 #[test]
 fn an_authored_interface_remains_required_during_update() {
     let mut installation = installed(&[Capability::ContainerRead], &[Capability::ContainerRead]);
     let mut update = manifest(&[Capability::ContainerRead, Capability::Interface]);
-    update.interface = Some(hl_extension::Presentation { tab_title: "Sample".to_owned(), icon: None });
-    let prepared = installation.prepare_update(&update, "sha256:second").expect("inspected");
+    update.interface = Some(hl_extension::Presentation {
+        tab_title: "Sample".to_owned(),
+        icon: None,
+    });
+    let prepared = installation
+        .prepare_update(&update, "sha256:second")
+        .expect("inspected");
     let mut invoked = false;
     let result = installation.commit_update(prepared, &Grant::default(), 2_000, |_, _| {
         invoked = true;
@@ -246,19 +254,19 @@ fn an_enable_and_disable_round_trip_leaves_the_grant_and_digest_intact() {
 #[test]
 fn an_uninstall_forgets_the_record_and_a_later_install_starts_from_nothing() {
     let mut installation = installed(
-        &[Capability::ContainerRead, Capability::ContainerControl],
-        &[Capability::ContainerRead, Capability::ContainerControl],
+        &[Capability::ContainerRead, Capability::ContainerLifecycle],
+        &[Capability::ContainerRead, Capability::ContainerLifecycle],
     );
 
     let forgotten = installation.uninstall(&name()).expect("removed");
-    assert!(forgotten.granted.holds(Capability::ContainerControl));
+    assert!(forgotten.granted.holds(Capability::ContainerLifecycle));
     assert_eq!(installation.stage(&name()), Stage::Vacancy);
     assert!(installation.record(&name()).is_none());
     assert!(installation.uninstall(&name()).is_none());
 
     installation
         .install(
-            &manifest(&[Capability::ContainerRead, Capability::ContainerControl]),
+            &manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]),
             "sha256:third",
             &Grant::new([Capability::ContainerRead]),
             3_000,
@@ -267,7 +275,7 @@ fn an_uninstall_forgets_the_record_and_a_later_install_starts_from_nothing() {
 
     let record = installation.record(&name()).expect("recorded");
     assert!(
-        !record.granted.holds(Capability::ContainerControl),
+        !record.granted.holds(Capability::ContainerLifecycle),
         "an uninstalled grant must not be resurrected"
     );
 }
@@ -419,7 +427,7 @@ fn a_record_written_before_versions_were_persisted_remains_readable() {
 #[test]
 fn the_consent_summary_names_execution_when_the_grant_permits_it() {
     for capability in [
-        Capability::ContainerControl,
+        Capability::ContainerExecute,
         Capability::TerminalInput,
         Capability::TerminalProcessControl,
     ] {

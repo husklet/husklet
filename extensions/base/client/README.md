@@ -14,7 +14,7 @@ writes exact byte values, and invokes an advertised revision-bound UI action.
 It accepts one JSON argument containing `path`, `terminalSlot`, `uiSlot`, `node`,
 and an `input` byte array; it uses no renderer or private transport imports.
 
-`examples/agent-containers:control.mjs` is the corresponding bounded container
+`examples/agent-container-control.mjs` is the corresponding bounded container
 workflow. It inspects the workspace and an immutable container ID, starts only
 when initially stopped, executes exact argv, waits and reads bounded output,
 removes the completed execution record, and restores the container's initial

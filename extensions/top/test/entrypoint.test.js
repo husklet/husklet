@@ -45,7 +45,10 @@ test(
             extension: 'top',
             granted: [
               'containers:read',
-              'containers:control',
+              'containers:create',
+              'containers:execute',
+              'containers:lifecycle',
+              'containers:remove',
               'containers:attach',
               'images:read',
               'images:pull',

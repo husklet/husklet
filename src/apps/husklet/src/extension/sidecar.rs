@@ -949,7 +949,7 @@ mod tests {
     #[test]
     fn an_added_capability_forces_a_recreate() {
         let wider = manifest(
-            &[Capability::ContainerRead, Capability::ContainerControl],
+            &[Capability::ContainerRead, Capability::ContainerLifecycle],
             Resources::default(),
         );
         let other = SidecarSpec::new(&wider, &wider.capabilities, &image(), "/run/sample/extension.sock");
@@ -984,7 +984,7 @@ mod tests {
         // The manifest asks for more than the record granted; the container is
         // built from the grant, so restating the request changes nothing.
         let wider = manifest(
-            &[Capability::ContainerRead, Capability::ContainerControl],
+            &[Capability::ContainerRead, Capability::ContainerLifecycle],
             Resources::default(),
         );
         let narrow = SidecarSpec::new(

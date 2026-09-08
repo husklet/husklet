@@ -26,8 +26,20 @@ pub enum Capability {
     WorkspaceEnvironmentWrite,
     #[serde(rename = "containers:read")]
     ContainerRead,
-    #[serde(rename = "containers:control")]
-    ContainerControl,
+    /// Creates a new container from an explicitly consented image and configuration.
+    #[serde(rename = "containers:create")]
+    ContainerCreate,
+    /// Starts detached processes inside explicitly consented containers and
+    /// controls only those execution records.
+    #[serde(rename = "containers:execute")]
+    ContainerExecute,
+    /// Starts, stops, pauses, resumes, restarts, renames, or signals an
+    /// explicitly consented container without granting deletion.
+    #[serde(rename = "containers:lifecycle")]
+    ContainerLifecycle,
+    /// Permanently removes an explicitly consented container.
+    #[serde(rename = "containers:remove")]
+    ContainerRemove,
     /// Opens an interactive, kill-on-disconnect terminal in an existing container.
     /// Kept separate from detached container mutation and ordinary terminal control.
     #[serde(rename = "containers:attach")]
@@ -109,7 +121,10 @@ impl Capability {
             Self::WorkspaceEnvironmentRead => "workspace-environment:read",
             Self::WorkspaceEnvironmentWrite => "workspace-environment:write",
             Self::ContainerRead => "containers:read",
-            Self::ContainerControl => "containers:control",
+            Self::ContainerCreate => "containers:create",
+            Self::ContainerExecute => "containers:execute",
+            Self::ContainerLifecycle => "containers:lifecycle",
+            Self::ContainerRemove => "containers:remove",
             Self::ContainerAttach => "containers:attach",
             Self::ImageRead => "images:read",
             Self::ImagePull => "images:pull",
@@ -147,7 +162,10 @@ impl Capability {
             self,
             Self::WorkspaceControl
                 | Self::WorkspaceEnvironmentWrite
-                | Self::ContainerControl
+                | Self::ContainerCreate
+                | Self::ContainerExecute
+                | Self::ContainerLifecycle
+                | Self::ContainerRemove
                 | Self::ContainerAttach
                 | Self::ImagePull
                 | Self::ImageRemove
@@ -173,7 +191,8 @@ impl Capability {
         matches!(
             self,
             Self::WorkspaceControl
-                | Self::ContainerControl
+                | Self::ContainerCreate
+                | Self::ContainerExecute
                 | Self::ContainerAttach
                 | Self::TerminalInput
                 | Self::TerminalProcessControl
@@ -188,7 +207,10 @@ impl Capability {
         Self::WorkspaceEnvironmentRead,
         Self::WorkspaceEnvironmentWrite,
         Self::ContainerRead,
-        Self::ContainerControl,
+        Self::ContainerCreate,
+        Self::ContainerExecute,
+        Self::ContainerLifecycle,
+        Self::ContainerRemove,
         Self::ContainerAttach,
         Self::ImageRead,
         Self::ImagePull,
@@ -242,7 +264,7 @@ mod tests {
     fn a_grant_reports_exactly_what_it_holds() {
         let grant = Grant::new([Capability::ContainerRead, Capability::Interface]);
         assert!(grant.holds(Capability::ContainerRead));
-        assert!(!grant.holds(Capability::ContainerControl));
+        assert!(!grant.holds(Capability::ContainerLifecycle));
         assert_eq!(grant.len(), 2);
     }
 
@@ -263,16 +285,17 @@ mod tests {
     #[test]
     fn a_wider_request_is_narrowed_to_the_recorded_grant() {
         let recorded = Grant::new([Capability::ContainerRead]);
-        let requested = Grant::new([Capability::ContainerRead, Capability::ContainerControl]);
+        let requested = Grant::new([Capability::ContainerRead, Capability::ContainerLifecycle]);
 
         assert!(!recorded.covers(&requested));
-        assert_eq!(recorded.missing(&requested), vec![Capability::ContainerControl]);
+        assert_eq!(recorded.missing(&requested), vec![Capability::ContainerLifecycle]);
         assert_eq!(recorded.intersect(&requested), recorded);
     }
 
     #[test]
     fn execution_grants_are_identified_for_the_consent_prompt() {
-        assert!(Grant::new([Capability::ContainerControl]).executes());
+        assert!(Grant::new([Capability::ContainerExecute]).executes());
+        assert!(!Grant::new([Capability::ContainerLifecycle]).executes());
         assert!(Grant::new([Capability::WorkspaceControl]).executes());
         assert!(Grant::new([Capability::TerminalInput]).executes());
         assert!(Grant::new([Capability::TerminalProcessControl]).executes());

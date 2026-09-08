@@ -90,7 +90,12 @@ const initial = boundedExtensions([
     update: {
       version: '1.5.0',
       digest: 'sha256:top-generation-15',
-      requested: ['workspaces:read', 'workspaces:control', 'containers:read', 'containers:control'],
+      requested: [
+        'workspaces:read',
+        'workspaces:control',
+        'containers:read',
+        'containers:lifecycle',
+      ],
     },
   },
   {
@@ -164,7 +169,7 @@ export function ExtensionLifecycleStory() {
                   <Text label={`Requested: ${selected.update.requested.join(', ')}`} wrap={true} />
                   <InlineMessage
                     label={
-                      'containers:control is new and remains ungranted until explicit consent.'
+                      'containers:lifecycle is new and remains ungranted until explicit consent.'
                     }
                     tone={'warning'}
                   />

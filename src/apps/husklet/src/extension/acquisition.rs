@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn install_persists_only_the_observed_digest_and_narrow_consent() {
         let root = tempfile::tempdir().unwrap();
-        let observed = manifest("1.0.0", &[Capability::ContainerRead, Capability::ContainerControl]);
+        let observed = manifest("1.0.0", &[Capability::ContainerRead, Capability::ContainerLifecycle]);
         let service =
             ExtensionAcquisitions::with_acquirer(&workspace(root.path()), move |_, reference, progress, _| {
                 let _ = progress.send(Acquisition::Ready(Candidate {
@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(candidate.digest, "sha256:observed");
         assert_eq!(candidate.name, "sample");
         assert_eq!(candidate.version, "1.0.0");
-        assert!(candidate.requested.holds(Capability::ContainerControl));
+        assert!(candidate.requested.holds(Capability::ContainerLifecycle));
         service
             .install(job, snapshot.revision, &Grant::new([Capability::ContainerRead]))
             .unwrap();
@@ -675,7 +675,7 @@ mod tests {
         let entries = Roster::workspace(&workspace(root.path())).unwrap().entries();
         assert_eq!(entries[0].image_digest, "sha256:observed");
         assert!(entries[0].granted.holds(Capability::ContainerRead));
-        assert!(!entries[0].granted.holds(Capability::ContainerControl));
+        assert!(!entries[0].granted.holds(Capability::ContainerLifecycle));
     }
 
     #[test]
@@ -691,7 +691,7 @@ mod tests {
                 1,
             )
             .unwrap();
-        let next = manifest("2.0.0", &[Capability::ContainerRead, Capability::ContainerControl]);
+        let next = manifest("2.0.0", &[Capability::ContainerRead, Capability::ContainerLifecycle]);
         let service = ExtensionAcquisitions::with_acquirer(&workspace, move |_, reference, progress, _| {
             let _ = progress.send(Acquisition::Ready(Candidate {
                 reference: reference.into(),
@@ -713,7 +713,7 @@ mod tests {
             .update(
                 job,
                 snapshot.revision,
-                &Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+                &Grant::new([Capability::ContainerRead, Capability::ContainerLifecycle]),
             )
             .unwrap();
         let entry = Roster::workspace(&workspace).unwrap().entries().remove(0);
@@ -721,7 +721,7 @@ mod tests {
             (entry.version.as_str(), entry.image_digest.as_str()),
             ("2.0.0", "sha256:new")
         );
-        assert!(entry.granted.holds(Capability::ContainerControl));
+        assert!(entry.granted.holds(Capability::ContainerLifecycle));
     }
 
     #[test]

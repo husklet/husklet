@@ -186,9 +186,11 @@ fn request_capability(request: &str) -> Capability {
         | "execution_logs"
         | "execution_output"
         | "execution_wait" => Capability::ContainerRead,
-        "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause"
-        | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec"
-        | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerControl,
+        "container_create" => Capability::ContainerCreate,
+        "container_start" | "container_stop" | "container_pause" | "container_unpause" | "container_restart"
+        | "container_rename" | "container_kill" => Capability::ContainerLifecycle,
+        "container_remove" => Capability::ContainerRemove,
+        "container_exec" | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerExecute,
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
         "image_pull_start" | "image_pull_status" | "image_pull_cancel" => Capability::ImagePull,

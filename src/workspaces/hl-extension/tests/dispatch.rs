@@ -1308,49 +1308,49 @@ fn calls() -> Vec<(Request, Capability)> {
                     pids_limit: None,
                 },
             },
-            Capability::ContainerControl,
+            Capability::ContainerCreate,
         ),
         (
             Request::ContainerStart {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerStop {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerRemove {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerRemove,
         ),
         (
             Request::ContainerPause {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerUnpause {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerRestart {
                 id: "c".repeat(64),
                 generation: 4,
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerRename {
@@ -1358,7 +1358,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 generation: 4,
                 name: "worker-2".into(),
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ContainerKill {
@@ -1366,14 +1366,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 generation: 4,
                 signal: "SIGTERM".into(),
             },
-            Capability::ContainerControl,
+            Capability::ContainerLifecycle,
         ),
         (
             Request::ExecutionKill {
                 id: "e".repeat(32),
                 signal: "SIGTERM".into(),
             },
-            Capability::ContainerControl,
+            Capability::ContainerExecute,
         ),
         (
             Request::ExecutionCancel {
@@ -1381,11 +1381,11 @@ fn calls() -> Vec<(Request, Capability)> {
                 signal: "SIGTERM".into(),
                 timeout_ms: 500,
             },
-            Capability::ContainerControl,
+            Capability::ContainerExecute,
         ),
         (
             Request::ExecutionRemove { id: "e".repeat(32) },
-            Capability::ContainerControl,
+            Capability::ContainerExecute,
         ),
         (
             Request::ContainerExec {
@@ -1396,7 +1396,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 user: None,
                 working_directory: None,
             },
-            Capability::ContainerControl,
+            Capability::ContainerExecute,
         ),
         (Request::ImageList, Capability::ImageRead),
         (
@@ -2246,7 +2246,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     let host = Host::new();
     let mut authorized = session(
         &[
-            Capability::ContainerControl,
+            Capability::ContainerCreate,
             Capability::VolumeRead,
             Capability::NetworkWrite,
         ],
@@ -2285,7 +2285,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
     };
     let mut unscoped = session(
         &[
-            Capability::ContainerControl,
+            Capability::ContainerCreate,
             Capability::VolumeRead,
             Capability::NetworkWrite,
         ],
@@ -2399,7 +2399,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         Err(Failure::Conflict { .. })
     ));
 
-    let mut insufficient = session(&[Capability::ContainerControl], &[]);
+    let mut insufficient = session(&[Capability::ContainerCreate], &[]);
     assert!(matches!(
         insufficient.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
         Err(Failure::Denied { .. })
@@ -2421,7 +2421,7 @@ fn configured_container_creation_is_bounded_before_control_authority() {
 #[test]
 fn execution_signals_are_bounded_before_the_container_port_is_reached() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(&[Capability::ContainerExecute], &[]);
     for signal in [String::new(), "x".repeat(33)] {
         assert!(matches!(
             session.dispatch(
@@ -2440,7 +2440,7 @@ fn execution_signals_are_bounded_before_the_container_port_is_reached() {
 #[test]
 fn execution_removal_refuses_aliases_before_control_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(&[Capability::ContainerExecute], &[]);
     for id in ["friendly".to_owned(), "e1".to_owned(), "a".repeat(12)] {
         assert!(matches!(
             session.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
@@ -2463,7 +2463,14 @@ fn execution_removal_refuses_aliases_before_control_authority() {
 #[test]
 fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(
+        &[
+            Capability::ContainerLifecycle,
+            Capability::ContainerRemove,
+            Capability::ContainerExecute,
+        ],
+        &[],
+    );
     for request in [
         Request::ContainerStart {
             id: "friendly-name".into(),
@@ -2586,7 +2593,7 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
 #[test]
 fn container_rename_requires_immutable_identity_and_native_name_grammar() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(&[Capability::ContainerLifecycle], &[]);
     for request in [
         Request::ContainerRename {
             id: "friendly-name".into(),
@@ -2818,11 +2825,61 @@ fn a_refusal_is_reported_rather_than_answered_emptily() {
 }
 
 #[test]
+fn container_execution_lifecycle_and_removal_authority_are_independent() {
+    let host = Host::new();
+    let id = "c".repeat(64);
+    let exec = Request::ContainerExec {
+        id: id.clone(),
+        generation: 4,
+        command: vec!["psql".into()],
+        environment: Vec::new(),
+        user: None,
+        working_directory: None,
+    };
+    let stop = Request::ContainerStop {
+        id: id.clone(),
+        generation: 4,
+    };
+    let remove = Request::ContainerRemove { id, generation: 4 };
+
+    let mut execute_only = session(&[Capability::ContainerExecute], &[]);
+    assert!(matches!(
+        execute_only.dispatch(&stop, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:lifecycle"
+    ));
+    assert!(matches!(
+        execute_only.dispatch(&remove, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:remove"
+    ));
+
+    let mut lifecycle_only = session(&[Capability::ContainerLifecycle], &[]);
+    assert!(matches!(
+        lifecycle_only.dispatch(&exec, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:execute"
+    ));
+    assert!(matches!(
+        lifecycle_only.dispatch(&remove, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:remove"
+    ));
+
+    let mut removal_only = session(&[Capability::ContainerRemove], &[]);
+    assert!(matches!(
+        removal_only.dispatch(&stop, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:lifecycle"
+    ));
+    assert!(matches!(
+        removal_only.dispatch(&exec, &services(&host)),
+        Err(Failure::Denied { ref capability, .. }) if capability == "containers:execute"
+    ));
+    assert!(host.ledger.reached().is_empty(), "denied verbs never reach a host port");
+}
+
+#[test]
 fn container_capabilities_without_resource_consent_expose_nothing() {
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("scoped").unwrap(),
-        Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+        Grant::new([Capability::ContainerRead, Capability::ContainerLifecycle]),
         Vec::new(),
     ));
 
@@ -2848,7 +2905,7 @@ fn exact_name_scope_filters_inventory_and_create_is_independent() {
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("scoped").unwrap(),
-        Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+        Grant::new([Capability::ContainerRead, Capability::ContainerCreate]),
         Vec::new(),
     ))
     .with_containers(hl_extension::ContainerGrant {
@@ -3196,7 +3253,7 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
 #[test]
 fn execution_cancel_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &["c1"]);
+    let mut session = session(&[Capability::ContainerExecute], &["c1"]);
     assert!(matches!(
         session.dispatch(
             &Request::ExecutionCancel {
@@ -3349,7 +3406,7 @@ fn execution_output_window_is_bounded_before_inventory_authority() {
 #[test]
 fn container_exec_returns_the_real_execution_identity() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(&[Capability::ContainerExecute], &[]);
     let immutable = "c".repeat(64);
     let refused = session.dispatch(
         &Request::ContainerExec {
@@ -3392,7 +3449,7 @@ fn container_exec_returns_the_real_execution_identity() {
 #[test]
 fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
     let host = Host::new();
-    let mut session = session(&[Capability::ContainerControl], &[]);
+    let mut session = session(&[Capability::ContainerExecute], &[]);
     let id = "c".repeat(64);
     let secret = "sentinel-password-never-observable";
     let request = Request::ContainerExec {
@@ -3877,7 +3934,10 @@ fn container_attachment_requires_its_dedicated_grant_and_preserves_exact_argv() 
         command: vec!["sh".into(), "-lc".into(), "printf '%s' \"$HOME\"".into()],
     };
     let host = Host::new();
-    let mut denied = session(&[Capability::ContainerControl, Capability::TerminalLayoutControl], &[]);
+    let mut denied = session(
+        &[Capability::ContainerLifecycle, Capability::TerminalLayoutControl],
+        &[],
+    );
     assert!(matches!(
         denied.dispatch(&request, &services(&host)),
         Err(Failure::Denied { .. })

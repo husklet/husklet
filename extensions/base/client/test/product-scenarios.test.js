@@ -21,7 +21,7 @@ const capabilities = [
   'state:read',
   'state:write',
   'containers:read',
-  'containers:control',
+  'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove',
   'networks:read',
   'interface:render',
 ];

@@ -341,7 +341,7 @@ test('real Unix execution cancellation is one bounded ordered operation', async 
       encode({
         channel: CONTROL,
         kind: KIND.open,
-        payload: { protocol: 1, peer: 'fixture', granted: ['containers:control'] },
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'] },
       }),
     );
   });
@@ -2334,7 +2334,7 @@ test('real Unix container start wait arms first and ignores unchanged initial st
         payload: {
           protocol: 1,
           peer: 'container-start-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2407,7 +2407,7 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
         payload: {
           protocol: 1,
           peer: 'container-stop-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2492,7 +2492,7 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
         payload: {
           protocol: 1,
           peer: 'remove-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2569,7 +2569,7 @@ test('real Unix restart wait requires the same container at a newer running gene
         payload: {
           protocol: 1,
           peer: 'restart-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -3231,7 +3231,7 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
         payload: {
           protocol: 1,
           peer: 'signal-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -3349,7 +3349,7 @@ test('real Unix removeExecutionAndWait requires a finished cursor and complete l
         payload: {
           protocol: 1,
           peer: 'execution-remove-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -3931,7 +3931,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
         payload: {
           protocol: 1,
           peer: 'exec-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -4010,7 +4010,7 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
         payload: {
           protocol: 1,
           peer: 'exec-wait-failure',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -4100,7 +4100,7 @@ test('real Unix execAndWait preserves the completed execution when bounded log r
         payload: {
           protocol: 1,
           peer: 'exec-log-failure',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );

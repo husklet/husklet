@@ -517,19 +517,19 @@ impl Request {
             | Self::ExecutionLogs { .. }
             | Self::ExecutionOutput { .. }
             | Self::ExecutionWait { .. } => Capability::ContainerRead,
-            Self::ContainerCreate { .. }
-            | Self::ContainerStart { .. }
+            Self::ContainerCreate { .. } => Capability::ContainerCreate,
+            Self::ContainerStart { .. }
             | Self::ContainerStop { .. }
-            | Self::ContainerRemove { .. }
             | Self::ContainerPause { .. }
             | Self::ContainerUnpause { .. }
             | Self::ContainerRestart { .. }
             | Self::ContainerRename { .. }
-            | Self::ContainerKill { .. }
-            | Self::ExecutionKill { .. }
+            | Self::ContainerKill { .. } => Capability::ContainerLifecycle,
+            Self::ContainerRemove { .. } => Capability::ContainerRemove,
+            Self::ExecutionKill { .. }
             | Self::ExecutionCancel { .. }
             | Self::ExecutionRemove { .. }
-            | Self::ContainerExec { .. } => Capability::ContainerControl,
+            | Self::ContainerExec { .. } => Capability::ContainerExecute,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {
@@ -820,7 +820,7 @@ mod tests {
                 generation: 4
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerLifecycle
         );
         assert_eq!(
             Request::ContainerCreate {
@@ -843,7 +843,7 @@ mod tests {
                 },
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerCreate
         );
         assert_eq!(
             Request::ContainerExec {
@@ -855,7 +855,7 @@ mod tests {
                 working_directory: None,
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerExecute
         );
         assert_eq!(
             Request::ContainerAttachTerminal {

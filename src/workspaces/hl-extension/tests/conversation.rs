@@ -995,7 +995,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let mut session = Session::new(Authority::new(
         ExtensionName::new("containers").expect("name"),
         Grant::new([
-            Capability::ContainerControl,
+            Capability::ContainerCreate,
             Capability::VolumeWrite,
             Capability::NetworkWrite,
         ]),

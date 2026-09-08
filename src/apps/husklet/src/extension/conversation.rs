@@ -3564,7 +3564,7 @@ mod tests {
         let welcome = codec::read_welcome(&frame).expect("a welcome");
         assert_eq!(welcome.protocol, PROTOCOL);
         assert!(welcome.granted.holds(Capability::ContainerRead));
-        assert!(!welcome.granted.holds(Capability::ContainerControl));
+        assert!(!welcome.granted.holds(Capability::ContainerLifecycle));
         drop(wire);
         let _ = served.join().expect("joined");
     }
@@ -3885,7 +3885,7 @@ mod tests {
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {
             panic!("an ungranted call is a denial");
         };
-        assert_eq!(capability, Capability::ContainerControl.as_str());
+        assert_eq!(capability, Capability::ContainerLifecycle.as_str());
         assert!(ledger.reached().is_empty(), "nothing may be reached before the check");
         drop(wire);
         let _ = served.join().expect("joined");
@@ -3900,7 +3900,7 @@ mod tests {
             let host = Host { ledger: host_ledger };
             let authority = Authority::new(
                 ExtensionName::new("sample").expect("name"),
-                Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+                Grant::new([Capability::ContainerRead, Capability::ContainerExecute]),
                 Vec::new(),
             );
             let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;

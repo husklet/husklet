@@ -254,7 +254,7 @@ impl Session {
             Ok(())
         } else {
             Err(Failure::Denied {
-                capability: Capability::ContainerControl.as_str().into(),
+                capability: Capability::ContainerCreate.as_str().into(),
                 detail: "container image use is outside the extension's consented image scope".into(),
             })
         }
@@ -763,7 +763,7 @@ impl Session {
             validate_container_create(spec)?;
             if !self.containers.create {
                 return Err(Failure::Denied {
-                    capability: Capability::ContainerControl.as_str().into(),
+                    capability: Capability::ContainerCreate.as_str().into(),
                     detail: "container creation was not consented".into(),
                 });
             }
@@ -791,10 +791,7 @@ impl Session {
                 self.permit_network_reference(network, Capability::NetworkWrite)?;
             }
         }
-        let port = self
-            .peer
-            .authority()
-            .port(Capability::ContainerControl, services.control)?;
+        let port = self.peer.authority().port(request.capability(), services.control)?;
         match request {
             Request::ContainerCreate { spec } => {
                 validate_container_create(spec)?;

@@ -792,8 +792,8 @@ impl Manifest {
         if !manifest.images.read.is_empty() && !manifest.capabilities.holds(Capability::ImageRead) {
             return Err(Invalid::Undeclared(Capability::ImageRead));
         }
-        if !manifest.images.r#use.is_empty() && !manifest.capabilities.holds(Capability::ContainerControl) {
-            return Err(Invalid::Undeclared(Capability::ContainerControl));
+        if !manifest.images.r#use.is_empty() && !manifest.capabilities.holds(Capability::ContainerCreate) {
+            return Err(Invalid::Undeclared(Capability::ContainerCreate));
         }
         if !manifest.images.pull.is_empty() && !manifest.capabilities.holds(Capability::ImagePull) {
             return Err(Invalid::Undeclared(Capability::ImagePull));
@@ -806,7 +806,10 @@ impl Manifest {
         }
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)
-            && !manifest.capabilities.holds(Capability::ContainerControl)
+            && !manifest.capabilities.holds(Capability::ContainerCreate)
+            && !manifest.capabilities.holds(Capability::ContainerExecute)
+            && !manifest.capabilities.holds(Capability::ContainerLifecycle)
+            && !manifest.capabilities.holds(Capability::ContainerRemove)
             && !manifest.capabilities.holds(Capability::ContainerAttach)
         {
             return Err(Invalid::Undeclared(Capability::ContainerRead));

@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:3d81243190607c8b
+// Protocol artifact fnv1a64:76a2b288d80c5c86
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -50,7 +50,22 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": true,
     "mutates": true,
-    "wire": "containers:control"
+    "wire": "containers:create"
+  },
+  {
+    "executes": true,
+    "mutates": true,
+    "wire": "containers:execute"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "containers:lifecycle"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "containers:remove"
   },
   {
     "executes": true,
@@ -404,19 +419,19 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "execution_logs": "containers:read",
   "execution_output": "containers:read",
   "execution_wait": "containers:read",
-  "execution_kill": "containers:control",
-  "execution_cancel": "containers:control",
-  "execution_remove": "containers:control",
-  "container_create": "containers:control",
-  "container_start": "containers:control",
-  "container_stop": "containers:control",
-  "container_remove": "containers:control",
-  "container_pause": "containers:control",
-  "container_unpause": "containers:control",
-  "container_restart": "containers:control",
-  "container_rename": "containers:control",
-  "container_kill": "containers:control",
-  "container_exec": "containers:control",
+  "execution_kill": "containers:execute",
+  "execution_cancel": "containers:execute",
+  "execution_remove": "containers:execute",
+  "container_create": "containers:create",
+  "container_start": "containers:lifecycle",
+  "container_stop": "containers:lifecycle",
+  "container_remove": "containers:remove",
+  "container_pause": "containers:lifecycle",
+  "container_unpause": "containers:lifecycle",
+  "container_restart": "containers:lifecycle",
+  "container_rename": "containers:lifecycle",
+  "container_kill": "containers:lifecycle",
+  "container_exec": "containers:execute",
   "container_attach_terminal": "containers:attach",
   "image_list": "images:read",
   "image_pull_start": "images:pull",
@@ -587,7 +602,25 @@ const definitions = {
         }
       },
       {
-        "name": "containers:control",
+        "name": "containers:create",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "containers:execute",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "containers:lifecycle",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "containers:remove",
         "payload": {
           "kind": "unit"
         }

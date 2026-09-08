@@ -86,16 +86,16 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.list(...)` — `container_list`, requires `containers:read`.
 - `host.containers.inspect(...)` — `container_inspect`, requires `containers:read`.
 - `host.containers.logs(...)` — `container_logs`, requires `containers:read`.
-- `host.containers.create(...)` — `container_create`, requires `containers:control`.
-- `host.containers.start(...)` — `container_start`, requires `containers:control`.
-- `host.containers.stop(...)` — `container_stop`, requires `containers:control`.
-- `host.containers.remove(...)` — `container_remove`, requires `containers:control`.
-- `host.containers.pause(...)` — `container_pause`, requires `containers:control`.
-- `host.containers.unpause(...)` — `container_unpause`, requires `containers:control`.
-- `host.containers.restart(...)` — `container_restart`, requires `containers:control`.
-- `host.containers.rename(...)` — `container_rename`, requires `containers:control`.
-- `host.containers.kill(...)` — `container_kill`, requires `containers:control`.
-- `host.containers.exec(...)` — `container_exec`, requires `containers:control`.
+- `host.containers.create(...)` — `container_create`, requires `containers:create`.
+- `host.containers.start(...)` — `container_start`, requires `containers:lifecycle`.
+- `host.containers.stop(...)` — `container_stop`, requires `containers:lifecycle`.
+- `host.containers.remove(...)` — `container_remove`, requires `containers:remove`.
+- `host.containers.pause(...)` — `container_pause`, requires `containers:lifecycle`.
+- `host.containers.unpause(...)` — `container_unpause`, requires `containers:lifecycle`.
+- `host.containers.restart(...)` — `container_restart`, requires `containers:lifecycle`.
+- `host.containers.rename(...)` — `container_rename`, requires `containers:lifecycle`.
+- `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
+- `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
 
 ## Processes and executions
@@ -106,11 +106,11 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.executionLogs(...)` — `execution_logs`, requires `containers:read`.
 - `host.containers.executionOutput(...)` — `execution_output`, requires `containers:read`.
 - `host.containers.waitExecution(...)` — `execution_wait`, requires `containers:read`.
-- `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:control`.
-- `host.containers.cancelExecution(...)` — `execution_cancel`, requires `containers:control`.
-- `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:control`.
+- `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:execute`.
+- `host.containers.cancelExecution(...)` — `execution_cancel`, requires `containers:execute`.
+- `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:execute`.
 - `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.
-- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.
+- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:execute`.
 
 ## Terminal and panes
 
@@ -224,10 +224,10 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.
 - `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.
 - `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, send its reviewed immutable digest as commit CAS authority, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.
-- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.
-- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.
-- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.
-- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.
+- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:lifecycle`.
+- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:lifecycle`.
+- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:remove`.
+- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:lifecycle`.
 
 ## Notifications
 

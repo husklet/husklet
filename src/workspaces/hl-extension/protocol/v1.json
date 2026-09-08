@@ -47,7 +47,22 @@
     {
       "executes": true,
       "mutates": true,
-      "wire": "containers:control"
+      "wire": "containers:create"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "containers:execute"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "containers:lifecycle"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "containers:remove"
     },
     {
       "executes": true,
@@ -280,7 +295,25 @@
           }
         },
         {
-          "name": "containers:control",
+          "name": "containers:create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:execute",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:lifecycle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:remove",
           "payload": {
             "kind": "unit"
           }
@@ -7533,55 +7566,55 @@
       "request": "execution_wait"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_kill"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_cancel"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_remove"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:create",
       "request": "container_create"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_start"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_stop"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:remove",
       "request": "container_remove"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_pause"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_unpause"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_restart"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_rename"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_kill"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "container_exec"
     },
     {
@@ -12567,7 +12600,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:32429349ef0393fc",
+  "source_fingerprint": "fnv1a64:701f075c89b7330c",
   "specification_version": 1,
   "topics": [
     {

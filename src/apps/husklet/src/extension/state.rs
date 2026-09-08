@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn a_narrow_grant_stays_narrow_across_a_restart() {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let asked = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+        let asked = manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]);
         let mut installation = Installation::new();
         let recorded = installation
             .install(&asked, "sha256:aaaa", &Grant::new([Capability::ContainerRead]), 5)
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(reloaded.len(), 1);
         assert!(reloaded[0].granted.holds(Capability::ContainerRead));
         assert!(
-            !reloaded[0].granted.holds(Capability::ContainerControl),
+            !reloaded[0].granted.holds(Capability::ContainerLifecycle),
             "a restart must not hand over what the manifest asked for"
         );
         assert!(!reloaded[0].granted.covers(&asked.capabilities));

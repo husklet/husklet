@@ -316,7 +316,7 @@ fn the_host_states_the_grant_before_the_extension_asks_for_anything() {
     assert_eq!(decoded, welcome);
     assert!(decoded.granted.holds(Capability::ContainerRead));
     assert!(
-        !decoded.granted.holds(Capability::ContainerControl),
+        !decoded.granted.holds(Capability::ContainerLifecycle),
         "an extension must learn what it lacks without probing for it"
     );
     assert_eq!(decoded.limits.payload_limit, Frame::PAYLOAD_LIMIT);
