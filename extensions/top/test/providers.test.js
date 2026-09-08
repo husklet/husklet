@@ -26,6 +26,7 @@ test('Top requests the complete workspace management and pane authority it exerc
     'extensions:read',
     'extensions:control',
     'extensions:install',
+    'extensions:remove',
     'terminals:read',
     'terminals:input',
     'terminals:layout-control',
