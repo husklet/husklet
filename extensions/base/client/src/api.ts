@@ -1143,7 +1143,7 @@ export interface WorkspaceApi {
     toText(slot: string, options?: { lines?: number }): Promise<ReadablePane>;
     /** Convert every pane in one bounded discovery pass without hiding truncation or cursor races. */
     readAll(options?: { lines?: number }): Promise<ReadablePaneInventory>;
-    /** Wait for a pane cursor to change, then return a fresh bounded text projection. */
+    /** Arm observation, reconcile already-unread state, then wait for a fresh bounded projection. */
     waitForText(
       slot: string,
       after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>,

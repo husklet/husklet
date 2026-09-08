@@ -1150,7 +1150,7 @@ export interface WorkspaceApi {
         readAll(options?: {
             lines?: number;
         }): Promise<ReadablePaneInventory>;
-        /** Wait for a pane cursor to change, then return a fresh bounded text projection. */
+        /** Arm observation, reconcile already-unread state, then wait for a fresh bounded projection. */
         waitForText(slot: string, after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>, options?: {
             lines?: number;
             timeoutMs?: number;

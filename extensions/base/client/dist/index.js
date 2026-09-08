@@ -1616,7 +1616,7 @@ export function workspace(session, { signal } = {}) {
         let timer;
         let settled = false;
         let reading = false;
-        let pending;
+        let pending = false;
         return new Promise((resolve, reject) => {
             const finish = (value, error) => {
                 if (settled)
@@ -1625,19 +1625,15 @@ export function workspace(session, { signal } = {}) {
                 clearTimeout(timer);
                 Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
             };
-            const observe = (change) => {
-                if (settled ||
-                    change.slot !== slot ||
-                    (change.generation === after.generation && change.revision === after.revision))
-                    return;
-                pending = change;
+            const reconcile = () => {
+                pending = true;
                 if (reading)
                     return;
                 reading = true;
                 void (async () => {
                     try {
                         while (pending && !settled) {
-                            pending = undefined;
+                            pending = false;
                             const readable = await api.terminal.toText(slot, { lines });
                             const cursor = readable.snapshot;
                             if (cursor.generation === after.generation && cursor.revision === after.revision)
@@ -1653,10 +1649,19 @@ export function workspace(session, { signal } = {}) {
                     }
                 })();
             };
+            const observe = (change) => {
+                if (settled ||
+                    change.slot !== slot ||
+                    (change.generation === after.generation && change.revision === after.revision))
+                    return;
+                reconcile();
+            };
             api.watchPaneChanges(observe).then((stop) => {
                 dispose = stop;
                 if (settled)
                     void stop();
+                else
+                    reconcile();
             }, (error) => finish(undefined, error));
             timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
         });

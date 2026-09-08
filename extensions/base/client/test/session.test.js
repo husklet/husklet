@@ -16,6 +16,55 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix text wait reconciles an unread revision without requiring a later event', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-reconcile-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const snapshot = { slot: 'shell', generation: 4, revision: 9, columns: 80, rows: 24,
+    lines: ['unread output'], cursor_column: 13, cursor_row: 0, truncated: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const reply = frame.payload.call === 'pane_list'
+          ? { reply: 'panes', with: { panes: [{ slot: 'shell', generation: 4, revision: 9,
+            kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }], truncated: false } }
+          : frame.payload.call === 'terminal_read_pane'
+            ? { reply: 'text', with: snapshot }
+            : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'text-reconcile', granted: ['panes:observe', 'terminals:output'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).terminal.waitForText(
+      'shell', { generation: 4, revision: 8 }, { lines: 40, timeoutMs: 1_000 },
+    );
+    assert.deepEqual(result, {
+      changed: true,
+      readable: { kind: 'terminal', text: 'unread output', snapshot },
+    });
+    assert.deepEqual(calls, [
+      'event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe',
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix watcher accepts the host initial snapshot before subscribe acknowledgement', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-initial-snapshot-'));
   const socketPath = path.join(directory, 'host.sock');

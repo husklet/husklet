@@ -2056,7 +2056,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     let timer;
     let settled = false;
     let reading = false;
-    let pending;
+    let pending = false;
     return new Promise((resolve, reject) => {
       const finish = (value, error?: unknown) => {
         if (settled) return;
@@ -2064,20 +2064,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         clearTimeout(timer);
         Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
-      const observe = (change) => {
-        if (
-          settled ||
-          change.slot !== slot ||
-          (change.generation === after.generation && change.revision === after.revision)
-        )
-          return;
-        pending = change;
+      const reconcile = () => {
+        pending = true;
         if (reading) return;
         reading = true;
         void (async () => {
           try {
             while (pending && !settled) {
-              pending = undefined;
+              pending = false;
               const readable = await api.terminal.toText(slot, { lines });
               const cursor = readable.snapshot;
               if (cursor.generation === after.generation && cursor.revision === after.revision)
@@ -2091,10 +2085,20 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           }
         })();
       };
+      const observe = (change) => {
+        if (
+          settled ||
+          change.slot !== slot ||
+          (change.generation === after.generation && change.revision === after.revision)
+        )
+          return;
+        reconcile();
+      };
       api.watchPaneChanges(observe).then(
         (stop) => {
           dispose = stop;
           if (settled) void stop();
+          else reconcile();
         },
         (error) => finish(undefined, error),
       );
