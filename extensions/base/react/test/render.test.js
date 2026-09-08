@@ -132,6 +132,18 @@ test('the sequence increases by exactly one per frame', () => {
   assert.equal(host.sent.sequence, 5);
 });
 
+test('sequence exhaustion cannot emit an imprecise or duplicate frame number', () => {
+  const frames = [];
+  const surface = new Surface((frame) => frames.push(frame), {
+    sequence: Number.MAX_SAFE_INTEGER,
+    patches: [{ Create: { id: 1, tag: 'Text' } }],
+  });
+  assert.throws(() => surface.flush(), /sequence is exhausted/);
+  assert.deepEqual(frames, []);
+  assert.equal(surface.sequence, Number.MAX_SAFE_INTEGER);
+  assert.throws(() => new Surface(() => {}, { sequence: Number.MAX_SAFE_INTEGER + 1 }), /safe integer/);
+});
+
 test('text children become the label', () => {
   const host = surface();
   const frame = host.render(h(Text, null, 'hello'));
