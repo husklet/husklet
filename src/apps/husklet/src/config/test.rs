@@ -205,6 +205,27 @@ fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
 }
 
 #[test]
+fn translation_cache_is_backward_compatible_and_round_trips_only_when_opted_in() {
+    let path = tmp_path("translation-cache-opt-in");
+    std::fs::write(&path, "[workspace]\nname = legacy\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = amd64\n").unwrap();
+    assert!(!WorkspaceStore::load(&path)
+        .unwrap()
+        .get("legacy")
+        .unwrap()
+        .translation_cache);
+
+    let mut workspace = WorkspaceConfig::new("fast", "alpine", Arch::Amd64);
+    workspace.translation_cache = true;
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(workspace.clone()).unwrap();
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("translation_cache = true\n"));
+    assert_eq!(WorkspaceStore::load(&path).unwrap().get("fast"), Some(&workspace));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn execution_lifetime_is_backward_compatible_and_nondefault_modes_round_trip_explicitly() {
     let path = tmp_path("execution-lifetime");
     std::fs::write(&path, "[workspace]\nname = legacy\ngeneration = 0123456789abcdef0123456789abcdef\nconfiguration_revision = 0123456789abcdef0123456789abcdef\nimage = alpine\narch = amd64\n").unwrap();

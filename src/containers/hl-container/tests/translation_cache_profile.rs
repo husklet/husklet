@@ -1262,6 +1262,15 @@ int main(void) {
     ) {
         benchmark_barrier("ready", "release")?;
     }
+    let receipts_before_start = if cache.exists() {
+        cache
+            .read_dir()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().as_encoded_bytes().to_vec())
+            .collect::<std::collections::BTreeSet<_>>()
+    } else {
+        std::collections::BTreeSet::new()
+    };
     let started = Instant::now();
     containers.start("pcache-profile").await?;
     let (waited, logs) = if matches!(mode, Mode::CwdRelative | Mode::LiveNative | Mode::NativeToolchain) {
@@ -1516,14 +1525,11 @@ int main(void) {
             .iter()
             .map(|entry| entry.file_name().as_encoded_bytes().to_vec())
             .collect::<Vec<_>>();
-        require_durable_cache_receipts(mode, &receipt_names)?;
-        cache_loaded = entries.iter().any(|entry| {
-            entry
-                .file_name()
-                .as_encoded_bytes()
-                .windows(17)
-                .any(|part| part == b".hit-fixed-image-")
-        });
+        if cfg!(feature = "native-test-hooks") {
+            require_durable_cache_receipts(mode, &receipt_names)?;
+        }
+        let current_receipts = new_cache_receipts(&receipt_names, &receipts_before_start);
+        cache_loaded = cache_receipts_show_loaded(&current_receipts);
         if cfg!(feature = "native-test-hooks") && cache_loaded {
             require(
                 entries.iter().any(|entry| {
@@ -1856,15 +1862,7 @@ int main(void) {
             // descriptor, outside captured guest stderr; the external benchmark runner validates it.
             Mode::CacheValid if !cfg!(feature = "native-test-hooks") => {
                 if std::env::var("HL_PCACHE_PROFILE_OBSERVE").is_ok_and(|value| value == "1") {
-                    let receipt = entries
-                        .iter()
-                        .find(|entry| {
-                            entry
-                                .file_name()
-                                .as_encoded_bytes()
-                                .windows(18)
-                                .any(|part| part == b".execution-census-")
-                        })
+                    let receipt = current_execution_census(&entries, &current_receipts)
                         .ok_or("observed warm HIT emitted no execution census")?;
                     let census = fs::read(receipt.path())?;
                     require(
@@ -2043,6 +2041,67 @@ int main(void) {
         hex(&output)
     );
     Ok(())
+}
+
+fn cache_receipts_show_loaded(names: &[Vec<u8>]) -> bool {
+    names.iter().any(|name| {
+        name.windows(17).any(|part| part == b".hit-fixed-image-")
+            || name.windows(18).any(|part| part == b".execution-census-")
+    })
+}
+
+fn new_cache_receipts(
+    names: &[Vec<u8>],
+    before: &std::collections::BTreeSet<Vec<u8>>,
+) -> Vec<Vec<u8>> {
+    names
+        .iter()
+        .filter(|name| !before.contains(*name))
+        .cloned()
+        .collect()
+}
+
+fn current_execution_census<'a>(entries: &'a [fs::DirEntry], current: &[Vec<u8>]) -> Option<&'a fs::DirEntry> {
+    entries.iter().find(|entry| {
+        let name = entry.file_name();
+        current.iter().any(|candidate| candidate == name.as_encoded_bytes())
+            && name
+                .as_encoded_bytes()
+                .windows(18)
+                .any(|part| part == b".execution-census-")
+    })
+}
+
+#[test]
+fn production_execution_census_reports_a_loaded_cache() {
+    assert!(cache_receipts_show_loaded(&[
+        b"cache.execution-census-123".to_vec()
+    ]));
+    assert!(cache_receipts_show_loaded(&[
+        b"cache.hit-fixed-image-123".to_vec()
+    ]));
+    assert!(!cache_receipts_show_loaded(&[
+        b"cache.fixed-image-123".to_vec()
+    ]));
+
+    let stale = b"cache.execution-census-stale".to_vec();
+    let fresh = b"cache.execution-census-fresh".to_vec();
+    let before = [stale.clone()].into_iter().collect();
+    assert_eq!(new_cache_receipts(&[stale, fresh.clone()], &before), [fresh]);
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cache.execution-census-aaa-stale"), b"stale").unwrap();
+    fs::write(directory.path().join("cache.execution-census-zzz-fresh"), b"fresh").unwrap();
+    let mut entries = directory.path().read_dir().unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    entries.sort_by_key(fs::DirEntry::file_name);
+    let current = [b"cache.execution-census-zzz-fresh".to_vec()];
+    assert_eq!(
+        current_execution_census(&entries, &current)
+            .unwrap()
+            .file_name()
+            .as_encoded_bytes(),
+        current[0]
+    );
 }
 
 /// Optional benchmark-only handshake. Image import, overlay creation, and process construction finish

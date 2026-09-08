@@ -27,12 +27,17 @@ pub enum TranslationCacheError {
     Open { path: PathBuf, source: nix::Error },
     #[error("could not make translation cache directory private {}: {source}", path.display())]
     Permissions { path: PathBuf, source: std::io::Error },
+    #[error("could not prune translation cache entry {}: {reason}", path.display())]
+    Prune { path: PathBuf, reason: String },
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct TranslationCache(PathBuf);
 
 impl TranslationCache {
+    const MAX_BYTES: u64 = 512 * 1024 * 1024;
+    const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
     fn new(directory: PathBuf) -> Self {
         Self(directory)
     }
@@ -91,8 +96,90 @@ impl TranslationCache {
                 path: self.0.clone(),
                 source,
             })?;
+        Self::prune(directory, &self.0, std::time::SystemTime::now(), Self::MAX_AGE, Self::MAX_BYTES)?;
 
         Ok(self.0)
+    }
+
+    fn prune(
+        directory: fs::File,
+        path: &Path,
+        now: std::time::SystemTime,
+        max_age: std::time::Duration,
+        max_bytes: u64,
+    ) -> Result<()> {
+        use nix::{
+            dir::Dir,
+            fcntl::AtFlags,
+            sys::stat::{SFlag, fstatat},
+            unistd::{UnlinkatFlags, unlinkat},
+        };
+
+        let mut directory = Dir::from_fd(directory.into()).map_err(|source| TranslationCacheError::Prune {
+            path: path.to_owned(),
+            reason: source.to_string(),
+        })?;
+        let names = directory
+            .iter()
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name().to_owned())
+                    .map_err(|source| TranslationCacheError::Prune {
+                        path: path.to_owned(),
+                        reason: source.to_string(),
+                    })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut files = Vec::new();
+        for name in names {
+            if name.as_c_str() == c"." || name.as_c_str() == c".." {
+                continue;
+            }
+            let metadata = match fstatat(&directory, name.as_c_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
+                Ok(metadata) => metadata,
+                Err(nix::errno::Errno::ENOENT) => continue,
+                Err(source) => {
+                    return Err(TranslationCacheError::Prune {
+                        path: path.join(name.to_string_lossy().as_ref()),
+                        reason: source.to_string(),
+                    }
+                    .into());
+                }
+            };
+            if SFlag::from_bits_truncate(metadata.st_mode) == SFlag::S_IFREG {
+                let modified = u64::try_from(metadata.st_mtime)
+                    .ok()
+                    .and_then(|seconds| {
+                        let nanos = u32::try_from(metadata.st_mtime_nsec).ok().filter(|value| *value < 1_000_000_000)?;
+                        std::time::UNIX_EPOCH.checked_add(std::time::Duration::new(seconds, nanos))
+                    })
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                files.push((name, metadata.st_size.max(0) as u64, modified));
+            }
+        }
+        files.sort_by_key(|(_, _, modified)| *modified);
+        let mut bytes = files
+            .iter()
+            .fold(0_u64, |total, (_, size, _)| total.saturating_add(*size));
+        for (name, size, modified) in files {
+            let stale = now.duration_since(modified).is_ok_and(|age| age > max_age);
+            if stale || bytes > max_bytes {
+                match unlinkat(&directory, name.as_c_str(), UnlinkatFlags::NoRemoveDir) {
+                    Ok(()) => bytes = bytes.saturating_sub(size),
+                    Err(nix::errno::Errno::ENOENT) => {
+                        bytes = bytes.saturating_sub(size);
+                    }
+                    Err(source) => {
+                        return Err(TranslationCacheError::Prune {
+                            path: path.join(name.to_string_lossy().as_ref()),
+                            reason: source.to_string(),
+                        }
+                        .into());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -269,5 +356,70 @@ mod tests {
                 path.display()
             )
         );
+    }
+
+    #[test]
+    fn translation_cache_prunes_stale_and_oldest_entries_to_its_quota() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("cache");
+        fs::create_dir(&directory).unwrap();
+        let older = directory.join("older");
+        let newest = directory.join("newest");
+        fs::File::create(&older).unwrap().set_len(300 * 1024 * 1024).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::File::create(&newest).unwrap().set_len(300 * 1024 * 1024).unwrap();
+        TranslationCache::prune(
+            fs::File::open(&directory).unwrap(),
+            &directory,
+            std::time::SystemTime::now(),
+            std::time::Duration::from_secs(u64::MAX),
+            TranslationCache::MAX_BYTES,
+        )
+        .unwrap();
+
+        assert!(!older.exists());
+        assert!(newest.exists());
+
+        let stale = directory.join("stale");
+        fs::File::create(&stale).unwrap().set_len(1).unwrap();
+        let stale_time = fs::metadata(&stale).unwrap().modified().unwrap();
+        TranslationCache::prune(
+            fs::File::open(&directory).unwrap(),
+            &directory,
+            stale_time + TranslationCache::MAX_AGE + std::time::Duration::from_secs(1),
+            TranslationCache::MAX_AGE,
+            u64::MAX,
+        )
+        .unwrap();
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn translation_cache_pruning_stays_bound_to_the_opened_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let selected = temporary.path().join("cache");
+        let held = temporary.path().join("held");
+        let victim = temporary.path().join("victim");
+        fs::create_dir(&selected).unwrap();
+        fs::create_dir(&victim).unwrap();
+        fs::write(selected.join("old"), b"old").unwrap();
+        fs::write(victim.join("must-survive"), b"authority").unwrap();
+        let authority = fs::File::open(&selected).unwrap();
+        fs::rename(&selected, &held).unwrap();
+        symlink(&victim, &selected).unwrap();
+
+        TranslationCache::prune(
+            authority,
+            &selected,
+            std::time::SystemTime::now(),
+            std::time::Duration::ZERO,
+            0,
+        )
+        .unwrap();
+
+        assert!(!held.join("old").exists());
+        assert_eq!(fs::read(victim.join("must-survive")).unwrap(), b"authority");
     }
 }
