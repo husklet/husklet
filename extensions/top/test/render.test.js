@@ -2992,17 +2992,9 @@ test('container creation groups its compact form and uses a human label editor',
       resource: { data: [], loading: false, error: null, reload: async () => {} },
     }),
   );
-  const createDisclosure = frame.patches.find((patch) => patch.Create?.tag === 'Expander');
-  assert.ok(
-    createDisclosure,
-    'container creation is collapsed behind a native disclosure by default',
-  );
   assert.equal(
-    frame.patches.some(
-      (patch) =>
-        patch.SetProp?.id === createDisclosure.Create.id && patch.SetProp.prop === 'Expanded',
-    ),
-    true,
+    taggedProperty(stage, 'Container setup', 'Expander', 'Expanded')?.Flag,
+    false,
     'empty container creation is controlled by the prominent action',
   );
   for (const label of [
@@ -3010,32 +3002,17 @@ test('container creation groups its compact form and uses a human label editor',
     'Process',
     'Resources and connectivity',
     'Labels use one name=value pair per line, for example role=worker.',
-    'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.',
     'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
   const placeholders = frame.patches
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
-  assert.deepEqual(
-    placeholders.slice(0, 14),
-    [
-      'Image reference',
-      'Container name',
-      'Hostname (optional)',
-      'Run as user (optional)',
-      'Entrypoint argv JSON (optional)',
-      'Command argv JSON (optional)',
-      'Environment pairs JSON (optional)',
-      'Working directory (optional)',
-      'Memory limit MiB (optional)',
-      'CPU limit (optional)',
-      'PID limit (optional)',
-      'Initial network (optional)',
-      'Named volume mounts JSON (optional)',
-      'Published ports JSON (optional)',
-    ],
-    'visual grouping preserves a predictable keyboard traversal order',
+  assert.deepEqual(placeholders.slice(0, 2), ['Image reference', 'Container name']);
+  assert.ok(
+    placeholders.indexOf('Add command argument') <
+      placeholders.indexOf('Command argv JSON (optional)'),
+    'the native common-path editor precedes raw advanced configuration',
   );
   assert.ok(labelled(stage, 'Labels (optional)'));
   assert.equal(
@@ -3125,6 +3102,47 @@ test('container creation retains exact identity and retries only start after a p
     ],
     'retry never creates a duplicate container',
   );
+});
+
+test('native process editors preserve ordered argv and environment wire types', async () => {
+  const calls = [];
+  const controlled = {
+    containers: {
+      create: async (spec) => {
+        calls.push(spec);
+        return 'native-editor-container';
+      },
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async () => {},
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api: controlled,
+      resource: { data: [], loading: false, error: null, reload: async () => {} },
+    }),
+  );
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'native');
+  for (const argument of ['sh', '-lc', 'printf ready']) {
+    change(stage, 'Add command argument', argument);
+    submit(stage, 'Add command argument');
+  }
+  change(stage, 'Variable name', 'MODE');
+  change(stage, 'Variable value', 'test');
+  invoke(stage, 'Add variable');
+  invoke(stage, 'Create and start');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, [
+    {
+      image: 'alpine:3.20',
+      name: 'native',
+      command: ['sh', '-lc', 'printf ready'],
+      environment: [['MODE', 'test']],
+    },
+  ]);
 });
 
 test('container creation refuses to start when inspection returns a different immutable identity', async () => {

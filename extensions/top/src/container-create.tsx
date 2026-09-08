@@ -13,6 +13,7 @@ import {
   Heading,
   Row,
   Spinner,
+  TagInput,
   Text,
   TextArea,
   type ContainerCreateSpec,
@@ -21,6 +22,125 @@ import {
 import { boundedMessage } from './model.js';
 
 const { useState } = React;
+
+function jsonArray(value: string): string[] {
+  if (!value) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return [];
+  }
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+}
+
+function ArgumentEditor({
+  label,
+  value,
+  enabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  enabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [argument, setArgument] = useState('');
+  const arguments_ = jsonArray(value);
+  const add = () => {
+    if (!argument || arguments_.length >= 64) return;
+    onChange(JSON.stringify([...arguments_, argument]));
+    setArgument('');
+  };
+  return (
+    <FormControl gap={1} width={{ chars: 28 }}>
+      <FormLabel label={label} />
+      <TagInput
+        value={argument}
+        placeholder={`Add ${label.toLowerCase()} argument`}
+        enabled={enabled}
+        onChange={(event) => setArgument(String(event.value ?? ''))}
+        onSubmit={add}
+      />
+      <Row gap={1} wrap>
+        {arguments_.map((item, index) => (
+          <Button
+            key={`${index}:${item}`}
+            label={`${index + 1} · ${item}`}
+            tooltip={`Remove argument ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() =>
+              onChange(JSON.stringify(arguments_.filter((_, held) => held !== index)))
+            }
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
+function EnvironmentEditor({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: string;
+  enabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [entryValue, setEntryValue] = useState('');
+  let parsed: unknown;
+  try {
+    parsed = value ? JSON.parse(value) : [];
+  } catch {
+    parsed = [];
+  }
+  const entries: [string, string][] = Array.isArray(parsed) ? parsed : [];
+  const add = () => {
+    if (!name || name.includes('=') || entries.some(([held]) => held === name)) return;
+    onChange(JSON.stringify([...entries, [name, entryValue]]));
+    setName('');
+    setEntryValue('');
+  };
+  return (
+    <FormControl gap={1}>
+      <FormLabel label="Environment variables" />
+      <Row gap={1} wrap>
+        <Entry
+          value={name}
+          placeholder="Variable name"
+          enabled={enabled}
+          onChange={(event) => setName(String(event.value ?? ''))}
+        />
+        <Entry
+          value={entryValue}
+          placeholder="Variable value"
+          enabled={enabled}
+          onChange={(event) => setEntryValue(String(event.value ?? ''))}
+        />
+        <Button
+          label="Add variable"
+          enabled={enabled && Boolean(name) && !name.includes('=')}
+          onInvoke={add}
+        />
+      </Row>
+      <Row gap={1} wrap>
+        {entries.map(([heldName, heldValue], index) => (
+          <Button
+            key={`${heldName}:${index}`}
+            label={`${heldName}=${heldValue}`}
+            tooltip={`Remove ${heldName}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
 
 export type ContainerCreateDraft = {
   image: string;
@@ -439,53 +559,58 @@ export function ContainerCreate({
                 enabled={editable}
                 onChange={(event) => update('name', event.value)}
               />
-              <Entry
-                value={draft.hostname}
-                placeholder={'Hostname (optional)'}
-                enabled={editable}
-                onChange={(event) => update('hostname', event.value)}
-              />
-              <Entry
-                value={draft.user}
-                placeholder={'Run as user (optional)'}
-                enabled={editable}
-                onChange={(event) => update('user', event.value)}
-              />
-              <FormControl gap={1}>
-                <FormLabel label="Labels (optional)" />
-                <TextArea
-                  value={draft.labels}
-                  tooltip={'Labels, one name=value per line (optional)'}
-                  height={{ step: 5 }}
-                  enabled={editable}
-                  onChange={(event) => update('labels', event.value)}
-                />
-              </FormControl>
             </Row>
-            <Text
-              label={'Labels use one name=value pair per line, for example role=worker.'}
-              color={'text-dim'}
-              wrap={true}
-            />
+            <Expander label="Advanced identity">
+              <Column gap={1}>
+                <Row gap={1} wrap>
+                  <Entry
+                    value={draft.hostname}
+                    placeholder={'Hostname (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('hostname', event.value)}
+                  />
+                  <Entry
+                    value={draft.user}
+                    placeholder={'Run as user (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('user', event.value)}
+                  />
+                </Row>
+                <FormControl gap={1}>
+                  <FormLabel label="Labels (optional)" />
+                  <TextArea
+                    value={draft.labels}
+                    tooltip={'Labels, one name=value per line (optional)'}
+                    height={{ step: 5 }}
+                    enabled={editable}
+                    onChange={(event) => update('labels', event.value)}
+                  />
+                </FormControl>
+                <Text
+                  label={'Labels use one name=value pair per line, for example role=worker.'}
+                  color={'text-dim'}
+                  wrap
+                />
+              </Column>
+            </Expander>
             <Heading label={'Process'} scale={'body'} />
             <Row gap={1} wrap={true}>
-              <Entry
+              <ArgumentEditor
+                label="Entrypoint"
                 value={draft.entrypoint}
-                placeholder={'Entrypoint argv JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('entrypoint', event.value)}
+                onChange={(value) => update('entrypoint', value)}
               />
-              <Entry
+              <ArgumentEditor
+                label="Command"
                 value={draft.command}
-                placeholder={'Command argv JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('command', event.value)}
+                onChange={(value) => update('command', value)}
               />
-              <Entry
+              <EnvironmentEditor
                 value={draft.environment}
-                placeholder={'Environment pairs JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('environment', event.value)}
+                onChange={(value) => update('environment', value)}
               />
               <Entry
                 value={draft.workingDirectory}
@@ -494,59 +619,78 @@ export function ContainerCreate({
                 onChange={(event) => update('workingDirectory', event.value)}
               />
             </Row>
-            <Text
-              label={
-                'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.'
-              }
-              color={'text-dim'}
-              wrap={true}
-            />
-            <Heading label={'Resources and connectivity'} scale={'body'} />
-            <Row gap={1} wrap={true}>
-              <Entry
-                value={draft.memoryMb}
-                placeholder={'Memory limit MiB (optional)'}
-                enabled={editable}
-                onChange={(event) => update('memoryMb', event.value)}
-              />
-              <Entry
-                value={draft.cpus}
-                placeholder={'CPU limit (optional)'}
-                enabled={editable}
-                onChange={(event) => update('cpus', event.value)}
-              />
-              <Entry
-                value={draft.pidsLimit}
-                placeholder={'PID limit (optional)'}
-                enabled={editable}
-                onChange={(event) => update('pidsLimit', event.value)}
-              />
-              <Entry
-                value={draft.network}
-                placeholder={'Initial network (optional)'}
-                enabled={editable}
-                onChange={(event) => update('network', event.value)}
-              />
-              <Entry
-                value={draft.mounts}
-                placeholder={'Named volume mounts JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('mounts', event.value)}
-              />
-              <Entry
-                value={draft.ports}
-                placeholder={'Published ports JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('ports', event.value)}
-              />
-            </Row>
-            <Text
-              label={
-                'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
-              }
-              color={'text-dim'}
-              wrap={true}
-            />
+            <Expander label="Advanced raw process configuration">
+              <Column gap={1}>
+                <Entry
+                  value={draft.entrypoint}
+                  placeholder={'Entrypoint argv JSON (optional)'}
+                  enabled={editable}
+                  onChange={(event) => update('entrypoint', event.value)}
+                />
+                <Entry
+                  value={draft.command}
+                  placeholder={'Command argv JSON (optional)'}
+                  enabled={editable}
+                  onChange={(event) => update('command', event.value)}
+                />
+                <Entry
+                  value={draft.environment}
+                  placeholder={'Environment pairs JSON (optional)'}
+                  enabled={editable}
+                  onChange={(event) => update('environment', event.value)}
+                />
+              </Column>
+            </Expander>
+            <Expander label="Advanced resources and networking">
+              <Column gap={1}>
+                <Heading label={'Resources and connectivity'} scale={'body'} />
+                <Row gap={1} wrap={true}>
+                  <Entry
+                    value={draft.memoryMb}
+                    placeholder={'Memory limit MiB (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('memoryMb', event.value)}
+                  />
+                  <Entry
+                    value={draft.cpus}
+                    placeholder={'CPU limit (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('cpus', event.value)}
+                  />
+                  <Entry
+                    value={draft.pidsLimit}
+                    placeholder={'PID limit (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('pidsLimit', event.value)}
+                  />
+                  <Entry
+                    value={draft.network}
+                    placeholder={'Initial network (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('network', event.value)}
+                  />
+                  <Entry
+                    value={draft.mounts}
+                    placeholder={'Named volume mounts JSON (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('mounts', event.value)}
+                  />
+                  <Entry
+                    value={draft.ports}
+                    placeholder={'Published ports JSON (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('ports', event.value)}
+                  />
+                </Row>
+                <Text
+                  label={
+                    'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
+                  }
+                  color={'text-dim'}
+                  wrap={true}
+                />
+              </Column>
+            </Expander>
           </CardContent>
           <CardActions>
             {blocked ? <Spinner /> : null}
