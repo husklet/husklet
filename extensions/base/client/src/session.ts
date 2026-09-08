@@ -236,7 +236,24 @@ export function validateRowRequest(value): RowRequest {
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export function validateUiEvent(value) {
   const event = requiredObject(value, 'UI event');
-  if (typeof event.pane_provider === 'string' && typeof event.slot === 'string') return value;
+  if (Object.hasOwn(event, 'pane_provider')) {
+    const fields = Object.keys(event);
+    if (fields.length !== 2 || !fields.includes('slot'))
+      throw new TypeError('pane selection must contain exactly pane_provider and slot');
+    peerName(event.pane_provider);
+    const bytes = new TextEncoder().encode(event.slot).byteLength;
+    if (
+      typeof event.slot !== 'string' ||
+      event.slot.length === 0 ||
+      bytes > 256 ||
+      event.slot.includes('\0')
+    ) {
+      throw new TypeError(
+        'pane selection slot must be a nonempty NUL-free string of at most 256 bytes',
+      );
+    }
+    return value;
+  }
   return validateCurrentUiEvent(value);
 }
 
