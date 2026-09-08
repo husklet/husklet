@@ -704,8 +704,17 @@ fn native_auto_eligibility(
     if plan.options.get_bytes("HL_C_DIAGNOSTICS").is_some() {
         eligibility = Err(NativeSupervisedRefusal::BackendControl);
     }
-    if plan.box_policy.volumes.is_some() {
+    if plan.box_policy.volumes.is_some() && !auto_identity_volumes_supported(plan) {
         eligibility = Err(NativeSupervisedRefusal::Volumes);
+    }
+    if plan.box_policy.lower_layers.as_deref().is_some_and(|layers| !lower_layers_supported(layers))
+        || (plan.box_policy.lower_layers.is_some()
+            && !plan.options.get_bytes("HL_OVERLAY_WORK").is_some_and(valid_host_path))
+    {
+        eligibility = Err(NativeSupervisedRefusal::Overlay);
+    }
+    if plan.box_policy.file_owners.as_deref().is_some_and(|owners| !file_owners_supported(owners)) {
+        eligibility = Err(NativeSupervisedRefusal::Ownership);
     }
     let isolated_ready = plan.box_policy.network_mode == 0
         && plan.box_policy.flags & BOX_NETWORK_ISOLATED != 0
@@ -714,6 +723,74 @@ fn native_auto_eligibility(
         eligibility = Err(NativeSupervisedRefusal::Network);
     }
     eligibility
+}
+
+fn valid_host_path(path: &[u8]) -> bool {
+    !path.contains(&0) && !path.contains(&b'\n') && valid_guest_path(path)
+}
+
+fn lower_layers_supported(layers: &[u8]) -> bool {
+    !layers.is_empty() && layers.split(|byte| *byte == b':').all(valid_host_path)
+}
+
+fn file_owners_supported(owners: &[u8]) -> bool {
+    !owners.is_empty()
+        && owners.split(|byte| *byte == b'\n').all(|record| {
+            let mut fields = record.split(|byte| *byte == b'\t');
+            let (Some(path), Some(uid), Some(gid), None) =
+                (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                return false;
+            };
+            !path.is_empty()
+                && !path.starts_with(b"/")
+                && path
+                    .split(|byte| *byte == b'/')
+                    .all(|part| !part.is_empty() && part != b"." && part != b"..")
+                && [uid, gid].into_iter().all(|id| {
+                    !id.is_empty()
+                        && id.iter().all(u8::is_ascii_digit)
+                        && std::str::from_utf8(id).ok().and_then(|id| id.parse::<u32>().ok()).is_some()
+                })
+        })
+}
+
+fn auto_identity_volumes_supported(plan: &crate::launcher::plan::RuntimePlan) -> bool {
+    let (Some(volumes), Some(generation)) = (
+        plan.box_policy.volumes.as_deref(),
+        plan.box_policy.filesystem_generation.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(directory) = generation.strip_suffix(b"/generation") else {
+        return false;
+    };
+    if !valid_host_path(directory) {
+        return false;
+    }
+    let mut seen = 0_u8;
+    for record in volumes.split(|byte| *byte == b',') {
+        let record = record.strip_prefix(b"rw:").or_else(|| record.strip_prefix(b"ro:"));
+        let Some(record) = record else { return false };
+        let Some(split) = record.iter().position(|byte| *byte == b':') else {
+            return false;
+        };
+        let (guest, host) = (&record[..split], &record[split + 1..]);
+        let Some(name) = guest.strip_prefix(b"/etc/") else {
+            return false;
+        };
+        let bit = match name {
+            b"hosts" => 1,
+            b"resolv.conf" => 2,
+            b"hostname" => 4,
+            _ => return false,
+        };
+        if seen & bit != 0 || host != [directory, b"/", name].concat() {
+            return false;
+        }
+        seen |= bit;
+    }
+    seen == 7
 }
 
 #[cfg(test)]
@@ -1213,7 +1290,8 @@ mod native_eligibility_tests {
     fn auto_accepts_the_same_validated_product_overlay_as_explicit_native() {
         let mut overlay = plan();
         overlay.box_policy.lower_layers = Some(b"/images/lower".to_vec());
-        overlay.box_policy.file_owners = Some(b"0:0:/usr/bin/tool".to_vec());
+        overlay.box_policy.file_owners = Some(b"usr/bin/tool\t0\t0".to_vec());
+        overlay.options.set("HL_OVERLAY_WORK", "/images/work", true).unwrap();
         assert_eq!(verdict(&overlay, host()), Ok(()));
         assert_eq!(native_auto_eligibility(&overlay, host(), verdict(&overlay, host())), Ok(()));
 
@@ -1226,6 +1304,54 @@ mod native_eligibility_tests {
 
         overlay.box_policy.lower_layers = None;
         assert_eq!(verdict(&overlay, host()), Err(NativeSupervisedRefusal::Ownership));
+
+        overlay.box_policy.lower_layers = Some(b"/images/lower".to_vec());
+        overlay.options.unset("HL_OVERLAY_WORK").unwrap();
+        assert_eq!(
+            native_auto_eligibility(&overlay, host(), verdict(&overlay, host())),
+            Err(NativeSupervisedRefusal::Overlay)
+        );
+        overlay.options.set("HL_OVERLAY_WORK", "/images/work", true).unwrap();
+        for owners in [b"bin/tool\t0\t0".as_slice(), b"../tool\t0\t0", b"bin/tool\tx\t0"] {
+            overlay.box_policy.file_owners = Some(owners.to_vec());
+            let expected = owners == b"bin/tool\t0\t0";
+            assert_eq!(file_owners_supported(owners), expected);
+        }
+        for layers in [
+            b"/one:/two".as_slice(),
+            b"relative",
+            b"/one::/two",
+            b"/one/../two",
+            b"/one\0bad",
+            b"/one\nbad",
+        ] {
+            assert_eq!(lower_layers_supported(layers), layers == b"/one:/two");
+        }
+    }
+
+    #[test]
+    fn auto_distinguishes_engine_identity_mounts_from_user_volumes() {
+        let mut identity = plan();
+        identity.box_policy.filesystem_generation = Some(b"/state/id/generation".to_vec());
+        identity.box_policy.volumes = Some(
+            b"rw:/etc/hosts:/state/id/hosts,rw:/etc/resolv.conf:/state/id/resolv.conf,rw:/etc/hostname:/state/id/hostname"
+                .to_vec(),
+        );
+        assert!(auto_identity_volumes_supported(&identity));
+        assert_eq!(native_auto_eligibility(&identity, host(), verdict(&identity, host())), Ok(()));
+
+        for volumes in [
+            b"rw:/work:/state/id/work".as_slice(),
+            b"rw:/etc/hosts:/elsewhere/hosts,rw:/etc/resolv.conf:/state/id/resolv.conf,rw:/etc/hostname:/state/id/hostname",
+            b"rw:/etc/hosts:/state/id/hosts,rw:/etc/hosts:/state/id/hosts,rw:/etc/hostname:/state/id/hostname",
+        ] {
+            identity.box_policy.volumes = Some(volumes.to_vec());
+            assert!(!auto_identity_volumes_supported(&identity));
+            assert_eq!(
+                native_auto_eligibility(&identity, host(), verdict(&identity, host())),
+                Err(NativeSupervisedRefusal::Volumes)
+            );
+        }
     }
 
     #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
