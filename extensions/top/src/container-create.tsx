@@ -5,6 +5,7 @@ import {
   CardActions,
   CardContent,
   CardHeader,
+  Column,
   Entry,
   Expander,
   Heading,
@@ -42,6 +43,7 @@ type ContainerCreateProps = {
   api: WorkspaceApi;
   blocked: boolean;
   label?: string;
+  prominent?: boolean;
   onBusyChange: (busy: boolean) => void;
   reload: () => void | Promise<void>;
 };
@@ -344,9 +346,11 @@ export function ContainerCreate({
   api,
   blocked,
   label = 'Create a container',
+  prominent = false,
   onBusyChange,
   reload,
 }: ContainerCreateProps) {
+  const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState<ContainerCreateDraft>(emptyDraft);
   const [created, setCreated] = useState<CreatedContainer | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -394,152 +398,164 @@ export function ContainerCreate({
   };
   const editable = !created && !blocked;
   return (
-    <Expander label={label}>
-      <Card variant={'outline'}>
-        <CardHeader
-          label={'New container'}
-          detail={'Uses a local image and starts it after durable creation.'}
-        />
-        <CardContent gap={1}>
-          <Heading label={'Identity and image'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.image}
-              placeholder={'Image reference'}
-              enabled={editable}
-              onChange={(event) => update('image', event.value)}
-            />
-            <Entry
-              value={draft.name}
-              placeholder={'Container name'}
-              enabled={editable}
-              onChange={(event) => update('name', event.value)}
-            />
-            <Entry
-              value={draft.hostname}
-              placeholder={'Hostname (optional)'}
-              enabled={editable}
-              onChange={(event) => update('hostname', event.value)}
-            />
-            <Entry
-              value={draft.user}
-              placeholder={'Run as user (optional)'}
-              enabled={editable}
-              onChange={(event) => update('user', event.value)}
-            />
-            <Entry
-              value={draft.labels}
-              placeholder={'Labels JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('labels', event.value)}
-            />
-          </Row>
-          <Text
-            label={'Labels use JSON [name, value] pairs, for example [["role","worker"]].'}
-            color={'text-dim'}
-            wrap={true}
+    <Column gap={1}>
+      {prominent && !expanded ? (
+        <Row gap={1} justify="start">
+          <Button label={label} onInvoke={() => setExpanded(true)} />
+        </Row>
+      ) : null}
+      <Expander
+        label={prominent ? 'Container setup' : label}
+        expanded={prominent ? expanded : undefined}
+        visible={!prominent || expanded}
+        onExpand={(event) => setExpanded(Boolean(event.value))}
+      >
+        <Card variant={'outline'}>
+          <CardHeader
+            label={'New container'}
+            detail={'Uses a local image and starts it after durable creation.'}
           />
-          <Heading label={'Process'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.entrypoint}
-              placeholder={'Entrypoint argv JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('entrypoint', event.value)}
+          <CardContent gap={1}>
+            <Heading label={'Identity and image'} scale={'body'} />
+            <Row gap={1} wrap={true}>
+              <Entry
+                value={draft.image}
+                placeholder={'Image reference'}
+                enabled={editable}
+                onChange={(event) => update('image', event.value)}
+              />
+              <Entry
+                value={draft.name}
+                placeholder={'Container name'}
+                enabled={editable}
+                onChange={(event) => update('name', event.value)}
+              />
+              <Entry
+                value={draft.hostname}
+                placeholder={'Hostname (optional)'}
+                enabled={editable}
+                onChange={(event) => update('hostname', event.value)}
+              />
+              <Entry
+                value={draft.user}
+                placeholder={'Run as user (optional)'}
+                enabled={editable}
+                onChange={(event) => update('user', event.value)}
+              />
+              <Entry
+                value={draft.labels}
+                placeholder={'Labels JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('labels', event.value)}
+              />
+            </Row>
+            <Text
+              label={'Labels use JSON [name, value] pairs, for example [["role","worker"]].'}
+              color={'text-dim'}
+              wrap={true}
             />
-            <Entry
-              value={draft.command}
-              placeholder={'Command argv JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('command', event.value)}
+            <Heading label={'Process'} scale={'body'} />
+            <Row gap={1} wrap={true}>
+              <Entry
+                value={draft.entrypoint}
+                placeholder={'Entrypoint argv JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('entrypoint', event.value)}
+              />
+              <Entry
+                value={draft.command}
+                placeholder={'Command argv JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('command', event.value)}
+              />
+              <Entry
+                value={draft.environment}
+                placeholder={'Environment pairs JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('environment', event.value)}
+              />
+              <Entry
+                value={draft.workingDirectory}
+                placeholder={'Working directory (optional)'}
+                enabled={editable}
+                onChange={(event) => update('workingDirectory', event.value)}
+              />
+            </Row>
+            <Text
+              label={
+                'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.'
+              }
+              color={'text-dim'}
+              wrap={true}
             />
-            <Entry
-              value={draft.environment}
-              placeholder={'Environment pairs JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('environment', event.value)}
+            <Heading label={'Resources and connectivity'} scale={'body'} />
+            <Row gap={1} wrap={true}>
+              <Entry
+                value={draft.memoryMb}
+                placeholder={'Memory limit MiB (optional)'}
+                enabled={editable}
+                onChange={(event) => update('memoryMb', event.value)}
+              />
+              <Entry
+                value={draft.cpus}
+                placeholder={'CPU limit (optional)'}
+                enabled={editable}
+                onChange={(event) => update('cpus', event.value)}
+              />
+              <Entry
+                value={draft.pidsLimit}
+                placeholder={'PID limit (optional)'}
+                enabled={editable}
+                onChange={(event) => update('pidsLimit', event.value)}
+              />
+              <Entry
+                value={draft.network}
+                placeholder={'Initial network (optional)'}
+                enabled={editable}
+                onChange={(event) => update('network', event.value)}
+              />
+              <Entry
+                value={draft.mounts}
+                placeholder={'Named volume mounts JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('mounts', event.value)}
+              />
+              <Entry
+                value={draft.ports}
+                placeholder={'Published ports JSON (optional)'}
+                enabled={editable}
+                onChange={(event) => update('ports', event.value)}
+              />
+            </Row>
+            <Text
+              label={
+                'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
+              }
+              color={'text-dim'}
+              wrap={true}
             />
-            <Entry
-              value={draft.workingDirectory}
-              placeholder={'Working directory (optional)'}
-              enabled={editable}
-              onChange={(event) => update('workingDirectory', event.value)}
+          </CardContent>
+          <CardActions>
+            {blocked ? <Spinner /> : null}
+            <Button
+              label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
+              enabled={
+                !blocked &&
+                (created !== null ||
+                  (draft.image.trim().length > 0 &&
+                    draft.name.trim().length > 0 &&
+                    !configurationError))
+              }
+              onInvoke={createAndStart}
             />
-          </Row>
-          <Text
-            label={
-              'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.'
-            }
-            color={'text-dim'}
-            wrap={true}
-          />
-          <Heading label={'Resources and connectivity'} scale={'body'} />
-          <Row gap={1} wrap={true}>
-            <Entry
-              value={draft.memoryMb}
-              placeholder={'Memory limit MiB (optional)'}
-              enabled={editable}
-              onChange={(event) => update('memoryMb', event.value)}
-            />
-            <Entry
-              value={draft.cpus}
-              placeholder={'CPU limit (optional)'}
-              enabled={editable}
-              onChange={(event) => update('cpus', event.value)}
-            />
-            <Entry
-              value={draft.pidsLimit}
-              placeholder={'PID limit (optional)'}
-              enabled={editable}
-              onChange={(event) => update('pidsLimit', event.value)}
-            />
-            <Entry
-              value={draft.network}
-              placeholder={'Initial network (optional)'}
-              enabled={editable}
-              onChange={(event) => update('network', event.value)}
-            />
-            <Entry
-              value={draft.mounts}
-              placeholder={'Named volume mounts JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('mounts', event.value)}
-            />
-            <Entry
-              value={draft.ports}
-              placeholder={'Published ports JSON (optional)'}
-              enabled={editable}
-              onChange={(event) => update('ports', event.value)}
-            />
-          </Row>
-          <Text
-            label={
-              'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
-            }
-            color={'text-dim'}
-            wrap={true}
-          />
-        </CardContent>
-        <CardActions>
-          {blocked ? <Spinner /> : null}
-          <Button
-            label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
-            enabled={
-              !blocked &&
-              (created !== null ||
-                (draft.image.trim().length > 0 &&
-                  draft.name.trim().length > 0 &&
-                  !configurationError))
-            }
-            onInvoke={createAndStart}
-          />
-        </CardActions>
-        {configurationError ? (
-          <Text label={configurationError} color={'danger'} wrap={true} />
-        ) : null}
-        {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
-        {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
-      </Card>
-    </Expander>
+          </CardActions>
+          {configurationError ? (
+            <Text label={configurationError} color={'danger'} wrap={true} />
+          ) : null}
+          {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
+          {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
+        </Card>
+      </Expander>
+    </Column>
   );
 }

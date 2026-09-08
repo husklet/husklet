@@ -173,7 +173,11 @@ export function Top({
         }}
       />
     ) : section === 'processes' ? (
-      <Processes api={api} resource={containers} />
+      <Processes
+        api={api}
+        resource={containers}
+        onOpenContainers={() => setSection('containers')}
+      />
     ) : section === 'executions' ? (
       <Executions
         api={api}
@@ -181,6 +185,7 @@ export function Top({
         executionDetails={executionDetails}
         truncated={executionsTruncated}
         requestedExecution={requestedExecution}
+        onOpenContainers={() => setSection('containers')}
       />
     ) : section === 'images' ? (
       <Images api={api} resource={images} imageDetails={imageDetails} />

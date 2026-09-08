@@ -56,6 +56,7 @@ export interface ExecutionsProps {
   executionDetails?: ExecutionDetailsSource;
   truncated?: boolean;
   requestedExecution?: string;
+  onOpenContainers?: () => void;
 }
 
 export function Executions({
@@ -64,6 +65,7 @@ export function Executions({
   executionDetails,
   truncated = false,
   requestedExecution = '',
+  onOpenContainers,
 }: ExecutionsProps) {
   const localDetails = React.useMemo(() => new ExecutionDetailsSource(), []);
   const detailsSource = executionDetails ?? localDetails;
@@ -221,8 +223,11 @@ export function Executions({
         ? 'empty'
         : 'ready';
   return (
-    <Page title="Executions" subtitle="Bounded exec-session catalogue, status and captured output.">
-      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
+    <Page
+      title="Executions"
+      subtitle="Durable command records created inside containers, with status and captured output."
+      action={<Toolbar loading={resource.loading} onRefresh={resource.reload} />}
+    >
       {notice ? <Text label={notice.label} color={notice.tone} wrap /> : null}
       <ResourceState
         state={state}
@@ -301,6 +306,11 @@ export function Executions({
           />
         ) : null}
       </ResourceState>
+      {state === 'empty' && onOpenContainers ? (
+        <Row width="fill" justify="center">
+          <Button label="Open containers" onInvoke={onOpenContainers} />
+        </Row>
+      ) : null}
     </Page>
   );
 }
@@ -387,16 +397,21 @@ function ExecutionDetail({
 function Page({
   title,
   subtitle,
+  action,
   children,
 }: {
   title: string;
   subtitle: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Scroll grow height="fill">
       <Column pad={4} gap={2}>
-        <Heading label={title} scale="title" />
+        <Row gap={2} align="center" justify="start" wrap>
+          <Heading label={title} scale="title" />
+          {action}
+        </Row>
         <Text label={subtitle} color="text-dim" wrap />
         {children}
       </Column>

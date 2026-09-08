@@ -1270,8 +1270,28 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
-    if (section === 'Containers') assert.ok(labelled(stage, 'Create first container'));
+    if (section === 'Containers') {
+      assert.ok(labelled(stage, 'Create first container'));
+      invoke(stage, 'Create first container');
+      assert.ok(labelled(stage, 'Container setup'), 'the primary action reveals container setup');
+    }
   }
+  invoke(stage, 'Processes');
+  await settled();
+  assert.ok(labelled(stage, 'Open containers'));
+  invoke(stage, 'Open containers');
+  assert.ok(
+    labelled(stage, 'Create and manage containers; inspect lifecycle, logs, and execution.'),
+    'process empty state routes locally to Containers',
+  );
+  invoke(stage, 'Executions');
+  await settled();
+  assert.ok(labelled(stage, 'Open containers'));
+  invoke(stage, 'Open containers');
+  assert.ok(
+    labelled(stage, 'Create and manage containers; inspect lifecycle, logs, and execution.'),
+    'execution empty state routes locally to Containers',
+  );
 });
 
 test('terminal management exposes exact pin state and acts through immutable tab identity', async () => {
@@ -2886,7 +2906,8 @@ test('container creation groups its compact form and explains raw JSON before an
       (patch) =>
         patch.SetProp?.id === createDisclosure.Create.id && patch.SetProp.prop === 'Expanded',
     ),
-    false,
+    true,
+    'empty container creation is controlled by the prominent action',
   );
   for (const label of [
     'Identity and image',

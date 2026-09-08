@@ -168,15 +168,19 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
         ? 'empty'
         : 'ready';
   return (
-    <Page title={'Containers'} subtitle={'Lifecycle, process inspection, logs, and execution.'}>
+    <Page
+      title={'Containers'}
+      subtitle={'Create and manage containers; inspect lifecycle, logs, and execution.'}
+      action={<Toolbar loading={resource.loading} onRefresh={resource.reload} />}
+    >
       <ContainerCreate
         api={api}
         blocked={busy !== ''}
         label={state === 'empty' ? 'Create first container' : undefined}
+        prominent={state === 'empty'}
         onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
         reload={resource.reload}
       />
-      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
       {notice ? <Text label={notice.label} color={notice.tone} wrap /> : null}
       <ResourceState
         state={state}
@@ -278,16 +282,21 @@ function containerActions(
 function Page({
   title: label,
   subtitle,
+  action,
   children,
 }: {
   title: string;
   subtitle: string;
+  action?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
     <Scroll grow={true} height={'fill'}>
       <Column pad={4} gap={2}>
-        <Heading label={label} scale={'title'} />
+        <Row gap={2} align="center" justify="start" wrap>
+          <Heading label={label} scale={'title'} />
+          {action}
+        </Row>
         <Text label={subtitle} color={'text-dim'} wrap={true} />
         {children}
       </Column>
