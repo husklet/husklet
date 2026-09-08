@@ -508,10 +508,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   assert.ok(labelled(stage, 'Version 2.0.0'));
   assert.ok(labelled(stage, 'Technical details'));
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 5), [
     'Row',
     'CardContent',
     'Card',
+    'Row',
+    'Column',
   ]);
   assert.equal(
     ancestorProperty(stage, 'Component playground', 'Card', 'Justify'),

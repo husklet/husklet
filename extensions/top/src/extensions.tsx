@@ -716,60 +716,64 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     tone="neutral"
                   />
                 )}
-                {availableCatalogue.map((entry) => {
-                  const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
-                  return (
-                    <Card key={entry.id} grow={false} width="fill" variant="filled">
-                      <CardHeader
-                        label={entry.title}
-                        detail={`${entry.publisher} · Version ${entry.version}`}
-                        align="start"
-                        width="fill"
-                      />
-                      <CardContent gap={1}>
-                        <Text label={entry.description} color="text-dim" wrap />
-                        <Row gap={1} wrap>
-                          <Badge label={`Version ${entry.version}`} tone="neutral" />
-                          <Badge
-                            label={compatibility.label}
-                            tone={
-                              compatibility.compatible === false
-                                ? 'danger'
-                                : compatibility.compatible === true
-                                  ? 'positive'
-                                  : 'neutral'
-                            }
+                {availableCatalogue.length > 0 && (
+                  <Row gap={1} width="fill" wrap>
+                    {availableCatalogue.map((entry) => {
+                      const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
+                      return (
+                        <Card key={entry.id} grow={false} width="fill" variant="filled">
+                          <CardHeader
+                            label={entry.title}
+                            detail={`${entry.publisher} · Version ${entry.version}`}
+                            align="start"
+                            width="fill"
                           />
-                        </Row>
-                        <Row>
-                          <Button
-                            label={`Review ${entry.title} installation`}
-                            variant="filled"
-                            tone="accent"
-                            enabled={!busy && compatibility.compatible !== false}
-                            onInvoke={() => inspect(entry.reference)}
-                          />
-                        </Row>
-                        <Expander label="Technical details" expanded={false}>
-                          <Column gap={1}>
-                            <Text
-                              label={`Image · ${entry.reference}`}
-                              color="text-dim"
-                              tooltip={entry.reference}
-                              wrap
-                            />
-                            <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
-                            <Text
-                              label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
-                              color="text-dim"
-                              wrap
-                            />
-                          </Column>
-                        </Expander>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                          <CardContent gap={1}>
+                            <Text label={entry.description} color="text-dim" wrap />
+                            <Row gap={1} wrap>
+                              <Badge label={`Version ${entry.version}`} tone="neutral" />
+                              <Badge
+                                label={compatibility.label}
+                                tone={
+                                  compatibility.compatible === false
+                                    ? 'danger'
+                                    : compatibility.compatible === true
+                                      ? 'positive'
+                                      : 'neutral'
+                                }
+                              />
+                            </Row>
+                            <Row>
+                              <Button
+                                label={`Review ${entry.title} installation`}
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy && compatibility.compatible !== false}
+                                onInvoke={() => inspect(entry.reference)}
+                              />
+                            </Row>
+                            <Expander label="Technical details" expanded={false}>
+                              <Column gap={1}>
+                                <Text
+                                  label={`Image · ${entry.reference}`}
+                                  color="text-dim"
+                                  tooltip={entry.reference}
+                                  wrap
+                                />
+                                <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
+                                <Text
+                                  label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
+                                  color="text-dim"
+                                  wrap
+                                />
+                              </Column>
+                            </Expander>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </Row>
+                )}
                 {catalogue && !catalogue.complete && (
                   <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
                 )}
