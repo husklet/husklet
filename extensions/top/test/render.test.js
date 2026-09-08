@@ -176,15 +176,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   change(stage, 'registry/image:tag', 'alpine:3.21');
   await settled();
-  const unsaved = labelled(stage, 'Unsaved changes').SetProp.id;
+  assert.ok(labelled(stage, 'Unsaved changes'));
   assert.equal(isEnabled(stage, 'Save workspace'), true);
   invoke(stage, 'Discard changes');
   await settled();
   await settled();
-  assert.ok(
-    stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Remove?.id === unsaved),
-    'discard removes the visible unsaved-state indicator',
-  );
+  assert.ok(labelled(stage, 'No changes'), 'discard restores an explicit clean state');
   assert.ok(
     ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
     'the settings editor retains a readable width instead of stretching with the window',
@@ -1326,7 +1323,7 @@ test('terminal management exposes exact pin state and acts through immutable tab
     placeholderProperty(stage, 'New tab title', 'Width'),
     'tab creation stays compact instead of consuming the page height',
   );
-  assert.ok(labelled(stage, 'Unpinned'));
+  assert.ok(labelled(stage, '1 terminal pane'));
   assert.ok(labelled(stage, 'Pane 1 · Terminal'));
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify')?.Align, 'Start');

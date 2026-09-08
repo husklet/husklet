@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Badge,
   Button,
   Card,
   CardActions,
@@ -29,7 +28,6 @@ import { bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
 type TerminalCursor = { generation: number; revision: number };
-const TERMINAL_CARD_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
 
 export function Terminals({
   api,
@@ -420,8 +418,9 @@ export function Terminals({
     <Page
       title="Terminal tabs"
       subtitle="View pane contents, send input, switch tabs, and keep important tabs pinned."
+      action={<Toolbar loading={resource.loading} onRefresh={resource.reload} />}
     >
-      <Row gap={1} wrap>
+      <Row gap={1} wrap justify="start">
         <Entry
           value={newTabTitle}
           placeholder="New tab title"
@@ -441,7 +440,6 @@ export function Terminals({
           }}
         />
       </Row>
-      <Toolbar loading={resource.loading} onRefresh={resource.reload} />
       <ErrorText error={error} />
       <ErrorText error={providerError} />
       {providersTruncated ? (
@@ -465,21 +463,20 @@ export function Terminals({
             key={tab.id}
             grow={false}
             justify="start"
-            width={TERMINAL_CARD_WIDTH}
+            width={{ chars: 72 }}
             variant={tab.pinned ? 'filled' : 'outline'}
           >
             <CardHeader label={tab.title} detail={`Tab ${tabIndex + 1}`} />
             <CardContent gap={1}>
-              <Row gap={1} align="center">
-                <Badge
-                  label={tab.pinned ? 'Pinned' : 'Unpinned'}
-                  tone={tab.pinned ? 'positive' : 'neutral'}
-                />
-                <Text
-                  label={`${tab.panes.length} pane${tab.panes.length === 1 ? '' : 's'}`}
-                  color="text-dim"
-                />
-              </Row>
+              <Text
+                label={
+                  tab.panes.length === 0
+                    ? `${tab.pinned ? 'Pinned · ' : ''}Workspace overview or extension tab · no terminal panes`
+                    : `${tab.pinned ? 'Pinned · ' : ''}${tab.panes.length} terminal pane${tab.panes.length === 1 ? '' : 's'}`
+                }
+                color="text-dim"
+                wrap
+              />
               {tab.panes.map((pane, paneIndex) => (
                 <Row key={pane.slot} gap={1} align="center">
                   <Text
@@ -720,7 +717,9 @@ export function Terminals({
             <CardActions gap={1}>
               {busy === tab.id ? <Spinner /> : null}
               <Button
-                label={tab.pinned ? 'Unpin tab' : 'Pin tab'}
+                label={
+                  tab.pinned ? 'Unpin tab' : tab.panes.length === 0 ? 'Pin overview tab' : 'Pin tab'
+                }
                 enabled={busy === ''}
                 onInvoke={() => {
                   void pin(tab);
@@ -857,16 +856,21 @@ function semanticTarget(root: SemanticNode, value: string): SemanticNode | null 
 function Page({
   title,
   subtitle,
+  action,
   children,
 }: {
   title: string;
   subtitle: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Scroll grow height="fill">
       <Column pad={4} gap={2}>
-        <Heading label={title} scale="title" />
+        <Row gap={2} align="center" justify="start" wrap>
+          <Heading label={title} scale="title" />
+          {action}
+        </Row>
         <Text label={subtitle} color="text-dim" wrap />
         {children}
       </Column>

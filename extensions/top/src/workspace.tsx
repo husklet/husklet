@@ -178,7 +178,10 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               width={CONTROL_WIDTH}
               wrap
             />
-            {dirty ? <Text label="Unsaved changes" color="warning" /> : null}
+            <Text
+              label={dirty ? 'Unsaved changes' : saved ? 'Saved' : 'No changes'}
+              color={dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
+            />
             <CardActions>
               <Button
                 label={saving ? 'Saving…' : 'Save workspace'}
@@ -190,6 +193,11 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             {invalid && <InlineMessage label={invalid} tone="danger" />}
             {error && <InlineMessage label={error} tone="danger" />}
             {saved && <InlineMessage label={saved} tone="positive" />}
+            <Text
+              label="Settings sections · Runtime · Terminal appearance · Environment variables · Filesystem mounts"
+              color="text-dim"
+              wrap
+            />
             <SettingsGroup
               name="runtime"
               label="Runtime"
