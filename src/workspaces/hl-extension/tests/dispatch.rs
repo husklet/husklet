@@ -309,6 +309,10 @@ impl ContainerControl for Host {
         self.ledger.note("executions.kill");
         Ok(())
     }
+    fn execution_cancel(&self, _id: &str, _signal: &str, _timeout_ms: u32) -> Result<(), HostError> {
+        self.ledger.note("executions.cancel");
+        Ok(())
+    }
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
         self.ledger.note("executions.remove");
         Ok(())
@@ -1306,6 +1310,14 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::ExecutionKill {
                 id: "e".repeat(32),
                 signal: "SIGTERM".into(),
+            },
+            Capability::ContainerControl,
+        ),
+        (
+            Request::ExecutionCancel {
+                id: "e".repeat(32),
+                signal: "SIGTERM".into(),
+                timeout_ms: 500,
             },
             Capability::ContainerControl,
         ),
@@ -2947,6 +2959,24 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
         )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
+}
+
+#[test]
+fn execution_cancel_rejects_unbounded_timeout_before_calling_host() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerControl], &["c1"]);
+    assert!(matches!(
+        session.dispatch(
+            &Request::ExecutionCancel {
+                id: "e".repeat(32),
+                signal: "SIGTERM".into(),
+                timeout_ms: 30_001,
+            },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    assert!(!host.ledger.reached().contains(&"executions.cancel"));
 }
 
 #[test]
