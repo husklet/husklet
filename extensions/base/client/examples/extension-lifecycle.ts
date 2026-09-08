@@ -33,12 +33,17 @@ const candidate = await ready(host, acquisition.job);
 const installed = await host.extensions.installAndWait(
   candidate.job,
   candidate.revision,
-  candidate.candidate!.requested,
-  { selectors: [{ name: 'postgres' }], create: false },
-  undefined,
-  undefined,
-  undefined,
-  { read: [{ subtree: 'data' }], write: [], create: [], delete: [], rename: [] },
+  {
+    capabilities: candidate.candidate!.requested,
+    containers: { selectors: [{ name: 'postgres' }], create: false },
+    filesystem: {
+      read: [{ subtree: 'data' }],
+      write: [],
+      create: [],
+      delete: [],
+      rename: [],
+    },
+  },
 );
 if (!installed.changed) throw new Error('install was not observed');
 const identity = installed.extension;

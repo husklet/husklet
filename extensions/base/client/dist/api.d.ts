@@ -118,6 +118,16 @@ export interface WorkspaceEnvironmentGrant {
         all: true;
     })[];
 }
+/** The complete authority approved for one reviewed extension image. */
+export interface ExtensionReviewedGrants {
+    capabilities: ExtensionCapability[];
+    containers?: ContainerGrant;
+    images?: ImageGrant;
+    networks?: NetworkGrant;
+    volumes?: VolumeGrant;
+    filesystem?: FilesystemGrant;
+    workspaceEnvironment?: WorkspaceEnvironmentGrant;
+}
 export interface ExtensionCandidate {
     name: string;
     version: string;
@@ -667,6 +677,7 @@ export declare class TerminalOperationError extends Error {
 }
 export interface ConnectOptions {
     path?: string;
+    /** Bounds pending calls, heartbeats, and queued event callback deliveries. */
     pendingLimit?: number;
     timeout?: number;
     connectTimeout?: number;
@@ -814,9 +825,8 @@ export interface WorkspaceApi {
         cancelAcquisition(job: string, revision: number): Promise<void>;
         install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-        installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
+        installAndWait(job: string, revision: number, review: ExtensionReviewedGrants, options?: {
             timeoutMs?: number;
-            workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{
             changed: true;
             extension: ExtensionSummary;
@@ -828,9 +838,8 @@ export interface WorkspaceApi {
         }>;
         update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-        updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
+        updateAndWait(job: string, revision: number, review: ExtensionReviewedGrants, options?: {
             timeoutMs?: number;
-            workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{
             changed: true;
             extension: ExtensionSummary;

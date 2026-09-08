@@ -975,8 +975,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         let bytes = 0;
         let stdout = '';
         let stderr = '';
-        const stdoutDecoder = new TextDecoder();
-        const stderrDecoder = new TextDecoder();
+        // Query/result protocols are textual. Replacing malformed bytes with U+FFFD could silently
+        // change a database value or delimiter, so fail and cancel the owned execution instead.
+        const stdoutDecoder = new TextDecoder('utf-8', { fatal: true });
+        const stderrDecoder = new TextDecoder('utf-8', { fatal: true });
         const result = await api.containers.execStreaming(id, generation, options, (page) => {
           for (const entry of page.entries) {
             bytes += entry.bytes.length;
@@ -3249,14 +3251,18 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     operation,
     job,
     revision,
-    granted,
-    containers = { selectors: [], create: false },
-    images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
-    networks = { selectors: [], create: false },
-    volumes = { selectors: [], create: false },
-    filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
-    { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
+    review,
+    { timeoutMs = 30_000 } = {},
   ): ReturnType<WorkspaceApi['extensions']['installAndWait']> => {
+    const {
+      capabilities: granted,
+      containers = { selectors: [], create: false },
+      images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
+      networks = { selectors: [], create: false },
+      volumes = { selectors: [], create: false },
+      filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
+      workspaceEnvironment = { read: [], write: [] },
+    } = review;
     if (!Number.isSafeInteger(revision) || revision < 0) {
       throw new TypeError(
         `extension ${operation} wait requires a nonnegative safe integer revision`,
@@ -3330,52 +3336,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       await stop();
     }
   };
-  api.extensions.installAndWait = (
-    job,
-    revision,
-    granted,
-    containers,
-    images,
-    networks,
-    volumes,
-    filesystem,
-    options,
-  ) =>
-    commitAcquisitionAndWait(
-      'install',
-      job,
-      revision,
-      granted,
-      containers,
-      images,
-      networks,
-      volumes,
-      filesystem,
-      options,
-    );
-  api.extensions.updateAndWait = (
-    job,
-    revision,
-    granted,
-    containers,
-    images,
-    networks,
-    volumes,
-    filesystem,
-    options,
-  ) =>
-    commitAcquisitionAndWait(
-      'update',
-      job,
-      revision,
-      granted,
-      containers,
-      images,
-      networks,
-      volumes,
-      filesystem,
-      options,
-    );
+  api.extensions.installAndWait = (job, revision, review, options) =>
+    commitAcquisitionAndWait('install', job, revision, review, options);
+  api.extensions.updateAndWait = (job, revision, review, options) =>
+    commitAcquisitionAndWait('update', job, revision, review, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (
       typeof job !== 'string' ||

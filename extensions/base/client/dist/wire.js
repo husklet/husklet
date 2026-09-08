@@ -178,6 +178,7 @@ export class Reader {
         if (this.#length !== 0) {
             const held = this.#length;
             this.#length = 0;
+            this.#compact();
             throw new Error(`extension host closed with an unfinished frame (${held} bytes buffered)`);
         }
     }

@@ -53,7 +53,7 @@ const { useCallback, useEffect, useRef, useState } = React;
 export const SIDEBAR_WIDTH_KEY = 'sidebar.width';
 export const SIDEBAR_WIDTH_MIN = 160;
 export const SIDEBAR_WIDTH_MAX = 320;
-export const SIDEBAR_WIDTH_DEFAULT = 196;
+export const SIDEBAR_WIDTH_DEFAULT = 176;
 export const SIDEBAR_SAVE_DELAY_MS = 250;
 
 export function boundedSidebarWidth(value: unknown): number | null {

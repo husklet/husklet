@@ -184,6 +184,14 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   const splitter = stage.frames
     .flatMap((frame) => frame.patches)
     .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.deepEqual(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
+      .at(-1)?.SetProp.value,
+    { Number: 176 },
+    'the default leaves daily-driver content room at the 520px launch width',
+  );
   assert.ok(
     stage.surface.dispatch({
       trigger: 'Change',
@@ -1135,27 +1143,28 @@ for (const updating of [false, true]) {
     await settled();
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].slice(0, 3), ['scoped-review', 4, []]);
-    assert.deepEqual(calls[0][3], {
+    assert.deepEqual(calls[0].slice(0, 2), ['scoped-review', 4]);
+    assert.deepEqual(calls[0][2].capabilities, []);
+    assert.deepEqual(calls[0][2].containers, {
       selectors: [{ name: 'database' }],
       create: true,
     });
-    assert.deepEqual(calls[0][4], {
+    assert.deepEqual(calls[0][2].images, {
       read: [],
       use: [],
       pull: [],
       remove: [],
       prune_all_unused: false,
     });
-    assert.deepEqual(calls[0][5], {
+    assert.deepEqual(calls[0][2].networks, {
       selectors: [],
       create: false,
     });
-    assert.deepEqual(calls[0][6], {
+    assert.deepEqual(calls[0][2].volumes, {
       selectors: [],
       create: false,
     });
-    assert.deepEqual(calls[0][7], {
+    assert.deepEqual(calls[0][2].filesystem, {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -1221,8 +1230,11 @@ test('extension review grants one exact network without workspace-wide network a
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls[0][5], { selectors: [{ name: 'database' }], create: false });
-  assert.deepEqual(calls[0][6], { selectors: [{ name: 'data' }], create: false });
+  assert.deepEqual(calls[0][2].networks, {
+    selectors: [{ name: 'database' }],
+    create: false,
+  });
+  assert.deepEqual(calls[0][2].volumes, { selectors: [{ name: 'data' }], create: false });
 });
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
@@ -1322,12 +1334,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls.at(-1), [
-    'install',
-    'candidate',
-    7,
-    ['containers:read', 'terminals:output'],
-  ]);
+  assert.deepEqual(calls.at(-1).slice(0, 3), ['install', 'candidate', 7]);
+  assert.deepEqual(calls.at(-1)[3].capabilities, ['containers:read', 'terminals:output']);
   assert.ok(labelled(stage, 'assistant installed and verified.'));
 });
 
@@ -3258,8 +3266,17 @@ test('volume and network panels render bounded real inventories and controls', (
       .map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove'])
     assert.ok(labels(volumeFrame).includes(label), label);
+  const volumeStage = stageFromFrame(volumeFrame);
+  assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
+  assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  const networkInventoryStage = stageFromFrame(networkFrame);
+  assert.equal(
+    taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Align')?.Align,
+    'Start',
+  );
+  assert.ok(taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Width'));
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
     'destructive endpoint action waits for a target',
@@ -3304,6 +3321,8 @@ test('volume and network panels render bounded real inventories and controls', (
 
 test('network inspection exposes loading, retry, empty and domain-specific details', async () => {
   let attempts = 0;
+  const networkId = 'b'.repeat(32);
+  const containerId = 'a'.repeat(64);
   const controlled = {
     networks: {
       ...api.networks,
@@ -3311,18 +3330,18 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
         return {
-          id: 'n1',
+          id: networkId,
           name: 'private',
           driver: 'bridge',
           scope: 'local',
           kind: 'custom',
-          endpoints: { containers: ['a'.repeat(64)], truncated: false },
+          endpoints: { containers: [containerId], truncated: false },
         };
       },
     },
   };
   const resource = {
-    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    data: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -3341,7 +3360,19 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
   assert.ok(labelled(stage, 'Driver · bridge'));
   assert.ok(labelled(stage, 'Scope · local'));
   assert.ok(labelled(stage, 'Connected containers · 1'));
-  assert.ok(labelled(stage, `Container · ${'a'.repeat(64)}`));
+  assert.ok(labelled(stage, `Immutable network ID · ${'b'.repeat(12)}`));
+  assert.deepEqual(property(stage, `Immutable network ID · ${'b'.repeat(12)}`, 'Tooltip'), {
+    Text: networkId,
+  });
+  assert.ok(labelled(stage, `Container · ${'a'.repeat(12)}`));
+  assert.deepEqual(property(stage, `Container · ${'a'.repeat(12)}`, 'Tooltip'), {
+    Text: containerId,
+  });
+  assert.equal(
+    labelled(stage, `Container · ${containerId}`),
+    undefined,
+    'exact endpoint identity stays inspectable without becoming a narrow text wall',
+  );
   assert.equal(labelled(stage, '$.id'), undefined, 'host source paths never enter the product UI');
 
   const empty = host();

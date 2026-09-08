@@ -472,13 +472,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       const result = await api.extensions[updating ? 'updateAndWait' : 'installAndWait'](
         acquisition.job,
         acquisition.revision,
-        granted,
-        grantedContainers,
-        grantedImages,
-        grantedNetworks,
-        grantedVolumes,
-        grantedFilesystem,
-        { workspaceEnvironment: grantedWorkspaceEnvironment },
+        {
+          capabilities: granted,
+          containers: grantedContainers,
+          images: grantedImages,
+          networks: grantedNetworks,
+          volumes: grantedVolumes,
+          filesystem: grantedFilesystem,
+          workspaceEnvironment: grantedWorkspaceEnvironment,
+        },
       );
       setAcquisition(null);
       setReference('');
@@ -680,6 +682,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       <CardHeader
                         label={entry.title}
                         detail={`${entry.publisher} · Version ${entry.version}`}
+                        align="start"
+                        width="fill"
                       />
                       <CardContent gap={1}>
                         <Text label={entry.description} color="text-dim" wrap />
@@ -782,6 +786,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       ? 'Update extension'
                       : 'Install extension'
                   }
+                  align="start"
+                  width="fill"
                 />
                 {acquisition?.candidate && (
                   <CardContent gap={1}>
@@ -1222,6 +1228,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         extension.version ? `Version ${extension.version}` : 'Version unavailable'
                       }
                       tooltip={`Installed image ${extension.image_digest}`}
+                      align="start"
+                      width="fill"
                     />
                     <CardContent gap={1}>
                       <Row gap={1} wrap>

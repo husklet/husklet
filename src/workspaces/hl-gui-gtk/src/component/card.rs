@@ -101,6 +101,7 @@ pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bo
         // A frame's header is a real slot: it is drawn in the border rather
         // than above the content, which is what makes a card read as one
         // surface.
+        frame.set_label_align(0.0);
         frame.set_label_widget(Some(child));
         return true;
     }

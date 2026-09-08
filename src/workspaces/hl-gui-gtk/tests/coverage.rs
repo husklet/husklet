@@ -186,12 +186,10 @@ fn query_plan_is_nested_selectable_and_hot() {
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-hot"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::QueryPlanMetric).is_some());
     s.producer.set(n, Prop::Value, PropValue::text("id=j state=normal"));
     s.flush().unwrap();
@@ -221,12 +219,10 @@ fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     s.flush().unwrap();
     let node = s.tagged(Tag::DependencyNode).unwrap();
     assert!(node.has_css_class("dependency-conflict"));
-    assert!(
-        subtree(&node)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&node)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     assert!(s.tagged(Tag::DependencyEdge).is_some())
 }
 
@@ -257,12 +253,10 @@ fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
     let phase = session.tagged(Tag::NetworkPhase).unwrap();
     assert!(request.has_css_class("network-failure"));
     assert!(phase.has_css_class("network-phase"));
-    assert!(
-        subtree(&request)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .all(|l| l.is_selectable())
-    );
+    assert!(subtree(&request)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .all(|l| l.is_selectable()));
     let bar = subtree(&phase)
         .into_iter()
         .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
@@ -1346,16 +1340,12 @@ fn stack_frames_keep_selectable_function_and_location() {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Label>().ok())
         .collect::<Vec<_>>();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
-    );
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "host::dispatch" && label.is_selectable()));
+    assert!(labels
+        .iter()
+        .any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {
@@ -1401,13 +1391,24 @@ fn placed(parent: Tag, parts: &[Tag]) -> Session {
 fn a_card_header_lands_in_the_cards_header() {
     let session = placed(Tag::Card, &[Tag::CardContent, Tag::CardHeader]);
     let card = session.tagged(Tag::Card).expect("a card renders");
-    let header = card
-        .downcast_ref::<gtk::Frame>()
-        .and_then(gtk::Frame::label_widget)
-        .expect("a card keeps a header slot");
+    let frame = card.downcast_ref::<gtk::Frame>().expect("a card uses a frame");
+    let header = frame.label_widget().expect("a card keeps a header slot");
     assert!(
         header.has_css_class("hl-cardheader"),
         "the card header was appended as content instead of filling the header slot"
+    );
+    assert_eq!(
+        frame.label_align(),
+        0.0,
+        "resource titles should follow the content's leading edge, not float in the card centre"
+    );
+    let emblem = offspring(&header)
+        .into_iter()
+        .find(|child| child.has_css_class("hl-emblem"))
+        .expect("a card header keeps an optional icon slot");
+    assert!(
+        !emblem.is_visible(),
+        "a missing icon must not reserve an empty indent before the title"
     );
 }
 

@@ -138,7 +138,7 @@ export function Processes({
             .join(' · ');
           return (
             <Card key={`${process.container}:${pid}:${index}`} variant="outline">
-              <CardHeader label={command} detail={process.container} />
+              <CardHeader label={command} detail={process.container} align="start" width="fill" />
               <CardContent>
                 <Row gap={2}>
                   <Badge label={`PID ${pid}`} />
