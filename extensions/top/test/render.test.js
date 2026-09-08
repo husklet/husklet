@@ -22,7 +22,6 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from '../dist/model.js';
 import { host } from './host.js';
@@ -2965,7 +2964,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(destructive(networkFrame, 'Remove'), false);
 });
 
-test('network inspection exposes loading, retry, empty and bounded typed details', async () => {
+test('network inspection exposes loading, retry, empty and domain-specific details', async () => {
   let attempts = 0;
   const controlled = {
     networks: {
@@ -2973,7 +2972,14 @@ test('network inspection exposes loading, retry, empty and bounded typed details
       inspect: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
-        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' };
+        return {
+          id: 'n1',
+          name: 'private',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: ['a'.repeat(64)], truncated: false },
+        };
       },
     },
   };
@@ -2983,9 +2989,8 @@ test('network inspection exposes loading, retry, empty and bounded typed details
     error: null,
     reload: async () => {},
   };
-  const details = new NetworkDetailsSource();
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource, networkDetails: details }));
+  stage.render(h(Networks, { api: controlled, resource }));
   invoke(stage, 'Inspect');
   await settled();
   await settled();
@@ -2994,21 +2999,18 @@ test('network inspection exposes loading, retry, empty and bounded typed details
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.id'),
-    'network inspection uses the native bounded object projection',
-  );
-  assert.equal(
-    details.answer({ source: 204, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
-    4,
-  );
+  assert.ok(labelled(stage, 'Network details'));
+  assert.ok(labelled(stage, 'Driver · bridge'));
+  assert.ok(labelled(stage, 'Scope · local'));
+  assert.ok(labelled(stage, 'Connected containers · 1'));
+  assert.ok(labelled(stage, `Container · ${'a'.repeat(64)}`));
+  assert.equal(labelled(stage, '$.id'), undefined, 'host source paths never enter the product UI');
 
   const empty = host();
   empty.render(
     h(Networks, {
       api: { networks: { ...api.networks, inspect: async () => ({}) } },
       resource,
-      networkDetails: new NetworkDetailsSource(),
     }),
   );
   invoke(empty, 'Inspect');

@@ -5,7 +5,6 @@ import type {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from './model.js';
 import { SECTIONS } from './overview.js';
@@ -15,7 +14,6 @@ let surface: import('@husklet/react').RenderHandle;
 let imageDetails: ImageDetailsSource | undefined;
 let containerDetails: ContainerDetailsSource | undefined;
 let executionDetails: ExecutionDetailsSource | undefined;
-let networkDetails: NetworkDetailsSource | undefined;
 let volumeDetails: VolumeDetailsSource | undefined;
 const send = (mutation: InterfaceSourceMutation) => surface.source(mutation);
 const session = await connect({
@@ -24,7 +22,6 @@ const session = await connect({
       imageDetails?.answer(request) ??
       containerDetails?.answer(request) ??
       executionDetails?.answer(request) ??
-      networkDetails?.answer(request) ??
       volumeDetails?.answer(request);
     if (window) session.answer(channel, window);
   },
@@ -50,7 +47,6 @@ await surface.ready;
 imageDetails = new models.ImageDetailsSource(send);
 containerDetails = new models.ContainerDetailsSource(send);
 executionDetails = new models.ExecutionDetailsSource(send);
-networkDetails = new models.NetworkDetailsSource(send);
 volumeDetails = new models.VolumeDetailsSource(send);
 surface.update(
   <Top
@@ -59,7 +55,6 @@ surface.update(
     containerDetails={containerDetails}
     executionDetails={executionDetails}
     imageDetails={imageDetails}
-    networkDetails={networkDetails}
     volumeDetails={volumeDetails}
     initialSection={
       SECTIONS.includes(process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])

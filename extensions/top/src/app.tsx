@@ -16,7 +16,6 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
@@ -58,7 +57,6 @@ type TopProps = {
   containerDetails?: ContainerDetailsSource;
   executionDetails?: ExecutionDetailsSource;
   imageDetails?: ImageDetailsSource;
-  networkDetails?: NetworkDetailsSource;
   volumeDetails?: VolumeDetailsSource;
   initial?: Partial<{
     containers: ContainerSummary[];
@@ -77,7 +75,6 @@ export function Top({
   containerDetails,
   executionDetails,
   imageDetails,
-  networkDetails,
   volumeDetails,
   initial = {},
   initialSection = 'overview',
@@ -202,7 +199,7 @@ export function Top({
     ) : section === 'volumes' ? (
       <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
     ) : section === 'networks' ? (
-      <Networks api={api} resource={networks} networkDetails={networkDetails} />
+      <Networks api={api} resource={networks} />
     ) : (
       <Terminals api={api} resource={terminals} />
     );
