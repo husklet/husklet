@@ -1005,6 +1005,36 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('filesystem change watcher advances opaque pages and exposes truncation', async () => {
+  const calls = [];
+  const pages = [
+    { changes: [{ revision: 11, kind: 'modify', path: 'src/late.ts', entry: { path: 'src/late.ts', directory: false, size: 4, identity: 'v2' } }], next: 11, current: 12, more: true, truncated: false },
+    { changes: [{ revision: 12, kind: 'remove', path: 'src/gone.ts', entry: null }], next: 12, current: 12, more: false, truncated: false },
+  ];
+  const api = workspace({
+    granted: ['filesystem:read'],
+    async call(name, payload) {
+      calls.push([name, payload]);
+      return { reply: 'file_changes', with: pages.shift() ?? { changes: [], next: 12, current: 12, more: false, truncated: false } };
+    },
+    onEvent() { return () => {}; },
+  });
+  const seen = [];
+  const controller = new AbortController();
+  const delivered = new Promise((resolve) => {
+    void api.files.watchChanges((page) => {
+      seen.push(...page.changes.map((change) => change.path));
+      if (seen.length === 2) { controller.abort(); resolve(); }
+    }, { after: 10, pageSize: 1, pollMs: 1000, signal: controller.signal });
+  });
+  await delivered;
+  assert.deepEqual(seen, ['src/late.ts', 'src/gone.ts']);
+  assert.deepEqual(calls.slice(0, 2), [
+    ['filesystem_changes', { after: 10, limit: 1 }],
+    ['filesystem_changes', { after: 11, limit: 1 }],
+  ]);
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const seen = [];

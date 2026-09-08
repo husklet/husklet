@@ -2058,6 +2058,50 @@ mod tests {
         (theirs, served)
     }
 
+    fn filesystem_journal_host(root: std::path::PathBuf) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host {
+                ledger: Arc::new(Ledger::default()),
+            };
+            let files = WorkspaceDirectory::new(root).expect("workspace directory");
+            let authority = Authority::new(
+                ExtensionName::new("indexer").expect("name"),
+                Grant::new([Capability::FilesystemRead]),
+                vec![
+                    RelativePath::new("docs").unwrap(),
+                    RelativePath::new("README.md").unwrap(),
+                ],
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
+                hl_extension::FilesystemGrant {
+                    read: vec![
+                        hl_extension::FilesystemSelector::Subtree {
+                            subtree: RelativePath::new("docs").unwrap(),
+                        },
+                        hl_extension::FilesystemSelector::Exact {
+                            exact: RelativePath::new("README.md").unwrap(),
+                        },
+                    ],
+                    ..hl_extension::FilesystemGrant::default()
+                },
+                hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            let mut ports = services(&host);
+            ports.files = &files;
+            conversation.greet()?;
+            conversation.serve(&ports)
+        });
+        (theirs, served)
+    }
+
     fn workspace_read_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let served = std::thread::spawn(move || {
@@ -2509,6 +2553,111 @@ mod tests {
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn terminal_or_container_file_writes_cross_scoped_cursor_pages_over_a_real_socket() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("private")).unwrap();
+        std::fs::write(root.join("docs/old.md"), b"old").unwrap();
+        for index in 0..300 {
+            std::fs::write(root.join(format!("docs/{index:03}.md")), b"stable").unwrap();
+        }
+        std::fs::write(root.join("README.md"), b"readme").unwrap();
+        std::fs::write(root.join("private/secret"), b"secret").unwrap();
+        let (theirs, served) = filesystem_journal_host(root.clone());
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let baseline = ask(&mut wire, &Request::FilesystemChanges { after: 0, limit: 2 });
+        assert!(
+            matches!(codec::read_reply(&baseline), Ok(Reply::FileChanges(page)) if page.changes.is_empty() && !page.truncated)
+        );
+        let foreign_cursor = ask(&mut wire, &Request::FilesystemChanges { after: 999, limit: 2 });
+        let Reply::FileChanges(foreign_cursor) = codec::read_reply(&foreign_cursor).unwrap() else {
+            panic!("page")
+        };
+        assert!(foreign_cursor.truncated, "{foreign_cursor:?}");
+        assert_eq!(foreign_cursor.next, foreign_cursor.current);
+
+        std::fs::write(root.join("docs/transient.md"), b"short lived").unwrap();
+        std::fs::remove_file(root.join("docs/transient.md")).unwrap();
+        let mut transient_seen = false;
+        let mut transient_cursor = 0;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(10));
+            let framed = ask(
+                &mut wire,
+                &Request::FilesystemChanges {
+                    after: transient_cursor,
+                    limit: 256,
+                },
+            );
+            let Reply::FileChanges(page) = codec::read_reply(&framed).unwrap() else {
+                panic!("page")
+            };
+            transient_seen |= page.changes.iter().any(|change| {
+                change.path.as_str() == "docs/transient.md" && change.kind == hl_extension::FileChangeKind::Invalidate
+            });
+            transient_cursor = page.next;
+            if transient_seen {
+                break;
+            }
+        }
+        assert!(transient_seen, "a transient create-delete must leave an invalidation");
+
+        std::fs::write(root.join("docs/old.md"), b"changed").unwrap();
+        std::fs::write(root.join("docs/new.md"), b"new").unwrap();
+        std::fs::write(root.join("docs/299.md"), b"changed beyond the old inventory prefix").unwrap();
+        std::fs::remove_file(root.join("README.md")).unwrap();
+        std::fs::write(root.join("private/secret"), b"not visible").unwrap();
+
+        let first = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                after: transient_cursor,
+                limit: 2,
+            },
+        );
+        let Reply::FileChanges(first) = codec::read_reply(&first).unwrap() else {
+            panic!("page")
+        };
+        assert_eq!(first.changes.len(), 2);
+        assert!(first.more);
+        let mut paths = first
+            .changes
+            .iter()
+            .map(|change| change.path.to_string())
+            .collect::<Vec<_>>();
+        let mut cursor = first.next;
+        let current = loop {
+            let framed = ask(
+                &mut wire,
+                &Request::FilesystemChanges {
+                    after: cursor,
+                    limit: 2,
+                },
+            );
+            let Reply::FileChanges(page) = codec::read_reply(&framed).unwrap() else {
+                panic!("page")
+            };
+            paths.extend(page.changes.iter().map(|change| change.path.to_string()));
+            cursor = page.next;
+            if !page.more {
+                break page.current;
+            }
+        };
+        assert_eq!(
+            paths,
+            vec!["README.md", "docs", "docs/299.md", "docs/new.md", "docs/old.md"]
+        );
+        assert_eq!(cursor, current);
+        assert!(!paths.iter().any(|path| path.starts_with("private/")));
+
+        drop(wire);
+        assert_eq!(served.join().unwrap(), Ok(()));
     }
 
     #[test]

@@ -50,6 +50,7 @@ tar = { workspace = true, optional = true }
 gtk = { version = "0.9", package = "gtk4", features = ["v4_10"], optional = true }
 vte4 = { version = "0.8", features = ["v0_72"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+notify = { version = "8", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation = { version = "0.2", features = ["NSThread"], optional = true }
@@ -85,6 +86,7 @@ runtime = [
     "dep:serde_json",
     "dep:sha2",
     "dep:tar",
+    "dep:notify",
 ]
 gui = [
     "runtime",

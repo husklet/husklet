@@ -1307,6 +1307,78 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     },
     files: {
       inventory: async () => expect(await session.call('filesystem_inventory'), 'file_inventory'),
+      changes: async (after = 0, limit = 256) => {
+        if (!Number.isSafeInteger(after) || after < 0)
+          throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+        exactFilesystemPageSize(limit);
+        const page = expect(
+          await session.call('filesystem_changes', { after, limit }),
+          'file_changes',
+        );
+        if (
+          page.changes.length > limit ||
+          (!page.truncated && page.next < after) ||
+          page.current < page.next ||
+          page.changes.some(
+            (change, index) =>
+              change.revision <= after ||
+              change.revision > page.next ||
+              (index > 0 && change.revision <= page.changes[index - 1].revision) ||
+              change.path !== (change.entry?.path ?? change.path),
+          ) ||
+          (page.changes.length > 0 && page.next < page.changes.at(-1).revision) ||
+          (page.truncated && (page.changes.length > 0 || page.next !== page.current)) ||
+          (page.more && page.next >= page.current)
+        )
+          throw new TypeError('host returned an inconsistent filesystem change page');
+        return page;
+      },
+      watchChanges: async (
+        listener,
+        {
+          after = 0,
+          pageSize = 256,
+          pollMs = 250,
+          signal,
+        }: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal } = {},
+      ) => {
+        exactFilesystemPageSize(pageSize);
+        if (!Number.isSafeInteger(after) || after < 0)
+          throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(pollMs) || pollMs < 1)
+          throw new TypeError('filesystem change poll interval must be a positive integer');
+        let stopped = false;
+        let wake;
+        const aborted = () => signal?.aborted || stopped;
+        const running = (async () => {
+          while (!aborted()) {
+            const page = await api.files.changes(after, pageSize);
+            if (aborted()) break;
+            if (page.truncated || page.changes.length > 0) await listener(page);
+            after = page.next;
+            if (page.more) continue;
+            await new Promise<void>((resolve) => {
+              const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', finish);
+                resolve();
+              };
+              wake = finish;
+              const timer = setTimeout(finish, pollMs);
+              signal?.addEventListener('abort', finish, { once: true });
+              void Promise.resolve().then(() => {
+                if (aborted()) finish();
+              });
+            });
+            wake = undefined;
+          }
+        })();
+        return async () => {
+          stopped = true;
+          if (wake) wake();
+          await running;
+        };
+      },
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
       listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
         if ((after === null) !== (observed === null)) {
@@ -3425,6 +3497,8 @@ export const protocolCoverage = Object.freeze({
     ],
     files: [
       'inventory',
+      'changes',
+      'watchChanges',
       'list',
       'listPage',
       'walk',

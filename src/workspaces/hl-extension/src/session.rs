@@ -627,6 +627,7 @@ impl Session {
                     .map_err(Failure::from)
             }
             Request::FilesystemInventory
+            | Request::FilesystemChanges { .. }
             | Request::FilesystemList { .. }
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
@@ -1421,6 +1422,19 @@ impl Session {
             Request::FilesystemInventory => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::FileInventory(port.inventory(&self.filesystem.read)?))
+            }
+            Request::FilesystemChanges { after, limit } => {
+                if *limit == 0 || *limit > 256 {
+                    return Err(Failure::Failed {
+                        detail: "filesystem change page limit must be from 1 through 256".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::FileChanges(port.changes_since(
+                    &self.filesystem.read,
+                    *after,
+                    usize::from(*limit),
+                )?))
             }
             Request::FilesystemList { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;

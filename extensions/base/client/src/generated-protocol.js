@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:76a2b288d80c5c86
+// Protocol artifact fnv1a64:c18b6d3507624d07
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -360,6 +360,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "terminal_switch_occupant": "done",
   "terminal_switch_occupant_observed": "done",
   "filesystem_inventory": "file_inventory",
+  "filesystem_changes": "file_changes",
   "filesystem_list": "entries",
   "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
@@ -476,6 +477,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_switch_occupant": "terminals:process-control",
   "terminal_switch_occupant_observed": "terminals:process-control",
   "filesystem_inventory": "filesystem:read",
+  "filesystem_changes": "filesystem:read",
   "filesystem_list": "filesystem:read",
   "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
@@ -2244,6 +2246,135 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "WorkspaceEnvironmentGrant"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileChange": {
+    "fields": [
+      {
+        "name": "revision",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "kind",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "FileChangeKind"
+        }
+      },
+      {
+        "name": "path",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "RelativePath"
+        }
+      },
+      {
+        "name": "entry",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "ref",
+            "name": "Entry"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileChangeKind": {
+    "kind": "enum",
+    "serde": {
+      "rename_all": "snake_case"
+    },
+    "variants": [
+      {
+        "name": "create",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "modify",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "remove",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "invalidate",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
+  },
+  "FileChangePage": {
+    "fields": [
+      {
+        "name": "changes",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "FileChange"
+          }
+        }
+      },
+      {
+        "name": "next",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "current",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "more",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
         }
       }
     ],
@@ -8116,6 +8247,16 @@ const roots = {
         }
       },
       {
+        "name": "file_changes",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "FileChangePage"
+          }
+        }
+      },
+      {
         "name": "entries",
         "payload": {
           "kind": "newtype",
@@ -10325,6 +10466,36 @@ const roots = {
         "name": "filesystem_inventory",
         "payload": {
           "kind": "unit"
+        }
+      },
+      {
+        "name": "filesystem_changes",
+        "payload": {
+          "fields": [
+            {
+              "name": "after",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 16,
+                "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
         }
       },
       {

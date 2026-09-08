@@ -1943,6 +1943,135 @@
       "kind": "struct",
       "serde": {}
     },
+    "FileChange": {
+      "fields": [
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "kind",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "FileChangeKind"
+          }
+        },
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "entry",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "FileChangeKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "modify",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "invalidate",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "FileChangePage": {
+      "fields": [
+        {
+          "name": "changes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "FileChange"
+            }
+          }
+        },
+        {
+          "name": "next",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "FileInventory": {
       "fields": [
         {
@@ -7795,6 +7924,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_changes"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_list"
     },
     {
@@ -8250,6 +8383,10 @@
     {
       "reply": "file_inventory",
       "request": "filesystem_inventory"
+    },
+    {
+      "reply": "file_changes",
+      "request": "filesystem_changes"
     },
     {
       "reply": "entries",
@@ -8781,6 +8918,16 @@
             "of": {
               "kind": "ref",
               "name": "FileInventory"
+            }
+          }
+        },
+        {
+          "name": "file_changes",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "FileChangePage"
             }
           }
         },
@@ -10997,6 +11144,36 @@
           }
         },
         {
+          "name": "filesystem_changes",
+          "payload": {
+            "fields": [
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_list",
           "payload": {
             "fields": [
@@ -12600,7 +12777,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:701f075c89b7330c",
+  "source_fingerprint": "fnv1a64:0ca6afe43126f480",
   "specification_version": 1,
   "topics": [
     {

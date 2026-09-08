@@ -696,6 +696,36 @@ pub struct FileInventory {
     pub coalesced: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeKind {
+    Create,
+    Modify,
+    Remove,
+    /// The path changed between metadata snapshots; consumers must restat it.
+    Invalidate,
+}
+
+/// One metadata change in the workspace filesystem journal.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileChange {
+    pub revision: u64,
+    pub kind: FileChangeKind,
+    pub path: RelativePath,
+    pub entry: Option<Entry>,
+}
+
+/// A bounded page of changes. `truncated` requires a fresh inventory before
+/// continuing at `current`; it is never represented as an empty successful page.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileChangePage {
+    pub changes: Vec<FileChange>,
+    pub next: u64,
+    pub current: u64,
+    pub more: bool,
+    pub truncated: bool,
+}
+
 /// One installed extension and its durable lifecycle policy.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionSummary {
@@ -1389,6 +1419,17 @@ pub trait WorkspaceFiles {
     /// Recursively inventories only the roots declared by this extension.
     fn inventory(&self, _roots: &[crate::FilesystemSelector]) -> Result<FileInventory, HostError> {
         Err(HostError::Unsupported("filesystem observation is unavailable".into()))
+    }
+
+    fn changes_since(
+        &self,
+        _roots: &[crate::FilesystemSelector],
+        _after: u64,
+        _limit: usize,
+    ) -> Result<FileChangePage, HostError> {
+        Err(HostError::Unsupported(
+            "filesystem change journal is unavailable".into(),
+        ))
     }
 
     /// # Errors

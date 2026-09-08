@@ -44,11 +44,11 @@ pub use manifest::{
     ImageSelector, Invalid, Manifest, NetworkGrant, NetworkSelector, PaneProvider, PaneSelection, Presentation,
     Resources, VolumeGrant, VolumeSelector, WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector,
 };
-pub use port::FileInventory;
 pub use port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionSummary,
 };
+pub use port::{FileChange, FileChangeKind, FileChangePage, FileInventory};
 pub use port::{
     HostError, InspectablePane, PaneInventory, PaneKind, PaneSemanticAction, PaneSemanticTree, SemanticActionKind,
     SemanticNode,

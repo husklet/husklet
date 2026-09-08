@@ -502,6 +502,19 @@ export interface FileInventory {
   complete: boolean;
   coalesced: number;
 }
+export interface FileChange {
+  revision: number;
+  kind: 'create' | 'modify' | 'remove' | 'invalidate';
+  path: string;
+  entry: FileEntry | null;
+}
+export interface FileChangePage {
+  changes: FileChange[];
+  next: number;
+  current: number;
+  more: boolean;
+  truncated: boolean;
+}
 export interface FileRange {
   path: string;
   identity: string;
@@ -1232,6 +1245,12 @@ export interface WorkspaceApi {
   files: {
     /** Returns the current bounded inventory for the exact consented read roots. */
     inventory(): Promise<FileInventory>;
+    changes(after?: number, limit?: number): Promise<FileChangePage>;
+    /** Cursor-safe polling watcher. A truncated page is delivered explicitly so callers can rescan. */
+    watchChanges(
+      listener: (page: FileChangePage) => void | Promise<void>,
+      options?: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal },
+    ): Promise<() => Promise<void>>;
     list(path: string): Promise<FileEntry[]>;
     /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
     listPage(
