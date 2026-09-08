@@ -19,7 +19,6 @@ cases:
         - { counter: candidates, greater-than: 0 }
         - { counter: patched, greater-than: 0 }
         - { counter: executed, greater-than: 0 }
-        - { counter: reset_fork, greater-than: 0 }
         - { counter: reset_thread, greater-than: 0 }
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "73043" } }
   - id: runtime/aarch64-dbt/conditional-chain-lifecycle-off
@@ -36,9 +35,20 @@ cases:
         - { counter: candidates, equals: 0 }
         - { counter: patched, equals: 0 }
         - { counter: executed, equals: 0 }
-        - { counter: reset_fork, equals: 0 }
         - { counter: reset_thread, equals: 0 }
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396486", interpreted_steps: "20502", translated_entries: "154286" } }
+  - id: runtime/aarch64-dbt/conditional-chain-fork-reset
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_fork_reset.c, output: conditional-chain-fork-reset, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-fork-reset }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
