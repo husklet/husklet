@@ -48,7 +48,6 @@ type Operation = {
   error: unknown;
 };
 const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', detail: null, error: null };
-const RESOURCE_WIDTH = { chars: 68 } as const;
 
 export function Networks({
   api,
@@ -198,7 +197,7 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1} width={RESOURCE_WIDTH}>
+      <Row gap={1} grow wrap>
         <Entry
           value={name}
           placeholder="Network name"
@@ -234,7 +233,7 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Card grow={false} justify="start" width={RESOURCE_WIDTH} variant="outline">
+      <Card grow justify="start" variant="outline">
         <CardContent gap={1}>
           <Text label="Container attachment" />
           <Text label="Required · complete immutable container ID" color="text-dim" />
@@ -294,9 +293,8 @@ export function Networks({
           return (
             <Card
               key={id}
-              grow={false}
               justify="start"
-              width={RESOURCE_WIDTH}
+              grow
               variant={inspection.id === id ? 'filled' : 'outline'}
             >
               <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />

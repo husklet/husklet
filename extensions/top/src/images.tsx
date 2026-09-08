@@ -19,7 +19,6 @@ import {
   type ImageSummary,
   type WorkspaceApi,
 } from '@husklet/react';
-const RESOURCE_WIDTH = { chars: 68 } as const;
 import { ImageDetailsSource, bounded, boundedMessage, bytes, shortId } from './model.js';
 import type { Resource } from './overview.js';
 
@@ -216,7 +215,7 @@ export function Images({
         : 'ready';
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
-      <Row gap={1} width={RESOURCE_WIDTH}>
+      <Row gap={1} grow wrap>
         <Entry
           value={reference}
           placeholder="registry/image:tag"
@@ -243,7 +242,7 @@ export function Images({
         retryLabel="Retry images"
         onRetry={resource.reload}
       >
-        <Card grow={false} width={RESOURCE_WIDTH} variant="outline">
+        <Card grow variant="outline">
           <CardContent gap={1}>
             <Text label="Image maintenance" />
             <Text
@@ -278,12 +277,7 @@ export function Images({
           </CardActions>
         </Card>
         {view.records.map((item) => (
-          <Card
-            key={item.id}
-            grow={false}
-            width={RESOURCE_WIDTH}
-            variant={detail?.id === item.id ? 'filled' : 'outline'}
-          >
+          <Card key={item.id} grow variant={detail?.id === item.id ? 'filled' : 'outline'}>
             <CardHeader label={item.reference || '<untagged>'} detail={shortId(item.id)} />
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
