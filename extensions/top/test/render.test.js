@@ -694,10 +694,15 @@ test('catalogue does not advertise an update at the installed version', async ()
     h(Extensions, {
       api: {
         extensions: {
-          list: async () => [{
-            name: 'storybook', image_digest: `sha256:${'a'.repeat(64)}`,
-            version: '2.0.0', enabled: true, status: 'duty',
-          }],
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
           catalogue: firstPartyCatalogue,
         },
         watchExtensions: async () => () => {},

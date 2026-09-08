@@ -1363,7 +1363,7 @@ function changeInvocation(requests, placeholder, value) {
     .toReversed()
     .find((patch) => active(patch.SetProp.id))?.SetProp.id;
   const handler = patches.findLast(
-    (patch) => patch.SetHandler?.id === node && patch.SetHandler.handler?.trigger === 'Change',
+    (patch) => patch.SetHandler?.id === node && patch.SetHandler?.handler?.trigger === 'Change',
   );
   assert.ok(handler, `${placeholder} advertises Change`);
   return {
