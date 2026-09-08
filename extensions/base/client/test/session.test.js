@@ -14,6 +14,57 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix extension inventory preserves every effective permission dimension', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-grants-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'extension_list' });
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'extensions',
+              with: [{
+                name: 'database-tools', image_digest: 'sha256:reviewed', status: 'standby',
+                version: '2.0.0', enabled: false, pane_providers: [],
+                granted: ['containers:read', 'filesystem:write'],
+                containers: { selectors: [{ name: 'postgres' }], create: false },
+                filesystem: { read: [], write: [{ exact: 'database.json' }], create: [], delete: [], rename: [] },
+                workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] },
+              }],
+            },
+          }),
+        );
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'fixture', granted: ['extensions:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const [installed] = await workspace(session).extensions.list();
+    assert.deepEqual(installed.granted, ['containers:read', 'filesystem:write']);
+    assert.deepEqual(installed.containers.selectors, [{ name: 'postgres' }]);
+    assert.deepEqual(installed.filesystem.write, [{ exact: 'database.json' }]);
+    assert.deepEqual(installed.workspace_environment.read, [{ workspace: 'dev', name: 'PGPASSWORD' }]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem inventory can reconcile immediately after reconnect', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-inventory-'));
   const socketPath = path.join(directory, 'host.sock');

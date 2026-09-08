@@ -115,7 +115,10 @@ mod tests {
             version: "1.0.0".into(),
             enabled: false,
             pane_providers: Vec::new(),
+            granted: hl_extension::Grant::default(),
+            containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
         events.inventory(vec![ExtensionSummary {
             name: "new".into(),
@@ -124,7 +127,10 @@ mod tests {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            granted: hl_extension::Grant::default(),
+            containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
         let job = AcquisitionJob::test(7);
         events.acquisition(job, snapshot("first", 1));

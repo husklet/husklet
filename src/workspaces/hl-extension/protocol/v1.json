@@ -1713,11 +1713,35 @@
           }
         },
         {
+          "name": "granted",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "Grant"
+          }
+        },
+        {
+          "name": "containers",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ContainerGrant"
+          }
+        },
+        {
           "name": "filesystem",
           "optional": true,
           "schema": {
             "kind": "ref",
             "name": "FilesystemGrant"
+          }
+        },
+        {
+          "name": "workspace_environment",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "WorkspaceEnvironmentGrant"
           }
         }
       ],
@@ -11984,7 +12008,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:e677849f946266ce",
+  "source_fingerprint": "fnv1a64:bc58f9eddd77a611",
   "specification_version": 1,
   "topics": [
     {

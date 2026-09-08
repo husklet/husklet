@@ -844,7 +844,10 @@ impl ExtensionStore for Host {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            granted: Grant::default(),
+            containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }])
     }
     fn inspect(&self, name: &str) -> Result<ExtensionSummary, HostError> {
@@ -856,7 +859,10 @@ impl ExtensionStore for Host {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            granted: Grant::default(),
+            containers: hl_extension::ContainerGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         })
     }
     fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {

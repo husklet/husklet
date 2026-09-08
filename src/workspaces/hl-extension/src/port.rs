@@ -704,9 +704,18 @@ pub struct ExtensionSummary {
     pub enabled: bool,
     #[serde(default)]
     pub pane_providers: Vec<crate::PaneProvider>,
+    /// Effective capability consent persisted for this exact image digest.
+    #[serde(default)]
+    pub granted: crate::Grant,
+    /// Effective container resource consent persisted for this exact image digest.
+    #[serde(default)]
+    pub containers: crate::ContainerGrant,
     /// Durable, manifest-intersected workspace file authority.
     #[serde(default)]
     pub filesystem: crate::FilesystemGrant,
+    /// Effective workspace-environment consent persisted for this exact image digest.
+    #[serde(default)]
+    pub workspace_environment: crate::WorkspaceEnvironmentGrant,
 }
 
 pub const EXTENSION_REFERENCE_BYTES: usize = 512;

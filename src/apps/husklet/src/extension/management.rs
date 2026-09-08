@@ -284,7 +284,10 @@ fn summary(entry: super::roster::Entry) -> ExtensionSummary {
         version: entry.version,
         enabled,
         pane_providers: entry.pane_providers,
+        granted: entry.granted,
+        containers: entry.containers,
         filesystem: entry.filesystem,
+        workspace_environment: entry.workspace_environment,
         status: match entry.stage {
             Stage::Vacancy => "vacancy".into(),
             Stage::Standby => "standby".into(),
@@ -425,7 +428,17 @@ mod tests {
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
-            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+            containers: hl_extension::ContainerGrant {
+                selectors: vec![hl_extension::ContainerSelector::Name { name: "database".into() }],
+                create: false,
+            },
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
+                read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                    workspace: "dev".into(),
+                    name: "PGPASSWORD".into(),
+                }],
+                write: Vec::new(),
+            },
             filesystem: hl_extension::FilesystemGrant {
                 write: vec![hl_extension::FilesystemSelector::Exact {
                     exact: hl_extension::RelativePath::new("settings.json").unwrap(),
@@ -437,6 +450,13 @@ mod tests {
         });
         assert!(value.enabled);
         assert_eq!(value.version, "2.1.0");
+        assert!(value.granted.holds(hl_extension::Capability::Interface));
+        assert_eq!(value.containers.selectors.len(), 1);
+        assert!(matches!(
+            &value.workspace_environment.read[0],
+            hl_extension::WorkspaceEnvironmentSelector::Exact { workspace, name }
+                if workspace == "dev" && name == "PGPASSWORD"
+        ));
         assert_eq!(value.pane_providers, vec![provider]);
         assert_eq!(
             value.filesystem.write,

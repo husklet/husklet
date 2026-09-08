@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:145d9c22d1dbc977
+// Protocol artifact fnv1a64:9caf85e0005a7da9
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2016,11 +2016,35 @@ const definitions = {
         }
       },
       {
+        "name": "granted",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "Grant"
+        }
+      },
+      {
+        "name": "containers",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "ContainerGrant"
+        }
+      },
+      {
         "name": "filesystem",
         "optional": true,
         "schema": {
           "kind": "ref",
           "name": "FilesystemGrant"
+        }
+      },
+      {
+        "name": "workspace_environment",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "WorkspaceEnvironmentGrant"
         }
       }
     ],

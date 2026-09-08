@@ -25,8 +25,14 @@ export interface ExtensionSummary {
     version?: string;
     enabled?: boolean;
     pane_providers?: ExtensionPaneProvider[];
+    /** Effective capability consent persisted for this exact image digest. */
+    granted?: ExtensionCapability[];
+    /** Effective container authority persisted for this exact image digest. */
+    containers?: ContainerGrant;
     /** Durable, manifest-intersected workspace file authority. */
     filesystem?: FilesystemGrant;
+    /** Effective workspace-environment authority persisted for this exact image digest. */
+    workspace_environment?: WorkspaceEnvironmentGrant;
 }
 export interface ExtensionProviderDeclaration {
     extension: string;
