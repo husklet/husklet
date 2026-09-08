@@ -51,7 +51,7 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'remove', label: 'Remove image' },
 ];
 
-const CONTENT_WIDTH = { minimum: { chars: 32 }, maximum: { chars: 48 } } as const;
+const COPY_WIDTH = { maximum: { chars: 42 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -643,14 +643,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
-        <Row gap={3} align="start" width="fill" wrap>
-          <Column gap={2} width="fill" grow={false}>
+        <Column gap={3} width="fill">
+          <Column gap={2} width="fill">
             {!acquisition && <Heading label="Browse extensions" scale="caption" />}
             {!acquisition && (
               <Column gap={2}>
                 <Text
                   label="Add trusted tools to this workspace. You will review access before anything is installed."
                   color="text-dim"
+                  width={COPY_WIDTH}
                   wrap
                 />
                 {catalogueState === 'loading' && (
@@ -666,19 +667,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         ? 'Everything in the built-in catalogue is installed. Available updates appear below.'
                         : 'The built-in extension catalogue is currently empty.'
                     }
+                    width={COPY_WIDTH}
                     tone="neutral"
                   />
                 )}
                 {availableCatalogue.map((entry) => {
                   const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                   return (
-                    <Card
-                      key={entry.id}
-                      grow={false}
-                      justify="start"
-                      width={CONTENT_WIDTH}
-                      variant="filled"
-                    >
+                    <Card key={entry.id} grow={false} width="fill" variant="filled">
                       <CardHeader
                         label={entry.title}
                         detail={`${entry.publisher} · Version ${entry.version}`}
@@ -746,7 +742,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             )}
             {!acquisition ? (
               <Expander label="Install from an OCI image" expanded={false}>
-                <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
+                <Card grow={false} width="fill" variant="outline">
                   <CardContent>
                     <Row gap={1} width="fill" wrap>
                       <Entry
@@ -778,7 +774,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 </Card>
               </Expander>
             ) : (
-              <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
+              <Card grow={false} width="fill" variant="outline">
                 <CardHeader
                   label={`Review ${acquisition.candidate?.name ?? 'extension'}`}
                   detail={
@@ -1181,7 +1177,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               />
             )}
           </Column>
-          <Column gap={2} width="fill" grow={false}>
+          <Column gap={2} width="fill">
             <Row gap={2}>
               <Heading label="Installed" scale="caption" />
               <Button
@@ -1207,115 +1203,120 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               error={inventoryError || 'Installed extensions could not be loaded.'}
               onRetry={reload}
             >
-              {installed.map((extension) => {
-                const update = catalogue?.entries.find(
-                  (entry) => entry.id === extension.name && entry.version !== extension.version,
-                );
-                const updateCompatibility = update
-                  ? catalogueCompatibility(update, workspaceArchitecture)
-                  : null;
-                return (
-                  <Card
-                    key={`${extension.name}:${extension.image_digest}`}
-                    grow={false}
-                    justify="start"
-                    width={CONTENT_WIDTH}
-                    variant="filled"
-                  >
-                    <CardHeader
-                      label={extension.name}
-                      detail={
-                        extension.version ? `Version ${extension.version}` : 'Version unavailable'
-                      }
-                      tooltip={`Installed image ${extension.image_digest}`}
-                      align="start"
+              <Row gap={1} width="fill" wrap>
+                {installed.map((extension) => {
+                  const update = catalogue?.entries.find(
+                    (entry) => entry.id === extension.name && entry.version !== extension.version,
+                  );
+                  const updateCompatibility = update
+                    ? catalogueCompatibility(update, workspaceArchitecture)
+                    : null;
+                  return (
+                    <Card
+                      key={`${extension.name}:${extension.image_digest}`}
+                      grow={false}
                       width="fill"
-                    />
-                    <CardContent gap={1}>
-                      <Row gap={1} wrap>
-                        <Badge
-                          label={capitalize(extensionState(extension))}
-                          tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
-                        />
-                        {extension.name === 'top' ? (
-                          <Badge label="Required workspace manager" tone="positive" />
-                        ) : null}
-                      </Row>
-                      <ExtensionFault extension={extension} />
-                      <InstalledPermissionSummary extension={extension} />
-                      {updateCompatibility ? (
-                        <Text
-                          label={
-                            updateCompatibility.compatible === true
-                              ? 'Update available'
-                              : `Update · ${updateCompatibility.label}`
-                          }
-                          color={updateCompatibility.compatible === false ? 'warning' : 'text-dim'}
-                          wrap
-                        />
-                      ) : null}
-                      <LifecycleFeedback
-                        extensionName={extension.name}
-                        pending={pendingLifecycle}
-                        failure={lifecycleFailure}
+                      variant="filled"
+                    >
+                      <CardHeader
+                        label={extension.name}
+                        detail={
+                          extension.version ? `Version ${extension.version}` : 'Version unavailable'
+                        }
+                        tooltip={`Installed image ${extension.image_digest}`}
+                        align="start"
+                        width="fill"
                       />
-                      <Row gap={1} wrap>
-                        {update && (
-                          <Button
-                            key="review-update"
-                            label="Review update"
-                            variant="filled"
-                            tone="accent"
-                            enabled={!busy && updateCompatibility?.compatible !== false}
-                            onInvoke={() => inspect(update.reference)}
+                      <CardContent gap={1}>
+                        <Row gap={1} wrap>
+                          <Badge
+                            label={capitalize(extensionState(extension))}
+                            tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                           />
-                        )}
-                        {extension.name === 'top' ? null : extension.status.startsWith('fault:') ? (
-                          <Button
-                            key="lifecycle"
-                            label="Retry"
-                            variant="outline"
-                            tone="accent"
-                            enabled={!busy}
-                            onInvoke={() => lifecycle(extension, 'retry')}
+                          {extension.name === 'top' ? (
+                            <Badge label="Required workspace manager" tone="positive" />
+                          ) : null}
+                        </Row>
+                        <ExtensionFault extension={extension} />
+                        <InstalledPermissionSummary extension={extension} />
+                        {updateCompatibility ? (
+                          <Text
+                            label={
+                              updateCompatibility.compatible === true
+                                ? 'Update available'
+                                : `Update · ${updateCompatibility.label}`
+                            }
+                            color={
+                              updateCompatibility.compatible === false ? 'warning' : 'text-dim'
+                            }
+                            wrap
                           />
-                        ) : extension.enabled ? (
-                          <Button
-                            key="lifecycle"
-                            label="Disable"
-                            variant="ghost"
-                            enabled={!busy}
-                            onInvoke={() => lifecycle(extension, 'disable')}
-                          />
-                        ) : (
-                          <Button
-                            key="lifecycle"
-                            label="Enable"
-                            variant="outline"
-                            tone="accent"
-                            enabled={!busy}
-                            onInvoke={() => lifecycle(extension, 'enable')}
-                          />
-                        )}
-                        {extension.name !== 'top' && (
-                          <ConfirmAction
-                            key="remove"
-                            label="Remove"
-                            confirmLabel={`Remove ${extension.name}`}
-                            question={`Remove ${extension.name} from this workspace?`}
-                            authorityKey={extension.image_digest}
-                            enabled={!busy}
-                            onConfirm={() => lifecycle(extension, 'remove')}
-                          />
-                        )}
-                      </Row>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                        ) : null}
+                        <LifecycleFeedback
+                          extensionName={extension.name}
+                          pending={pendingLifecycle}
+                          failure={lifecycleFailure}
+                        />
+                        <Row gap={1} wrap>
+                          {update && (
+                            <Button
+                              key="review-update"
+                              label="Review update"
+                              variant="filled"
+                              tone="accent"
+                              enabled={!busy && updateCompatibility?.compatible !== false}
+                              onInvoke={() => inspect(update.reference)}
+                            />
+                          )}
+                          {extension.name === 'top' ? null : extension.status.startsWith(
+                              'fault:',
+                            ) ? (
+                            <Button
+                              key="lifecycle"
+                              label="Retry"
+                              variant="outline"
+                              tone="accent"
+                              enabled={!busy}
+                              onInvoke={() => lifecycle(extension, 'retry')}
+                            />
+                          ) : extension.enabled ? (
+                            <Button
+                              key="lifecycle"
+                              label="Disable"
+                              variant="ghost"
+                              enabled={!busy}
+                              onInvoke={() => lifecycle(extension, 'disable')}
+                            />
+                          ) : (
+                            <Button
+                              key="lifecycle"
+                              label="Enable"
+                              variant="outline"
+                              tone="accent"
+                              enabled={!busy}
+                              onInvoke={() => lifecycle(extension, 'enable')}
+                            />
+                          )}
+                          {extension.name !== 'top' && (
+                            <ConfirmAction
+                              key="remove"
+                              label="Remove"
+                              confirmLabel={`Remove ${extension.name}`}
+                              question={`Remove ${extension.name} from this workspace?`}
+                              authorityKey={extension.image_digest}
+                              enabled={!busy}
+                              onConfirm={() => lifecycle(extension, 'remove')}
+                            />
+                          )}
+                        </Row>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </Row>
             </ResourceState>
           </Column>
-        </Row>
+        </Column>
       </Column>
     </Scroll>
   );

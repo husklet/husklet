@@ -405,17 +405,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Row']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
-  assert.equal(
-    ancestorProperty(stage, 'Browse extensions', 'Row', 'Wrap')?.Flag,
-    true,
-    'extension sections stack instead of overflowing a narrow viewport',
-  );
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
   assert.deepEqual(
-    ancestorProperty(stage, 'Browse extensions', 'Row', 'Width'),
+    ancestorProperty(stage, 'Browse extensions', 'Column', 'Width'),
     { Length: 'Fill' },
-    'extension sections share the full page width when displayed side by side',
+    'extension sections use the full page width without separating related content',
   );
   assert.ok(labelled(stage, 'Version 2.0.0'));
   assert.ok(labelled(stage, 'Technical details'));
@@ -425,10 +420,13 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Card',
   ]);
   assert.equal(
-    ancestorProperty(stage, 'Component playground', 'Card', 'Justify')?.Align,
-    'Start',
-    'cross-axis alignment lets the declared maximum width govern the GTK card',
+    ancestorProperty(stage, 'Component playground', 'Card', 'Justify'),
+    undefined,
+    'extension cards fill their responsive column instead of overriding width with start alignment',
   );
+  assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
+    Length: 'Fill',
+  });
   assert.equal(
     taggedProperty(stage, 'Install from an OCI image', 'Expander', 'Expanded')?.Flag,
     false,
