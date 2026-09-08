@@ -182,7 +182,6 @@ export function Volumes({
         {view.records.map((volume) => (
           <Card
             key={`${volume.name}:${volume.generation}`}
-            grow
             variant={inspection.name === volume.name ? 'filled' : 'outline'}
           >
             <CardHeader label={volume.name} detail={volume.driver} />

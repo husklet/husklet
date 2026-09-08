@@ -2661,6 +2661,11 @@ test('image removal and prune require an explicit confirmation step', async () =
   };
   const stage = host();
   const frame = stage.render(h(Images, { api: controlled, resource }));
+  assert.equal(
+    ancestorProperty(stageFromFrame(frame), 'Image maintenance', 'Card', 'Grow'),
+    undefined,
+    'maintenance stays content-height on wide windows',
+  );
   const labels = () =>
     stage.frames
       .flatMap((current) => current.patches)
@@ -2682,7 +2687,7 @@ test('image removal and prune require an explicit confirmation step', async () =
   );
   assert.deepEqual(calls, [], 'opening image removal performs no operation');
   assert.ok(labels().some((patch) => patch.SetProp.value.Text === 'Confirm remove'));
-  assert.ok(labelled(stage, `Remove immutable image ${originalDigest}?`));
+  assert.ok(labelled(stage, `Remove alpine:3.20 (${originalDigest.slice(0, 12)})?`));
   const staleConfirm = labels()
     .filter((patch) => patch.SetProp.value.Text === 'Confirm remove')
     .at(-1).SetProp.id;
@@ -2706,7 +2711,7 @@ test('image removal and prune require an explicit confirmation step', async () =
     labelled(stage, `Image ${originalDigest} changed or disappeared; inspect and confirm again.`),
   );
   invoke(stage, 'Remove');
-  assert.ok(labelled(stage, `Remove immutable image ${refreshedDigest}?`));
+  assert.ok(labelled(stage, `Remove alpine:3.20 (${refreshedDigest.slice(0, 12)})?`));
   invoke(stage, 'Confirm remove');
   await settled();
   assert.deepEqual(calls, [['remove', refreshedDigest]]);
@@ -3168,7 +3173,11 @@ test('volume and network panels render bounded real inventories and controls', (
     'the attachment form stays content-height so the empty state follows it',
   );
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Width'), undefined);
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 1);
+  assert.equal(
+    ancestorProperty(networkStage, 'private', 'Card', 'Grow'),
+    undefined,
+    'inventory cards remain content-height on wide windows',
+  );
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {

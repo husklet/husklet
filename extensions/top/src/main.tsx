@@ -39,6 +39,9 @@ const [{ render, Text, workspace }, { Top }, models] = await Promise.all([
   import('./app.js'),
   import('./model.js'),
 ]);
+const fixture = process.env.HUSKLET_TOP_FIXTURE === 'populated';
+const fixtureModule = fixture ? await import('./fixture.js') : null;
+const api = workspace(session);
 surface = render(<Text label={'Loading workspace resources…'} />, session, {
   title: 'Top',
   bootstrap,
@@ -50,12 +53,13 @@ executionDetails = new models.ExecutionDetailsSource(send);
 volumeDetails = new models.VolumeDetailsSource(send);
 surface.update(
   <Top
-    api={workspace(session)}
+    api={fixtureModule ? fixtureModule.fixtureApi(api) : api}
     selections={providerSelections}
     containerDetails={containerDetails}
     executionDetails={executionDetails}
     imageDetails={imageDetails}
     volumeDetails={volumeDetails}
+    initial={fixtureModule?.populatedFixture}
     initialSection={
       SECTIONS.includes(process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])
         ? (process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])

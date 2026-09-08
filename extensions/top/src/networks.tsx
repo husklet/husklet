@@ -248,7 +248,7 @@ export function Networks({
           <Entry
             value={container}
             placeholder="Complete container ID"
-            width={{ chars: 58 }}
+            width={{ minimum: { chars: 20 }, maximum: { chars: 58 } }}
             enabled={operation.state !== 'loading'}
             onChange={(event) => {
               setContainer(String(event.value ?? ''));
@@ -256,12 +256,12 @@ export function Networks({
               setDisconnectRequest(null);
             }}
           />
-          <Row gap={1} align="center" justify="start">
+          <Row gap={1} align="center" justify="start" wrap>
             <Text label="Optional aliases" color="text-dim" />
             <Entry
               value={aliases}
               placeholder="Endpoint aliases (comma-separated, optional)"
-              width={{ chars: 38 }}
+              width={{ minimum: { chars: 20 }, maximum: { chars: 38 } }}
               enabled={operation.state !== 'loading'}
               onChange={(event) => {
                 setAliases(String(event.value ?? ''));
@@ -273,7 +273,7 @@ export function Networks({
       </Card>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
-      <Column grow={false} align="start" justify="stretch">
+      <Column grow={false} justify="stretch">
         {inventoryState === 'empty' ? (
           <Column gap={1} align="start" justify="start">
             <Text label="No networks" />
@@ -313,7 +313,6 @@ export function Networks({
                 <Card
                   key={id}
                   justify="start"
-                  grow
                   variant={inspection.id === id ? 'filled' : 'outline'}
                 >
                   <CardHeader

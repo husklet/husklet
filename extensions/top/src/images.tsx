@@ -304,11 +304,19 @@ export function Images({
                 </ResourceState>
               ) : null}
             </CardContent>
+            {confirm === item.id ? (
+              <CardContent>
+                <Text
+                  label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
+                  color="warning"
+                  wrap
+                />
+              </CardContent>
+            ) : null}
             <CardActions gap={1} justify="start">
               <Button label="Inspect" enabled={!busy} onInvoke={() => inspect(item)} />
               {confirm === item.id ? (
                 <>
-                  <Text label={`Remove immutable image ${item.id}?`} color="warning" />
                   <Button
                     label="Confirm remove"
                     enabled={!busy}
