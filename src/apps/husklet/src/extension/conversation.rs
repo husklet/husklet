@@ -937,21 +937,28 @@ impl Conversation {
             // generation. Both checks happen in one dispatch.
             action.generation = pane.generation;
         }
-        // A terminal read mints authority for a later byte write. Bracket the
-        // requested snapshot with the canonical pane observation so output
-        // arriving during the read cannot be returned with a newer cursor.
-        let terminal_read_generation = if let hl_extension::Request::TerminalReadPane { slot, .. } = &request {
-            Some(self.observe_pane_generation(services, slot)?)
-        } else {
-            None
+        // A readable pane snapshot mints authority for a later byte write or
+        // semantic action. Bracket it with canonical pane observations so a
+        // changing UI cannot be returned with a newer cursor.
+        let pane_read_generation = match &request {
+            hl_extension::Request::TerminalReadPane { slot, .. }
+            | hl_extension::Request::PaneSemanticRead { slot } => {
+                Some(self.observe_pane_generation(services, slot)?)
+            }
+            _ => None,
         };
         let mut answer = self.session.dispatch(&request, services);
         if let Ok(reply) = &mut answer {
             self.attach_pane_cursors(reply, services);
-            if let (Some(before), Reply::Text(text)) = (terminal_read_generation, reply) {
-                if text.generation != before {
+            if let Some(before) = pane_read_generation {
+                let changed_slot = match reply {
+                    Reply::Text(text) if text.generation != before => Some(&text.slot),
+                    Reply::Semantics(tree) if tree.generation != before => Some(&tree.slot),
+                    _ => None,
+                };
+                if let Some(slot) = changed_slot {
                     answer = Err(Failure::Conflict {
-                        detail: format!("pane {} changed while its terminal screen was read", text.slot),
+                        detail: format!("pane {slot} changed while its readable snapshot was captured"),
                     });
                 }
             }
@@ -1143,6 +1150,8 @@ mod tests {
     struct Ledger {
         reached: Mutex<Vec<&'static str>>,
         semantic_revision: AtomicU64,
+        semantic_transition: AtomicU64,
+        semantic_reads: AtomicU64,
         terminal_transition: AtomicU64,
         terminal_reads: AtomicU64,
     }
@@ -1158,6 +1167,11 @@ mod tests {
 
         fn semantic_revision(&self, revision: u64) {
             self.semantic_revision.store(revision, Ordering::Release);
+        }
+
+        fn transition_semantics_during_read(&self, revision: u64) {
+            self.semantic_revision.store(revision, Ordering::Release);
+            self.semantic_transition.store(1, Ordering::Release);
         }
 
         fn transition_terminal_during_read(&self) {
@@ -1412,7 +1426,11 @@ mod tests {
 
         fn semantics(&self, slot: &str) -> Result<hl_extension::PaneSemanticTree, HostError> {
             self.ledger.note("terminal.semantics");
-            let revision = self.ledger.semantic_revision.load(Ordering::Acquire);
+            let read = self.ledger.semantic_reads.fetch_add(1, Ordering::AcqRel);
+            let mut revision = self.ledger.semantic_revision.load(Ordering::Acquire);
+            if self.ledger.semantic_transition.load(Ordering::Acquire) != 0 && read >= 2 {
+                revision = revision.saturating_add(1);
+            }
             if revision == 0 {
                 return Err(HostError::Unsupported("pane semantics are unavailable".into()));
             }
@@ -3467,6 +3485,29 @@ mod tests {
 
         let later = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn semantic_read_refuses_stale_nodes_with_a_newer_action_cursor() {
+        let ledger = Arc::new(Ledger::default());
+        ledger.transition_semantics_during_read(1);
+        let (theirs, served) = semantic_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let raced = ask(
+            &mut wire,
+            &Request::PaneSemanticRead { slot: "s1".into() },
+        );
+        assert!(matches!(codec::read_failure(&raced), Ok(Failure::Conflict { .. })));
+
+        let stable = ask(
+            &mut wire,
+            &Request::PaneSemanticRead { slot: "s1".into() },
+        );
+        assert!(matches!(codec::read_reply(&stable), Ok(Reply::Semantics(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
