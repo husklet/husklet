@@ -13,6 +13,7 @@ import {
   Volumes,
   Workspace,
   Top,
+  SIDEBAR_SAVE_DELAY_MS,
   boundedSidebarWidth,
   persistSidebarWidth,
   parseArguments,
@@ -65,9 +66,10 @@ const api = {
 };
 
 test('Top sidebar preference is narrowly bounded and retried with fresh CAS authority', async () => {
-  assert.equal(boundedSidebarWidth(9), 10);
-  assert.equal(boundedSidebarWidth(18), 18);
-  assert.equal(boundedSidebarWidth(99), 24);
+  assert.equal(SIDEBAR_SAVE_DELAY_MS, 250);
+  assert.equal(boundedSidebarWidth(159), 160);
+  assert.equal(boundedSidebarWidth(240), 240);
+  assert.equal(boundedSidebarWidth(321), 320);
   assert.equal(boundedSidebarWidth(1.5), null);
   const calls = [];
   let revision = 4;
@@ -82,10 +84,10 @@ test('Top sidebar preference is narrowly bounded and retried with fresh CAS auth
       return 6;
     },
   };
-  assert.equal(await persistSidebarWidth({ preferences }, 80), 6);
+  assert.equal(await persistSidebarWidth({ preferences }, 240), 6);
   assert.deepEqual(calls, [
-    [4, 'sidebar.width', { kind: 'number', value: 24 }],
-    [5, 'sidebar.width', { kind: 'number', value: 24 }],
+    [4, 'sidebar.width', { kind: 'number', value: 240 }],
+    [5, 'sidebar.width', { kind: 'number', value: 240 }],
   ]);
 });
 
