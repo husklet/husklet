@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -367,6 +368,110 @@ test('real Unix execution cancellation is one bounded ordered operation', async 
         call: 'execution_cancel',
         with: { id: executionId, signal: 'SIGINT', timeout_ms: 750 },
       },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix streaming cancellation preserves inspection, cleanup, and session reuse', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stream-cancel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const execution = {
+    id: executionId,
+    container_id: containerId,
+    running: false,
+    exit_code: 130,
+    pid: 42,
+    command: ['psql'],
+    user: 'postgres',
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const call = frame.payload.call;
+        const payload =
+          call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: { entries: [], next: 0, more: false, eof: false, gap: false },
+                }
+              : call === 'execution_inspect'
+                ? { reply: 'execution', with: execution }
+                : call === 'container_list'
+                  ? { reply: 'containers', with: [] }
+                  : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:read', 'containers:execute'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    const controller = new AbortController();
+    await assert.rejects(
+      containers.execStreaming(
+        containerId,
+        7,
+        { command: ['psql'], signal: controller.signal, cancelSignal: 'SIGINT' },
+        () => controller.abort('query view closed'),
+      ),
+      (error) => {
+        assert(error instanceof ExecutionOperationError);
+        assert.equal(error.executionId, executionId);
+        assert.equal(error.phase, 'output');
+        assert.equal(error.cause.name, 'AbortError');
+        return true;
+      },
+    );
+    assert.deepEqual(
+      requests.map(({ call }) => call),
+      ['container_exec', 'execution_output', 'execution_cancel'],
+      'cancellation follows the final delivered page and does not inspect or remove implicitly',
+    );
+    assert.deepEqual(requests[2].with, {
+      id: executionId,
+      signal: 'SIGINT',
+      timeout_ms: 1_000,
+    });
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+
+    assert.deepEqual(await containers.execution(executionId), execution);
+    await containers.removeExecution(executionId);
+    assert.deepEqual(await containers.list(), []);
+    assert.deepEqual(requests.map(({ call }) => call), [
+      'container_exec',
+      'execution_output',
+      'execution_cancel',
+      'execution_inspect',
+      'execution_remove',
+      'container_list',
     ]);
     await session.close();
   } finally {
