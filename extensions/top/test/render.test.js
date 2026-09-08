@@ -1156,7 +1156,10 @@ test('extension inspection keeps invalid and failed references recoverable with 
       'All access is off. Expand exact grants and enable only what this extension needs.',
     ),
   );
-  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.deepEqual(property(stage, 'View containers and processes', 'Tooltip'), {
+    Text: 'containers:read',
+  });
   assert.deepEqual(latestSwitchValues(stage), [false]);
 });
 
@@ -1518,8 +1521,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
-  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
-  assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.ok(labelled(stage, 'Read terminal text'));
   assert.ok(labelled(stage, 'Requested access'));
   assert.ok(labelled(stage, 'Product · 2'));
   assert.ok(labelled(stage, 'No access selected · 2 requested'));
@@ -1537,8 +1540,13 @@ test('extension image entry submits from the keyboard and consent explains reque
     'each capability requires its own consent gesture',
   );
   assert.ok(
-    labelled(stage, 'View containers and processes (containers:read)'),
-    'exact authority remains visible beside plain language',
+    labelled(stage, 'View containers and processes'),
+    'plain-language authority remains visible in the compact review',
+  );
+  assert.deepEqual(
+    property(stage, 'View containers and processes', 'Tooltip'),
+    { Text: 'containers:read' },
+    'the exact wire authority remains inspectable without cluttering the label',
   );
 
   toggleSwitch(stage, 0, true);

@@ -887,7 +887,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         {acquisition.candidate.requested.map((capability) => (
                           <FormControlLabel
                             key={capability}
-                            label={`${capabilityLabel(capability)} (${capability})`}
+                            label={capabilityLabel(capability)}
+                            tooltip={capability}
                             gap={2}
                           >
                             <Switch
