@@ -298,7 +298,9 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.equal(labelled(stage, 'Workspace control'), undefined);
   assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
   assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
-  assert.deepEqual(ancestorTags(stage, 'View Component playground').slice(0, 3), [
+  assert.ok(labelled(stage, 'Version 2.0.0'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
@@ -504,7 +506,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'View Component playground');
+  invoke(stage, 'Review Component playground installation');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -561,11 +563,11 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.equal(isEnabled(stage, 'View Unknown'), true);
+  assert.equal(isEnabled(stage, 'Review Unknown installation'), true);
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
-  assert.equal(isEnabled(stage, 'View ARM only'), false);
+  assert.equal(isEnabled(stage, 'Review ARM only installation'), false);
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
-  assert.equal(isEnabled(stage, 'View Future protocol'), false);
+  assert.equal(isEnabled(stage, 'Review Future protocol installation'), false);
 });
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
@@ -613,7 +615,7 @@ test('an installed catalogue extension exposes its update review without retypin
   await settled();
   assert.ok(labelled(stage, 'Review update'));
   assert.equal(
-    labelled(stage, 'View Component playground'),
+    labelled(stage, 'Review Component playground installation'),
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
@@ -823,7 +825,7 @@ test('extension discovery can retry a failed catalogue without leaving the page'
   invoke(stage, 'Retry catalogue');
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'View Component playground'));
+  assert.ok(labelled(stage, 'Review Component playground installation'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {

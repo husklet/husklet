@@ -673,34 +673,50 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       width={CONTENT_WIDTH}
                       variant="filled"
                     >
-                      <CardHeader label={entry.title} detail={`By ${entry.publisher}`} />
+                      <CardHeader
+                        label={entry.title}
+                        detail={`${entry.publisher} · Version ${entry.version}`}
+                      />
                       <CardContent gap={1}>
                         <Text label={entry.description} color="text-dim" wrap />
-                        <Text
-                          label={`Image · ${entry.reference}`}
-                          color="text-dim"
-                          tooltip={entry.reference}
-                          wrap
-                        />
-                        <Badge
-                          label={compatibility.label}
-                          tone={
-                            compatibility.compatible === false
-                              ? 'danger'
-                              : compatibility.compatible === true
-                                ? 'positive'
-                                : 'neutral'
-                          }
-                        />
+                        <Row gap={1} wrap>
+                          <Badge label={`Version ${entry.version}`} tone="neutral" />
+                          <Badge
+                            label={compatibility.label}
+                            tone={
+                              compatibility.compatible === false
+                                ? 'danger'
+                                : compatibility.compatible === true
+                                  ? 'positive'
+                                  : 'neutral'
+                            }
+                          />
+                        </Row>
                         <Row>
                           <Button
-                            label={`View ${entry.title}`}
+                            label={`Review ${entry.title} installation`}
                             variant="filled"
                             tone="accent"
                             enabled={!busy && compatibility.compatible !== false}
                             onInvoke={() => inspect(entry.reference)}
                           />
                         </Row>
+                        <Expander label="Technical details" expanded={false}>
+                          <Column gap={1}>
+                            <Text
+                              label={`Image · ${entry.reference}`}
+                              color="text-dim"
+                              tooltip={entry.reference}
+                              wrap
+                            />
+                            <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
+                            <Text
+                              label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
+                              color="text-dim"
+                              wrap
+                            />
+                          </Column>
+                        </Expander>
                       </CardContent>
                     </Card>
                   );
