@@ -255,6 +255,11 @@ impl Conversation {
                 selectors: vec![hl_extension::ContainerSelector::All { all: true }],
                 create: true,
             },
+            hl_extension::NetworkGrant {
+                selectors: vec![hl_extension::NetworkSelector::All { all: true }],
+                create: true,
+            },
+            hl_extension::VolumeGrant { selectors: vec![hl_extension::VolumeSelector::All { all: true }], create: true },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
                 write: roots.clone(),
@@ -273,6 +278,8 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
+        networks: hl_extension::NetworkGrant,
+        volumes: hl_extension::VolumeGrant,
         filesystem: hl_extension::FilesystemGrant,
         workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     ) -> io::Result<Self> {
@@ -285,6 +292,8 @@ impl Conversation {
             // surfaces are acquired explicitly through the terminal port.
             session: Session::new(authority)
                 .with_containers(containers)
+                .with_networks(networks)
+                .with_volumes(volumes)
                 .with_filesystem(filesystem)
                 .with_workspace_environment(workspace_environment)
                 .with_surface(""),
@@ -387,7 +396,7 @@ impl Conversation {
         self.arm_io_deadlines()?;
         let mut partial_since = None;
         loop {
-            match self.wire.receive() {
+            match self.wire.receive_step() {
                 Ok(frame) => {
                     partial_since = None;
                     self.exchange(&frame, services)?;
@@ -458,9 +467,7 @@ impl Conversation {
         }
         if self.may_observe(Topic::Networks) {
             if let Ok(networks) = services.networks.list() {
-                snapshots.push(Snapshot::Networks(hl_extension::port::NetworkInventory::bounded(
-                    networks,
-                )));
+                snapshots.push(Snapshot::Networks(self.session.visible_networks(networks)));
             }
         }
         if self.may_observe(Topic::Terminal) {
@@ -718,9 +725,18 @@ impl Conversation {
     /// Reads the reply under a deadline, so an unfinished handshake ends the
     /// connection instead of holding it.
     fn hello(&mut self) -> Result<Hello, Fault> {
-        self.control.set_read_timeout(Some(self.settle))?;
         let started = Instant::now();
-        let received = self.wire.receive();
+        let received = loop {
+            let remaining = self.settle.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break Err(Transit::Pending);
+            }
+            self.control.set_read_timeout(Some(remaining.min(Self::IO_TURN)))?;
+            match self.wire.receive_step() {
+                Err(Transit::Pending) if started.elapsed() < self.settle => {}
+                result => break result,
+            }
+        };
         self.control.set_read_timeout(None)?;
         let frame = received.map_err(|transit| self.unsettled(transit, started))?;
         codec::read_hello(&frame).map_err(|coding| Fault::Malformed(coding.to_string()))
@@ -941,8 +957,7 @@ impl Conversation {
         // semantic action. Bracket it with canonical pane observations so a
         // changing UI cannot be returned with a newer cursor.
         let pane_read_generation = match &request {
-            hl_extension::Request::TerminalReadPane { slot, .. }
-            | hl_extension::Request::PaneSemanticRead { slot } => {
+            hl_extension::Request::TerminalReadPane { slot, .. } | hl_extension::Request::PaneSemanticRead { slot } => {
                 Some(self.observe_pane_generation(services, slot)?)
             }
             _ => None,
@@ -1242,7 +1257,34 @@ mod tests {
     impl hl_extension::port::NetworkStore for Host {
         fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
             self.ledger.note("networks.list");
-            Ok(Vec::new())
+            Ok([("a", "database"), ("b", "unrelated")]
+                .into_iter()
+                .map(|(id, name)| hl_extension::port::NetworkSummary {
+                    id: id.repeat(32),
+                    name: name.into(),
+                    driver: "bridge".into(),
+                    scope: "local".into(),
+                    kind: hl_extension::NetworkKind::Custom,
+                    endpoints: None,
+                })
+                .collect())
+        }
+
+        fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
+            self.ledger.note("networks.inspect");
+            let (id, name) = if reference == "database" || reference == "a".repeat(32) {
+                ("a".repeat(32), "database")
+            } else {
+                ("b".repeat(32), "unrelated")
+            };
+            Ok(hl_extension::port::NetworkSummary {
+                id,
+                name: name.into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
+            })
         }
     }
 
@@ -1617,6 +1659,8 @@ mod tests {
                 pane_providers: Vec::new(),
                 granted: hl_extension::Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             }])
@@ -1689,6 +1733,69 @@ mod tests {
             conversation.serve(&services(&host))
         });
         (theirs, served)
+    }
+
+    fn network_scoped_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("postgres").unwrap(),
+                Grant::new([Capability::NetworkRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant {
+                    selectors: vec![hl_extension::NetworkSelector::Name {
+                        name: "database".into(),
+                    }],
+                    create: false,
+                },
+                hl_extension::VolumeGrant::default(),
+                hl_extension::FilesystemGrant::default(),
+                hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    #[test]
+    fn exact_network_scope_filters_and_denies_over_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = network_scoped_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let listed = ask(&mut wire, &Request::NetworkList);
+        assert!(matches!(codec::read_reply(&listed), Ok(Reply::Networks(inventory))
+            if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
+        let subscribed = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Networks,
+            },
+        );
+        assert_eq!(codec::read_reply(&subscribed), Ok(Reply::Done));
+        let event = wire.receive().expect("scoped network snapshot");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Networks(inventory)
+            if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
+        let denied = ask(
+            &mut wire,
+            &Request::NetworkInspect {
+                reference: "unrelated".into(),
+            },
+        );
+        assert!(matches!(codec::read_failure(&denied), Ok(Failure::Denied { .. })));
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+        assert_eq!(ledger.reached(), ["networks.list", "networks.list"]);
     }
 
     #[test]
@@ -1796,6 +1903,8 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant {
                     read: vec![
                         hl_extension::FilesystemSelector::Subtree {
@@ -1838,6 +1947,8 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant {
                     write: vec![hl_extension::FilesystemSelector::Exact { exact }],
                     ..hl_extension::FilesystemGrant::default()
@@ -1890,6 +2001,8 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant::default(),
                 grant,
             )?;
@@ -1913,6 +2026,8 @@ mod tests {
             pane_providers: Vec::new(),
             granted: hl_extension::Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
@@ -2678,6 +2793,8 @@ mod tests {
                 selectors: vec![hl_extension::ContainerSelector::Name { name: "other".into() }],
                 create: false,
             },
+            hl_extension::NetworkGrant::default(),
+            hl_extension::VolumeGrant::default(),
             hl_extension::FilesystemGrant::default(),
             hl_extension::WorkspaceEnvironmentGrant::default(),
         )
@@ -3262,6 +3379,43 @@ mod tests {
     }
 
     #[test]
+    fn handshake_deadline_is_total_even_when_a_peer_trickles_bytes() {
+        let deadline = Duration::from_millis(150);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        codec::read_welcome(&wire.receive().expect("welcome")).expect("typed welcome");
+        let hello = Hello {
+            protocol: PROTOCOL,
+            name: ExtensionName::new("slow_peer").expect("name"),
+            features: Vec::new(),
+        };
+        let bytes = codec::hello(&hello).expect("hello").encode().expect("framed hello");
+        let mut peer = wire.into_stream();
+        let trickle = std::thread::spawn(move || {
+            for byte in bytes {
+                if peer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+
+        let started = Instant::now();
+        let fault = served
+            .join()
+            .expect("conversation thread")
+            .expect_err("slow handshake dropped");
+        let elapsed = started.elapsed();
+        assert_eq!(fault, Fault::Handshake(Compatibility::Unknown));
+        assert!(elapsed >= deadline, "deadline fired early after {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "byte trickle extended the total handshake deadline to {elapsed:?}"
+        );
+        trickle.join().expect("trickle thread");
+    }
+
+    #[test]
     fn a_peer_cannot_hold_the_only_conversation_with_an_unfinished_frame() {
         let deadline = Duration::from_millis(400);
         let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
@@ -3288,6 +3442,41 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "the partial-frame deadline remains bounded"
         );
+    }
+
+    #[test]
+    fn request_deadline_is_total_even_when_a_peer_trickles_bytes() {
+        let deadline = Duration::from_millis(150);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let bytes = codec::request(&Request::ContainerList)
+            .expect("request")
+            .encode()
+            .expect("framed request");
+        let mut peer = wire.into_stream();
+        let trickle = std::thread::spawn(move || {
+            for byte in bytes {
+                if peer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+
+        let started = Instant::now();
+        let fault = served
+            .join()
+            .expect("conversation thread")
+            .expect_err("slow request dropped");
+        let elapsed = started.elapsed();
+        assert!(matches!(fault, Fault::Malformed(ref detail) if detail.contains("unfinished frame")));
+        assert!(elapsed >= deadline, "deadline fired early after {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "byte trickle extended the total request deadline to {elapsed:?}"
+        );
+        trickle.join().expect("trickle thread");
     }
 
     #[test]
@@ -3559,16 +3748,10 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let raced = ask(
-            &mut wire,
-            &Request::PaneSemanticRead { slot: "s1".into() },
-        );
+        let raced = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".into() });
         assert!(matches!(codec::read_failure(&raced), Ok(Failure::Conflict { .. })));
 
-        let stable = ask(
-            &mut wire,
-            &Request::PaneSemanticRead { slot: "s1".into() },
-        );
+        let stable = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".into() });
         assert!(matches!(codec::read_reply(&stable), Ok(Reply::Semantics(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));

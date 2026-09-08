@@ -38,7 +38,13 @@ export { Images } from './images.js';
 export { Volumes } from './volumes.js';
 export { Networks } from './networks.js';
 export { ContainerRename } from './container-rename.js';
-export { ContainerCreate } from './container-create.js';
+export {
+  ContainerCreate,
+  parseArguments,
+  parseLabels,
+  parseMounts,
+  parsePorts,
+} from './container-create.js';
 export { ContainerDetail } from './container-detail.js';
 export { Containers } from './containers.js';
 export { Workspace } from './workspace.js';

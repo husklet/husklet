@@ -30,7 +30,7 @@ wrong caller.
 | --- | --- | --- |
 | Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing, and private bounded state stores its checkpoint. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
-| PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
+| PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded output, cancellation, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. Durable credentials still require a dedicated secret provider; private extension state is not a vault. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
 | Single-file workspace editor | Strong | `[filesystem]` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. `stat` plus `writeObserved` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
@@ -56,6 +56,12 @@ observed generation atomically with the mutation.
 Creation additionally requires `create = true`. Visibility never implies create.
 Omitting `[containers]` means no container authority, even with a container verb
 capability. Workspace-wide authority is explicit: `selectors = [{ all = true }]`.
+
+Networks use the same two-dimensional model. Manifests request exact network IDs
+or names (or explicit `all`) under `[networks]`; installation consent intersects
+that request, and creation is separately consented. Inventory, inspection, removal,
+connection, disconnection, and snapshots are filtered or denied against the
+persisted selectors.
 
 Filesystem grants implement the same two-dimensional model: `filesystem:read` and
 `filesystem:write` permits the mutation domain, while independently consented write, create, delete, and rename roots decide

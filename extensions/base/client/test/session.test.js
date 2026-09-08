@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
+import { queryObjects } from 'node:v8';
 import {
   connect,
   ExecutionOperationError,
@@ -1566,6 +1567,83 @@ test('a matching pong outside the control channel cannot complete a heartbeat', 
   }
 });
 
+test('a timed-out real Unix heartbeat closes concurrent calls before a late pong can cross generations', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-ping-timeout-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let latePong;
+  let reportLargeCall;
+  const largeCallSeen = new Promise((resolve) => {
+    reportLargeCall = resolve;
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.ping) latePong = frame;
+        if (frame.payload?.call === 'event_subscribe') {
+          socket.write(
+            encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
+          );
+        }
+        if (frame.payload?.call === 'state_write') {
+          reportLargeCall();
+          socket.write(
+            encode({
+              channel: 19,
+              kind: KIND.event,
+              payload: { snapshot: 'containers', of: [] },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'ping_timeout',
+          granted: ['state:write', 'containers:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const closed = [];
+    const events = [];
+    const session = await connect({
+      path: socketPath,
+      timeout: 80,
+      onClose: (error) => closed.push(error.message),
+      onEvent: (event) => events.push(event),
+    });
+    await session.call('event_subscribe', { topic: 'containers' });
+    const heartbeat = session.ping();
+    const largeCall = session.call('state_write', {
+      observed: 'absent',
+      contents: new Array(256 * 1024).fill(7),
+    });
+    await largeCallSeen;
+    while (events.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, [{ snapshot: 'containers', of: [] }]);
+    await assert.rejects(heartbeat, /ping timed out/);
+    await assert.rejects(largeCall, /ping timed out/);
+    await session.closed;
+    assert.equal(closed.length, 1, 'timeout establishes exactly one close boundary');
+    assert(latePong, 'the peer retained a real heartbeat token');
+    await assert.rejects(session.call('state_write', { observed: 'absent', contents: [] }), /closed/);
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix partial EOF and illegal headers fail closed without sending credit', async () => {
   for (const malformed of ['partial', 'flags']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-malformed-'));
@@ -1754,6 +1832,45 @@ test('real socket write backpressure admits no further calls until drain', async
     assert.equal(client.listenerCount(event), count);
   host.destroy();
   await new Promise((resolve) => server.close(resolve));
+});
+
+test('a pending large Unix call retains correlation metadata but not its request argument', async () => {
+  class RetainedBytes extends Array {}
+  const server = net.createServer((socket) => {
+    socket.on('error', () => {});
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'retention', granted: ['state:write'] },
+      }),
+    );
+    socket.on('data', () => {});
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const connections = new Set();
+  server.on('connection', (socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+  });
+  try {
+    const session = await connect({ path: server.address(), timeout: 1_000 });
+    const issue = () => {
+      const contents = new RetainedBytes(256 * 1024).fill(255);
+      return session.call('state_write', { observed: 'absent', contents });
+    };
+    const pending = issue();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(queryObjects(RetainedBytes, { format: 'count' }), 0);
+    const rejected = assert.rejects(pending, /closed/);
+    await session.close();
+    await rejected;
+    assert.equal(queryObjects(RetainedBytes, { format: 'count' }), 0);
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('real Unix event credit waits for drain when its listener fills the write buffer', async () => {

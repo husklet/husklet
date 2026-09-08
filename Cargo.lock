@@ -1436,6 +1436,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hl-image-reference"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "hl-images"
 version = "0.1.0"
 dependencies = [
@@ -1446,6 +1455,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hl-fs",
+ "hl-image-reference",
  "hl-log",
  "nix",
  "oci-client",

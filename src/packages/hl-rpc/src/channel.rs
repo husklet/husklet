@@ -38,6 +38,7 @@ pub enum Refusal {
     Exhausted,
     Unknown(ChannelId),
     Duplicate(ChannelId),
+    Retired(ChannelId),
     Reserved,
     WrongOrigin(ChannelId),
 }
@@ -48,6 +49,7 @@ impl std::fmt::Display for Refusal {
             Self::Exhausted => write!(formatter, "the channel limit of {} is reached", Channels::LIMIT),
             Self::Unknown(id) => write!(formatter, "channel {} is not open", id.raw()),
             Self::Duplicate(id) => write!(formatter, "channel {} is already open", id.raw()),
+            Self::Retired(id) => write!(formatter, "channel {} has already been retired", id.raw()),
             Self::Reserved => write!(formatter, "the control channel cannot be opened or closed"),
             Self::WrongOrigin(id) => write!(formatter, "channel {} was opened by the other side", id.raw()),
         }
@@ -73,10 +75,17 @@ struct Channel {
 }
 
 /// The open channels of one session.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Channels {
     open: BTreeMap<ChannelId, Channel>,
-    next_host: u32,
+    next_host: Option<u32>,
+    next_peer: Option<u32>,
+}
+
+impl Default for Channels {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Channels {
@@ -89,7 +98,8 @@ impl Channels {
     pub fn new() -> Self {
         Self {
             open: BTreeMap::new(),
-            next_host: 2,
+            next_host: Some(2),
+            next_peer: Some(1),
         }
     }
 
@@ -128,8 +138,8 @@ impl Channels {
         if self.open.len() >= Self::LIMIT {
             return Err(Refusal::Exhausted);
         }
-        let id = ChannelId::new(self.next_host);
-        self.next_host = self.next_host.saturating_add(2);
+        let id = ChannelId::new(self.next_host.ok_or(Refusal::Exhausted)?);
+        self.next_host = id.raw().checked_add(2);
         self.insert(id, purpose);
         Ok(id)
     }
@@ -152,6 +162,11 @@ impl Channels {
         if self.open.len() >= Self::LIMIT {
             return Err(Refusal::Exhausted);
         }
+        let next = self.next_peer.ok_or(Refusal::Exhausted)?;
+        if id.raw() < next {
+            return Err(Refusal::Retired(id));
+        }
+        self.next_peer = id.raw().checked_add(2);
         self.insert(id, purpose);
         Ok(())
     }
@@ -192,6 +207,15 @@ impl Channels {
         Ok(())
     }
 
+    /// Restores one reservation when an outbox refuses the corresponding
+    /// frame. This is crate-private because only the queue can prove no frame
+    /// was retained or sent.
+    pub(crate) fn refund(&mut self, id: ChannelId) {
+        if let Some(channel) = self.open.get_mut(&id) {
+            channel.credit = channel.credit.saturating_add(1).min(Self::CREDIT);
+        }
+    }
+
     /// Clears the coalescing tally after the superseding frame is sent.
     pub fn resolve(&mut self, id: ChannelId) -> u64 {
         self.open
@@ -213,6 +237,8 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{ChannelId, Channels, Permission, Purpose, Refusal};
 
     #[test]
@@ -225,6 +251,14 @@ mod tests {
         assert!(!extension.is_host());
         channels.accept(extension, Purpose::Call).expect("accepted");
         assert_eq!(channels.len(), 2);
+    }
+
+    #[test]
+    fn default_construction_never_allocates_the_control_channel() {
+        let mut channels = Channels::default();
+        let host = channels.open(Purpose::Call).expect("opened");
+        assert_eq!(host, ChannelId::new(2));
+        assert_ne!(host, ChannelId::CONTROL);
     }
 
     #[test]
@@ -332,6 +366,57 @@ mod tests {
         channels.close(first).expect("closed");
         let second = channels.open(Purpose::Call).expect("opened");
         assert_ne!(first, second, "a late frame must not land on a new channel");
+    }
+
+    #[test]
+    fn an_extension_cannot_reopen_a_retired_identifier() {
+        let mut channels = Channels::new();
+        let old = ChannelId::new(3);
+        channels.accept(old, Purpose::Call).expect("accepted");
+        channels.close(old).expect("closed");
+
+        assert_eq!(channels.accept(old, Purpose::Stream), Err(Refusal::Retired(old)));
+        assert!(channels.is_empty(), "the delayed identifier did not alias a new stream");
+
+        let fresh = ChannelId::new(5);
+        channels
+            .accept(fresh, Purpose::Stream)
+            .expect("newer identifier accepted");
+        assert_eq!(channels.purpose(fresh), Some(Purpose::Stream));
+    }
+
+    #[test]
+    fn identifier_exhaustion_never_changes_origin_or_reuses_the_boundary() {
+        let mut channels = Channels {
+            open: BTreeMap::new(),
+            next_host: Some(u32::MAX - 1),
+            next_peer: Some(u32::MAX),
+        };
+
+        let host = channels.open(Purpose::Call).expect("last even identifier");
+        assert_eq!(host, ChannelId::new(u32::MAX - 1));
+        assert!(host.is_host());
+        assert_eq!(channels.open(Purpose::Call), Err(Refusal::Exhausted));
+
+        let peer = ChannelId::new(u32::MAX);
+        channels.accept(peer, Purpose::Call).expect("last odd identifier");
+        channels.close(peer).expect("closed");
+        assert_eq!(channels.accept(peer, Purpose::Call), Err(Refusal::Exhausted));
+    }
+
+    #[test]
+    fn repeated_peer_churn_cannot_alias_late_frames_or_inflate_credit() {
+        let mut channels = Channels::new();
+        for raw in (1..40_001_u32).step_by(2) {
+            let id = ChannelId::new(raw);
+            channels.accept(id, Purpose::Stream).expect("fresh peer channel");
+            channels.replenish(id, u32::MAX).expect("forged credit is bounded");
+            assert_eq!(channels.credit(id), Some(Channels::CREDIT));
+            channels.close(id).expect("closed");
+            assert_eq!(channels.accept(id, Purpose::Call), Err(Refusal::Retired(id)));
+            assert_eq!(channels.reserve(id), Err(Refusal::Unknown(id)));
+            assert!(channels.is_empty());
+        }
     }
 
     #[test]

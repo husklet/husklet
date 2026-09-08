@@ -385,8 +385,7 @@ impl Supply for Workspace {
     fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
         conversation.with_events(self.events.clone());
         let extensions = Extensions::open(&self.config).map_err(|error| error.to_string())?;
-        let state = super::super::StateBlob::new(&self.root(), &plan.record.name)
-            .map_err(|error| error.to_string())?;
+        let state = super::super::StateBlob::new(&self.root(), &plan.record.name).map_err(|error| error.to_string())?;
         conversation.with_extension_events(extensions.extension_events());
         let console = Console;
         let terminal: &dyn TerminalSurface = self.terminal.as_deref().unwrap_or(&console);
@@ -431,6 +430,8 @@ mod halt_tests {
     fn plan(socket: std::path::PathBuf) -> Plan {
         let manifest = Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("checkpoint-sidecar").expect("name"),
             display_name: "Checkpoint sidecar".to_owned(),
             version: "1.0.0".to_owned(),
@@ -446,6 +447,8 @@ mod halt_tests {
         };
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             name: manifest.name.clone(),

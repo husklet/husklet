@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
-    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
-    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
+    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
+    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -44,6 +44,8 @@ pub struct Session {
     pending: Vec<SurfaceFrame>,
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
+    networks: crate::NetworkGrant,
+    volumes: crate::VolumeGrant,
     filesystem: FilesystemGrant,
     workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
@@ -145,6 +147,8 @@ impl Session {
             pending: Vec::new(),
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
+            networks: crate::NetworkGrant::default(),
+            volumes: crate::VolumeGrant::default(),
             filesystem: FilesystemGrant::default(),
             workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
@@ -155,6 +159,18 @@ impl Session {
     #[must_use]
     pub fn with_containers(mut self, containers: ContainerGrant) -> Self {
         self.containers = containers;
+        self
+    }
+
+    #[must_use]
+    pub fn with_networks(mut self, networks: crate::NetworkGrant) -> Self {
+        self.networks = networks;
+        self
+    }
+
+    #[must_use]
+    pub fn with_volumes(mut self, volumes: crate::VolumeGrant) -> Self {
+        self.volumes = volumes;
         self
     }
 
@@ -173,6 +189,23 @@ impl Session {
     #[must_use]
     pub fn filesystem_read_selectors(&self) -> &[crate::FilesystemSelector] {
         &self.filesystem.read
+    }
+
+    #[must_use]
+    pub fn visible_networks(&self, networks: Vec<crate::port::NetworkSummary>) -> crate::port::NetworkInventory {
+        crate::port::NetworkInventory::bounded(
+            networks
+                .into_iter()
+                .filter(|network| self.networks.permits(&network.id, &network.name))
+                .collect(),
+        )
+    }
+
+    #[must_use]
+    pub fn visible_volumes(&self, volumes: Vec<crate::port::VolumeSummary>) -> crate::port::VolumeInventory {
+        crate::port::VolumeInventory::bounded(
+            volumes.into_iter().filter(|volume| self.volumes.permits(&volume.name)).collect(),
+        )
     }
 
     fn permit_filesystem_path(
@@ -519,7 +552,9 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
-            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => self.state(request, services),
+            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => {
+                self.state(request, services)
+            }
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -637,6 +672,7 @@ impl Session {
 
     fn control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         if let Request::ContainerCreate { spec } = request {
+            validate_container_create(spec)?;
             if !self.containers.create {
                 return Err(Failure::Denied {
                     capability: Capability::ContainerControl.as_str().into(),
@@ -649,8 +685,17 @@ impl Session {
             if spec.mounts.iter().any(|mount| !mount.read_only) {
                 self.peer.authority().permit(Capability::VolumeWrite)?;
             }
+            for mount in &spec.mounts {
+                self.permit_volume(
+                    &mount.volume,
+                    if mount.read_only { Capability::VolumeRead } else { Capability::VolumeWrite },
+                )?;
+            }
             if spec.network.is_some() || spec.ports.iter().any(|port| port.host.is_some()) {
                 self.peer.authority().permit(Capability::NetworkWrite)?;
+            }
+            if let Some(network) = &spec.network {
+                self.permit_network_reference(network, Capability::NetworkWrite)?;
             }
         }
         let port = self
@@ -785,11 +830,27 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.volumes)?;
         match request {
-            Request::VolumeList => Ok(Reply::Volumes(crate::port::VolumeInventory::bounded(port.list()?))),
-            Request::VolumeInspect { name } => Ok(Reply::Volume(port.inspect(name)?)),
-            Request::VolumeCreate { name } => Ok(Reply::Volume(port.create(name)?)),
+            Request::VolumeList => Ok(Reply::Volumes(self.visible_volumes(port.list()?))),
+            Request::VolumeInspect { name } => {
+                validate_volume_name(name)?;
+                self.permit_volume(name, capability)?;
+                Ok(Reply::Volume(port.inspect(name)?))
+            }
+            Request::VolumeCreate { name } => {
+                validate_volume_name(name)?;
+                if !self.volumes.create {
+                    return Err(Failure::Denied {
+                        capability: capability.as_str().into(),
+                        detail: "volume creation is outside the consented resource scope".into(),
+                    });
+                }
+                self.permit_volume(name, capability)?;
+                Ok(Reply::Volume(port.create(name)?))
+            }
             Request::VolumeRemove { name, generation } => {
+                validate_volume_name(name)?;
                 immutable_identity(generation, &[32], "volume generation")?;
+                self.permit_volume(name, capability)?;
                 port.remove(name, generation)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
@@ -798,15 +859,42 @@ impl Session {
         }
     }
 
+    fn permit_volume(&self, name: &str, capability: Capability) -> Result<(), Failure> {
+        if self.volumes.permits(name) {
+            Ok(())
+        } else {
+            Err(Failure::Denied {
+                capability: capability.as_str().into(),
+                detail: "volume is outside the consented resource scope".into(),
+            })
+        }
+    }
+
     fn networks(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.networks)?;
         match request {
-            Request::NetworkList => Ok(Reply::Networks(crate::port::NetworkInventory::bounded(port.list()?))),
-            Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
-            Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
+            Request::NetworkList => Ok(Reply::Networks(self.visible_networks(port.list()?))),
+            Request::NetworkInspect { reference } => {
+                self.permit_network_reference(reference, capability)?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
+                Ok(Reply::Network(network))
+            }
+            Request::NetworkCreate { name } => {
+                if !self.networks.create {
+                    return Err(Failure::Denied {
+                        capability: capability.as_str().into(),
+                        detail: "network creation is outside the consented resource scope".into(),
+                    });
+                }
+                Ok(Reply::Identity(port.create(name)?))
+            }
             Request::NetworkRemove { reference } => {
                 immutable_identity(reference, &[32], "network")?;
+                self.permit_network_reference(reference, capability)?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::NetworkConnect {
@@ -817,6 +905,9 @@ impl Session {
                 validate_endpoint_aliases(aliases)?;
                 let reference = immutable_reference(reference, &[32], "network")?;
                 immutable_identity(container, &[32, 64], "container")?;
+                self.permit_network_reference(reference, capability)?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.connect_with_aliases(reference, &target.id, aliases)
                     .map(|()| Reply::Done)
@@ -825,12 +916,41 @@ impl Session {
             Request::NetworkDisconnect { reference, container } => {
                 let reference = immutable_reference(reference, &[32], "network")?;
                 immutable_identity(container, &[32, 64], "container")?;
+                self.permit_network_reference(reference, capability)?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.disconnect(reference, &target.id)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn permit_network(&self, network: &crate::port::NetworkSummary, capability: Capability) -> Result<(), Failure> {
+        self.networks
+            .permits(&network.id, &network.name)
+            .then_some(())
+            .ok_or_else(|| Failure::Denied {
+                capability: capability.as_str().into(),
+                detail: "network is outside the consented resource scope".into(),
+            })
+    }
+
+    fn permit_network_reference(&self, reference: &str, capability: Capability) -> Result<(), Failure> {
+        if !resource_name(reference)
+            && immutable_identity(reference, &[32], "network").is_err()
+        {
+            return Err(Failure::Conflict { detail: "network reference must be an exact name or complete immutable ID".into() });
+        }
+        if self.networks.permits_reference(reference) {
+            Ok(())
+        } else {
+            Err(Failure::Denied {
+                capability: capability.as_str().into(),
+                detail: "network is outside the consented resource scope".into(),
+            })
         }
     }
 
@@ -988,6 +1108,8 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                networks,
+                volumes,
                 filesystem,
                 workspace_environment,
             } => {
@@ -999,6 +1121,8 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    networks,
+                    volumes,
                     filesystem,
                     workspace_environment,
                 )?))
@@ -1009,6 +1133,8 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                networks,
+                volumes,
                 filesystem,
                 workspace_environment,
             } => {
@@ -1020,6 +1146,8 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    networks,
+                    volumes,
                     filesystem,
                     workspace_environment,
                 )?))
@@ -1355,7 +1483,9 @@ impl Session {
                     });
                 }
                 exact_state_identity(observed)?;
-                port.write(observed, contents).map(Reply::Identity).map_err(Failure::from)
+                port.write(observed, contents)
+                    .map(Reply::Identity)
+                    .map_err(Failure::from)
             }
             Request::StateClear { observed } => {
                 exact_state_identity(observed)?;
@@ -1574,6 +1704,25 @@ fn immutable_identity(id: &str, widths: &[usize], noun: &str) -> Result<(), Fail
     })
 }
 
+fn validate_volume_name(name: &str) -> Result<(), Failure> {
+    if resource_name(name) {
+        Ok(())
+    } else {
+        Err(Failure::Conflict {
+            detail: "volume name must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes".into(),
+        })
+    }
+}
+
+fn resource_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
+}
+
 fn immutable_reference<'a>(id: &'a str, widths: &[usize], noun: &str) -> Result<&'a str, Failure> {
     immutable_identity(id, widths, noun)?;
     Ok(id)
@@ -1704,14 +1853,6 @@ fn validate_container_create(spec: &crate::port::ContainerCreateSpec) -> Result<
     let unique =
         |values: &[(String, String)]| values.iter().map(|(key, _)| key).collect::<BTreeSet<_>>().len() == values.len();
     let environment_name = |value: &str| !value.is_empty() && value.len() <= 256 && !value.contains(['=', '\0']);
-    let resource_name = |value: &str| {
-        !value.is_empty()
-            && value.len() <= 255
-            && value
-                .bytes()
-                .enumerate()
-                .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index != 0 && b"_.-".contains(&byte)))
-    };
     let valid = container_name(&spec.name)
         && spec.hostname.as_ref().is_none_or(|value| {
             !value.is_empty()

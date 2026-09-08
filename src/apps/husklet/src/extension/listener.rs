@@ -359,6 +359,8 @@ mod tests {
     fn manifest() -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -414,7 +416,11 @@ mod tests {
         let listener = Listener::open(&spec(&socket), |_| {}).expect("bound");
 
         let mode = std::fs::metadata(&socket).expect("metadata").permissions().mode();
-        assert_eq!(mode & 0o777, 0o666, "the owner-only directory is the credential boundary");
+        assert_eq!(
+            mode & 0o777,
+            0o666,
+            "the owner-only directory is the credential boundary"
+        );
         listener.close().expect("closed");
     }
 

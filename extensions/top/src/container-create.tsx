@@ -8,9 +8,14 @@ import {
   Column,
   Entry,
   Expander,
+  FormControl,
+  FormLabel,
   Heading,
   Row,
+  Select,
   Spinner,
+  Switch,
+  TagInput,
   Text,
   type ContainerCreateSpec,
   type WorkspaceApi,
@@ -19,22 +24,128 @@ import { boundedMessage } from './model.js';
 
 const { useState } = React;
 
+function ArgumentEditor({
+  label,
+  value,
+  enabled,
+  onChange,
+}: {
+  label: string;
+  value: string[];
+  enabled: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  const [argument, setArgument] = useState('');
+  const add = () => {
+    if (!argument || value.length >= 64) return;
+    onChange([...value, argument]);
+    setArgument('');
+  };
+  return (
+    <FormControl gap={1} width={{ chars: 28 }}>
+      <FormLabel label={label} />
+      <TagInput
+        value={argument}
+        placeholder={`Add ${label.toLowerCase()} argument`}
+        enabled={enabled}
+        onChange={(event) => setArgument(String(event.value ?? ''))}
+        onSubmit={add}
+      />
+      <Row gap={1} wrap>
+        {value.map((item, index) => (
+          <Button
+            key={`${index}:${item}`}
+            label={`${index + 1} · ${item}`}
+            tooltip={`Remove argument ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
+function EnvironmentEditor({
+  value,
+  enabled,
+  onChange,
+  label = 'Environment variables',
+  namePlaceholder = 'Variable name',
+  valuePlaceholder = 'Variable value',
+  addLabel = 'Add variable',
+}: {
+  value: [string, string][];
+  enabled: boolean;
+  onChange: (value: [string, string][]) => void;
+  label?: string;
+  namePlaceholder?: string;
+  valuePlaceholder?: string;
+  addLabel?: string;
+}) {
+  const [name, setName] = useState('');
+  const [entryValue, setEntryValue] = useState('');
+  const add = () => {
+    if (!name || name.includes('=') || value.some(([held]) => held === name)) return;
+    onChange([...value, [name, entryValue]]);
+    setName('');
+    setEntryValue('');
+  };
+  return (
+    <FormControl gap={1}>
+      <FormLabel label={label} />
+      <Row gap={1} wrap>
+        <Entry
+          value={name}
+          placeholder={namePlaceholder}
+          enabled={enabled}
+          onChange={(event) => setName(String(event.value ?? ''))}
+        />
+        <Entry
+          value={entryValue}
+          placeholder={valuePlaceholder}
+          enabled={enabled}
+          onChange={(event) => setEntryValue(String(event.value ?? ''))}
+        />
+        <Button
+          label={addLabel}
+          enabled={enabled && Boolean(name) && !name.includes('=')}
+          onInvoke={add}
+        />
+      </Row>
+      <Row gap={1} wrap>
+        {value.map(([heldName, heldValue], index) => (
+          <Button
+            key={`${heldName}:${index}`}
+            label={`${heldName}=${heldValue}`}
+            tooltip={`Remove ${heldName}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
 export type ContainerCreateDraft = {
   image: string;
   name: string;
   hostname: string;
   user: string;
-  labels: string;
+  labels: [string, string][];
   network: string;
-  entrypoint: string;
-  command: string;
-  environment: string;
+  entrypoint: string[];
+  command: string[];
+  environment: [string, string][];
   workingDirectory: string;
   memoryMb: string;
   cpus: string;
   pidsLimit: string;
-  mounts: string;
-  ports: string;
+  mounts: VolumeMount[];
+  ports: PublishedPort[];
 };
 
 type CreatedContainer = { id: string; name: string; generation: number };
@@ -53,28 +164,20 @@ const emptyDraft = (): ContainerCreateDraft => ({
   name: '',
   hostname: '',
   user: '',
-  labels: '',
+  labels: [],
   network: '',
-  entrypoint: '',
-  command: '',
-  environment: '',
+  entrypoint: [],
+  command: [],
+  environment: [],
   workingDirectory: '',
   memoryMb: '',
   cpus: '',
   pidsLimit: '',
-  mounts: '',
-  ports: '',
+  mounts: [],
+  ports: [],
 });
 
 const byteLength = (value: string) => new TextEncoder().encode(value).byteLength;
-
-function parseJson(text: string, message: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(message);
-  }
-}
 
 function isStringPair(value: unknown): value is [string, string] {
   return (
@@ -126,12 +229,141 @@ function isValidPublishedPort(value: unknown, allowed: Set<string>): value is Pu
   );
 }
 
-function parseLabels(text: string): [string, string][] | undefined {
-  if (!text) {
+function MountEditor({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: VolumeMount[];
+  enabled: boolean;
+  onChange: (value: VolumeMount[]) => void;
+}) {
+  const [volume, setVolume] = useState('');
+  const [target, setTarget] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
+  const add = () => {
+    if (!volume || !target || value.length >= 64) return;
+    onChange([...value, { volume, target, read_only: readOnly }]);
+    setVolume('');
+    setTarget('');
+    setReadOnly(false);
+  };
+  return (
+    <FormControl gap={1}>
+      <FormLabel label="Volume mounts" />
+      <Row gap={1} wrap>
+        <Entry
+          value={volume}
+          placeholder="Mount volume"
+          enabled={enabled}
+          onChange={(event) => setVolume(String(event.value ?? ''))}
+        />
+        <Entry
+          value={target}
+          placeholder="Container path"
+          enabled={enabled}
+          onChange={(event) => setTarget(String(event.value ?? ''))}
+        />
+        <FormControl gap={1}>
+          <FormLabel label="Read only" />
+          <Switch
+            checked={readOnly}
+            enabled={enabled}
+            onToggle={(event) => setReadOnly(Boolean(event.value))}
+          />
+        </FormControl>
+        <Button
+          label="Add mount"
+          enabled={enabled && Boolean(volume) && Boolean(target)}
+          onInvoke={add}
+        />
+      </Row>
+      <Row gap={1} wrap>
+        {value.map((entry, index) => (
+          <Button
+            key={`${String(entry.volume)}:${index}`}
+            label={`${String(entry.volume)} → ${String(entry.target)}${entry.read_only ? ' · read only' : ''}`}
+            tooltip={`Remove mount ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
+function PortEditor({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: PublishedPort[];
+  enabled: boolean;
+  onChange: (value: PublishedPort[]) => void;
+}) {
+  const [containerPort, setContainerPort] = useState('');
+  const [hostPort, setHostPort] = useState('');
+  const [protocol, setProtocol] = useState('tcp');
+  const add = () => {
+    const container = Number(containerPort);
+    const host = hostPort ? Number(hostPort) : null;
+    if (!isPortNumber(container) || (host !== null && !isPortNumber(host)) || value.length >= 64)
+      return;
+    onChange([...value, { container, host, protocol: protocol as 'tcp' | 'udp' }]);
+    setContainerPort('');
+    setHostPort('');
+  };
+  const validDraft =
+    isPortNumber(Number(containerPort)) && (!hostPort || isPortNumber(Number(hostPort)));
+  return (
+    <FormControl gap={1}>
+      <FormLabel label="Published ports" />
+      <Row gap={1} wrap>
+        <Entry
+          value={containerPort}
+          placeholder="Container port"
+          enabled={enabled}
+          onChange={(event) => setContainerPort(String(event.value ?? ''))}
+        />
+        <Entry
+          value={hostPort}
+          placeholder="Host port (automatic if empty)"
+          enabled={enabled}
+          onChange={(event) => setHostPort(String(event.value ?? ''))}
+        />
+        <Select
+          value={protocol}
+          choices={[
+            { value: 'tcp', label: 'TCP' },
+            { value: 'udp', label: 'UDP' },
+          ]}
+          enabled={enabled}
+          onChange={(event) => setProtocol(String(event.value ?? 'tcp'))}
+        />
+        <Button label="Publish port" enabled={enabled && validDraft} onInvoke={add} />
+      </Row>
+      <Row gap={1} wrap>
+        {value.map((entry, index) => (
+          <Button
+            key={`${String(entry.container)}:${String(entry.protocol)}:${index}`}
+            label={`${String(entry.host ?? 'auto')} → ${String(entry.container)}/${String(entry.protocol)}`}
+            tooltip={`Remove published port ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
+export function parseLabels(value: [string, string][]): [string, string][] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const value = parseJson(text, 'Labels must be valid JSON pairs, such as [["role","worker"]].');
   const valid =
     Array.isArray(value) &&
     value.length <= 128 &&
@@ -154,13 +386,13 @@ function parseLabels(text: string): [string, string][] | undefined {
   return value;
 }
 
-function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] | undefined {
-  if (!text) {
+export function parseArguments(
+  value: string[],
+  kind: 'Command' | 'Entrypoint',
+): string[] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const example = kind === 'Entrypoint' ? '["/bin/sh","-lc"]' : '["sh","-lc","printf ready"]';
-  const value = parseJson(text, `${kind} must be valid JSON, such as ${example}.`);
   const validCount =
     Array.isArray(value) &&
     value.length <= 64 &&
@@ -184,12 +416,10 @@ function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] 
   return value;
 }
 
-function parseEnvironment(text: string): [string, string][] | undefined {
-  if (!text) {
+export function parseEnvironment(value: [string, string][]): [string, string][] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const value = parseJson(text, 'Environment must be valid JSON pairs, such as [["MODE","test"]].');
   const valid =
     Array.isArray(value) &&
     value.length <= 256 &&
@@ -226,15 +456,15 @@ export function containerCreateOptions(
   if (user && (byteLength(user) > 256 || user.includes('\0'))) {
     throw new Error('Run as user must be a nonempty, NUL-free value of at most 256 bytes.');
   }
-  const labels = parseLabels(draft.labels.trim());
+  const labels = parseLabels(draft.labels);
   const network = draft.network;
   if (network && (byteLength(network) > 255 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(network))) {
     throw new Error(
       'Initial network must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes.',
     );
   }
-  const entrypoint = parseArguments(draft.entrypoint.trim(), 'Entrypoint');
-  const command = parseArguments(draft.command.trim(), 'Command');
+  const entrypoint = parseArguments(draft.entrypoint, 'Entrypoint');
+  const command = parseArguments(draft.command, 'Command');
   if (
     [...(entrypoint ?? []), ...(command ?? [])].reduce(
       (total, argument) => total + byteLength(argument),
@@ -243,7 +473,7 @@ export function containerCreateOptions(
   ) {
     throw new Error('Entrypoint and command together must contain at most 32768 bytes.');
   }
-  const environment = parseEnvironment(draft.environment.trim());
+  const environment = parseEnvironment(draft.environment);
   const workingDirectory = draft.workingDirectory.trim();
   if (
     workingDirectory &&
@@ -259,60 +489,8 @@ export function containerCreateOptions(
   const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
   const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
   const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
-  const mountsText = draft.mounts.trim();
-  let mounts;
-  if (mountsText) {
-    try {
-      mounts = JSON.parse(mountsText);
-    } catch {
-      throw new Error(
-        'Mounts must be valid JSON, such as [{"volume":"cache","target":"/cache","read_only":true}].',
-      );
-    }
-    const allowed = new Set(['volume', 'target', 'read_only']);
-    if (
-      !Array.isArray(mounts) ||
-      mounts.length > 64 ||
-      mounts.some((mount) => !isValidVolumeMount(mount, allowed)) ||
-      new Set(mounts.map((mount) => mount.target)).size !== mounts.length
-    ) {
-      throw new Error(
-        'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.',
-      );
-    }
-    mounts = (mounts as VolumeMount[]).map(({ volume, target, read_only = false }) => ({
-      volume,
-      target,
-      read_only,
-    }));
-  }
-  const portsText = draft.ports.trim();
-  let ports;
-  if (portsText) {
-    try {
-      ports = JSON.parse(portsText);
-    } catch {
-      throw new Error(
-        'Ports must be valid JSON, such as [{"container":8080,"host":18080,"protocol":"tcp"}].',
-      );
-    }
-    const allowed = new Set(['container', 'host', 'protocol']);
-    if (
-      !Array.isArray(ports) ||
-      ports.length > 64 ||
-      ports.some((port) => !isValidPublishedPort(port, allowed)) ||
-      new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length
-    ) {
-      throw new Error(
-        'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.',
-      );
-    }
-    ports = (ports as PublishedPort[]).map(({ container, host = null, protocol }) => ({
-      container,
-      host,
-      protocol,
-    }));
-  }
+  const mounts = parseMounts(draft.mounts);
+  const ports = parsePorts(draft.ports);
   return {
     ...(hostname ? { hostname } : {}),
     ...(entrypoint ? { entrypoint } : {}),
@@ -328,6 +506,50 @@ export function containerCreateOptions(
     ...(mounts ? { mounts } : {}),
     ...(ports ? { ports } : {}),
   };
+}
+
+export function parseMounts(mounts: VolumeMount[]): VolumeMount[] | undefined {
+  if (mounts.length === 0) return undefined;
+  {
+    const allowed = new Set(['volume', 'target', 'read_only']);
+    if (
+      !Array.isArray(mounts) ||
+      mounts.length > 64 ||
+      mounts.some((mount) => !isValidVolumeMount(mount, allowed)) ||
+      new Set(mounts.map((mount) => mount.target)).size !== mounts.length
+    ) {
+      throw new Error(
+        'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.',
+      );
+    }
+    return (mounts as VolumeMount[]).map(({ volume, target, read_only = false }) => ({
+      volume,
+      target,
+      read_only,
+    }));
+  }
+}
+
+export function parsePorts(ports: PublishedPort[]): PublishedPort[] | undefined {
+  if (ports.length === 0) return undefined;
+  {
+    const allowed = new Set(['container', 'host', 'protocol']);
+    if (
+      !Array.isArray(ports) ||
+      ports.length > 64 ||
+      ports.some((port) => !isValidPublishedPort(port, allowed)) ||
+      new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length
+    ) {
+      throw new Error(
+        'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.',
+      );
+    }
+    return (ports as PublishedPort[]).map(({ container, host = null, protocol }) => ({
+      container,
+      host,
+      protocol,
+    }));
+  }
 }
 
 function optionalDecimalLimit(value: string, label: string, maximum: number): number | null {
@@ -361,8 +583,11 @@ export function ContainerCreate({
   } catch (cause: unknown) {
     configurationError = boundedMessage(cause);
   }
-  const update = (field: keyof ContainerCreateDraft, value: unknown) => {
-    setDraft((current) => ({ ...current, [field]: String(value ?? '') }));
+  const update = <K extends keyof ContainerCreateDraft>(
+    field: K,
+    value: ContainerCreateDraft[K],
+  ) => {
+    setDraft((current) => ({ ...current, [field]: value }));
   };
   const createAndStart = async () => {
     if (blocked) return;
@@ -422,118 +647,114 @@ export function ContainerCreate({
                 value={draft.image}
                 placeholder={'Image reference'}
                 enabled={editable}
-                onChange={(event) => update('image', event.value)}
+                onChange={(event) => update('image', String(event.value ?? ''))}
               />
               <Entry
                 value={draft.name}
                 placeholder={'Container name'}
                 enabled={editable}
-                onChange={(event) => update('name', event.value)}
-              />
-              <Entry
-                value={draft.hostname}
-                placeholder={'Hostname (optional)'}
-                enabled={editable}
-                onChange={(event) => update('hostname', event.value)}
-              />
-              <Entry
-                value={draft.user}
-                placeholder={'Run as user (optional)'}
-                enabled={editable}
-                onChange={(event) => update('user', event.value)}
-              />
-              <Entry
-                value={draft.labels}
-                placeholder={'Labels JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('labels', event.value)}
+                onChange={(event) => update('name', String(event.value ?? ''))}
               />
             </Row>
-            <Text
-              label={'Labels use JSON [name, value] pairs, for example [["role","worker"]].'}
-              color={'text-dim'}
-              wrap={true}
-            />
+            <Expander label="Advanced identity">
+              <Column gap={1}>
+                <Row gap={1} wrap>
+                  <Entry
+                    value={draft.hostname}
+                    placeholder={'Hostname (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('hostname', String(event.value ?? ''))}
+                  />
+                  <Entry
+                    value={draft.user}
+                    placeholder={'Run as user (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('user', String(event.value ?? ''))}
+                  />
+                </Row>
+                <EnvironmentEditor
+                  value={draft.labels}
+                  enabled={editable}
+                  onChange={(value) => update('labels', value)}
+                  label="Labels"
+                  namePlaceholder="Label name"
+                  valuePlaceholder="Label value"
+                  addLabel="Add label"
+                />
+              </Column>
+            </Expander>
             <Heading label={'Process'} scale={'body'} />
             <Row gap={1} wrap={true}>
-              <Entry
+              <ArgumentEditor
+                label="Entrypoint"
                 value={draft.entrypoint}
-                placeholder={'Entrypoint argv JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('entrypoint', event.value)}
+                onChange={(value) => update('entrypoint', value)}
               />
-              <Entry
+              <ArgumentEditor
+                label="Command"
                 value={draft.command}
-                placeholder={'Command argv JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('command', event.value)}
+                onChange={(value) => update('command', value)}
               />
-              <Entry
+              <EnvironmentEditor
                 value={draft.environment}
-                placeholder={'Environment pairs JSON (optional)'}
                 enabled={editable}
-                onChange={(event) => update('environment', event.value)}
+                onChange={(value) => update('environment', value)}
               />
               <Entry
                 value={draft.workingDirectory}
                 placeholder={'Working directory (optional)'}
                 enabled={editable}
-                onChange={(event) => update('workingDirectory', event.value)}
+                onChange={(event) => update('workingDirectory', String(event.value ?? ''))}
               />
             </Row>
-            <Text
-              label={
-                'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.'
-              }
-              color={'text-dim'}
-              wrap={true}
-            />
-            <Heading label={'Resources and connectivity'} scale={'body'} />
-            <Row gap={1} wrap={true}>
-              <Entry
-                value={draft.memoryMb}
-                placeholder={'Memory limit MiB (optional)'}
-                enabled={editable}
-                onChange={(event) => update('memoryMb', event.value)}
-              />
-              <Entry
-                value={draft.cpus}
-                placeholder={'CPU limit (optional)'}
-                enabled={editable}
-                onChange={(event) => update('cpus', event.value)}
-              />
-              <Entry
-                value={draft.pidsLimit}
-                placeholder={'PID limit (optional)'}
-                enabled={editable}
-                onChange={(event) => update('pidsLimit', event.value)}
-              />
-              <Entry
-                value={draft.network}
-                placeholder={'Initial network (optional)'}
-                enabled={editable}
-                onChange={(event) => update('network', event.value)}
-              />
-              <Entry
-                value={draft.mounts}
-                placeholder={'Named volume mounts JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('mounts', event.value)}
-              />
-              <Entry
-                value={draft.ports}
-                placeholder={'Published ports JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('ports', event.value)}
-              />
-            </Row>
-            <Text
-              label={
-                'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
-              }
-              color={'text-dim'}
-              wrap={true}
-            />
+            <Expander label="Advanced resources and networking">
+              <Column gap={1}>
+                <Heading label={'Resources and connectivity'} scale={'body'} />
+                <Row gap={1} wrap={true}>
+                  <Entry
+                    value={draft.memoryMb}
+                    placeholder={'Memory limit MiB (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('memoryMb', String(event.value ?? ''))}
+                  />
+                  <Entry
+                    value={draft.cpus}
+                    placeholder={'CPU limit (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('cpus', String(event.value ?? ''))}
+                  />
+                  <Entry
+                    value={draft.pidsLimit}
+                    placeholder={'PID limit (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('pidsLimit', String(event.value ?? ''))}
+                  />
+                  <Entry
+                    value={draft.network}
+                    placeholder={'Initial network (optional)'}
+                    enabled={editable}
+                    onChange={(event) => update('network', String(event.value ?? ''))}
+                  />
+                  <MountEditor
+                    value={draft.mounts}
+                    enabled={editable}
+                    onChange={(value) => update('mounts', value)}
+                  />
+                  <PortEditor
+                    value={draft.ports}
+                    enabled={editable}
+                    onChange={(value) => update('ports', value)}
+                  />
+                </Row>
+                <Text
+                  label="Mounts accept named volumes only. Published host ports may be left automatic."
+                  color="text-dim"
+                  wrap
+                />
+              </Column>
+            </Expander>
           </CardContent>
           <CardActions>
             {blocked ? <Spinner /> : null}

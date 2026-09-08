@@ -512,21 +512,25 @@ export function workspace(session, { signal } = {}) {
             startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
             acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
             cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-            install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_install', {
+            install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_install', {
                 job,
                 revision,
                 image_digest: immutableDigest(imageDigest, 'extension candidate image'),
                 granted,
                 containers,
+                networks,
+                volumes,
                 filesystem,
                 workspace_environment: workspaceEnvironment,
             }), 'extension'),
-            update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_update', {
+            update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_update', {
                 job,
                 revision,
                 image_digest: immutableDigest(imageDigest, 'extension candidate image'),
                 granted,
                 containers,
+                networks,
+                volumes,
                 filesystem,
                 workspace_environment: workspaceEnvironment,
             }), 'extension'),
@@ -2468,7 +2472,7 @@ export function workspace(session, { signal } = {}) {
         }
     };
     api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
-    const commitAcquisitionAndWait = async (operation, job, revision, granted, containers = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {}) => {
+    const commitAcquisitionAndWait = async (operation, job, revision, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {}) => {
         if (!Number.isSafeInteger(revision) || revision < 0) {
             throw new TypeError(`extension ${operation} wait requires a nonnegative safe integer revision`);
         }
@@ -2506,7 +2510,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
-            const committed = await api.extensions[operation](job, revision, digest, granted, containers, filesystem, workspaceEnvironment);
+            const committed = await api.extensions[operation](job, revision, digest, granted, containers, networks, volumes, filesystem, workspaceEnvironment);
             if (committed.name !== candidate.name || committed.image_digest !== digest) {
                 throw new Error(`extension ${operation} returned a different candidate identity`);
             }
@@ -2528,8 +2532,8 @@ export function workspace(session, { signal } = {}) {
             await stop();
         }
     };
-    api.extensions.installAndWait = (job, revision, granted, containers, filesystem, options) => commitAcquisitionAndWait('install', job, revision, granted, containers, filesystem, options);
-    api.extensions.updateAndWait = (job, revision, granted, containers, filesystem, options) => commitAcquisitionAndWait('update', job, revision, granted, containers, filesystem, options);
+    api.extensions.installAndWait = (job, revision, granted, containers, networks, volumes, filesystem, options) => commitAcquisitionAndWait('install', job, revision, granted, containers, networks, volumes, filesystem, options);
+    api.extensions.updateAndWait = (job, revision, granted, containers, networks, volumes, filesystem, options) => commitAcquisitionAndWait('update', job, revision, granted, containers, networks, volumes, filesystem, options);
     api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
         if (typeof job !== 'string' ||
             job.length === 0 ||

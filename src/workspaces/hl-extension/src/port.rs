@@ -710,6 +710,11 @@ pub struct ExtensionSummary {
     /// Effective container resource consent persisted for this exact image digest.
     #[serde(default)]
     pub containers: crate::ContainerGrant,
+    /// Effective network resource consent persisted for this exact image digest.
+    #[serde(default)]
+    pub networks: crate::NetworkGrant,
+    #[serde(default)]
+    pub volumes: crate::VolumeGrant,
     /// Durable, manifest-intersected workspace file authority.
     #[serde(default)]
     pub filesystem: crate::FilesystemGrant,
@@ -745,6 +750,10 @@ pub struct ExtensionCandidate {
     pub requested: crate::Grant,
     #[serde(default)]
     pub requested_containers: crate::ContainerGrant,
+    #[serde(default)]
+    pub requested_networks: crate::NetworkGrant,
+    #[serde(default)]
+    pub requested_volumes: crate::VolumeGrant,
     #[serde(default)]
     pub requested_filesystem: crate::FilesystemGrant,
     #[serde(default)]
@@ -880,6 +889,8 @@ pub trait ExtensionStore {
         _image_digest: &str,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _networks: &crate::NetworkGrant,
+        _volumes: &crate::VolumeGrant,
         _filesystem: &crate::FilesystemGrant,
         _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -892,6 +903,8 @@ pub trait ExtensionStore {
         _image_digest: &str,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _networks: &crate::NetworkGrant,
+        _volumes: &crate::VolumeGrant,
         _filesystem: &crate::FilesystemGrant,
         _workspace_environment: &crate::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {

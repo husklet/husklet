@@ -71,16 +71,7 @@ impl ExtensionManagement {
 impl ExtensionStore for ExtensionManagement {
     fn catalogue(&self) -> Result<ExtensionCatalogue, HostError> {
         Ok(ExtensionCatalogue {
-            entries: vec![ExtensionCatalogueEntry {
-                id: "storybook".into(),
-                title: "Component playground".into(),
-                description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
-                reference: "ghcr.io/husklet/husklet/extension-storybook:latest".into(),
-                publisher: "Husklet".into(),
-                source: "husklet:first-party/storybook".into(),
-                protocol: hl_extension::PROTOCOL,
-                architectures: vec![self.workspace.arch.as_str().into()],
-            }],
+            entries: first_party_catalogue(option_env!("HL_STORYBOOK_IMAGE"), self.workspace.arch.as_str()),
             complete: true,
         })
     }
@@ -155,6 +146,8 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -165,6 +158,8 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            networks,
+            volumes,
             filesystem,
             workspace_environment,
         )?;
@@ -183,6 +178,8 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -193,6 +190,8 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            networks,
+            volumes,
             filesystem,
             workspace_environment,
         )?;
@@ -228,6 +227,22 @@ fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &st
     }
 }
 
+fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<ExtensionCatalogueEntry> {
+    reference
+        .map(|reference| ExtensionCatalogueEntry {
+            id: "storybook".into(),
+            title: "Component playground".into(),
+            description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+            reference: reference.into(),
+            publisher: "Husklet".into(),
+            source: "husklet:first-party/storybook".into(),
+            protocol: hl_extension::PROTOCOL,
+            architectures: vec![architecture.into()],
+        })
+        .into_iter()
+        .collect()
+}
+
 fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAcquisitionStatus {
     let reference = snapshot.reference;
     let (state, progress, candidate, error) = match snapshot.state {
@@ -256,6 +271,8 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 image_digest: candidate.digest,
                 requested: candidate.requested,
                 requested_containers: candidate.requested_containers,
+                requested_networks: candidate.requested_networks,
+                requested_volumes: candidate.requested_volumes,
                 requested_filesystem: candidate.requested_filesystem,
                 requested_workspace_environment: candidate.requested_workspace_environment,
                 installed_image_digest: candidate.installed_digest,
@@ -289,6 +306,8 @@ fn summary(entry: super::roster::Entry) -> ExtensionSummary {
         pane_providers: entry.pane_providers,
         granted: entry.granted,
         containers: entry.containers,
+        networks: entry.networks,
+        volumes: entry.volumes,
         filesystem: entry.filesystem,
         workspace_environment: entry.workspace_environment,
         status: match entry.stage {
@@ -316,11 +335,21 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_exposes_current_protocol_and_workspace_architecture() {
+    fn catalogue_advertises_only_a_release_proven_reference() {
         let root = tempfile::tempdir().unwrap();
         let catalogue = ExtensionManagement::new(&workspace(root.path())).catalogue().unwrap();
-        assert_eq!(catalogue.entries[0].protocol, hl_extension::PROTOCOL);
-        assert_eq!(catalogue.entries[0].architectures, ["amd64"]);
+        assert!(catalogue.complete);
+        assert_eq!(
+            catalogue.entries,
+            first_party_catalogue(option_env!("HL_STORYBOOK_IMAGE"), "amd64")
+        );
+
+        let entries = first_party_catalogue(Some("registry.example/husklet/storybook:4"), "arm64");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].protocol, hl_extension::PROTOCOL);
+        assert_eq!(entries[0].architectures, ["arm64"]);
+        assert_eq!(entries[0].reference, "registry.example/husklet/storybook:4");
+        assert!(first_party_catalogue(None, "amd64").is_empty());
     }
 
     #[test]
@@ -358,6 +387,8 @@ mod tests {
                 revision: 7,
                 state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                     requested_containers: hl_extension::ContainerGrant::default(),
+                    requested_networks: hl_extension::NetworkGrant::default(),
+                    requested_volumes: hl_extension::VolumeGrant::default(),
                     requested_filesystem: hl_extension::FilesystemGrant::default(),
                     requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                     reference: "registry.example/team/tool:2".into(),
@@ -383,6 +414,8 @@ mod tests {
             revision: 7,
             state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                 requested_containers: hl_extension::ContainerGrant::default(),
+                requested_networks: hl_extension::NetworkGrant::default(),
+                requested_volumes: hl_extension::VolumeGrant::default(),
                 requested_filesystem: hl_extension::FilesystemGrant::default(),
                 requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 reference: "registry.example/team/tool:latest".into(),
@@ -437,6 +470,8 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let manifest = hl_extension::Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: name.clone(),
             display_name: "Postgres".into(),
             version: "1".into(),
@@ -490,9 +525,13 @@ mod tests {
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
             containers: hl_extension::ContainerGrant {
-                selectors: vec![hl_extension::ContainerSelector::Name { name: "database".into() }],
+                selectors: vec![hl_extension::ContainerSelector::Name {
+                    name: "database".into(),
+                }],
                 create: false,
             },
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
                 read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
                     workspace: "dev".into(),

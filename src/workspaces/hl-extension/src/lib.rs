@@ -41,8 +41,9 @@ pub use hl_rpc::{
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
     Activation, ContainerGrant, ContainerSelector, ExtensionName, FilesystemGrant, FilesystemSelector, Invalid,
-    Manifest, PaneProvider, PaneSelection, Presentation, Resources, WorkspaceEnvironmentGrant,
-    WorkspaceEnvironmentSelector,
+    Manifest, NetworkGrant, NetworkSelector, PaneProvider, PaneSelection, Presentation, Resources, VolumeGrant,
+    VolumeSelector,
+    WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector,
 };
 pub use port::FileInventory;
 pub use port::{

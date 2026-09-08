@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:4f9790fd0b6685e7
+// Protocol artifact fnv1a64:fef1cf27b00c6d09
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1890,6 +1890,22 @@ const definitions = {
         }
       },
       {
+        "name": "requested_networks",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "NetworkGrant"
+        }
+      },
+      {
+        "name": "requested_volumes",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "VolumeGrant"
+        }
+      },
+      {
         "name": "requested_filesystem",
         "optional": true,
         "schema": {
@@ -2105,6 +2121,22 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "ContainerGrant"
+        }
+      },
+      {
+        "name": "networks",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "NetworkGrant"
+        }
+      },
+      {
+        "name": "volumes",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "VolumeGrant"
         }
       },
       {
@@ -3002,6 +3034,32 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "NetworkGrant": {
+    "fields": [
+      {
+        "name": "selectors",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "NetworkSelector"
+          }
+        }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
   "NetworkInventory": {
     "fields": [
       {
@@ -3042,6 +3100,59 @@ const definitions = {
         "name": "custom",
         "payload": {
           "kind": "unit"
+        }
+      }
+    ]
+  },
+  "NetworkSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Id",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "Name",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
         }
       }
     ]
@@ -6433,6 +6544,32 @@ const definitions = {
     },
     "serde": {}
   },
+  "VolumeGrant": {
+    "fields": [
+      {
+        "name": "selectors",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "VolumeSelector"
+          }
+        }
+      },
+      {
+        "name": "create",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
   "VolumeInventory": {
     "fields": [
       {
@@ -6456,6 +6593,44 @@ const definitions = {
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "VolumeSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Name",
+        "payload": {
+          "fields": [
+            {
+              "name": "name",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
   },
   "VolumeSummary": {
     "fields": [
@@ -8216,6 +8391,22 @@ const roots = {
               }
             },
             {
+              "name": "networks",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "NetworkGrant"
+              }
+            },
+            {
+              "name": "volumes",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "VolumeGrant"
+              }
+            },
+            {
               "name": "filesystem",
               "optional": false,
               "schema": {
@@ -8278,6 +8469,22 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "ContainerGrant"
+              }
+            },
+            {
+              "name": "networks",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "NetworkGrant"
+              }
+            },
+            {
+              "name": "volumes",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "VolumeGrant"
               }
             },
             {

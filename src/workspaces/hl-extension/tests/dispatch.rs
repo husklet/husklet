@@ -10,10 +10,9 @@ use std::cell::{Cell, RefCell};
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
     ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary,
-    FileInventory, FileRange,
-    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
-    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
-    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    FileInventory, FileRange, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant,
+    PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode,
+    TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -90,14 +89,24 @@ impl hl_extension::port::VolumeStore for Host {
 impl hl_extension::port::NetworkStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
         self.ledger.note("networks.list");
-        Ok(vec![hl_extension::port::NetworkSummary {
-            id: "a".repeat(32),
-            name: "private".into(),
-            driver: "bridge".into(),
-            scope: "local".into(),
-            kind: hl_extension::NetworkKind::Custom,
-            endpoints: None,
-        }])
+        Ok(vec![
+            hl_extension::port::NetworkSummary {
+                id: "a".repeat(32),
+                name: "private".into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
+            },
+            hl_extension::port::NetworkSummary {
+                id: "f".repeat(32),
+                name: "unrelated".into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
+            },
+        ])
     }
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
         self.ledger.note("networks.inspect");
@@ -846,6 +855,8 @@ impl ExtensionStore for Host {
             pane_providers: Vec::new(),
             granted: Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }])
@@ -861,6 +872,8 @@ impl ExtensionStore for Host {
             pane_providers: Vec::new(),
             granted: Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         })
@@ -909,6 +922,8 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _networks: &hl_extension::NetworkGrant,
+        _volumes: &hl_extension::VolumeGrant,
         _filesystem: &hl_extension::FilesystemGrant,
         _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -922,6 +937,8 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _networks: &hl_extension::NetworkGrant,
+        _volumes: &hl_extension::VolumeGrant,
         _filesystem: &hl_extension::FilesystemGrant,
         _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -969,6 +986,14 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
     ))
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::All { all: true }],
+        create: true,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::All { all: true }],
+        create: true,
+    })
+    .with_volumes(hl_extension::VolumeGrant {
+        selectors: vec![hl_extension::VolumeSelector::All { all: true }],
         create: true,
     })
     .with_filesystem(hl_extension::FilesystemGrant {
@@ -1197,6 +1222,8 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
@@ -1208,6 +1235,8 @@ fn calls() -> Vec<(Request, Capability)> {
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
@@ -1928,6 +1957,8 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
                 image_digest: "sha256:stale-catalogue-label".into(),
                 granted: Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
@@ -2153,6 +2184,17 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         cpus: Some(2),
         pids_limit: Some(128),
     };
+    let mut unscoped = session(
+        &[Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite],
+        &[],
+    )
+    .with_volumes(hl_extension::VolumeGrant { selectors: vec![], create: true })
+    .with_networks(hl_extension::NetworkGrant { selectors: vec![], create: true });
+    assert!(matches!(
+        unscoped.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
     assert_eq!(
         authorized.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
         Ok(Reply::Identity("id-worker".into()))
@@ -2561,9 +2603,12 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
     assert_eq!(
         host.ledger.reached(),
         [
+            "networks.inspect",
             "networks.remove",
+            "networks.inspect",
             "containers.list",
             "networks.connect",
+            "networks.inspect",
             "containers.list",
             "networks.disconnect"
         ]
@@ -2595,7 +2640,10 @@ fn network_endpoint_alias_boundaries_are_enforced_before_control_authority() {
     let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>();
     aliases[0] = "x".repeat(253);
     session.dispatch(&request(aliases), &services(&host)).unwrap();
-    assert_eq!(host.ledger.reached(), ["containers.list", "networks.connect"]);
+    assert_eq!(
+        host.ledger.reached(),
+        ["networks.inspect", "containers.list", "networks.connect"]
+    );
 }
 
 #[test]
@@ -3338,6 +3386,66 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
         write.dispatch(&Request::NetworkList, &services(&host)),
         Err(Failure::Denied { .. })
     ));
+}
+
+#[test]
+fn exact_network_scope_filters_inventory_and_denies_unrelated_inspection_and_creation() {
+    let host = Host::new();
+    let mut scoped =
+        session(&[Capability::NetworkRead, Capability::NetworkWrite], &[]).with_networks(hl_extension::NetworkGrant {
+            selectors: vec![hl_extension::NetworkSelector::Name { name: "private".into() }],
+            create: false,
+        });
+    let Reply::Networks(inventory) = scoped.dispatch(&Request::NetworkList, &services(&host)).unwrap() else {
+        panic!("network inventory reply");
+    };
+    assert_eq!(
+        inventory
+            .networks
+            .iter()
+            .map(|network| network.name.as_str())
+            .collect::<Vec<_>>(),
+        ["private"]
+    );
+    host.ledger.clear();
+    assert!(matches!(
+        scoped.dispatch(
+            &Request::NetworkInspect {
+                reference: "unrelated".into()
+            },
+            &services(&host)
+        ),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(matches!(
+        scoped.dispatch(&Request::NetworkCreate { name: "another".into() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn exact_volume_scope_filters_and_denies_before_host_access() {
+    let host = Host::new();
+    let mut scoped = session(&[Capability::VolumeRead, Capability::VolumeWrite], &[])
+        .with_volumes(hl_extension::VolumeGrant {
+            selectors: vec![hl_extension::VolumeSelector::Name { name: "cache".into() }],
+            create: false,
+        });
+    assert!(matches!(scoped.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values.volumes.len() == 1));
+    host.ledger.clear();
+    assert!(matches!(scoped.dispatch(&Request::VolumeInspect { name: "other".into() }, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(matches!(scoped.dispatch(&Request::VolumeInspect { name: "bad/name".into() }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn volume_creation_requires_create_and_selection_to_prevent_namesake_capture() {
+    let host = Host::new();
+    let mut create_only = session(&[Capability::VolumeWrite], &[])
+        .with_volumes(hl_extension::VolumeGrant { selectors: vec![], create: true });
+    assert!(matches!(create_only.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

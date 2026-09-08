@@ -122,6 +122,16 @@ export class Reader {
         this.#held.copy(grown, 0, 0, this.#length);
         this.#held = grown;
     }
+    #compact() {
+        let capacity = INITIAL_CAPACITY;
+        while (capacity < this.#length)
+            capacity = Math.min(CAPACITY, capacity * 2);
+        if (capacity >= this.#held.length)
+            return;
+        const compacted = Buffer.allocUnsafe(capacity);
+        this.#held.copy(compacted, 0, 0, this.#length);
+        this.#held = compacted;
+    }
     #next() {
         if (this.#length < HEADER)
             return null;
@@ -160,9 +170,7 @@ export class Reader {
         };
         this.#held.copyWithin(0, total, this.#length);
         this.#length -= total;
-        if (this.#length === 0 && this.#held.length > INITIAL_CAPACITY) {
-            this.#held = Buffer.allocUnsafe(INITIAL_CAPACITY);
-        }
+        this.#compact();
         return frame;
     }
     /** Refuses an EOF that cut a header or payload short. */

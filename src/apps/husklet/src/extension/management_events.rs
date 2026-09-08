@@ -117,6 +117,8 @@ mod tests {
             pane_providers: Vec::new(),
             granted: hl_extension::Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
@@ -129,6 +131,8 @@ mod tests {
             pane_providers: Vec::new(),
             granted: hl_extension::Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);

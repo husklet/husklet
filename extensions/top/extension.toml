@@ -21,6 +21,16 @@ write = [{ all = true }]
 selectors = [{ all = true }]
 create = true
 
+# Top is also the network administrator. Other extensions name only the exact
+# networks they require, and omission grants no network resources.
+[networks]
+selectors = [{ all = true }]
+create = true
+
+[volumes]
+selectors = [{ all = true }]
+create = true
+
 [interface]
 tab_title = "Top"
 icon = "utilities-system-monitor-symbolic"

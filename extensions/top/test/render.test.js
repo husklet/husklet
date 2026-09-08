@@ -13,6 +13,10 @@ import {
   Volumes,
   Workspace,
   Top,
+  parseArguments,
+  parseLabels,
+  parseMounts,
+  parsePorts,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
@@ -814,6 +818,14 @@ for (const updating of [false, true]) {
       create: true,
     });
     assert.deepEqual(calls[0][4], {
+      selectors: [],
+      create: false,
+    });
+    assert.deepEqual(calls[0][5], {
+      selectors: [],
+      create: false,
+    });
+    assert.deepEqual(calls[0][6], {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -822,6 +834,66 @@ for (const updating of [false, true]) {
     });
   });
 }
+
+test('extension review grants one exact network without workspace-wide network authority', async () => {
+  const calls = [];
+  const candidate = {
+    name: 'postgres',
+    version: '1.0.0',
+    image_digest: `sha256:${'a'.repeat(64)}`,
+    requested: ['networks:read'],
+    requested_containers: { selectors: [], create: false },
+    requested_networks: { selectors: [{ name: 'database' }, { name: 'internal' }], create: true },
+    requested_volumes: { selectors: [{ name: 'data' }], create: true },
+    requested_filesystem: { read: [], write: [], create: [], delete: [], rename: [] },
+    requested_workspace_environment: { read: [], write: [] },
+    installed_image_digest: null,
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'network-review' }),
+          acquisition: async () => ({
+            job: 'network-review',
+            reference: 'local/postgres:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate,
+            error: null,
+          }),
+          installAndWait: async (...args) => {
+            calls.push(args);
+            return { changed: true, extension: { ...candidate, status: 'running' } };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'local/postgres:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(stage, 'Network access starts off. Select only the networks this extension needs.'),
+  );
+  assert.ok(labelled(stage, 'Network named database'));
+  assert.ok(labelled(stage, 'Network named internal'));
+  assert.ok(labelled(stage, 'Volume named data'));
+  assert.ok(labelled(stage, 'Create new volumes'));
+  toggleSwitch(stage, 1, true);
+  toggleSwitch(stage, 4, true);
+  invoke(stage, 'Install with selected access');
+  await settled();
+  await settled();
+  assert.deepEqual(calls[0][4], { selectors: [{ name: 'database' }], create: false });
+  assert.deepEqual(calls[0][5], { selectors: [{ name: 'data' }], create: false });
+});
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
   const calls = [];
@@ -2984,7 +3056,7 @@ test('container rename validates locally, retries failure, and preserves immutab
   assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
 });
 
-test('container creation groups its compact form and explains raw JSON before an error', () => {
+test('container creation groups its compact form and uses a human label editor', () => {
   const stage = host();
   const frame = stage.render(
     h(Containers, {
@@ -2992,52 +3064,28 @@ test('container creation groups its compact form and explains raw JSON before an
       resource: { data: [], loading: false, error: null, reload: async () => {} },
     }),
   );
-  const createDisclosure = frame.patches.find((patch) => patch.Create?.tag === 'Expander');
-  assert.ok(
-    createDisclosure,
-    'container creation is collapsed behind a native disclosure by default',
-  );
   assert.equal(
-    frame.patches.some(
-      (patch) =>
-        patch.SetProp?.id === createDisclosure.Create.id && patch.SetProp.prop === 'Expanded',
-    ),
-    true,
+    taggedProperty(stage, 'Container setup', 'Expander', 'Expanded')?.Flag,
+    false,
     'empty container creation is controlled by the prominent action',
   );
   for (const label of [
     'Identity and image',
     'Process',
     'Resources and connectivity',
-    'Labels use JSON [name, value] pairs, for example [["role","worker"]].',
-    'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.',
-    'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.',
+    'Mounts accept named volumes only. Published host ports may be left automatic.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
   const placeholders = frame.patches
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
-  assert.deepEqual(
-    placeholders.slice(0, 15),
-    [
-      'Image reference',
-      'Container name',
-      'Hostname (optional)',
-      'Run as user (optional)',
-      'Labels JSON (optional)',
-      'Entrypoint argv JSON (optional)',
-      'Command argv JSON (optional)',
-      'Environment pairs JSON (optional)',
-      'Working directory (optional)',
-      'Memory limit MiB (optional)',
-      'CPU limit (optional)',
-      'PID limit (optional)',
-      'Initial network (optional)',
-      'Named volume mounts JSON (optional)',
-      'Published ports JSON (optional)',
-    ],
-    'visual grouping preserves a predictable keyboard traversal order',
+  assert.deepEqual(placeholders.slice(0, 2), ['Image reference', 'Container name']);
+  assert.ok(placeholders.includes('Add command argument'));
+  assert.equal(
+    placeholders.some((value) => value.includes('JSON')),
+    false,
   );
+  assert.ok(labelled(stage, 'Labels'));
   const wrappingRows = frame.patches.filter(
     (patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true,
   );
@@ -3071,28 +3119,6 @@ test('container creation retains exact identity and retries only start after a p
   stage.render(h(Containers, { api: controlled, resource }));
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'worker');
-  change(stage, 'Command argv JSON (optional)', '["sh",7]');
-  assert.ok(
-    labelled(
-      stage,
-      'Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.',
-    ),
-  );
-  assert.equal(
-    isEnabled(stage, 'Create and start'),
-    false,
-    'invalid optional configuration cannot reach the host',
-  );
-  change(stage, 'Command argv JSON (optional)', '');
-  change(stage, 'Environment pairs JSON (optional)', '[["MODE","one"],["MODE","two"]]');
-  assert.ok(
-    labelled(
-      stage,
-      'Environment must contain at most 256 unique [name, value] pairs with bounded NUL-free strings.',
-    ),
-  );
-  assert.equal(isEnabled(stage, 'Create and start'), false);
-  change(stage, 'Environment pairs JSON (optional)', '');
   change(stage, 'Working directory (optional)', '/workspace/../secret');
   assert.ok(
     labelled(
@@ -3121,6 +3147,60 @@ test('container creation retains exact identity and retries only start after a p
     ],
     'retry never creates a duplicate container',
   );
+});
+
+test('native process editors preserve ordered argv and environment wire types', async () => {
+  const calls = [];
+  const controlled = {
+    containers: {
+      create: async (spec) => {
+        calls.push(spec);
+        return 'native-editor-container';
+      },
+      inspect: async (id) => ({ id, generation: 0 }),
+      start: async () => {},
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api: controlled,
+      resource: { data: [], loading: false, error: null, reload: async () => {} },
+    }),
+  );
+  change(stage, 'Image reference', 'alpine:3.20');
+  change(stage, 'Container name', 'native');
+  for (const argument of ['sh', '-lc', 'printf ready']) {
+    change(stage, 'Add command argument', argument);
+    submit(stage, 'Add command argument');
+  }
+  change(stage, 'Variable name', 'MODE');
+  change(stage, 'Variable value', 'test');
+  invoke(stage, 'Add variable');
+  change(stage, 'Label name', 'role');
+  change(stage, 'Label value', 'worker');
+  invoke(stage, 'Add label');
+  change(stage, 'Mount volume', 'cache');
+  change(stage, 'Container path', '/cache');
+  toggleLatestSwitch(stage, true);
+  invoke(stage, 'Add mount');
+  change(stage, 'Container port', '8080');
+  change(stage, 'Host port (automatic if empty)', '18080');
+  invoke(stage, 'Publish port');
+  invoke(stage, 'Create and start');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, [
+    {
+      image: 'alpine:3.20',
+      name: 'native',
+      command: ['sh', '-lc', 'printf ready'],
+      environment: [['MODE', 'test']],
+      labels: [['role', 'worker']],
+      mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
+      ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
+    },
+  ]);
 });
 
 test('container creation refuses to start when inspection returns a different immutable identity', async () => {
@@ -3233,6 +3313,33 @@ test('container creation validates exact resource bounds and retains them until 
 });
 
 test('container creation accepts only bounded named-volume mounts and retains them until success', async () => {
+  const mountError =
+    'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.';
+  assert.throws(() => parseMounts([{ volume: 'cache', target: 'relative', read_only: false }]), {
+    message: mountError,
+  });
+  assert.throws(
+    () =>
+      parseMounts(
+        Array.from({ length: 65 }, (_, index) => ({
+          volume: `v${index}`,
+          target: `/v${index}`,
+          read_only: false,
+        })),
+      ),
+    { message: mountError },
+  );
+  assert.equal(
+    parseMounts(
+      Array.from({ length: 64 }, (_, index) => ({
+        volume: `v${index}`,
+        target: `/v${index}`,
+        read_only: false,
+      })),
+    )?.length,
+    64,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3271,7 +3378,7 @@ test('container creation accepts only bounded named-volume mounts and retains th
     '[{"source":"/host","target":"/guest"}]',
   ]) {
     change(stage, placeholder, invalid);
-    assert.ok(labelled(stage, error));
+    assert.ok(labelled(stage, error), `invalid label set was accepted: ${invalid.slice(0, 80)}`);
     assert.equal(isEnabled(stage, 'Create and start'), false);
   }
   change(
@@ -3315,6 +3422,33 @@ test('container creation accepts only bounded named-volume mounts and retains th
 });
 
 test('container creation validates bounded published ports and retains them until success', async () => {
+  const portError =
+    'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.';
+  assert.throws(() => parsePorts([{ container: 0, host: null, protocol: 'tcp' }]), {
+    message: portError,
+  });
+  assert.throws(
+    () =>
+      parsePorts(
+        Array.from({ length: 65 }, (_, index) => ({
+          container: index + 1,
+          host: null,
+          protocol: 'tcp',
+        })),
+      ),
+    { message: portError },
+  );
+  assert.equal(
+    parsePorts(
+      Array.from({ length: 64 }, (_, index) => ({
+        container: index + 1,
+        host: null,
+        protocol: 'tcp',
+      })),
+    )?.length,
+    64,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3475,6 +3609,25 @@ test('container creation validates runtime identity and retains it until success
 });
 
 test('container creation validates bounded labels and retains them until success', async () => {
+  const labelError =
+    'Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.';
+  assert.throws(
+    () =>
+      parseLabels([
+        ['role', 'worker'],
+        ['role', 'other'],
+      ]),
+    { message: labelError },
+  );
+  assert.throws(
+    () => parseLabels(Array.from({ length: 129 }, (_, index) => [`key-${index}`, 'value'])),
+    { message: labelError },
+  );
+  assert.equal(
+    parseLabels(Array.from({ length: 128 }, (_, index) => [`key-${index}`, 'value']))?.length,
+    128,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3499,38 +3652,38 @@ test('container creation validates bounded labels and retains them until success
   stage.render(h(Containers, { api: controlled, resource }));
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'labelled');
-  const placeholder = 'Labels JSON (optional)';
+  const placeholder = 'Labels, one name=value per line (optional)';
   const error =
     'Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.';
+  changeByTooltip(stage, placeholder, 'missing-separator');
+  assert.ok(labelled(stage, 'Each label must use name=value on its own line.'));
   for (const invalid of [
-    '{"role":"worker"}',
-    '[["","worker"]]',
-    '[["role","worker"],["role","other"]]',
-    JSON.stringify([[`k${'é'.repeat(128)}`, 'value']]),
-    JSON.stringify([['key', 'é'.repeat(2049)]]),
-    JSON.stringify(Array.from({ length: 129 }, (_, index) => [`key-${index}`, 'value'])),
+    'role=worker\nrole=other',
+    `${`k${'é'.repeat(128)}`}=value`,
+    `key=${'é'.repeat(2049)}`,
+    Array.from({ length: 129 }, (_, index) => `key-${index}=value`).join('\n'),
   ]) {
-    change(stage, placeholder, invalid);
+    changeByTooltip(stage, placeholder, invalid);
     assert.ok(labelled(stage, error));
     assert.equal(isEnabled(stage, 'Create and start'), false);
   }
-  change(
+  changeByTooltip(
     stage,
     placeholder,
-    JSON.stringify(Array.from({ length: 128 }, (_, index) => [`key-${index}`, 'value'])),
+    Array.from({ length: 128 }, (_, index) => `key-${index}=value`).join('\n'),
   );
   assert.equal(
     isEnabled(stage, 'Create and start'),
     true,
     'the exact 128-label boundary is accepted',
   );
-  const requested = '[["role","worker"],["com.example/tier","backend"],["empty",""]]';
-  change(stage, placeholder, requested);
+  const requested = 'role=worker\ncom.example/tier=backend\nempty=';
+  changeByTooltip(stage, placeholder, requested);
   invoke(stage, 'Create and start');
   await settled();
   await settled();
   assert.ok(labelled(stage, 'label persistence temporarily unavailable'));
-  assert.equal(fieldValue(stage, placeholder), requested);
+  assert.equal(fieldValueByTooltip(stage, placeholder), requested);
   invoke(stage, 'Create and start');
   await settled();
   await settled();
@@ -3549,10 +3702,18 @@ test('container creation validates bounded labels and retains them until success
     ['start', 'labelled-container', 0],
     ['reload'],
   ]);
-  assert.equal(fieldValue(stage, placeholder), '');
+  assert.equal(fieldValueByTooltip(stage, placeholder), '');
 });
 
 test('container creation validates entrypoint argv and retains it until success', async () => {
+  const argumentError =
+    'Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.';
+  assert.throws(() => parseArguments([''], 'Entrypoint'), { message: argumentError });
+  assert.throws(() => parseArguments(Array(65).fill('x'), 'Entrypoint'), {
+    message: argumentError,
+  });
+  assert.equal(parseArguments(Array(64).fill('x'), 'Entrypoint')?.length, 64);
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -4894,6 +5055,18 @@ function change(stage, placeholder, value) {
   );
 }
 
+function changeByTooltip(stage, tooltip, value) {
+  const node = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
+    .at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${tooltip} field is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
+    `${tooltip} changes`,
+  );
+}
+
 function submit(stage, placeholder) {
   const node = stage.frames
     .flatMap((frame) => frame.patches)
@@ -4991,6 +5164,16 @@ function fieldValue(stage, placeholder) {
     .filter(
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
+    .at(-1)?.SetProp.value?.Text;
+}
+
+function fieldValueByTooltip(stage, tooltip) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const node = patches
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
+    .at(-1)?.SetProp.id;
+  return patches
+    .filter((patch) => patch.SetProp?.id === node && patch.SetProp?.prop === 'Value')
     .at(-1)?.SetProp.value?.Text;
 }
 

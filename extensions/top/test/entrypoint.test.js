@@ -647,53 +647,9 @@ test(
       );
       peer.write(
         encode({
-          channel: 53,
-          kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Labels JSON (optional)',
-            '[["role","worker"],["tier","backend"]]',
-          ),
-        }),
-      );
-      peer.write(
-        encode({
-          channel: 54,
-          kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Entrypoint argv JSON (optional)',
-            '["/bin/sh","-lc"]',
-          ),
-        }),
-      );
-      peer.write(
-        encode({
           channel: 55,
           kind: KIND.event,
           payload: changeInvocation(requests, 'Initial network (optional)', 'private_backend.v1'),
-        }),
-      );
-      peer.write(
-        encode({
-          channel: 43,
-          kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Command argv JSON (optional)',
-            '["sh","-lc","printf ready"]',
-          ),
-        }),
-      );
-      peer.write(
-        encode({
-          channel: 44,
-          kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Environment pairs JSON (optional)',
-            '[["MODE","test"],["EMPTY",""]]',
-          ),
         }),
       );
       peer.write(
@@ -728,23 +684,49 @@ test(
         encode({
           channel: 49,
           kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Named volume mounts JSON (optional)',
-            '[{"volume":"cache","target":"/cache","read_only":true},{"volume":"data","target":"/srv/data"}]',
-          ),
+          payload: changeInvocation(requests, 'Mount volume', 'cache'),
         }),
       );
       peer.write(
         encode({
           channel: 50,
           kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Published ports JSON (optional)',
-            '[{"container":8080,"host":18080,"protocol":"tcp"},{"container":53,"protocol":"udp"}]',
-          ),
+          payload: changeInvocation(requests, 'Container path', '/cache'),
         }),
+      );
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '/cache'),
+        ),
+      );
+      peer.write(
+        encode({ channel: 51, kind: KIND.event, payload: invocation(requests, 'Add mount') }),
+      );
+      peer.write(
+        encode({
+          channel: 52,
+          kind: KIND.event,
+          payload: changeInvocation(requests, 'Container port', '8080'),
+        }),
+      );
+      peer.write(
+        encode({
+          channel: 53,
+          kind: KIND.event,
+          payload: changeInvocation(requests, 'Host port (automatic if empty)', '18080'),
+        }),
+      );
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '18080'),
+        ),
+      );
+      peer.write(
+        encode({ channel: 54, kind: KIND.event, payload: invocation(requests, 'Publish port') }),
       );
       await until(() =>
         requests.some(
@@ -777,28 +759,16 @@ test(
       assert.deepEqual(requests.find((request) => request.call === 'container_create').with.spec, {
         image: 'alpine:3.20',
         name: 'worker',
-        entrypoint: ['/bin/sh', '-lc'],
-        command: ['sh', '-lc', 'printf ready'],
-        environment: [
-          ['MODE', 'test'],
-          ['EMPTY', ''],
-        ],
+        entrypoint: null,
+        command: [],
+        environment: [],
+        labels: [],
         working_directory: '/workspace/app',
         hostname: 'worker-1.internal',
         user: '1000:1000',
-        labels: [
-          ['role', 'worker'],
-          ['tier', 'backend'],
-        ],
-        mounts: [
-          { volume: 'cache', target: '/cache', read_only: true },
-          { volume: 'data', target: '/srv/data', read_only: false },
-        ],
+        mounts: [{ volume: 'cache', target: '/cache', read_only: false }],
         network: 'private_backend.v1',
-        ports: [
-          { container: 8080, host: 18080, protocol: 'tcp' },
-          { container: 53, host: null, protocol: 'udp' },
-        ],
+        ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
         memory_mb: 512,
         cpus: 2,
         pids_limit: 128,
@@ -1379,7 +1349,9 @@ function changeInvocation(requests, placeholder, value) {
   const active = activeNodes(patches);
   const node = patches
     .filter(
-      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+      (patch) =>
+        (patch.SetProp?.prop === 'Placeholder' || patch.SetProp?.prop === 'Tooltip') &&
+        patch.SetProp.value?.Text === placeholder,
     )
     .toReversed()
     .find((patch) => active(patch.SetProp.id))?.SetProp.id;

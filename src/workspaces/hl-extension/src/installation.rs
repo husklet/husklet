@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use crate::capability::{Capability, Grant};
-use crate::manifest::{ContainerGrant, ExtensionName, FilesystemGrant, Manifest};
+use crate::manifest::{ContainerGrant, ExtensionName, FilesystemGrant, Manifest, NetworkGrant, VolumeGrant};
 
 /// What a host persists per workspace for one extension.
 ///
@@ -36,6 +36,11 @@ pub struct Record {
     /// Exact resource consent paired with `granted` and the image digest.
     #[serde(default)]
     pub containers: ContainerGrant,
+    /// Exact network resource consent paired with `granted` and the image digest.
+    #[serde(default)]
+    pub networks: NetworkGrant,
+    #[serde(default)]
+    pub volumes: VolumeGrant,
     /// Exact per-verb workspace path consent paired with this image digest.
     #[serde(default)]
     pub filesystem: FilesystemGrant,
@@ -283,6 +288,8 @@ impl Installation {
             digest,
             consented,
             consented_containers,
+            &NetworkGrant::default(),
+            &VolumeGrant::default(),
             &FilesystemGrant::default(),
             &crate::WorkspaceEnvironmentGrant::default(),
             at,
@@ -295,6 +302,8 @@ impl Installation {
         digest: &str,
         consented: &Grant,
         consented_containers: &ContainerGrant,
+        consented_networks: &NetworkGrant,
+        consented_volumes: &VolumeGrant,
         consented_filesystem: &FilesystemGrant,
         consented_environment: &crate::WorkspaceEnvironmentGrant,
         at: i64,
@@ -307,6 +316,8 @@ impl Installation {
         }
         let granted = manifest.capabilities.intersect(consented);
         let containers = manifest.containers.intersect(consented_containers);
+        let networks = manifest.networks.intersect(consented_networks);
+        let volumes = manifest.volumes.intersect(consented_volumes);
         let filesystem = manifest.filesystem.intersect(consented_filesystem);
         let workspace_environment = manifest.workspace_environment.intersect(consented_environment);
         // The name is vacant, checked above, so this always inserts.
@@ -317,6 +328,8 @@ impl Installation {
                 version: manifest.version.clone(),
                 granted,
                 containers,
+                networks,
+                volumes,
                 filesystem,
                 workspace_environment,
                 enabled: false,
@@ -393,6 +406,8 @@ impl Installation {
             update,
             consented,
             consented_containers,
+            &NetworkGrant::default(),
+            &VolumeGrant::default(),
             &FilesystemGrant::default(),
             &crate::WorkspaceEnvironmentGrant::default(),
             at,
@@ -405,6 +420,8 @@ impl Installation {
         update: Update,
         consented: &Grant,
         consented_containers: &ContainerGrant,
+        consented_networks: &NetworkGrant,
+        consented_volumes: &VolumeGrant,
         consented_filesystem: &FilesystemGrant,
         consented_environment: &crate::WorkspaceEnvironmentGrant,
         at: i64,
@@ -433,6 +450,8 @@ impl Installation {
             version: update.candidate_version,
             granted,
             containers: update.manifest.containers.intersect(consented_containers),
+            networks: update.manifest.networks.intersect(consented_networks),
+            volumes: update.manifest.volumes.intersect(consented_volumes),
             filesystem: update.manifest.filesystem.intersect(consented_filesystem),
             workspace_environment: update.manifest.workspace_environment.intersect(consented_environment),
             enabled: entry.record.enabled,
@@ -641,6 +660,8 @@ mod tests {
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
             containers: crate::ContainerGrant::default(),
+            networks: crate::NetworkGrant::default(),
+            volumes: crate::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -666,6 +687,74 @@ mod tests {
 
         assert!(record.granted.holds(Capability::ContainerRead));
         assert!(!record.granted.holds(Capability::ContainerControl));
+    }
+
+    #[test]
+    fn network_authority_records_only_the_manifest_and_consent_intersection() {
+        let mut installation = Installation::new();
+        let mut asked = manifest(&[Capability::NetworkRead, Capability::NetworkWrite]);
+        asked.networks = crate::NetworkGrant {
+            selectors: vec![
+                crate::NetworkSelector::Name {
+                    name: "database".into(),
+                },
+                crate::NetworkSelector::Name {
+                    name: "internal".into(),
+                },
+            ],
+            create: true,
+        };
+        let consented = crate::NetworkGrant {
+            selectors: vec![crate::NetworkSelector::Name {
+                name: "database".into(),
+            }],
+            create: false,
+        };
+        let record = installation
+            .install_resource_scoped(
+                &asked,
+                "sha256:network",
+                &asked.capabilities,
+                &crate::ContainerGrant::default(),
+                &consented,
+                &crate::VolumeGrant::default(),
+                &crate::FilesystemGrant::default(),
+                &crate::WorkspaceEnvironmentGrant::default(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(record.networks, consented);
+    }
+
+    #[test]
+    fn volume_authority_records_only_the_manifest_and_consent_intersection() {
+        let mut installation = Installation::new();
+        let mut asked = manifest(&[Capability::VolumeRead, Capability::VolumeWrite]);
+        asked.volumes = crate::VolumeGrant {
+            selectors: vec![
+                crate::VolumeSelector::Name { name: "database".into() },
+                crate::VolumeSelector::Name { name: "internal".into() },
+            ],
+            create: true,
+        };
+        let consented = crate::VolumeGrant {
+            selectors: vec![crate::VolumeSelector::Name { name: "database".into() }],
+            create: false,
+        };
+        let record = installation
+            .install_resource_scoped(
+                &asked,
+                "sha256:volume",
+                &asked.capabilities,
+                &crate::ContainerGrant::default(),
+                &crate::NetworkGrant::default(),
+                &consented,
+                &crate::FilesystemGrant::default(),
+                &crate::WorkspaceEnvironmentGrant::default(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(record.volumes, consented);
     }
 
     #[test]

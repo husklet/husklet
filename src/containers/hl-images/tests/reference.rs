@@ -132,3 +132,16 @@ fn from_str_uses_reference_parser() {
     assert_eq!(reference.repository(), "app");
     assert_eq!(reference.tag(), Some("1"));
 }
+
+#[test]
+fn neutral_normalization_remains_representable_by_the_registry_transport() {
+    let longest_name = format!("example.test/{}", "a".repeat(255 - "example.test/".len()));
+    assert!(longest_name.parse::<Reference>().is_ok());
+    for raw in [
+        "docker.io/alpine",
+        "registry-1.docker.io/alpine",
+        "localhost:5000/team/app:v1",
+    ] {
+        assert!(raw.parse::<Reference>().is_ok(), "transport rejected {raw:?}");
+    }
+}

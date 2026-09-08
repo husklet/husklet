@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::channel::{Channels, Permission, Purpose};
-use crate::frame::ChannelId;
+use crate::frame::{ChannelId, Frame};
 
 /// What happened to an emission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,7 @@ pub struct Message<T> {
 #[derive(Debug)]
 pub struct Outbox<T> {
     queues: BTreeMap<ChannelId, VecDeque<Message<T>>>,
+    bytes: usize,
     dropped: u64,
 }
 
@@ -48,6 +49,7 @@ impl<T> Default for Outbox<T> {
     fn default() -> Self {
         Self {
             queues: BTreeMap::new(),
+            bytes: 0,
             dropped: 0,
         }
     }
@@ -56,6 +58,13 @@ impl<T> Default for Outbox<T> {
 impl<T: Copy + PartialEq> Outbox<T> {
     /// Messages held per channel before backpressure applies.
     pub const DEPTH: usize = 32;
+    /// Messages held across a whole session, including queues whose owner
+    /// failed to pair channel closure with explicit outbox disposal.
+    pub const LIMIT: usize = Self::DEPTH * Channels::LIMIT;
+    /// Payload bytes retained across a whole session. Two maximum-size frames
+    /// can wait concurrently; further producers receive backpressure instead
+    /// of multiplying that allocation by every channel and credit slot.
+    pub const BYTE_LIMIT: usize = Frame::PAYLOAD_LIMIT * 2;
 
     #[must_use]
     pub fn new() -> Self {
@@ -78,6 +87,12 @@ impl<T: Copy + PartialEq> Outbox<T> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Payload bytes retained across every channel.
+    #[must_use]
+    pub const fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// Values dropped by coalescing since the session opened.
@@ -104,7 +119,13 @@ impl<T: Copy + PartialEq> Outbox<T> {
             superseded: 0,
         };
         match channels.reserve(channel) {
-            Ok(Permission::Send) => self.enqueue(channel, message, purpose),
+            Ok(Permission::Send) => {
+                let emission = self.enqueue(channel, message, purpose);
+                if emission == Emission::Blocked {
+                    channels.refund(channel);
+                }
+                emission
+            }
             Ok(Permission::Await) => self.withhold(channel, message, purpose),
             Err(_) => Emission::Ignored,
         }
@@ -112,24 +133,35 @@ impl<T: Copy + PartialEq> Outbox<T> {
 
     /// Takes what may now be sent on a channel.
     pub fn drain(&mut self, channel: ChannelId) -> Vec<Message<T>> {
-        self.queues
-            .get_mut(&channel)
-            .map(|queue| queue.drain(..).collect())
-            .unwrap_or_default()
+        let drained = self.queues.remove(&channel).unwrap_or_default();
+        self.bytes = self
+            .bytes
+            .saturating_sub(drained.iter().map(|message| message.payload.len()).sum());
+        drained.into_iter().collect()
     }
 
     /// Discards everything queued for a channel that is closing.
     pub fn discard(&mut self, channel: ChannelId) {
-        self.queues.remove(&channel);
+        if let Some(discarded) = self.queues.remove(&channel) {
+            self.bytes = self
+                .bytes
+                .saturating_sub(discarded.iter().map(|message| message.payload.len()).sum());
+        }
     }
 
     fn enqueue(&mut self, channel: ChannelId, message: Message<T>, purpose: Purpose) -> Emission {
+        let full = self.len() >= Self::LIMIT;
+        let byte_full = self
+            .bytes
+            .checked_add(message.payload.len())
+            .is_none_or(|total| total > Self::BYTE_LIMIT);
         let queue = self.queues.entry(channel).or_default();
-        if queue.len() < Self::DEPTH {
+        if !full && !byte_full && queue.len() < Self::DEPTH {
+            self.bytes += message.payload.len();
             queue.push_back(message);
             return Emission::Queued;
         }
-        Self::supersede(queue, message, purpose).map_or(Emission::Blocked, |dropped| {
+        Self::supersede(queue, message, purpose, &mut self.bytes).map_or(Emission::Blocked, |dropped| {
             self.dropped = self.dropped.saturating_add(dropped);
             Emission::Superseded
         })
@@ -142,7 +174,7 @@ impl<T: Copy + PartialEq> Outbox<T> {
             return Emission::Blocked;
         }
         let queue = self.queues.entry(channel).or_default();
-        Self::supersede(queue, message, purpose).map_or(Emission::Blocked, |dropped| {
+        Self::supersede(queue, message, purpose, &mut self.bytes).map_or(Emission::Blocked, |dropped| {
             self.dropped = self.dropped.saturating_add(dropped);
             Emission::Superseded
         })
@@ -150,19 +182,45 @@ impl<T: Copy + PartialEq> Outbox<T> {
 
     /// Replaces the newest queued value of the same topic, returning how many
     /// values were dropped. Returns `None` when the channel may not drop.
-    fn supersede(queue: &mut VecDeque<Message<T>>, message: Message<T>, purpose: Purpose) -> Option<u64> {
+    fn supersede(
+        queue: &mut VecDeque<Message<T>>,
+        message: Message<T>,
+        purpose: Purpose,
+        bytes: &mut usize,
+    ) -> Option<u64> {
         if !purpose.coalesces() {
             return None;
         }
         let existing = queue.iter().rposition(|held| held.topic == message.topic);
         let Some(index) = existing else {
+            if queue.is_empty() {
+                return None;
+            }
             // A different topic on a full coalescing channel: drop the oldest
             // rather than refuse, since the queue is already bounded.
+            let removed = queue.front()?.payload.len();
+            let retained = bytes.saturating_sub(removed);
+            if retained
+                .checked_add(message.payload.len())
+                .is_none_or(|total| total > Self::BYTE_LIMIT)
+            {
+                return None;
+            }
             let dropped = queue.pop_front().map_or(0, |_| 1);
+            *bytes = retained + message.payload.len();
             queue.push_back(message);
             return Some(dropped);
         };
+        let removed = queue[index].payload.len();
+        let retained = bytes.saturating_sub(removed);
+        if retained
+            .checked_add(message.payload.len())
+            .is_none_or(|total| total > Self::BYTE_LIMIT)
+        {
+            return None;
+        }
         let superseded = queue[index].superseded.saturating_add(1);
+        *bytes = retained + message.payload.len();
         queue[index] = Message { superseded, ..message };
         Some(1)
     }
@@ -303,5 +361,118 @@ mod tests {
         outbox.discard(channel);
 
         assert!(outbox.is_empty(), "a dead session must not retain its queue");
+    }
+
+    #[test]
+    fn retired_channel_queues_cannot_grow_a_session_without_bound() {
+        let mut channels = Channels::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
+        let mut blocked = 0;
+
+        for value in 0..(Channels::LIMIT + 8) {
+            let channel = channels.open(Purpose::Stream).expect("one live channel");
+            for _ in 0..Outbox::<Topic>::DEPTH {
+                if outbox.emit(&mut channels, channel, None, payload(value as u8)) == Emission::Blocked {
+                    blocked += 1;
+                }
+            }
+            // Deliberately model a faulty owner that omits `outbox.discard`.
+            channels.close(channel).expect("closed");
+        }
+
+        assert_eq!(outbox.len(), Outbox::<Topic>::LIMIT);
+        assert!(blocked > 0, "retired queues eventually apply global backpressure");
+    }
+
+    #[test]
+    fn a_refused_enqueue_refunds_the_credit_it_could_not_use() {
+        let mut channels = Channels::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
+        let channel = channels.open(Purpose::Stream).expect("opened");
+        for value in 0..Outbox::<Topic>::DEPTH {
+            assert_eq!(
+                outbox.emit(&mut channels, channel, None, payload(value as u8)),
+                Emission::Queued
+            );
+        }
+        channels.replenish(channel, u32::MAX).expect("forged credit is clamped");
+
+        assert_eq!(
+            outbox.emit(&mut channels, channel, None, payload(99)),
+            Emission::Blocked
+        );
+        assert_eq!(
+            channels.credit(channel),
+            Some(Channels::CREDIT),
+            "a frame that was neither retained nor sent spends no credit"
+        );
+    }
+
+    #[test]
+    fn maximum_frames_across_channel_churn_obey_the_total_byte_budget() {
+        let mut channels = Channels::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
+        let first = channels.open(Purpose::Stream).expect("first stream");
+        let maximum = vec![b'x'; crate::Frame::PAYLOAD_LIMIT];
+
+        assert_eq!(
+            outbox.emit(&mut channels, first, None, maximum.clone()),
+            Emission::Queued
+        );
+        assert_eq!(
+            outbox.emit(&mut channels, first, None, maximum.clone()),
+            Emission::Queued
+        );
+        assert_eq!(outbox.bytes(), Outbox::<Topic>::BYTE_LIMIT);
+        channels.close(first).expect("retired without discarding its queue");
+
+        let next = channels.open(Purpose::Stream).expect("replacement stream");
+        assert_eq!(
+            outbox.emit(&mut channels, next, None, maximum.clone()),
+            Emission::Blocked,
+            "retiring a channel alone cannot evade the session byte budget"
+        );
+        assert_eq!(channels.credit(next), Some(Channels::CREDIT));
+        assert_eq!(outbox.bytes(), Outbox::<Topic>::BYTE_LIMIT);
+
+        outbox.discard(first);
+        assert_eq!(outbox.bytes(), 0, "discard releases the complete byte charge");
+        assert_eq!(outbox.emit(&mut channels, next, None, maximum), Emission::Queued);
+        assert_eq!(outbox.bytes(), crate::Frame::PAYLOAD_LIMIT);
+    }
+
+    #[test]
+    fn coalescing_replaces_bytes_without_exceeding_the_session_budget() {
+        let mut channels = Channels::new();
+        let mut outbox = Outbox::new();
+        let channel = channels.open(Purpose::Subscription).expect("subscription");
+        let maximum = vec![b'x'; crate::Frame::PAYLOAD_LIMIT];
+
+        assert_eq!(
+            outbox.emit(&mut channels, channel, Some(Topic::Containers), maximum.clone()),
+            Emission::Queued
+        );
+        assert_eq!(
+            outbox.emit(&mut channels, channel, Some(Topic::Containers), maximum.clone()),
+            Emission::Queued
+        );
+        for _ in 2..Channels::CREDIT {
+            assert_eq!(
+                outbox.emit(&mut channels, channel, Some(Topic::Containers), maximum.clone()),
+                Emission::Superseded
+            );
+            assert_eq!(outbox.bytes(), Outbox::<Topic>::BYTE_LIMIT);
+        }
+        assert_eq!(channels.credit(channel), Some(0));
+
+        assert_eq!(
+            outbox.emit(&mut channels, channel, Some(Topic::Containers), payload(7)),
+            Emission::Superseded
+        );
+        assert_eq!(outbox.bytes(), crate::Frame::PAYLOAD_LIMIT + 1);
+        let held = outbox.drain(channel);
+        assert_eq!(held.len(), 2);
+        assert_eq!(held[1].payload, payload(7));
+        assert_eq!(outbox.bytes(), 0);
     }
 }
