@@ -223,10 +223,15 @@ fn a_long_fault_is_bounded_wrapped_and_accessible() {
         .find(|label| label.text().as_str() == "Extension unavailable")
         .expect("the fault has a stable heading");
     assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
-    let detail = labels
-        .iter()
-        .find(|label| label.has_css_class("hl-extension-banner-detail"))
-        .expect("the fault has diagnostic detail");
+    let details = descendants(&banner.clone().upcast())
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Expander>().ok())
+        .expect("the fault has a technical-details disclosure");
+    assert!(!details.is_expanded());
+    let detail = details
+        .child()
+        .and_then(|widget| widget.downcast::<gtk::Label>().ok())
+        .expect("the disclosure has diagnostic detail");
     assert!(detail.wraps());
     assert_eq!(detail.wrap_mode(), gtk::pango::WrapMode::WordChar);
     assert!(detail.text().ends_with('…'));
