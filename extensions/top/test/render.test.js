@@ -2004,6 +2004,11 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    assert.deepEqual(
+      outerAncestorProperty(stage, message, 'Column', 'Pad'),
+      { Length: { Step: 2 } },
+      `${section} uses the same compact page inset as the manager surfaces`,
+    );
     if (section === 'Images') {
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
       assert.deepEqual(
@@ -5945,6 +5950,30 @@ function ancestorProperty(stage, label, tag, prop) {
     }
   }
   return undefined;
+}
+
+function outerAncestorProperty(stage, label, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = labelled(stage, label)?.SetProp.id;
+  let found;
+  while (parents.has(node)) {
+    node = parents.get(node);
+    if (tags.get(node) === tag) {
+      const value = patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
+        .at(-1)?.SetProp.value;
+      if (value !== undefined) found = value;
+    }
+  }
+  return found;
 }
 
 function compactDigest(digest) {
