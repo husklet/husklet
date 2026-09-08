@@ -1150,6 +1150,11 @@ export interface WorkspaceApi {
       path: string,
       options?: { after?: string | null; observed?: string | null; limit?: number },
     ): Promise<DirectoryPage>;
+    /** Depth-first, bounded traversal with one host page in memory at a time. */
+    walk(
+      path: string,
+      options?: { pageSize?: number; signal?: AbortSignal },
+    ): AsyncGenerator<FileEntry, void, void>;
     stat(path: string): Promise<FileEntry>;
     read(path: string): Promise<number[]>;
     readRange(
@@ -1158,6 +1163,11 @@ export interface WorkspaceApi {
       limit?: number,
       observed?: string | null,
     ): Promise<FileRange>;
+    /** Reads a stable file identity as consumer-driven bounded chunks until EOF. */
+    readChunks(
+      path: string,
+      options?: { offset?: number; chunkBytes?: number; signal?: AbortSignal },
+    ): AsyncGenerator<FileRange, void, void>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     /** Atomically replace exactly the file identity returned by stat/readRange. */
     writeObserved(path: string, observed: string, contents: Iterable<number>): Promise<string>;

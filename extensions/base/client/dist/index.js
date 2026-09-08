@@ -99,6 +99,21 @@ function exactFileRange(offset, limit) {
     }
     return [offset, limit];
 }
+function exactFilesystemPageSize(limit) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) {
+        throw new RangeError('filesystem page size must be an integer between 1 and 256');
+    }
+    return limit;
+}
+function filesystemAbort(signal) {
+    const error = new Error('filesystem iteration aborted', { cause: signal?.reason });
+    error.name = 'AbortError';
+    return error;
+}
+function requireFilesystemActive(signal) {
+    if (signal?.aborted)
+        throw filesystemAbort(signal);
+}
 function exactContainerName(name) {
     if (typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name))
         return name;
@@ -836,22 +851,82 @@ export function workspace(session, { signal } = {}) {
                 const page = expect(await session.call('filesystem_list_page', { path, after, observed, limit }), 'directory_page');
                 if (!page.identity ||
                     new TextEncoder().encode(page.identity).byteLength > 256 ||
+                    (observed !== null && page.identity !== observed) ||
                     page.entries.length > limit ||
                     (page.more && !page.next) ||
+                    (page.more && page.entries.length === 0) ||
+                    (after !== null && page.next === after) ||
                     (page.entries.length > 0 && page.next !== page.entries.at(-1).path)) {
                     throw new TypeError('host returned an inconsistent filesystem directory page');
                 }
                 return page;
             },
+            walk: async function* (path, { pageSize = 256, signal } = {}) {
+                exactFilesystemPageSize(pageSize);
+                async function* directory(directoryPath) {
+                    let after = null;
+                    let observed = null;
+                    for (;;) {
+                        requireFilesystemActive(signal);
+                        const page = await api.files.listPage(directoryPath, {
+                            after,
+                            observed,
+                            limit: pageSize,
+                        });
+                        requireFilesystemActive(signal);
+                        observed ??= page.identity;
+                        for (const entry of page.entries) {
+                            yield entry;
+                            if (entry.directory)
+                                yield* directory(entry.path);
+                        }
+                        if (!page.more)
+                            return;
+                        after = page.next;
+                    }
+                }
+                yield* directory(path);
+            },
             read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
             readRange: async (path, offset = 0, limit = 65536, observed = null) => {
                 const [boundedOffset, boundedLimit] = exactFileRange(offset, limit);
-                return expect(await session.call('filesystem_read_range', {
+                const range = expect(await session.call('filesystem_read_range', {
                     path,
                     offset: boundedOffset,
                     limit: boundedLimit,
                     observed,
                 }), 'file_range');
+                const complete = range.offset >= range.total || range.contents.length >= range.total - range.offset;
+                if (range.path !== path ||
+                    !range.identity ||
+                    new TextEncoder().encode(range.identity).byteLength > 256 ||
+                    (observed !== null && range.identity !== observed) ||
+                    range.offset !== boundedOffset ||
+                    range.contents.length > boundedLimit ||
+                    range.eof !== complete ||
+                    range.truncated === range.eof ||
+                    (!range.eof && range.contents.length === 0)) {
+                    throw new TypeError('host returned an inconsistent filesystem file range');
+                }
+                return range;
+            },
+            readChunks: async function* (path, { offset = 0, chunkBytes = 65_536, signal, } = {}) {
+                const [start, limit] = exactFileRange(offset, chunkBytes);
+                let cursor = start;
+                let observed = null;
+                for (;;) {
+                    requireFilesystemActive(signal);
+                    const range = await api.files.readRange(path, cursor, limit, observed);
+                    requireFilesystemActive(signal);
+                    observed ??= range.identity;
+                    if (range.identity !== observed) {
+                        throw new TypeError('host changed filesystem file identity during iteration');
+                    }
+                    yield range;
+                    if (range.eof)
+                        return;
+                    cursor += range.contents.length;
+                }
             },
             stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
             write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
@@ -2571,8 +2646,10 @@ export const protocolCoverage = Object.freeze({
         files: [
             'list',
             'listPage',
+            'walk',
             'read',
             'readRange',
+            'readChunks',
             'stat',
             'write',
             'writeObserved',

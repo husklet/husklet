@@ -14,6 +14,158 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix filesystem iterators page recursively, stream stable chunks, and cancel locally', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-iterator-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const requests = [];
+  let rangeCalls = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        requests.push(frame.payload);
+        let reply;
+        let value;
+        if (frame.payload.call === 'filesystem_list_page') {
+          const input = frame.payload.with;
+          reply = 'directory_page';
+          if (input.path === 'src/lib') {
+            value = {
+              entries: [{ path: 'src/lib/nested.ts', directory: false, size: 3 }],
+              identity: 'lib-v1',
+              next: 'src/lib/nested.ts',
+              more: false,
+            };
+          } else if (input.after === null) {
+            value = {
+              entries: [
+                { path: 'src/a.ts', directory: false, size: 4 },
+                { path: 'src/lib', directory: true, size: 0 },
+              ],
+              identity: 'src-v1',
+              next: 'src/lib',
+              more: true,
+            };
+          } else {
+            assert.deepEqual([input.after, input.observed], ['src/lib', 'src-v1']);
+            value = {
+              entries: [{ path: 'src/z.ts', directory: false, size: 2 }],
+              identity: 'src-v1',
+              next: 'src/z.ts',
+              more: false,
+            };
+          }
+        } else if (frame.payload.call === 'filesystem_read_range') {
+          const input = frame.payload.with;
+          rangeCalls += 1;
+          reply = 'file_range';
+          if (input.path === 'src/bad.ts') {
+            value = {
+              path: 'src/wrong.ts',
+              identity: 'bad-v1',
+              offset: 0,
+              total: 0,
+              contents: [],
+              eof: true,
+              truncated: false,
+            };
+            socket.write(
+              encode({ channel: 2, kind: KIND.response, payload: { reply, with: value } }),
+            );
+            continue;
+          }
+          assert.equal(input.path, 'src/a.ts');
+          if (input.offset === 0) {
+            assert.equal(input.observed, null);
+            value = {
+              path: input.path,
+              identity: 'file-v1',
+              offset: 0,
+              total: 4,
+              contents: [65, 66],
+              eof: false,
+              truncated: true,
+            };
+          } else {
+            assert.deepEqual([input.offset, input.observed], [2, 'file-v1']);
+            value = {
+              path: input.path,
+              identity: 'file-v1',
+              offset: 2,
+              total: 4,
+              contents: [67, 68],
+              eof: true,
+              truncated: false,
+            };
+          }
+        } else if (frame.payload.call === 'workspace_info') {
+          reply = 'workspace';
+          value = { name: 'demo', image: 'alpine', architecture: 'amd64' };
+        }
+        if (reply) {
+          socket.write(
+            encode({ channel: 2, kind: KIND.response, payload: { reply, with: value } }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['filesystem:read', 'workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const walk = host.files.walk('src', { pageSize: 2 });
+    assert.equal((await walk.next()).value.path, 'src/a.ts');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      requests.filter(({ call }) => call === 'filesystem_list_page').length,
+      1,
+      'an unconsumed traversal does not fetch another page',
+    );
+    const paths = ['src/a.ts'];
+    for await (const entry of walk) paths.push(entry.path);
+    assert.deepEqual(paths, ['src/a.ts', 'src/lib', 'src/lib/nested.ts', 'src/z.ts']);
+
+    const controller = new AbortController();
+    const cancelled = host.files.readChunks('src/a.ts', {
+      chunkBytes: 2,
+      signal: controller.signal,
+    });
+    assert.deepEqual((await cancelled.next()).value.contents, [65, 66]);
+    controller.abort('document removed from index');
+    await assert.rejects(cancelled.next(), (error) => error.name === 'AbortError');
+    assert.equal(rangeCalls, 1, 'cancellation between chunks sends no ambiguous ordered call');
+    assert.equal((await host.info()).name, 'demo', 'local cancellation leaves the session usable');
+
+    const chunks = [];
+    for await (const range of host.files.readChunks('src/a.ts', { chunkBytes: 2 })) {
+      chunks.push(...range.contents);
+    }
+    assert.deepEqual(chunks, [65, 66, 67, 68]);
+    await assert.rejects(
+      host.files.readRange('src/bad.ts'),
+      /host returned an inconsistent filesystem file range/,
+    );
+    assert.equal((await host.info()).name, 'demo', 'a malformed range leaves correlation intact');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output pages apply backpressure, cancel locally, and fail closed on a gap', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-pages-'));
   const socketPath = path.join(directory, 'host.sock');

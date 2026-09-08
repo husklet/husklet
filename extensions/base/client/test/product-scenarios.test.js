@@ -150,11 +150,11 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
   assert.match(run.result.after, /healthy/);
 });
 
-test('embeddings indexer watches, range-reads one identity, and CAS-updates its index', async () => {
+test('embeddings indexer watches, recursively discovers, streams, and CAS-updates', async () => {
   const document = new TextEncoder().encode('alpha beta gamma');
   const run = await scenario(
     'embeddings-indexer.ts',
-    { document: 'src/a.md', index: '.husklet/index.json', chunkBytes: 6 },
+    { root: 'src', document: 'src/a.md', index: '.husklet/index.json', chunkBytes: 6 },
     (socket, frame) => {
       const { call } = frame.payload;
       if (call === 'event_subscribe') {
@@ -183,6 +183,23 @@ test('embeddings indexer watches, range-reads one identity, and CAS-updates its 
           ),
         );
       } else if (call === 'event_unsubscribe') respond(socket, frame, { reply: 'done' });
+      else if (call === 'filesystem_list_page')
+        respond(socket, frame, {
+          reply: 'directory_page',
+          with: {
+            entries: [
+              {
+                path: 'src/a.md',
+                directory: false,
+                size: document.length,
+                identity: 'doc-v1',
+              },
+            ],
+            identity: 'src-v1',
+            next: 'src/a.md',
+            more: false,
+          },
+        });
       else if (call === 'filesystem_read_range') {
         const offset = frame.payload.with.offset;
         const contents = Array.from(document.slice(offset, offset + 6));
@@ -195,7 +212,7 @@ test('embeddings indexer watches, range-reads one identity, and CAS-updates its 
             total: document.length,
             contents,
             eof: offset + contents.length === document.length,
-            truncated: false,
+            truncated: offset + contents.length !== document.length,
           },
         });
       } else if (call === 'filesystem_stat')
