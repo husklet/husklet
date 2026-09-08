@@ -967,6 +967,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         {
           command,
           environment = [],
+          credentials,
           user,
           workingDirectory,
           pageLimit = 16,
@@ -980,12 +981,20 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (typeof onPage !== 'function')
           throw new TypeError('streaming execution requires an output callback');
         requireOutputActive(signal);
-        const executionId = await api.containers.exec(id, generation, {
-          command,
-          environment,
-          user,
-          workingDirectory,
-        });
+        const executionId = credentials
+          ? await api.containers.execWithCredentials(id, generation, {
+              command,
+              environment,
+              credentials,
+              user,
+              workingDirectory,
+            })
+          : await api.containers.exec(id, generation, {
+              command,
+              environment,
+              user,
+              workingDirectory,
+            });
         let phase = 'output';
         try {
           for await (const page of api.containers.executionOutputPages(executionId, {

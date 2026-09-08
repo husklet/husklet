@@ -35,6 +35,7 @@
     "examples/agent-workspace-control.mjs",
     "examples/llm-terminal-agent.ts",
     "examples/embeddings-indexer.ts",
+    "examples/postgres-browser.ts",
     "README.md",
     "API.md",
     "LICENSE"
@@ -45,7 +46,7 @@
     "format": "prettier --write 'src/{api,index,semantic,session,wire}.ts' tools/build.js tsconfig.json package.json",
     "format:check": "prettier --check 'src/{api,index,semantic,session,wire}.ts' tools/build.js tsconfig.json package.json",
     "test": "npm run build && npm run types:examples && node tools/protocol-spec.js && node tools/api-reference.js && node --test test/*.test.js && node tools/package-smoke.js",
-    "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --skipLibCheck --noEmit examples/llm-terminal-agent.ts examples/embeddings-indexer.ts examples/extension-lifecycle.ts",
+    "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --skipLibCheck --noEmit examples/llm-terminal-agent.ts examples/embeddings-indexer.ts examples/extension-lifecycle.ts examples/postgres-browser.ts",
     "pack:check": "npm run build && node tools/package-smoke.js",
     "prepack": "npm run build && node tools/protocol-spec.js && node tools/api-reference.js",
     "protocol:generate": "node tools/protocol-spec.js --write",
