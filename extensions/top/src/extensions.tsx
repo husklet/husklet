@@ -768,6 +768,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     label="All access is off. Expand exact grants and enable only what this extension needs."
                     tone="warning"
                   />
+                  {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
+                    <InlineMessage
+                      label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
+                      tone="warning"
+                    />
+                  )}
                   <Expander
                     label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
                     expanded={permissionDetailsExpanded}
@@ -1451,8 +1457,10 @@ function capabilityLabel(capability: ExtensionCapability): string {
     'networks:read': 'View networks',
     'networks:write': 'Create and modify networks',
     'terminals:read': 'View terminal tabs and panes',
-    'terminals:control': 'Create and rearrange terminal panes',
-    'terminals:output': 'Read and write terminal text',
+    'terminals:input': 'Type into terminal panes',
+    'terminals:layout-control': 'Create and rearrange terminal panes',
+    'terminals:process-control': 'Replace processes in terminal panes',
+    'terminals:output': 'Read terminal text',
     'panes:observe': 'Observe pane interaction',
     'panes:semantic-read': 'Read structured pane interfaces',
     'panes:semantic-control': 'Operate structured pane interfaces',

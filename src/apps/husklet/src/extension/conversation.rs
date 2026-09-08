@@ -502,11 +502,13 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::ImagePulls) {
+            let available = self.available_credit(Topic::ImagePulls);
             snapshots.extend(
                 services
                     .images
                     .pull_changes(self.session.extension_identity(), self.image_pull_cursor)
                     .into_iter()
+                    .take(available)
                     .map(Snapshot::ImagePulls),
             );
         }
@@ -555,8 +557,10 @@ impl Conversation {
         if self.may_observe(Topic::WorkspaceLifecycle) {
             if let Some(revision) = self.workspace_lifecycle_revision {
                 if let Ok(changes) = services.workspace_control.lifecycle_since(revision) {
-                    for change in changes {
-                        self.workspace_lifecycle_revision = Some(change.revision);
+                    for change in changes
+                        .into_iter()
+                        .take(self.available_credit(Topic::WorkspaceLifecycle))
+                    {
                         snapshots.push(Snapshot::WorkspaceLifecycle(change));
                     }
                 }
@@ -575,9 +579,17 @@ impl Conversation {
             {
                 continue;
             }
-            self.publish(&snapshot)?;
-            if let Snapshot::ImagePulls(change) = &snapshot {
-                self.image_pull_cursor = self.image_pull_cursor.max(change.sequence);
+            let emission = self.publish(&snapshot)?;
+            if emission == Emission::Queued {
+                match &snapshot {
+                    Snapshot::ImagePulls(change) => {
+                        self.image_pull_cursor = self.image_pull_cursor.max(change.sequence);
+                    }
+                    Snapshot::WorkspaceLifecycle(change) => {
+                        self.workspace_lifecycle_revision = Some(change.revision);
+                    }
+                    _ => {}
+                }
             }
             if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle {
                 self.observed.insert(topic, snapshot);
@@ -588,11 +600,12 @@ impl Conversation {
     }
 
     /// Whether collecting a topic can produce an event the peer is currently
-    /// allowed to receive. The first collection has no route yet and is what
-    /// allocates one; after that, exhausted channel credit stops work at the
-    /// service boundary rather than repeatedly rebuilding snapshots which
-    /// cannot leave the host. Returned credit makes the next observation read
-    /// fresh state, so a stalled peer resumes from the latest full snapshot.
+    /// allowed to receive. The first collection has no route yet; its first
+    /// successful publication allocates one. After that, exhausted channel
+    /// credit stops work at the service boundary rather than repeatedly
+    /// rebuilding snapshots which cannot leave the host. Returned credit makes
+    /// the next observation read fresh state, so a stalled peer resumes from
+    /// the latest full snapshot.
     fn may_observe(&self, topic: Topic) -> bool {
         if !self.session.may_emit(topic) {
             return false;
@@ -600,6 +613,15 @@ impl Conversation {
         self.subscriptions
             .channel(topic)
             .is_none_or(|channel| self.channels.credit(channel).is_some_and(|credit| credit > 0))
+    }
+
+    fn available_credit(&self, topic: Topic) -> usize {
+        self.subscriptions
+            .channel(topic)
+            .and_then(|channel| self.channels.credit(channel))
+            .unwrap_or(Channels::CREDIT)
+            .try_into()
+            .unwrap_or(usize::MAX)
     }
 
     fn flush_interactions(&mut self) -> Result<(), Fault> {
@@ -1205,8 +1227,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath,
+        Reply, Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1218,6 +1240,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct Ledger {
         reached: Mutex<Vec<&'static str>>,
+        image_pull_changes: Mutex<Vec<hl_extension::port::ImagePullChange>>,
         semantic_revision: AtomicU64,
         semantic_transition: AtomicU64,
         semantic_reads: AtomicU64,
@@ -1232,6 +1255,10 @@ mod tests {
 
         fn reached(&self) -> Vec<&'static str> {
             self.reached.lock().expect("ledger").clone()
+        }
+
+        fn image_pull_changes(&self, changes: Vec<hl_extension::port::ImagePullChange>) {
+            *self.image_pull_changes.lock().expect("image pull changes") = changes;
         }
 
         fn semantic_revision(&self, revision: u64) {
@@ -1425,9 +1452,17 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn pull_changes(&self, _owner: &str, _after: u64) -> Vec<hl_extension::port::ImagePullChange> {
+        fn pull_changes(&self, _owner: &str, after: u64) -> Vec<hl_extension::port::ImagePullChange> {
             self.ledger.note("images.pull_changes");
-            Vec::new()
+            self.ledger
+                .image_pull_changes
+                .lock()
+                .expect("image pull changes")
+                .iter()
+                .filter(|change| change.sequence > after)
+                .take(64)
+                .cloned()
+                .collect()
         }
     }
 
@@ -1779,6 +1814,22 @@ mod tests {
         (theirs, served)
     }
 
+    fn image_pull_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("image-observer").expect("name"),
+                Grant::new([Capability::ImagePull]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
     fn network_scoped_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let served = std::thread::spawn(move || {
@@ -1917,7 +1968,7 @@ mod tests {
                 Grant::new([
                     Capability::ContainerRead,
                     Capability::TerminalOutput,
-                    Capability::TerminalControl,
+                    Capability::TerminalLayoutControl,
                 ]),
                 Vec::new(),
             );
@@ -2719,6 +2770,76 @@ mod tests {
     }
 
     #[test]
+    fn sixty_four_image_pull_changes_cross_two_credited_unix_pages_in_order() {
+        let ledger = Arc::new(Ledger::default());
+        ledger.image_pull_changes(
+            (1..=64)
+                .map(|sequence| hl_extension::port::ImagePullChange {
+                    sequence,
+                    job: format!("{sequence:032x}"),
+                    revision: 1,
+                    state: "pulling".into(),
+                    coalesced: 0,
+                })
+                .collect(),
+        );
+        let (theirs, served) = image_pull_host(Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::ImagePulls,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
+
+        let mut first = Vec::new();
+        let mut channel = None;
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("first credited image pull page");
+            channel = Some(event.channel);
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed image pull change");
+            let Snapshot::ImagePulls(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            first.push(change.sequence);
+        }
+        assert_eq!(first, (1..=32).collect::<Vec<_>>());
+
+        wire.send(&Frame::new(
+            channel.expect("event channel"),
+            Kind::Credit,
+            serde_json::to_vec(&Channels::CREDIT).expect("credit"),
+        ))
+        .expect("return first page credit");
+        let mut second = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("second credited image pull page");
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed image pull change");
+            let Snapshot::ImagePulls(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            second.push(change.sequence);
+        }
+        assert_eq!(second, (33..=64).collect::<Vec<_>>());
+        assert!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "images.pull_changes")
+                .count()
+                >= 2,
+            "the second page came from a cursor read, not a retained flood"
+        );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn reconnect_after_subscribed_disconnect_starts_without_stale_observation() {
         let ledger = Arc::new(Ledger::default());
         let (first, first_served) = host(Duration::from_secs(5), Queue::new(), Arc::clone(&ledger));
@@ -3142,6 +3263,70 @@ mod tests {
         assert!(
             matches!(second, Snapshot::WorkspaceLifecycle(change) if change.workspace == "target" && change.revision == 5)
         );
+    }
+
+    #[test]
+    fn workspace_lifecycle_cursor_waits_for_each_credited_page() {
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+        let lifecycle = LifecycleHost(
+            (1..=64)
+                .map(|revision| hl_extension::WorkspaceLifecycleChange {
+                    workspace: format!("workspace-{revision}"),
+                    action: hl_extension::WorkspaceLifecycleAction::Start,
+                    revision,
+                    coalesced: 0,
+                })
+                .collect(),
+        );
+        let (ours, peer) = UnixStream::pair().expect("socket pair");
+        peer.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
+        conversation.workspace_lifecycle_revision = Some(0);
+        let mut ports = services(&host);
+        ports.workspace_control = &lifecycle;
+        let mut wire = Wire::new(peer);
+
+        conversation.observe(&ports).expect("first lifecycle page");
+        let mut channel = None;
+        let mut first = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("first credited lifecycle page");
+            channel = Some(event.channel);
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("snapshot");
+            let Snapshot::WorkspaceLifecycle(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            first.push(change.revision);
+        }
+        assert_eq!(first, (1..=32).collect::<Vec<_>>());
+        assert_eq!(conversation.workspace_lifecycle_revision, Some(32));
+
+        let credit = Frame::new(
+            channel.expect("event channel"),
+            Kind::Credit,
+            serde_json::to_vec(&Channels::CREDIT).expect("credit"),
+        );
+        conversation.exchange(&credit, &ports).expect("return page credit");
+        conversation.observe(&ports).expect("second lifecycle page");
+        let mut second = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("second credited lifecycle page");
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("snapshot");
+            let Snapshot::WorkspaceLifecycle(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            second.push(change.revision);
+        }
+        assert_eq!(second, (33..=64).collect::<Vec<_>>());
+        assert_eq!(conversation.workspace_lifecycle_revision, Some(64));
     }
 
     #[test]
@@ -3833,7 +4018,7 @@ mod tests {
         );
         assert!(matches!(
             codec::read_failure(&denied),
-            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalControl.as_str()
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalInput.as_str()
         ));
         assert!(!denied.payload.windows(secret.len()).any(|window| window == secret));
         assert!(ledger.reached().is_empty(), "denied input reached terminal inspection");

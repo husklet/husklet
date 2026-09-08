@@ -49,8 +49,8 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
     /must be workspace/,
   );
   assert.deepEqual(
-    validateFailure({ error: 'denied', capability: 'terminals:control', detail: 'not granted' }),
-    { error: 'denied', capability: 'terminals:control', detail: 'not granted' },
+    validateFailure({ error: 'denied', capability: 'terminals:input', detail: 'not granted' }),
+    { error: 'denied', capability: 'terminals:input', detail: 'not granted' },
   );
   assert.deepEqual(validateSnapshot({ snapshot: 'containers', of: [] }), {
     snapshot: 'containers',

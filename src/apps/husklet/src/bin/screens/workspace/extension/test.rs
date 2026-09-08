@@ -116,6 +116,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         provider_authority_waits_for_a_valid_frame();
         startup_is_visible_until_the_first_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
+        a_new_generation_restarts_at_frame_one_without_a_sequence_fault();
         an_empty_wire_slot_addresses_the_overview_surface();
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
@@ -165,6 +166,35 @@ fn startup_is_visible_until_the_first_valid_frame() {
     assert!(!visible_labels(&fixture)
         .iter()
         .any(|label| label == "Starting extension…"));
+}
+
+fn a_new_generation_restarts_at_frame_one_without_a_sequence_fault() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&panel("First generation"));
+    fixture.page.tick();
+
+    fixture.post.send(Delivery::Reset).expect("the page is listening");
+    fixture.reconciliation = Reconciliation::new();
+    fixture.describe(&panel("Replacement generation"));
+    fixture.page.tick();
+
+    assert!(
+        !fixture.page.banner().is_visible(),
+        "a declared generation boundary is not a frame gap"
+    );
+    assert_eq!(
+        fixture.page.surface().len(),
+        4,
+        "only the replacement generation's root, heading, and action remain mounted"
+    );
+    let semantics = fixture.page.semantics("").expect("replacement semantics");
+    assert_eq!(semantics.revision, 3, "the replacement committed its first frame");
+    let labels = visible_labels(&fixture);
+    assert!(labels.iter().any(|label| label == "Replacement generation"));
+    assert!(
+        labels.iter().all(|label| label != "First generation"),
+        "the previous generation has no remaining visible authority"
+    );
 }
 
 fn visible_labels(fixture: &Fixture) -> Vec<String> {

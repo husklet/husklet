@@ -22,7 +22,6 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from '../dist/model.js';
 import { host } from './host.js';
@@ -606,6 +605,62 @@ test('reviewing an unchanged installed digest is an explicit no-op', async () =>
   assert.equal(updates, 0);
 });
 
+test('extension review calls out destructive image authority before consent', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'image-review' }),
+          acquisition: async () => ({
+            job: 'image-review',
+            reference: 'registry.example/tools:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'tools',
+              version: '1',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['images:remove', 'images:prune'],
+              requested_images: {
+                read: [],
+                use: [],
+                pull: [],
+                remove: [{ digest: `sha256:${'b'.repeat(64)}` }],
+                prune_all_unused: true,
+              },
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/tools:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ),
+  );
+  assert.equal(
+    ancestorTags(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ).includes('Expander'),
+    false,
+    'destructive authority is announced while exact grants remain collapsed',
+  );
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
@@ -1009,7 +1064,7 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
-  assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
+  assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
   assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
   assert.ok(labelled(stage, 'Exact grants · 0/2 selected'));
   expand(stage, 'Exact grants · 0/2 selected');
@@ -2532,7 +2587,10 @@ test('image inspect renders real typed details through a bounded source and retr
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, '$.id'), 'image inspection uses the native bounded object projection');
+  assert.ok(labelled(stage, 'Image details'));
+  assert.ok(labelled(stage, 'Platform · linux/amd64'));
+  assert.ok(labelled(stage, 'References · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 201, version: 1, rows: 9 } }]);
   assert.equal(
     imageDetails.answer({ source: 201, version: 1, id: 8, range: { start: 0, count: 999 } }).rows
@@ -2566,12 +2624,27 @@ test('an empty typed image inspection has an explicit semantic empty state', asy
   );
 });
 
-test('structured resource inspection applies the manager hard bounds visibly', async () => {
+test('typed image inspection never exposes unknown host object fields', async () => {
   const oversized = Object.fromEntries(
     Array.from({ length: 200 }, (_, index) => [`field_${index}`, `value-${index}`]),
   );
   const controlled = {
-    images: { ...api.images, inspect: async () => ({ id: 'sha256:bounded', ...oversized }) },
+    images: {
+      ...api.images,
+      inspect: async () => ({
+        id: 'sha256:bounded',
+        references: ['bounded:latest'],
+        created: 'now',
+        size: 1,
+        os: 'linux',
+        architecture: 'amd64',
+        entrypoint: [],
+        command: [],
+        working_directory: '',
+        user: '',
+        ...oversized,
+      }),
+    },
   };
   const resource = {
     data: [{ id: 'sha256:bounded', reference: 'bounded:latest', size: 1 }],
@@ -2584,16 +2657,9 @@ test('structured resource inspection applies the manager hard bounds visibly', a
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(
-      stage,
-      'Inspection is bounded to 128 nodes, depth 8, and 256 characters per string. Truncated values are marked.',
-    ),
-  );
-  assert.ok(
-    !labelled(stage, '$.field_199'),
-    'fields beyond the native inspector bound never become nodes',
-  );
+  assert.ok(labelled(stage, 'Image details'));
+  assert.equal(labelled(stage, '$.field_199'), undefined);
+  assert.equal(labelled(stage, 'value-199'), undefined);
 });
 
 test('image pull progress is determinate, cancellable and retryable from retained input', async () => {
@@ -2886,10 +2952,10 @@ test('volume and network panels render bounded real inventories and controls', (
     'only the custom network offers removal',
   );
   const networkStage = stageFromFrame(networkFrame);
-  assert.ok(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 0);
-  assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), undefined);
+  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 1);
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Width'), undefined);
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 1);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
@@ -2909,7 +2975,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(destructive(networkFrame, 'Remove'), false);
 });
 
-test('network inspection exposes loading, retry, empty and bounded typed details', async () => {
+test('network inspection exposes loading, retry, empty and domain-specific details', async () => {
   let attempts = 0;
   const controlled = {
     networks: {
@@ -2917,7 +2983,14 @@ test('network inspection exposes loading, retry, empty and bounded typed details
       inspect: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
-        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' };
+        return {
+          id: 'n1',
+          name: 'private',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: ['a'.repeat(64)], truncated: false },
+        };
       },
     },
   };
@@ -2927,9 +3000,8 @@ test('network inspection exposes loading, retry, empty and bounded typed details
     error: null,
     reload: async () => {},
   };
-  const details = new NetworkDetailsSource();
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource, networkDetails: details }));
+  stage.render(h(Networks, { api: controlled, resource }));
   invoke(stage, 'Inspect');
   await settled();
   await settled();
@@ -2938,21 +3010,18 @@ test('network inspection exposes loading, retry, empty and bounded typed details
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.id'),
-    'network inspection uses the native bounded object projection',
-  );
-  assert.equal(
-    details.answer({ source: 204, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
-    4,
-  );
+  assert.ok(labelled(stage, 'Network details'));
+  assert.ok(labelled(stage, 'Driver · bridge'));
+  assert.ok(labelled(stage, 'Scope · local'));
+  assert.ok(labelled(stage, 'Connected containers · 1'));
+  assert.ok(labelled(stage, `Container · ${'a'.repeat(64)}`));
+  assert.equal(labelled(stage, '$.id'), undefined, 'host source paths never enter the product UI');
 
   const empty = host();
   empty.render(
     h(Networks, {
       api: { networks: { ...api.networks, inspect: async () => ({}) } },
       resource,
-      networkDetails: new NetworkDetailsSource(),
     }),
   );
   invoke(empty, 'Inspect');
@@ -2990,10 +3059,10 @@ test('volume inspection exposes loading, retry, empty and bounded typed details'
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.name'),
-    'volume inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Volume details'));
+  assert.ok(labelled(stage, 'Name · cache'));
+  assert.ok(labelled(stage, 'Driver · local'));
+  assert.equal(labelled(stage, '$.name'), undefined);
   assert.equal(
     details.answer({ source: 205, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
     2,
@@ -4204,10 +4273,10 @@ test('container details load through the bounded source and a failed read is ret
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(
-    labelled(stage, '$.id'),
-    'container inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Container details'));
+  assert.ok(labelled(stage, 'Name · api'));
+  assert.ok(labelled(stage, 'Image · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 202, version: 1, rows: 5 } }]);
   assert.equal(
     details.answer({ source: 202, version: 1, id: 2, range: { start: 0, count: 999 } }).rows.length,

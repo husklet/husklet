@@ -397,6 +397,7 @@ impl Interface {
 
     fn accept(&mut self, delivery: Delivery) {
         match delivery {
+            Delivery::Reset => self.reset(),
             Delivery::Frame(frame) => self.draw(&frame),
             Delivery::Source(mutation) => self.feed(&mutation),
             Delivery::FrameAt { slot, frame } => self.draw_at(&slot, &frame),
@@ -408,6 +409,19 @@ impl Interface {
             }
             Delivery::Fault { restarts } => (self.faulted)(restarts),
         }
+    }
+
+    /// Drops every identity and callback owned by the previous sidecar.
+    fn reset(&mut self) {
+        self.tree = Tree::new();
+        self.surface.reset();
+        for pane in self.panes.values_mut() {
+            pane.tree = Tree::new();
+            pane.surface.reset();
+        }
+        self.recovery_pending.set(false);
+        self.banner.hide();
+        self.loading.set_visible(true);
     }
 
     /// Applies one frame. A rejected frame means the producer and the tree no

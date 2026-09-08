@@ -173,7 +173,17 @@ impl<T: Copy + PartialEq> Outbox<T> {
         if !purpose.coalesces() {
             return Emission::Blocked;
         }
+        let full = self.len() >= Self::LIMIT;
+        let byte_full = self
+            .bytes
+            .checked_add(message.payload.len())
+            .is_none_or(|total| total > Self::BYTE_LIMIT);
         let queue = self.queues.entry(channel).or_default();
+        if !full && !byte_full && queue.is_empty() {
+            self.bytes += message.payload.len();
+            queue.push_back(message);
+            return Emission::Superseded;
+        }
         Self::supersede(queue, message, purpose, &mut self.bytes).map_or(Emission::Blocked, |dropped| {
             self.dropped = self.dropped.saturating_add(dropped);
             Emission::Superseded
@@ -229,7 +239,7 @@ impl<T: Copy + PartialEq> Outbox<T> {
 #[cfg(test)]
 mod tests {
     use super::{Emission, Outbox};
-    use crate::channel::{Channels, Purpose};
+    use crate::channel::{Channels, Permission, Purpose};
 
     /// Two topics is all this needs: the subject is coalescing, not routing.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -406,6 +416,31 @@ mod tests {
             Some(Channels::CREDIT),
             "a frame that was neither retained nor sent spends no credit"
         );
+    }
+
+    #[test]
+    fn first_withheld_snapshot_is_retained_after_sent_frames_were_drained() {
+        let mut channels = Channels::new();
+        let mut outbox = Outbox::new();
+        let channel = channels.open(Purpose::Subscription).expect("opened");
+        for _ in 0..Channels::CREDIT {
+            assert_eq!(channels.reserve(channel), Ok(Permission::Send));
+        }
+
+        assert_eq!(
+            outbox.emit(&mut channels, channel, Some(Topic::Containers), payload(7)),
+            Emission::Superseded
+        );
+        assert_eq!(outbox.depth(channel), 1);
+        assert_eq!(outbox.bytes(), 1);
+        assert_eq!(
+            outbox.emit(&mut channels, channel, Some(Topic::Containers), payload(8)),
+            Emission::Superseded
+        );
+        let held = outbox.drain(channel);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].payload, payload(8));
+        assert_eq!(held[0].superseded, 1);
     }
 
     #[test]

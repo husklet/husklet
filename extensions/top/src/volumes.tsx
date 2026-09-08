@@ -10,7 +10,6 @@ import {
   EmptyState,
   Entry,
   Heading,
-  ObjectInspector,
   ResourceState,
   Row,
   Scroll,
@@ -19,11 +18,9 @@ import {
   type VolumeSummary,
   type WorkspaceApi,
 } from '@husklet/react';
-const RESOURCE_WIDTH = { chars: 68 } as const;
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 type Inspection = {
   name: string;
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -129,7 +126,7 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Row gap={1} width={RESOURCE_WIDTH}>
+      <Row gap={1} grow wrap>
         <Entry
           value={name}
           placeholder="Volume name"
@@ -177,8 +174,7 @@ export function Volumes({
         {view.records.map((volume) => (
           <Card
             key={`${volume.name}:${volume.generation}`}
-            grow={false}
-            width={RESOURCE_WIDTH}
+            grow
             variant={inspection.name === volume.name ? 'filled' : 'outline'}
           >
             <CardHeader label={volume.name} detail={volume.driver} />
@@ -222,11 +218,12 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
       ) : inspection.count === 0 ? (
         <EmptyState label="No volume details" detail="The host returned no inspectable fields." />
       ) : (
-        <ObjectInspector
-          value={inspection.detail}
-          {...INSPECTOR_BOUNDS}
-          height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-        />
+        <Column gap={1}>
+          <Heading label="Volume details" scale="caption" />
+          <Text label={`Name · ${inspection.detail?.name}`} />
+          <Text label={`Driver · ${inspection.detail?.driver}`} />
+          <Text label={`Immutable generation · ${inspection.detail?.generation}`} wrap />
+        </Column>
       )}
     </CardContent>
   );

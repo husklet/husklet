@@ -1417,21 +1417,21 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::PaneList, Capability::PaneObserve),
         (
             Request::TerminalOpenTab { title: "logs".into() },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalPinTab {
                 tab: "t1".into(),
                 pinned: true,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalSplit {
                 slot: "s1".into(),
                 division: Division::Beside,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalSplitObserved {
@@ -1440,14 +1440,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 11,
                 division: Division::Below,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalSpawn {
                 slot: "s1".into(),
                 command: vec!["ls".into()],
             },
-            Capability::TerminalControl,
+            Capability::TerminalProcessControl,
         ),
         (
             Request::TerminalSpawnObserved {
@@ -1456,7 +1456,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 11,
                 command: vec!["ls".into()],
             },
-            Capability::TerminalControl,
+            Capability::TerminalProcessControl,
         ),
         (
             Request::TerminalWritePane {
@@ -1465,7 +1465,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 2,
                 contents: b"pwd\n".to_vec(),
             },
-            Capability::TerminalControl,
+            Capability::TerminalInput,
         ),
         (
             Request::TerminalResizeGrid {
@@ -1473,14 +1473,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 columns: 120,
                 rows: 40,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalRetitlePane {
                 slot: "s1".into(),
                 title: "Build 🧪".into(),
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalSwitchOccupant {
@@ -1491,7 +1491,7 @@ fn calls() -> Vec<(Request, Capability)> {
                     provider: "main".into(),
                 },
             },
-            Capability::TerminalControl,
+            Capability::TerminalProcessControl,
         ),
         (
             Request::TerminalSwitchOccupantObserved {
@@ -1500,7 +1500,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 11,
                 target: hl_extension::port::PaneOccupantTarget::Terminal,
             },
-            Capability::TerminalControl,
+            Capability::TerminalProcessControl,
         ),
         (Request::FilesystemInventory, Capability::FilesystemRead),
         (
@@ -1710,11 +1710,11 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 columns: 80,
                 rows: 24,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalClosePane { slot: "s1".into() },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalClosePaneObserved {
@@ -1722,11 +1722,11 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 generation: 0,
                 revision: 1,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalFocusPane { slot: "s1".into() },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalFocusPaneObserved {
@@ -1734,7 +1734,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 generation: 0,
                 revision: 1,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalRetitlePaneObserved {
@@ -1743,14 +1743,14 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 revision: 1,
                 title: "Build".into(),
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalRatio {
                 slot: "s1".into(),
                 ratio: 0.5,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::TerminalRatioObserved {
@@ -1759,7 +1759,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 revision: 1,
                 ratio: 0.5,
             },
-            Capability::TerminalControl,
+            Capability::TerminalLayoutControl,
         ),
         (
             Request::InterfaceSplit {
@@ -1866,7 +1866,21 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
     for (request, capability) in calls() {
         let host = Host::new();
 
-        let mut granted = session(&[capability], &["logs"])
+        let mut capabilities = vec![capability];
+        if matches!(
+            request,
+            Request::TerminalOpenTab { .. }
+                | Request::TerminalSplit { .. }
+                | Request::TerminalSplitObserved { .. }
+                | Request::TerminalClosePane { .. }
+                | Request::TerminalClosePaneObserved { .. }
+                | Request::TerminalSwitchOccupant { .. }
+                | Request::TerminalSwitchOccupantObserved { .. }
+        ) {
+            capabilities.push(Capability::TerminalLayoutControl);
+            capabilities.push(Capability::TerminalProcessControl);
+        }
+        let mut granted = session(&capabilities, &["logs"])
             .with_images(hl_extension::ImageGrant {
                 read: vec![hl_extension::ImageSelector::All { all: true }],
                 r#use: vec![hl_extension::ImageSelector::All { all: true }],
@@ -2023,7 +2037,7 @@ fn extension_controls_refuse_partial_digests_before_host_authority() {
 #[test]
 fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
     let host = Host::new();
-    let mut session = session(&[Capability::TerminalControl], &[]);
+    let mut session = session(&[Capability::TerminalInput, Capability::TerminalLayoutControl], &[]);
     let oversized = Request::TerminalWritePane {
         slot: "s1".into(),
         generation: 1,
@@ -2049,9 +2063,80 @@ fn terminal_input_and_grid_are_bounded_before_the_window_is_reached() {
 }
 
 #[test]
+fn terminal_input_alone_cannot_reach_process_or_layout_authority() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalInput], &[]);
+    let requests = [
+        Request::TerminalOpenTab { title: "logs".into() },
+        Request::TerminalPinTab {
+            tab: "t1".into(),
+            pinned: true,
+        },
+        Request::TerminalSplit {
+            slot: "s1".into(),
+            division: Division::Beside,
+        },
+        Request::TerminalSpawn {
+            slot: "s1".into(),
+            command: vec!["sh".into()],
+        },
+        Request::TerminalResizeGrid {
+            slot: "s1".into(),
+            columns: 80,
+            rows: 24,
+        },
+        Request::TerminalClosePane { slot: "s1".into() },
+        Request::TerminalFocusPane { slot: "s1".into() },
+        Request::TerminalRetitlePane {
+            slot: "s1".into(),
+            title: "logs".into(),
+        },
+        Request::TerminalRatio {
+            slot: "s1".into(),
+            ratio: 0.5,
+        },
+    ];
+    for request in requests {
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Denied { capability, .. })
+                if capability == request.capability().as_str()
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn process_lifetime_layout_operations_require_both_grants_before_host_access() {
+    for granted in [Capability::TerminalLayoutControl, Capability::TerminalProcessControl] {
+        for request in [
+            Request::TerminalOpenTab { title: "shell".into() },
+            Request::TerminalSplit {
+                slot: "s1".into(),
+                division: Division::Beside,
+            },
+            Request::TerminalClosePane { slot: "s1".into() },
+            Request::TerminalSwitchOccupant {
+                slot: "s1".into(),
+                generation: 7,
+                target: hl_extension::port::PaneOccupantTarget::Terminal,
+            },
+        ] {
+            let host = Host::new();
+            let mut session = session(&[granted], &[]);
+            assert!(matches!(
+                session.dispatch(&request, &services(&host)),
+                Err(Failure::Denied { .. })
+            ));
+            assert!(host.ledger.reached().is_empty());
+        }
+    }
+}
+
+#[test]
 fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::TerminalControl], &[]);
+    let mut session = session(&[Capability::TerminalLayoutControl], &[]);
     for title in [
         String::new(),
         "   ".into(),
@@ -2087,7 +2172,10 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
 #[test]
 fn occupant_targets_are_native_names_and_reach_terminal_authority_exactly_once() {
     let host = Host::new();
-    let mut session = session(&[Capability::TerminalControl], &[]);
+    let mut session = session(
+        &[Capability::TerminalLayoutControl, Capability::TerminalProcessControl],
+        &[],
+    );
     for extension in ["", "Upper", "x/escape", &"x".repeat(65)] {
         let request = Request::TerminalSwitchOccupant {
             slot: "s1".into(),
@@ -2118,7 +2206,7 @@ fn occupant_targets_are_native_names_and_reach_terminal_authority_exactly_once()
 #[test]
 fn terminal_spawn_argv_is_bounded_before_the_window_is_reached() {
     let host = Host::new();
-    let mut session = session(&[Capability::TerminalControl], &[]);
+    let mut session = session(&[Capability::TerminalProcessControl], &[]);
     for command in [
         Vec::new(),
         vec![String::new()],
@@ -3789,7 +3877,7 @@ fn container_attachment_requires_its_dedicated_grant_and_preserves_exact_argv() 
         command: vec!["sh".into(), "-lc".into(), "printf '%s' \"$HOME\"".into()],
     };
     let host = Host::new();
-    let mut denied = session(&[Capability::ContainerControl, Capability::TerminalControl], &[]);
+    let mut denied = session(&[Capability::ContainerControl, Capability::TerminalLayoutControl], &[]);
     assert!(matches!(
         denied.dispatch(&request, &services(&host)),
         Err(Failure::Denied { .. })

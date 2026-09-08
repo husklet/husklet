@@ -8,7 +8,6 @@ import { createElement as h } from 'react';
 import { connect, workspace } from '../../../extensions/base/react/dist/index.js';
 import { KIND, Reader, encode } from '../../../extensions/base/react/dist/wire.js';
 import { Top } from '../dist/app.js';
-import { NETWORK_DETAIL_SOURCE, NetworkDetailsSource } from '../dist/model.js';
 import { host } from './host.js';
 
 test(
@@ -92,7 +91,6 @@ test(
       inspectionSession = await connect({ path: socketPath });
       const framed = workspace(session);
       const inspectionApi = workspace(inspectionSession);
-      const mutations = [];
       stage = host();
       stage.render(
         h(Top, {
@@ -102,7 +100,6 @@ test(
             subscribe: undefined,
             unsubscribe: undefined,
           },
-          networkDetails: new NetworkDetailsSource(async (m) => mutations.push(m)),
           initial: { containers: [], executions: [], images: [], volumes: [] },
         }),
       );
@@ -129,14 +126,9 @@ test(
           `${stale} does not remount`,
         );
       await new Promise((resolve) => setTimeout(resolve, 170));
-      assert.equal(lengths(mutations).length, 0);
       invoke(stage, 'Inspect');
-      await until(() => lengths(mutations).length === 1);
-      assert.deepEqual(lengths(mutations)[0], {
-        source: NETWORK_DETAIL_SOURCE,
-        version: 1,
-        rows: 6,
-      });
+      await until(() => labelled(stage, 'Network details'));
+      assert.ok(labelled(stage, 'Scope · new-scope'));
       await until(() => labelled(stage, 'Disconnect'));
       invoke(stage, 'Disconnect');
       assert.ok(labelled(stage, `Disconnect immutable container ${container} from network ${id}?`));
@@ -152,9 +144,6 @@ test(
   },
 );
 
-function lengths(ms) {
-  return ms.flatMap((m) => (m.Length ? [m.Length] : []));
-}
 function labelled(stage, label) {
   return stage.frames
     .flatMap((f) => f.patches)

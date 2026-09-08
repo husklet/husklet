@@ -203,13 +203,12 @@ fn request_capability(request: &str) -> Capability {
         "terminal_read_pane" => Capability::TerminalOutput,
         "pane_semantic_read" => Capability::PaneSemanticRead,
         "pane_semantic_action" => Capability::PaneSemanticControl,
+        "terminal_write_pane" => Capability::TerminalInput,
+        "terminal_spawn" | "terminal_spawn_observed" => Capability::TerminalProcessControl,
         "terminal_open_tab"
         | "terminal_pin_tab"
         | "terminal_split"
         | "terminal_split_observed"
-        | "terminal_spawn"
-        | "terminal_spawn_observed"
-        | "terminal_write_pane"
         | "terminal_resize_grid"
         | "terminal_resize_grid_observed"
         | "terminal_close_pane"
@@ -219,9 +218,8 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_retitle_pane"
         | "terminal_retitle_pane_observed"
         | "terminal_ratio"
-        | "terminal_ratio_observed"
-        | "terminal_switch_occupant"
-        | "terminal_switch_occupant_observed" => Capability::TerminalControl,
+        | "terminal_ratio_observed" => Capability::TerminalLayoutControl,
+        "terminal_switch_occupant" | "terminal_switch_occupant_observed" => Capability::TerminalProcessControl,
         "filesystem_inventory"
         | "filesystem_list"
         | "filesystem_list_page"

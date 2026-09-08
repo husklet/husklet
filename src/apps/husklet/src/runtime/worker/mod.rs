@@ -159,6 +159,11 @@ impl Worker {
     }
 
     pub fn daemon(name: &str) -> std::io::Result<std::path::PathBuf> {
+        // Finder-launched applications inherit macOS's small soft descriptor limit.
+        // The daemon owns container engines and their pipes just as a terminal worker
+        // does, so raising capacity only in `launch` leaves workspace startup able to
+        // exhaust itself before a pane can attach.
+        OpenFiles::prepare()?;
         let store = WorkspaceStore::load(Self::store())?;
         let workspace = store.get_key(name).ok_or_else(|| {
             std::io::Error::new(
@@ -170,6 +175,10 @@ impl Worker {
     }
 
     pub fn domain(name: &str) -> std::io::Result<()> {
+        // The domain is the execution-owning worker: it retains the Docker API,
+        // container engines, terminals, and extension connections. Establish the
+        // descriptor contract before constructing any of them.
+        OpenFiles::prepare()?;
         let store = WorkspaceStore::load(Self::store())?;
         let workspace = store.get(name).ok_or_else(|| {
             std::io::Error::new(

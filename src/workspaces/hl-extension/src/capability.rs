@@ -50,8 +50,15 @@ pub enum Capability {
     NetworkWrite,
     #[serde(rename = "terminals:read")]
     TerminalRead,
-    #[serde(rename = "terminals:control")]
-    TerminalControl,
+    /// Injecting bytes into an existing terminal pane.
+    #[serde(rename = "terminals:input")]
+    TerminalInput,
+    /// Creating, removing, focusing, or rearranging terminal panes and tabs.
+    #[serde(rename = "terminals:layout-control")]
+    TerminalLayoutControl,
+    /// Replacing the process running in an existing terminal pane.
+    #[serde(rename = "terminals:process-control")]
+    TerminalProcessControl,
     /// Reading the bytes flowing through a pane. Deliberately separate from
     /// `TerminalRead`: listing panes and reading what was typed into a shell
     /// are different kinds of access.
@@ -113,7 +120,9 @@ impl Capability {
             Self::NetworkRead => "networks:read",
             Self::NetworkWrite => "networks:write",
             Self::TerminalRead => "terminals:read",
-            Self::TerminalControl => "terminals:control",
+            Self::TerminalInput => "terminals:input",
+            Self::TerminalLayoutControl => "terminals:layout-control",
+            Self::TerminalProcessControl => "terminals:process-control",
             Self::TerminalOutput => "terminals:output",
             Self::PaneObserve => "panes:observe",
             Self::PaneSemanticRead => "panes:semantic-read",
@@ -145,7 +154,9 @@ impl Capability {
                 | Self::ImagePrune
                 | Self::VolumeWrite
                 | Self::NetworkWrite
-                | Self::TerminalControl
+                | Self::TerminalInput
+                | Self::TerminalLayoutControl
+                | Self::TerminalProcessControl
                 | Self::PaneSemanticControl
                 | Self::ExtensionControl
                 | Self::ExtensionInstall
@@ -161,7 +172,11 @@ impl Capability {
     pub const fn executes(self) -> bool {
         matches!(
             self,
-            Self::WorkspaceControl | Self::ContainerControl | Self::ContainerAttach | Self::TerminalControl
+            Self::WorkspaceControl
+                | Self::ContainerControl
+                | Self::ContainerAttach
+                | Self::TerminalInput
+                | Self::TerminalProcessControl
         )
     }
 
@@ -184,7 +199,9 @@ impl Capability {
         Self::NetworkRead,
         Self::NetworkWrite,
         Self::TerminalRead,
-        Self::TerminalControl,
+        Self::TerminalInput,
+        Self::TerminalLayoutControl,
+        Self::TerminalProcessControl,
         Self::TerminalOutput,
         Self::PaneObserve,
         Self::PaneSemanticRead,
@@ -257,7 +274,9 @@ mod tests {
     fn execution_grants_are_identified_for_the_consent_prompt() {
         assert!(Grant::new([Capability::ContainerControl]).executes());
         assert!(Grant::new([Capability::WorkspaceControl]).executes());
-        assert!(Grant::new([Capability::TerminalControl]).executes());
+        assert!(Grant::new([Capability::TerminalInput]).executes());
+        assert!(Grant::new([Capability::TerminalProcessControl]).executes());
+        assert!(!Grant::new([Capability::TerminalLayoutControl]).executes());
         assert!(!Grant::new([Capability::ContainerRead, Capability::Interface]).executes());
     }
 }

@@ -56,7 +56,9 @@ test(
               'networks:read',
               'networks:write',
               'terminals:read',
-              'terminals:control',
+              'terminals:input',
+              'terminals:layout-control',
+              'terminals:process-control',
               'interface:render',
             ],
           },
@@ -526,7 +528,9 @@ test(
         requests.some(
           (request) =>
             request.call === 'interface_render_at' &&
-            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === '$.id'),
+            request.with.frame.patches.some(
+              (patch) => patch.SetProp?.value?.Text === 'Image details',
+            ),
         ),
       );
       const beforeRefresh = requests.length;
@@ -1204,14 +1208,12 @@ test(
           calls.includes('network_inspect') &&
           requests.some(
             (request) =>
-              request.call === 'source_resize_at' && request.with.mutation.Length?.source === 204,
+              request.call === 'interface_render_at' &&
+              request.with.frame.patches.some(
+                (patch) => patch.SetProp?.value?.Text === 'Network details',
+              ),
           ),
       );
-      const networkResize = requests.findLast(
-        (request) =>
-          request.call === 'source_resize_at' && request.with.mutation.Length?.source === 204,
-      );
-      assert.deepEqual(networkResize.with.mutation.Length, { source: 204, version: 2, rows: 6 });
       peer.write(
         encode({ channel: 21, kind: KIND.event, payload: invocation(requests, 'Volumes') }),
       );

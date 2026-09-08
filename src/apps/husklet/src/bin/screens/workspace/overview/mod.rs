@@ -57,6 +57,7 @@ impl<'a> Overview<'a> {
         // lives in the library; this is the whole of the translation.
         let audience = Box::new(move |report| {
             let delivery = match report {
+                Report::Reset => Delivery::Reset,
                 Report::Frame(frame) => Delivery::FrameAt {
                     slot: frame.slot,
                     frame: frame.frame,

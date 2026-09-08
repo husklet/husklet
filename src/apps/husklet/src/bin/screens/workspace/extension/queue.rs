@@ -11,6 +11,8 @@ use hl_gui::{Frame, SourceMutation};
 /// One item posted from the extension's thread to the page.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Delivery {
+    /// A new producer generation is starting from an empty tree.
+    Reset,
     /// A batch of patches for the node tree.
     Frame(Frame),
     /// A source mutation: how long a table is, or a window of its rows.

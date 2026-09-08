@@ -102,7 +102,17 @@
     {
       "executes": true,
       "mutates": true,
-      "wire": "terminals:control"
+      "wire": "terminals:input"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "terminals:layout-control"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "terminals:process-control"
     },
     {
       "executes": false,
@@ -336,7 +346,19 @@
           }
         },
         {
-          "name": "terminals:control",
+          "name": "terminals:input",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:layout-control",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:process-control",
           "payload": {
             "kind": "unit"
           }
@@ -7635,27 +7657,27 @@
       "request": "pane_list"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_open_tab"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_pin_tab"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_split"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_split_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_spawn"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_spawn_observed"
     },
     {
@@ -7671,55 +7693,55 @@
       "request": "pane_semantic_action"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:input",
       "request": "terminal_write_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_resize_grid"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_resize_grid_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_close_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_close_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_focus_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_focus_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_retitle_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_retitle_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_ratio"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_ratio_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_switch_occupant"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_switch_occupant_observed"
     },
     {
@@ -12533,7 +12555,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:5aca27ce255c3cb7",
+  "source_fingerprint": "fnv1a64:32429349ef0393fc",
   "specification_version": 1,
   "topics": [
     {

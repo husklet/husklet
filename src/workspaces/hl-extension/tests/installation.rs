@@ -418,7 +418,11 @@ fn a_record_written_before_versions_were_persisted_remains_readable() {
 
 #[test]
 fn the_consent_summary_names_execution_when_the_grant_permits_it() {
-    for capability in [Capability::ContainerControl, Capability::TerminalControl] {
+    for capability in [
+        Capability::ContainerControl,
+        Capability::TerminalInput,
+        Capability::TerminalProcessControl,
+    ] {
         let summary = Summary::of(&Grant::new([Capability::ContainerRead, capability]));
         assert!(summary.execution, "{capability:?} is execution inside the workspace");
         assert!(summary.mutations.contains(&capability));

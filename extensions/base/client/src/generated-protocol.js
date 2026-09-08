@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:0f6ed6fecc83d1fa
+// Protocol artifact fnv1a64:e646bdb5f0fad5fb
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -105,7 +105,17 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": true,
     "mutates": true,
-    "wire": "terminals:control"
+    "wire": "terminals:input"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "terminals:layout-control"
+  },
+  {
+    "executes": true,
+    "mutates": true,
+    "wire": "terminals:process-control"
   },
   {
     "executes": false,
@@ -428,28 +438,28 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_tabs": "terminals:read",
   "terminal_topology": "terminals:read",
   "pane_list": "panes:observe",
-  "terminal_open_tab": "terminals:control",
-  "terminal_pin_tab": "terminals:control",
-  "terminal_split": "terminals:control",
-  "terminal_split_observed": "terminals:control",
-  "terminal_spawn": "terminals:control",
-  "terminal_spawn_observed": "terminals:control",
+  "terminal_open_tab": "terminals:layout-control",
+  "terminal_pin_tab": "terminals:layout-control",
+  "terminal_split": "terminals:layout-control",
+  "terminal_split_observed": "terminals:layout-control",
+  "terminal_spawn": "terminals:process-control",
+  "terminal_spawn_observed": "terminals:process-control",
   "terminal_read_pane": "terminals:output",
   "pane_semantic_read": "panes:semantic-read",
   "pane_semantic_action": "panes:semantic-control",
-  "terminal_write_pane": "terminals:control",
-  "terminal_resize_grid": "terminals:control",
-  "terminal_resize_grid_observed": "terminals:control",
-  "terminal_close_pane": "terminals:control",
-  "terminal_close_pane_observed": "terminals:control",
-  "terminal_focus_pane": "terminals:control",
-  "terminal_focus_pane_observed": "terminals:control",
-  "terminal_retitle_pane": "terminals:control",
-  "terminal_retitle_pane_observed": "terminals:control",
-  "terminal_ratio": "terminals:control",
-  "terminal_ratio_observed": "terminals:control",
-  "terminal_switch_occupant": "terminals:control",
-  "terminal_switch_occupant_observed": "terminals:control",
+  "terminal_write_pane": "terminals:input",
+  "terminal_resize_grid": "terminals:layout-control",
+  "terminal_resize_grid_observed": "terminals:layout-control",
+  "terminal_close_pane": "terminals:layout-control",
+  "terminal_close_pane_observed": "terminals:layout-control",
+  "terminal_focus_pane": "terminals:layout-control",
+  "terminal_focus_pane_observed": "terminals:layout-control",
+  "terminal_retitle_pane": "terminals:layout-control",
+  "terminal_retitle_pane_observed": "terminals:layout-control",
+  "terminal_ratio": "terminals:layout-control",
+  "terminal_ratio_observed": "terminals:layout-control",
+  "terminal_switch_occupant": "terminals:process-control",
+  "terminal_switch_occupant_observed": "terminals:process-control",
   "filesystem_inventory": "filesystem:read",
   "filesystem_list": "filesystem:read",
   "filesystem_list_page": "filesystem:read",
@@ -643,7 +653,19 @@ const definitions = {
         }
       },
       {
-        "name": "terminals:control",
+        "name": "terminals:input",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminals:layout-control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminals:process-control",
         "payload": {
           "kind": "unit"
         }
