@@ -75,7 +75,11 @@ impl ExtensionStore for ExtensionManagement {
                 id: "storybook".into(),
                 title: "Component playground".into(),
                 description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
-                reference: "ghcr.io/husklet/husklet/extension-storybook:latest".into(),
+                reference: concat!(
+                    "ghcr.io/husklet/husklet/extension-storybook:",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .into(),
                 publisher: "Husklet".into(),
                 source: "husklet:first-party/storybook".into(),
                 protocol: hl_extension::PROTOCOL,
@@ -327,6 +331,13 @@ mod tests {
         let catalogue = ExtensionManagement::new(&workspace(root.path())).catalogue().unwrap();
         assert_eq!(catalogue.entries[0].protocol, hl_extension::PROTOCOL);
         assert_eq!(catalogue.entries[0].architectures, ["amd64"]);
+        assert_eq!(
+            catalogue.entries[0].reference,
+            format!(
+                "ghcr.io/husklet/husklet/extension-storybook:{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]

@@ -301,6 +301,11 @@ jobs:
       - name: Verify first-party image contracts
         run: .github/scripts/check-first-party-images.sh
 
+      - name: Bind published images to the application release
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/require-release-version.sh "$RELEASE_VERSION"
+
       - name: Install multi-architecture emulation
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
@@ -360,9 +365,14 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
         run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" "$EXTENSION"
 
+      - name: Verify the published image is anonymously readable
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/extension-${{ matrix.extension }}:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-anonymous-extension-image.sh "$IMAGE"
+
   dmg:
     name: Signed and notarized DMG
-    needs: [smoke, native-linux-reproducibility]
+    needs: [smoke, native-linux-reproducibility, first-party-extensions]
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -403,6 +413,11 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building Husklet $version"
+
+      - name: Bind the application to published first-party images
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/require-release-version.sh "$RELEASE_VERSION"
 
       - name: Require release signing and notarization secrets
         env:
