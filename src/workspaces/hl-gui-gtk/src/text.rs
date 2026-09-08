@@ -55,6 +55,10 @@ fn mark(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
     if tag == Tag::IconButton {
         if let Some(button) = widget.downcast_ref::<gtk::Button>() {
             button.update_property(&[gtk::accessible::Property::Label(content)]);
+            // An icon-only control still needs a discoverable name for pointer
+            // users when its producer does not provide a more specific
+            // tooltip. A later Tooltip property deliberately replaces this.
+            button.set_tooltip_text(Some(content));
             return true;
         }
     }

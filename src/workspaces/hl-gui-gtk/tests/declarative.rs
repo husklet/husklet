@@ -186,6 +186,7 @@ fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {
         .expect("an icon button is a button");
     assert_eq!(button.icon_name().as_deref(), Some("edit-clear-symbolic"));
     assert_eq!(button.label(), None, "the accessible label must not replace the icon");
+    assert_eq!(button.tooltip_text().as_deref(), Some("Reset foreground"));
 }
 
 fn a_select_follows_its_stable_value() {
