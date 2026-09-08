@@ -10,9 +10,12 @@ if (!configuration?.path || !configuration.slot || !configuration.prompt) {
 const session = await connect({ path: configuration.path, pendingLimit: 8, timeout: 5_000 });
 try {
   const terminal = workspace(session).terminal;
-  const pane = (await terminal.panes()).panes.find(({ slot }) => slot === configuration.slot);
-  if (!pane || pane.kind !== 'terminal') throw new Error('terminal pane is not available');
-  const observed = await terminal.toText(pane.slot, { lines: 80 });
+  const context = await terminal.readAll({ lines: 80 });
+  const selected = context.panes.find(({ pane }) => pane.slot === configuration.slot);
+  if (!selected || selected.pane.kind !== 'terminal')
+    throw new Error('terminal pane is not available');
+  const pane = selected.pane;
+  const observed = selected.readable;
   if (observed.kind !== 'terminal') throw new Error('pane changed occupant before observation');
   const result = await terminal.writeAndWait(
     pane.slot,
@@ -22,7 +25,7 @@ try {
     { lines: 80, timeoutMs: 2_000 },
   );
   process.stdout.write(
-    `${JSON.stringify({ before: observed.text, after: result.changed ? result.after.lines.join('\n') : null })}\n`,
+    `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: !context.complete, before: observed.text, after: result.changed ? result.after.lines.join('\n') : null })}\n`,
   );
 } finally {
   await session.close();

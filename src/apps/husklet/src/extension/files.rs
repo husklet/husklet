@@ -388,6 +388,16 @@ impl WorkspaceDirectory {
 impl WorkspaceFiles for WorkspaceDirectory {
     fn inventory(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<FileInventory, HostError> {
         self.refresh_journal(roots)?;
+        let revision = {
+            let journals = self
+                .journals
+                .lock()
+                .map_err(|_| HostError::Failed("filesystem journal lock is poisoned".into()))?;
+            let mut key = roots.to_vec();
+            key.sort();
+            key.dedup();
+            journals.get(&key).expect("refresh creates the scoped journal").revision
+        };
         const LIMIT: usize = 256;
         const PATH_BYTES_LIMIT: usize = 256 * 1024;
         let mut pending = roots
@@ -435,6 +445,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
             entries: entries.into_values().collect(),
             complete,
             coalesced: 0,
+            revision,
         };
         if inventory.complete {
             let mut journals = self
@@ -1225,8 +1236,32 @@ mod tests {
         let overflow = files.changes_since(&roots, baseline.next, 32).unwrap();
         assert!(overflow.truncated);
         assert!(overflow.changes.is_empty());
-        assert!(files.inventory(&roots).unwrap().complete);
-        assert!(!files.changes_since(&roots, overflow.current, 32).unwrap().truncated);
+        let rebased = files.inventory(&roots).unwrap();
+        assert!(rebased.complete);
+        assert!(!files.changes_since(&roots, rebased.revision, 32).unwrap().truncated);
+    }
+
+    #[test]
+    fn complete_inventory_cursor_bridges_without_losing_a_later_change() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/readme.md"), b"before").unwrap();
+        let files = WorkspaceDirectory::new(&root).unwrap();
+        let roots = [subtree("docs")];
+
+        let inventory = files.inventory(&roots).unwrap();
+        assert!(inventory.complete);
+        std::fs::write(root.join("docs/readme.md"), b"after").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        let page = files.changes_since(&roots, inventory.revision, 32).unwrap();
+        assert!(!page.truncated);
+        assert!(
+            page.changes
+                .iter()
+                .any(|change| { change.revision > inventory.revision && change.path.as_str() == "docs/readme.md" })
+        );
     }
 
     #[test]

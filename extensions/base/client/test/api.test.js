@@ -994,7 +994,7 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'filesystem' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
-  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4 };
+  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4, revision: 19 };
   stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'filesystem', of: inventory } }));
   assert.equal((await next()).kind, KIND.credit);
   assert.deepEqual(seen, [inventory]);

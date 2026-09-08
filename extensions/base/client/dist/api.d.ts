@@ -495,6 +495,8 @@ export interface FileInventory {
     entries: FileEntry[];
     complete: boolean;
     coalesced: number;
+    /** Journal cursor from the same reconciliation snapshot. */
+    revision: number;
 }
 export interface FileChange {
     revision: number;

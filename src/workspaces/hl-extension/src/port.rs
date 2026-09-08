@@ -694,6 +694,8 @@ pub struct FileInventory {
     pub entries: Vec<Entry>,
     pub complete: bool,
     pub coalesced: u64,
+    /// Journal cursor immediately preceding this reconciliation snapshot.
+    pub revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]

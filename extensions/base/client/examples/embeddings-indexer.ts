@@ -44,6 +44,13 @@ try {
   )
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
+  const changes = await files.changes(inventory.revision);
+  if (changes.truncated) throw new Error('filesystem change retention gap requires a rescan');
+  if (changes.changes.some((change) => change.path === configuration.document))
+    throw new Error('document changed after inventory; refusing a stale index publication');
+  const confirmed = await files.stat(configuration.document);
+  if (confirmed.identity !== observed)
+    throw new Error('document identity changed before index publication');
   const nextIdentity = await files.writeObserved(
     configuration.index,
     index.identity,

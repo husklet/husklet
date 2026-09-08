@@ -235,6 +235,7 @@ mod tests {
             entries: Vec::new(),
             complete: true,
             coalesced: 0,
+            revision: 0,
         });
         assert_eq!(filesystem.topic(), Topic::Filesystem);
         assert!(matches!(filesystem.with_coalesced(3), Snapshot::Filesystem(value) if value.coalesced == 3));

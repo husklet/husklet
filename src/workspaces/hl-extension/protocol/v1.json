@@ -2160,6 +2160,17 @@
             "minimum": 0,
             "signed": false
           }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
         }
       ],
       "kind": "struct",
@@ -12990,7 +13001,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:61aeb8c36f78f6d7",
+  "source_fingerprint": "fnv1a64:fc35dae9f3046a9c",
   "specification_version": 1,
   "topics": [
     {

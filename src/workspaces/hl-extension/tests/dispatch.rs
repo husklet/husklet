@@ -731,6 +731,7 @@ impl WorkspaceFiles for Host {
             }],
             complete: true,
             coalesced: 0,
+            revision: 0,
         })
     }
 
