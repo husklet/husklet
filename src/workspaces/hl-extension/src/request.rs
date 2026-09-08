@@ -167,6 +167,11 @@ pub enum Request {
         id: String,
         signal: String,
     },
+    ExecutionCancel {
+        id: String,
+        signal: String,
+        timeout_ms: u32,
+    },
     ExecutionRemove {
         id: String,
     },
@@ -510,6 +515,7 @@ impl Request {
             | Self::ContainerRename { .. }
             | Self::ContainerKill { .. }
             | Self::ExecutionKill { .. }
+            | Self::ExecutionCancel { .. }
             | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,

@@ -295,6 +295,25 @@ pub struct NetworkSummary {
     pub driver: String,
     pub scope: String,
     pub kind: NetworkKind,
+    /// Authoritative endpoint membership when this is an inspection reply.
+    /// List replies omit it rather than representing unknown membership as empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoints: Option<NetworkEndpointInventory>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct NetworkEndpointInventory {
+    pub containers: Vec<String>,
+    pub truncated: bool,
+}
+
+impl NetworkEndpointInventory {
+    #[must_use]
+    pub fn bounded(mut containers: Vec<String>) -> Self {
+        let truncated = containers.len() > RESOURCE_INVENTORY_LIMIT;
+        containers.truncate(RESOURCE_INVENTORY_LIMIT);
+        Self { containers, truncated }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -1006,6 +1025,14 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Signals one execution and waits until it has stopped, as one indivisible
+    /// host operation so an ordered client is never stranded behind its wait.
+    fn execution_cancel(&self, _id: &str, _signal: &str, _timeout_ms: u32) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "atomic execution cancellation is unsupported by this host".into(),
+        ))
+    }
+
     /// Removes one stopped execution record selected by its complete immutable
     /// execution identity, and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {
@@ -1484,6 +1511,18 @@ mod tests {
             Legacy.connect_with_aliases("network", "container", &aliases),
             Err(super::HostError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn network_endpoint_inventory_is_bounded_and_reports_truncation() {
+        let containers = (0..=super::RESOURCE_INVENTORY_LIMIT)
+            .map(|index| format!("{index:032x}"))
+            .collect();
+        let inventory = super::NetworkEndpointInventory::bounded(containers);
+
+        assert_eq!(inventory.containers.len(), super::RESOURCE_INVENTORY_LIMIT);
+        assert!(inventory.truncated);
+        assert_eq!(inventory.containers[0], "00000000000000000000000000000000");
     }
 
     #[test]

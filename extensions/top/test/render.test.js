@@ -720,7 +720,8 @@ for (const updating of [false, true]) {
       'Rename or move entries folder · migrations/ and everything inside',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.ok(labelled(stage, '0/10 permissions allowed'));
+    assert.ok(labelled(stage, 'Review decision · 0/10 selected'));
+    assert.ok(labelled(stage, 'Review every permission choice before continuing.'));
     assert.ok(labelled(stage, 'Container access · 0/4'));
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
@@ -733,7 +734,19 @@ for (const updating of [false, true]) {
     toggleSwitch(stage, 7, true);
     toggleSwitch(stage, 9, true);
     assert.ok(labelled(stage, '3/6 workspace paths allowed'));
-    assert.ok(labelled(stage, '3/10 permissions allowed'));
+    assert.ok(labelled(stage, 'Review decision · 3/10 selected'));
+    assert.ok(
+      ancestorTags(stage, 'View contents file · README.md').filter((tag) => tag === 'Scroll')
+        .length === 1,
+      'permission choices remain inside the scrolling review region',
+    );
+    assert.ok(
+      ancestorTags(
+        stage,
+        updating ? 'Update with selected access' : 'Install with selected access',
+      ).filter((tag) => tag === 'Scroll').length === 0,
+      'the review decision remains outside the scrolling permission region',
+    );
     invoke(stage, updating ? 'Update with selected access' : 'Install with selected access');
     await settled();
     await settled();
@@ -801,8 +814,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
-  assert.ok(labelled(stage, '0/2 permissions allowed'));
-  assert.ok(labelled(stage, 'Husklet access · 0/2'));
+  assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
+  assert.ok(labelled(stage, 'Product access · 0/2'));
   assert.equal(
     labelled(stage, 'Workspace files'),
     undefined,
@@ -820,9 +833,9 @@ test('extension image entry submits from the keyboard and consent explains reque
 
   toggleSwitch(stage, 0, true);
   toggleSwitch(stage, 1, true);
-  assert.ok(labelled(stage, '2/2 permissions allowed'));
-  assert.ok(labelled(stage, 'Husklet access · 2/2'));
-  assert.ok(labelled(stage, 'Clear Husklet access'));
+  assert.ok(labelled(stage, 'Review decision · 2/2 selected'));
+  assert.ok(labelled(stage, 'Product access · 2/2'));
+  assert.ok(labelled(stage, 'Clear product access'));
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
@@ -2604,7 +2617,7 @@ test('volume and network panels render bounded real inventories and controls', (
       .map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove'])
     assert.ok(labels(volumeFrame).includes(label), label);
-  for (const label of ['Networks', 'private', 'Connect', 'Remove'])
+  for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
@@ -2620,6 +2633,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
+  assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>
@@ -2634,7 +2648,6 @@ test('volume and network panels render bounded real inventories and controls', (
     );
   };
   assert.equal(destructive(volumeFrame, 'Remove'), false);
-  assert.equal(destructive(networkFrame, 'Disconnect'), false);
   assert.equal(destructive(networkFrame, 'Remove'), false);
 });
 
@@ -4205,7 +4218,14 @@ test('volume and network mutations expose danger only on final confirm and cance
 
   const networks = host();
   const initialNetworks = resource([
-    { id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+    {
+      id: networkId,
+      name: 'private',
+      driver: 'bridge',
+      scope: 'local',
+      kind: 'custom',
+      endpoints: { containers: [containerId], truncated: false },
+    },
   ]);
   networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
   change(networks, 'Complete container ID', containerId);
@@ -4337,6 +4357,41 @@ test('volume creation exposes pending failure and retained retry before claiming
   assert.ok(labelled(stage, 'Created volume cache-data.'));
 });
 
+test('truncated network membership explains why inspection is required and resolves contextually', async () => {
+  const container = 'b'.repeat(64);
+  const network = {
+    id: 'a'.repeat(32),
+    name: 'private',
+    driver: 'bridge',
+    scope: 'local',
+    kind: 'custom',
+    endpoints: { containers: [], truncated: true },
+  };
+  const controlled = {
+    networks: {
+      ...api.networks,
+      inspect: async () => ({
+        ...network,
+        endpoints: { containers: [], truncated: false },
+      }),
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Networks, {
+      api: controlled,
+      resource: { data: [network], loading: false, error: null, reload: async () => {} },
+    }),
+  );
+  change(stage, 'Complete container ID', container);
+  assert.ok(labelled(stage, 'Attachment status unknown for this container · Inspect to resolve'));
+  assert.equal(labelled(stage, 'Connect'), undefined);
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Connect'), 'complete inspection exposes the contextual action');
+});
+
 test('network connect validates aliases, exposes progress, success, bounded failure and retained retry', async () => {
   const calls = [];
   let release;
@@ -4357,7 +4412,14 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   };
   const resource = {
     data: [
-      { id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+      {
+        id: 'a'.repeat(32),
+        name: 'private',
+        driver: 'bridge',
+        scope: 'local',
+        kind: 'custom',
+        endpoints: { containers: [], truncated: false },
+      },
     ],
     loading: false,
     error: null,
@@ -4368,18 +4430,16 @@ test('network connect validates aliases, exposes progress, success, bounded fail
 
   change(stage, 'Complete container ID', 'friendly');
   change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
-  invoke(stage, 'Connect');
   await settled();
   assert.deepEqual(
     calls,
     [],
     'invalid immutable identity and aliases never reach control authority',
   );
-  assert.ok(
-    labelled(
-      stage,
-      'Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.',
-    ),
+  assert.equal(
+    labelled(stage, 'Connect'),
+    undefined,
+    'an invalid identity offers no endpoint action',
   );
 
   change(stage, 'Complete container ID', 'b'.repeat(64));
@@ -4478,6 +4538,7 @@ test('network creation exposes pending failure and retained retry before claimin
         patch.SetProp.value?.Text?.startsWith('registry unavailable'),
     );
   assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  assert.equal(failures.length, 1, 'a network creation failure is rendered exactly once');
 
   invoke(stage, 'Retry create');
   await settled();
@@ -4495,7 +4556,16 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
     networks: { ...api.networks, disconnect: async (...args) => calls.push(args) },
   };
   const resource = {
-    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    data: [
+      {
+        id: network,
+        name: 'private',
+        driver: 'bridge',
+        scope: 'local',
+        kind: 'custom',
+        endpoints: { containers: [first, second], truncated: false },
+      },
+    ],
     loading: false,
     error: null,
     reload: async () => {},

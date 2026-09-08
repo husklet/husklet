@@ -298,6 +298,10 @@ export interface NetworkSummary {
     driver: string;
     scope: string;
     kind: 'builtin' | 'custom';
+    endpoints?: {
+        containers: string[];
+        truncated: boolean;
+    };
 }
 export interface NetworkInventory {
     networks: NetworkSummary[];
@@ -815,6 +819,11 @@ export interface WorkspaceApi {
             output: ContainerOutput;
         }>;
         signalExecution(id: string, signal: string): Promise<void>;
+        /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */
+        cancelExecution(id: string, options?: {
+            signal?: string;
+            timeoutMs?: number;
+        }): Promise<void>;
         /** Arm and verify the exact execution cursor before signaling, then await its requested transition. */
         signalExecutionAndWait(id: string, signal: string, after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>, options?: {
             state?: 'changed' | 'exited';

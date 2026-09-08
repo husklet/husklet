@@ -13,8 +13,8 @@ use hl_rpc::{ChannelId, Flags, Frame, Hello, Kind};
 
 pub use hl_rpc::Coding;
 
-use crate::Welcome;
 use crate::request::{Failure, Reply, Request};
+use crate::Welcome;
 
 /// The channel calls and their answers ride on.
 ///
@@ -221,8 +221,8 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
 mod tests {
     use super::{interaction, read_request, request, safe_numbers, welcome};
     use crate::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, JSON_SAFE_INTEGER_MAX, Kind, Limits, PaneChange,
-        PaneChangeKind, Request, Snapshot, Welcome,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Kind, Limits, PaneChange, PaneChangeKind, Request,
+        Snapshot, Welcome, JSON_SAFE_INTEGER_MAX,
     };
     use hl_gui::{CollectionSelection, Event, EventId, NodeId, SelectedRow, SourceId, Version};
 
@@ -402,12 +402,10 @@ mod tests {
             job: "job-1".into(),
             revision: JSON_SAFE_INTEGER_MAX + 1,
         };
-        assert!(
-            request(&unsafe_outbound)
-                .unwrap_err()
-                .to_string()
-                .contains("lossless JSON boundary")
-        );
+        assert!(request(&unsafe_outbound)
+            .unwrap_err()
+            .to_string()
+            .contains("lossless JSON boundary"));
 
         let unsafe_inbound = Frame::new(
             ChannelId::new(2),
@@ -418,25 +416,21 @@ mod tests {
             )
             .into_bytes(),
         );
-        assert!(
-            read_request(&unsafe_inbound)
-                .unwrap_err()
-                .to_string()
-                .contains("lossless JSON boundary")
-        );
-        assert!(safe_numbers(&serde_json::json!(-(JSON_SAFE_INTEGER_MAX as i64) - 1)).is_err());
-        assert!(
-            Snapshot::PaneChanges(PaneChange {
-                slot: "pane-1".into(),
-                kind: PaneChangeKind::Terminal,
-                revision: JSON_SAFE_INTEGER_MAX + 1,
-                generation: 1,
-                coalesced: 0,
-            })
-            .payload()
+        assert!(read_request(&unsafe_inbound)
             .unwrap_err()
             .to_string()
-            .contains("lossless JSON boundary")
-        );
+            .contains("lossless JSON boundary"));
+        assert!(safe_numbers(&serde_json::json!(-(JSON_SAFE_INTEGER_MAX as i64) - 1)).is_err());
+        assert!(Snapshot::PaneChanges(PaneChange {
+            slot: "pane-1".into(),
+            kind: PaneChangeKind::Terminal,
+            revision: JSON_SAFE_INTEGER_MAX + 1,
+            generation: 1,
+            coalesced: 0,
+        })
+        .payload()
+        .unwrap_err()
+        .to_string()
+        .contains("lossless JSON boundary"));
     }
 }

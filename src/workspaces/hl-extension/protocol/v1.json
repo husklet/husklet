@@ -2576,6 +2576,29 @@
         }
       ]
     },
+    "NetworkEndpointInventory": {
+      "fields": [
+        {
+          "name": "containers",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "NetworkInventory": {
       "fields": [
         {
@@ -2656,6 +2679,17 @@
           "schema": {
             "kind": "ref",
             "name": "NetworkKind"
+          }
+        },
+        {
+          "name": "endpoints",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "NetworkEndpointInventory"
+            }
           }
         }
       ],
@@ -7030,6 +7064,10 @@
     },
     {
       "capability": "containers:control",
+      "request": "execution_cancel"
+    },
+    {
+      "capability": "containers:control",
       "request": "execution_remove"
     },
     {
@@ -7469,6 +7507,10 @@
     {
       "reply": "done",
       "request": "execution_kill"
+    },
+    {
+      "reply": "done",
+      "request": "execution_cancel"
     },
     {
       "reply": "done",
@@ -8981,6 +9023,39 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_cancel",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "signal",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "timeout_ms",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -11885,7 +11960,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:1858ed5fb4b2d9bc",
+  "source_fingerprint": "fnv1a64:0587e299ab5c9d72",
   "specification_version": 1,
   "topics": [
     {

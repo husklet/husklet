@@ -21,6 +21,7 @@ test(
     let liveTerminated = false;
     let containerInspectAttempts = 0;
     let imageInspectAttempts = 0;
+    let networkConnected = false;
     const containerId = 'a'.repeat(32);
     const executionId = 'c'.repeat(32);
     const liveExecutionId = 'b'.repeat(32);
@@ -66,6 +67,8 @@ test(
           if (!name) continue;
           calls.push(name);
           requests.push(frame.payload);
+          if (name === 'network_connect') networkConnected = true;
+          if (name === 'network_disconnect') networkConnected = false;
           const inspectedContainerId = frame.payload?.with?.id;
           const inspectAttempt =
             name === 'container_inspect' && inspectedContainerId === containerId
@@ -321,6 +324,12 @@ test(
                                                           driver: 'bridge',
                                                           scope: 'local',
                                                           kind: 'custom',
+                                                          endpoints: {
+                                                            containers: networkConnected
+                                                              ? [containerId]
+                                                              : [],
+                                                            truncated: false,
+                                                          },
                                                         },
                                                       }
                                                     : { reply: 'done' };
@@ -598,6 +607,7 @@ test(
             ),
         ),
       );
+      await new Promise((resolve) => setTimeout(resolve, 30));
       peer.write(
         encode({ channel: 35, kind: KIND.event, payload: invocation(requests, 'Rename') }),
       );
@@ -1153,7 +1163,19 @@ test(
         ),
       );
       peer.write(
-        encode({ channel: 40, kind: KIND.event, payload: invocation(requests, 'Connect') }),
+        encode({ channel: 40, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+      );
+      await until(
+        () =>
+          calls.includes('network_inspect') &&
+          requests.some(
+            (request) =>
+              request.call === 'interface_render_at' &&
+              request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Connect'),
+          ),
+      );
+      peer.write(
+        encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Connect') }),
       );
       await until(() => calls.includes('network_connect'));
       assert.deepEqual(requests.find((request) => request.call === 'network_connect').with, {
@@ -1161,8 +1183,23 @@ test(
         container: containerId,
         aliases: ['database.internal', 'database_2'],
       });
+      const inspectionsBeforeDisconnect = calls.filter((call) => call === 'network_inspect').length;
       peer.write(
-        encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Disconnect') }),
+        encode({ channel: 42, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+      );
+      await until(
+        () =>
+          calls.filter((call) => call === 'network_inspect').length > inspectionsBeforeDisconnect &&
+          requests.some(
+            (request) =>
+              request.call === 'interface_render_at' &&
+              request.with.frame.patches.some(
+                (patch) => patch.SetProp?.value?.Text === 'Disconnect',
+              ),
+          ),
+      );
+      peer.write(
+        encode({ channel: 43, kind: KIND.event, payload: invocation(requests, 'Disconnect') }),
       );
       await until(() =>
         requests.some(
@@ -1177,7 +1214,7 @@ test(
       );
       peer.write(
         encode({
-          channel: 42,
+          channel: 44,
           kind: KIND.event,
           payload: invocation(requests, 'Confirm disconnect'),
         }),
@@ -1188,7 +1225,7 @@ test(
         container: containerId,
       });
       peer.write(
-        encode({ channel: 20, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({ channel: 45, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
       );
       await until(
         () =>
@@ -1202,7 +1239,7 @@ test(
         (request) =>
           request.call === 'source_resize_at' && request.with.mutation.Length?.source === 204,
       );
-      assert.deepEqual(networkResize.with.mutation.Length, { source: 204, version: 1, rows: 4 });
+      assert.deepEqual(networkResize.with.mutation.Length, { source: 204, version: 2, rows: 6 });
       peer.write(
         encode({ channel: 21, kind: KIND.event, payload: invocation(requests, 'Volumes') }),
       );

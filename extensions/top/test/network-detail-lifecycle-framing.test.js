@@ -66,6 +66,7 @@ test(
                 driver: 'bridge',
                 scope: inspections === 1 ? 'old-scope' : 'new-scope',
                 kind: 'custom',
+                endpoints: { containers: [container], truncated: false },
               },
             };
           }
@@ -110,8 +111,7 @@ test(
       invoke(stage, 'Inspect');
       await until(() => inspections === 1);
       change(stage, 'Complete container ID', container);
-      invoke(stage, 'Disconnect');
-      assert.ok(labelled(stage, `Disconnect immutable container ${container} from network ${id}?`));
+      assert.equal(labelled(stage, 'Disconnect'), undefined, 'membership waits for inspection');
       invoke(stage, 'Remove');
       assert.ok(labelled(stage, `Remove immutable network ${id} (old-net)?`));
       const start = stage.frames.length;
@@ -122,11 +122,7 @@ test(
       );
       const patches = stage.frames.slice(start).flatMap((frame) => frame.patches);
       assert.ok(patches.some((patch) => 'Remove' in patch));
-      for (const stale of [
-        `Disconnect immutable container ${container} from network ${id}?`,
-        `Remove immutable network ${id} (old-net)?`,
-        'old-scope',
-      ])
+      for (const stale of [`Remove immutable network ${id} (old-net)?`, 'old-scope'])
         assert.equal(
           patches.some((patch) => patch.SetProp?.value?.Text === stale),
           false,
@@ -139,8 +135,11 @@ test(
       assert.deepEqual(lengths(mutations)[0], {
         source: NETWORK_DETAIL_SOURCE,
         version: 1,
-        rows: 4,
+        rows: 6,
       });
+      await until(() => labelled(stage, 'Disconnect'));
+      invoke(stage, 'Disconnect');
+      assert.ok(labelled(stage, `Disconnect immutable container ${container} from network ${id}?`));
       assert.equal(inspections, 2);
     } finally {
       stage?.render(null);

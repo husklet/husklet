@@ -752,6 +752,16 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         ),
       signalExecution: (id, signal) =>
         done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
+      cancelExecution: (id, { signal = 'SIGTERM', timeoutMs = 1_000 } = {}) => {
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+          throw new RangeError('execution cancellation timeout must be between 1 and 30000ms');
+        }
+        return done('execution_cancel', {
+          id: immutableIdentity(id, [32], 'execution'),
+          signal,
+          timeout_ms: timeoutMs,
+        });
+      },
       removeExecution: (id) =>
         done('execution_remove', {
           id: immutableIdentity(id, [32], 'execution'),
@@ -3037,6 +3047,7 @@ const facadeOverrides = Object.freeze({
   execution_output: 'containers.executionOutput',
   execution_wait: 'containers.waitExecution',
   execution_kill: 'containers.signalExecution',
+  execution_cancel: 'containers.cancelExecution',
   execution_remove: 'containers.removeExecution',
   container_attach_terminal: 'containers.attachTerminal',
   image_pull_start: 'images.startPull',
@@ -3133,6 +3144,7 @@ export const protocolCoverage = Object.freeze({
       'executionOutputPages',
       'waitExecution',
       'signalExecution',
+      'cancelExecution',
       'removeExecution',
       'create',
       'start',

@@ -14,6 +14,57 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix execution cancellation is one bounded ordered operation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-cancel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'c'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        socket.write(
+          encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'done' } }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:control'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    assert.throws(
+      () => containers.cancelExecution(executionId, { timeoutMs: 0 }),
+      /cancellation timeout/,
+    );
+    assert.equal(requests.length, 0, 'invalid cancellation is rejected before framing');
+    await containers.cancelExecution(executionId, { signal: 'SIGINT', timeoutMs: 750 });
+    assert.deepEqual(requests, [
+      {
+        call: 'execution_cancel',
+        with: { id: executionId, signal: 'SIGINT', timeout_ms: 750 },
+      },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem iterators page recursively, stream stable chunks, and cancel locally', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-iterator-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -192,8 +243,7 @@ test('real Unix filesystem walk rejects directory cycles and handles a very deep
           entries = [];
         } else {
           const depth = requested.split('/').length - 1;
-          entries =
-            depth < 1_200 ? [{ path: `${requested}/d`, directory: true, size: 0 }] : [];
+          entries = depth < 1_200 ? [{ path: `${requested}/d`, directory: true, size: 0 }] : [];
         }
         socket.write(
           encode({
@@ -1503,6 +1553,67 @@ test('real Unix event credit waits for drain when its listener fills the write b
   } finally {
     peer?.destroy();
     client.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a mixed cross-surface event cannot masquerade as a pane selection over Unix framing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-selection-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const returned = [];
+  const server = net.createServer((socket) => {
+    peer = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'selection', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const seen = [];
+  let session;
+  try {
+    session = await connect({
+      path: socketPath,
+      timeout: 500,
+      onEvent: (event) => seen.push(event),
+    });
+    peer.write(
+      encode({
+        channel: 19,
+        kind: KIND.event,
+        payload: {
+          pane_provider: 'database',
+          slot: 'pane-17',
+          interaction: 'click',
+          trigger: 'pointer',
+          node: 7,
+          id: 'foreign-action',
+        },
+      }),
+    );
+    const reason = await Promise.race([
+      session.closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('ambiguous pane event did not close the session')), 200),
+      ),
+    ]);
+    assert.match(reason.message, /exactly pane_provider and slot/);
+    assert.deepEqual(seen, [], 'ambiguous cross-surface bytes never reach event listeners');
+    assert.equal(
+      returned.some((frame) => frame.channel === 19 && frame.kind === KIND.credit),
+      false,
+      'rejected bytes earn no event credit',
+    );
+  } finally {
+    await session?.close();
+    peer?.destroy();
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }

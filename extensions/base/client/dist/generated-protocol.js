@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:0e00b552a7654341
+// Protocol artifact fnv1a64:58dc288c389c7301
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -259,6 +259,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "execution_output": "execution_output",
   "execution_wait": "execution",
   "execution_kill": "done",
+  "execution_cancel": "done",
   "execution_remove": "done",
   "container_create": "identity",
   "container_start": "done",
@@ -371,6 +372,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "execution_output": "containers:read",
   "execution_wait": "containers:read",
   "execution_kill": "containers:control",
+  "execution_cancel": "containers:control",
   "execution_remove": "containers:control",
   "container_create": "containers:control",
   "container_start": "containers:control",
@@ -2875,6 +2877,29 @@ const definitions = {
       }
     ]
   },
+  "NetworkEndpointInventory": {
+    "fields": [
+      {
+        "name": "containers",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "NetworkInventory": {
     "fields": [
       {
@@ -2955,6 +2980,17 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "NetworkKind"
+        }
+      },
+      {
+        "name": "endpoints",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "ref",
+            "name": "NetworkEndpointInventory"
+          }
         }
       }
     ],
@@ -8336,6 +8372,39 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "execution_cancel",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "signal",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "timeout_ms",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],

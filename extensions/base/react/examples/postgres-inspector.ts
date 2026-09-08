@@ -104,8 +104,12 @@ try {
       return csv(stdout);
     } finally {
       if (signal?.aborted) {
-        await host.containers.signalExecution(executionId, 'SIGTERM').catch(() => {});
-        await host.containers.waitExecution(executionId, { timeoutMs: 1_000 }).catch(() => {});
+        await host.containers
+          .cancelExecution(executionId, {
+            signal: 'SIGTERM',
+            timeoutMs: 1_000,
+          })
+          .catch(() => {});
         await host.containers.removeExecution(executionId).catch(() => {});
       } else {
         await host.containers.removeExecution(executionId);
