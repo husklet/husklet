@@ -10,6 +10,7 @@ import {
   Row,
   Text,
   connect,
+  createWindowCache,
   render,
   workspace,
   type ColumnSpec,
@@ -18,7 +19,13 @@ import {
 } from '@husklet/react';
 
 declare const process: { argv: string[]; stdout: { write(value: string): void } };
-type Configuration = { path: string; container?: string; credentialPath: string; query: string };
+type Configuration = {
+  path: string;
+  container?: string;
+  credentialPath: string;
+  query: string;
+  outputMaxBytes?: number;
+};
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration | null;
 if (!configuration?.path || !configuration.credentialPath || !configuration.query) {
   throw new TypeError('usage: postgres-inspector.ts JSON(path, credentialPath, query, container?)');
@@ -79,37 +86,20 @@ try {
 
   const executeCsv = async (statement: string, signal?: AbortSignal): Promise<string[][]> => {
     let executionId: string | undefined;
-    let stdout = '';
-    let stderr = '';
-    const stdoutDecoder = new TextDecoder();
-    const stderrDecoder = new TextDecoder();
     try {
-      const result = await host.containers.execStreaming(
-        container.id,
-        container.generation,
-        {
-          // Exact argv: query whitespace and metacharacters never become shell syntax.
-          command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
-          environment: [['PGPASSWORD', credential]],
-          signal,
-        },
-        (page) => {
-          for (const entry of page.entries) {
-            if (entry.stream === 'stdout') {
-              stdout += stdoutDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
-            } else {
-              stderr += stderrDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
-            }
-          }
-        },
-      );
+      const result = await host.containers.execText(container.id, container.generation, {
+        // Exact argv: query whitespace and metacharacters never become shell syntax.
+        command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
+        environment: [['PGPASSWORD', credential]],
+        signal,
+        // A viewport query remains bounded even when one PostgreSQL value is unexpectedly huge.
+        maxBytes: configuration.outputMaxBytes ?? 4 * 1024 * 1024,
+      });
       executionId = result.executionId;
-      stdout += stdoutDecoder.decode();
-      stderr += stderrDecoder.decode();
       const finished = result.execution;
       if (finished.exit_code !== 0)
-        throw new Error(stderr.trim() || `psql exited ${finished.exit_code}`);
-      return csv(stdout);
+        throw new Error(result.stderr.trim() || `psql exited ${finished.exit_code}`);
+      return csv(result.stdout);
     } catch (error) {
       if (error instanceof ExecutionOperationError) executionId = error.executionId;
       throw error;
@@ -131,7 +121,8 @@ try {
     width: index === 0 ? { chars: 12 } : 'fill',
     sortable: true,
   }));
-  const cache = new Map<string, string[][]>([['0:initial', firstPage]]);
+  const cache = createWindowCache<string[][]>(32);
+  cache.set('0:initial', firstPage);
   const source = 1;
   const provideRows = async (
     request: RowRequest,

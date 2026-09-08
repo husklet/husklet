@@ -130,6 +130,8 @@ static const hl_option_definition hl_option_definitions[] = {
                         "test-only disable already-published same-page JCC links", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_JCC_IBTC_DISABLE",
                      "disable late publication for unresolved same-ISA constant JCC targets", HL_OPTION_FLAG),
+    HL_LAUNCH_OPTION("HL_A64_X86_JCC_LINK",
+                     "enable experimental direct conditional edges for AArch64 guests on x86-64", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE",
                      "disable late publication for same-ISA direct JMP targets", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_TRANSLIT_PROFILE_WIDE_TEST",

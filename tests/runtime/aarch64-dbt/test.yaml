@@ -6,6 +6,50 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
 cases:
+  - id: runtime/aarch64-dbt/conditional-chain-lifecycle
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_lifecycle.c, output: conditional-chain-lifecycle, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-lifecycle }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: candidates, greater-than: 0 }
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
+        - { counter: reset_thread, greater-than: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "73043" } }
+  - id: runtime/aarch64-dbt/conditional-chain-lifecycle-off
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_lifecycle.c, output: conditional-chain-lifecycle-off, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-lifecycle-off }
+    environment: { HL_A64_X86_JCC_LINK: "0" }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: candidates, equals: 0 }
+        - { counter: patched, equals: 0 }
+        - { counter: executed, equals: 0 }
+        - { counter: reset_thread, equals: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396486", interpreted_steps: "20502", translated_entries: "154286" } }
+  - id: runtime/aarch64-dbt/conditional-chain-fork-reset
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_fork_reset.c, output: conditional-chain-fork-reset, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-fork-reset }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
+        - { counter: reset_fork, greater-than: 0 }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
@@ -16,7 +60,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "76", interpreted_steps: "0", translated_entries: "29" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "76", interpreted_steps: "0", translated_entries: "26" } }
   - id: runtime/aarch64-dbt/alu-bench
     status: active
     compat: { class: smoke }
@@ -38,7 +82,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "62", interpreted_steps: "4", translated_entries: "14" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "62", interpreted_steps: "4", translated_entries: "13" } }
   - id: runtime/aarch64-dbt/scalar-pair-memory
     status: active
     compat: { class: smoke }
@@ -60,7 +104,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "13" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "12" } }
   - id: runtime/aarch64-dbt/cross-block-loop
     status: active
     compat: { class: smoke }
@@ -113,4 +157,10 @@ cases:
     build: { source: source/smc_targeted.c, output: smc-targeted, flags: [-static, -no-pie, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/smc-targeted }
     run: []
-    expect: { exit: 0, stdout: golden/smc_targeted.out }
+    expect:
+      exit: 0
+      stdout: golden/smc_targeted.out
+      diagnostics:
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
+        - { counter: reset_smc, greater-than: 0 }

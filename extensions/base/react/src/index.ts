@@ -28,6 +28,7 @@ export * from './json-tree.js';
 export * from './confirm-action.js';
 export * from './resource-state.js';
 export * from './recovery-state.js';
+export * from './window-cache.js';
 
 type RenderFrame = Parameters<ConstructorParameters<typeof Surface>[0]>[0];
 export interface RowProviderContext {

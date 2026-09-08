@@ -25,6 +25,7 @@ struct Assembly<S> {
     translation_cache_observability: bool,
     translation_symbols: Option<std::path::PathBuf>,
     direct_call_pre_spill: bool,
+    a64_x86_jcc_link: bool,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -59,6 +60,7 @@ impl<S: Storage + 'static> Assembly<S> {
             translation_cache_observability: self.translation_cache_observability,
             translation_symbols: self.translation_symbols,
             direct_call_pre_spill: self.direct_call_pre_spill,
+            a64_x86_jcc_link: self.a64_x86_jcc_link,
             checkpoints: self.checkpoints,
         }));
         service.reconcile().await?;
@@ -108,6 +110,7 @@ impl Builder {
         let translation_cache_observability = self.config.translation_cache_observability;
         let translation_symbols = self.config.translation_symbols.map(crate::config::TranslationCache::prepare).transpose()?;
         let direct_call_pre_spill = self.config.direct_call_pre_spill;
+        let a64_x86_jcc_link = self.config.a64_x86_jcc_link;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
         let checkpoints = match self.checkpoints {
@@ -134,6 +137,7 @@ impl Builder {
                     translation_cache_observability,
                     translation_symbols,
                     direct_call_pre_spill,
+                    a64_x86_jcc_link,
                     checkpoints,
                 }
                 .build()
@@ -151,6 +155,7 @@ impl Builder {
                     translation_cache_observability,
                     translation_symbols,
                     direct_call_pre_spill,
+                    a64_x86_jcc_link,
                     checkpoints,
                 }
                 .build()
@@ -183,6 +188,7 @@ pub(super) async fn build_with<S: Storage + 'static>(
         translation_cache_observability: false,
         translation_symbols: None,
         direct_call_pre_spill: false,
+        a64_x86_jcc_link: false,
         checkpoints,
     }
     .build()

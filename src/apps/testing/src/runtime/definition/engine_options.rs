@@ -9,7 +9,7 @@ use hl_container::{
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 18] = [
+const SUPPORTED: [&str; 19] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -28,6 +28,7 @@ const SUPPORTED: [&str; 18] = [
     "HL_ULIMITS",
     "HL_HOSTNAME",
     "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL",
+    "HL_A64_X86_JCC_LINK",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
 const UNWIRED: [&str; 0] = [];
@@ -45,6 +46,7 @@ pub(crate) struct EngineOptions {
     process_count: Option<u32>,
     translation_cache: Option<PathBuf>,
     direct_call_pre_spill: Option<bool>,
+    a64_x86_jcc_link: Option<bool>,
     seccomp_baseline: Option<SeccompBaseline>,
     limits: Vec<ResourceLimit>,
     hostname: Option<String>,
@@ -97,6 +99,7 @@ impl EngineOptions {
             "HL_HOSTNAME" => self.hostname = Some(value.to_owned()),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
             "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL" => self.direct_call_pre_spill = Some(setting.flag()?),
+            "HL_A64_X86_JCC_LINK" => self.a64_x86_jcc_link = Some(setting.flag()?),
             "HL_SECCOMP_BASELINE" => {
                 self.seccomp_baseline = Some(match value {
                     "container" => SeccompBaseline::Container,
@@ -150,6 +153,10 @@ impl EngineOptions {
 
     pub(crate) const fn direct_call_pre_spill(&self) -> Option<bool> {
         self.direct_call_pre_spill
+    }
+
+    pub(crate) const fn a64_x86_jcc_link(&self) -> Option<bool> {
+        self.a64_x86_jcc_link
     }
 
     pub(crate) const fn user(&self) -> Option<(i32, i32)> {
@@ -386,6 +393,17 @@ mod tests {
             EngineOptions::split(&entries(&[("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "0")])).unwrap();
         assert!(guest.is_empty());
         assert_eq!(disabled.direct_call_pre_spill(), Some(false));
+    }
+
+
+    #[test]
+    fn aarch64_x86_conditional_link_is_a_typed_engine_option() {
+        let default = EngineOptions::split(&entries(&[])).unwrap().1;
+        assert_eq!(default.a64_x86_jcc_link(), None);
+        let enabled = EngineOptions::split(&entries(&[("HL_A64_X86_JCC_LINK", "1")])).unwrap().1;
+        assert_eq!(enabled.a64_x86_jcc_link(), Some(true));
+        let disabled = EngineOptions::split(&entries(&[("HL_A64_X86_JCC_LINK", "0")])).unwrap().1;
+        assert_eq!(disabled.a64_x86_jcc_link(), Some(false));
     }
 
     #[test]

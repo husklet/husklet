@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import {
   ExtensionError,
+  ExecutionOperationError,
   PROTOCOL_CAPABILITIES,
   Session,
   protocolCoverage,
@@ -1199,6 +1200,41 @@ test('pre-aborted streaming execution never starts a container command', async (
     (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
   );
   assert.equal(starts, 0);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('text execution preserves split UTF-8 and cancels aggregate overflow', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  let cancelled = 0;
+  api.containers.execStreaming = async (_id, _generation, _options, onPage) => {
+    try {
+      await onPage({ entries: [
+        { sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [0xe2, 0x82] },
+        { sequence: 2, timestamp_ms: 2, stream: 'stdout', bytes: [0xac] },
+        { sequence: 3, timestamp_ms: 3, stream: 'stderr', bytes: [101, 114, 114] },
+      ], next: 3, more: false, eof: true, gap: false });
+    } catch (error) {
+      cancelled += 1;
+      throw new ExecutionOperationError('e'.repeat(32), 'output', error);
+    }
+    return { executionId: 'e'.repeat(32), execution: { running: false, exit_code: 0 } };
+  };
+  assert.deepEqual(
+    await api.containers.execText('c'.repeat(64), 1, { command: ['query'], maxBytes: 6 }),
+    {
+      executionId: 'e'.repeat(32),
+      execution: { running: false, exit_code: 0 },
+      stdout: '€',
+      stderr: 'err',
+    },
+  );
+  await assert.rejects(
+    api.containers.execText('c'.repeat(64), 1, { command: ['query'], maxBytes: 5 }),
+    (error) => error instanceof ExecutionOperationError && /5 byte limit/.test(error.cause.message),
+  );
+  assert.equal(cancelled, 1);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

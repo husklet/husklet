@@ -116,6 +116,9 @@ async fn run_case_inner(
     if let Some(enabled) = case.engine_options.direct_call_pre_spill() {
         config = config.direct_call_pre_spill(enabled);
     }
+    if let Some(enabled) = case.engine_options.a64_x86_jcc_link() {
+        config = config.a64_x86_jcc_link(enabled);
+    }
     let containers = hl_container::Containers::builder(config)
         .images(fixture.images())
         .build()

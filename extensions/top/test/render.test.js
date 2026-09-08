@@ -296,8 +296,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
+  assert.equal(
+    ancestorProperty(stage, 'Browse extensions', 'Row', 'Wrap')?.Flag,
+    true,
+    'extension sections stack instead of overflowing a narrow viewport',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Browse extensions', 'Row', 'Width'),
+    { Length: 'Fill' },
+    'extension sections share the full page width when displayed side by side',
+  );
   assert.ok(labelled(stage, 'Version 2.0.0'));
   assert.ok(labelled(stage, 'Technical details'));
   assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [
@@ -1600,6 +1610,7 @@ test('installed extensions translate the host duty stage into a developer-facing
 test('overview never presents stale inventory counts as current during loading or failure', () => {
   const stale = [{ id: 'old', state: 'running' }];
   const stage = host();
+  const opened = [];
   stage.render(
     h(Overview, {
       containers: { data: stale, loading: true, error: null },
@@ -1609,7 +1620,7 @@ test('overview never presents stale inventory counts as current during loading o
       networks: { data: [], loading: false, error: null },
       terminals: { data: [], loading: false, error: null },
       extensions: { data: [], loading: false, error: null },
-      onOpen: () => {},
+      onOpen: (section) => opened.push(section),
     }),
   );
   assert.ok(labelled(stage, '…'));
@@ -1619,6 +1630,12 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'running containers available to snapshot'));
   assert.ok(labelled(stage, '0 running'));
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const actionNodes = new Set(
+    patches
+      .filter((patch) => patch.Create?.tag === 'CardActionArea')
+      .map((patch) => patch.Create.id),
+  );
   for (const resource of [
     'Containers',
     'Processes',
@@ -1630,8 +1647,25 @@ test('overview never presents stale inventory counts as current during loading o
     'Extensions',
   ]) {
     assert.ok(
-      labelled(stage, `Open ${resource}`),
+      patches.some(
+        (patch) =>
+          patch.SetProp?.prop === 'Tooltip' &&
+          patch.SetProp.value?.Text === `Open ${resource}` &&
+          actionNodes.has(patch.SetProp.id),
+      ),
       `${resource} has an unambiguous dashboard action`,
+    );
+    const cue = patches
+      .filter(
+        (patch) =>
+          patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === `Open ${resource}`,
+      )
+      .find((patch) => !actionNodes.has(patch.SetProp.id));
+    assert.ok(cue, `${resource} has a visible navigation cue inside its action area`);
+    assert.deepEqual(
+      latestProperty(stage, cue.SetProp.id, 'Icon'),
+      { Text: 'go-next-symbolic' },
+      `${resource} uses the shared forward-navigation icon`,
     );
   }
   assert.equal(
@@ -1642,14 +1676,38 @@ test('overview never presents stale inventory counts as current during loading o
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
   assert.ok(labelled(stage, 'No reported faults'));
   assert.equal(
-    ancestorProperty(stage, 'Containers', 'Column', 'Grow')?.Number,
+    ancestorProperty(stage, 'Containers', 'Row', 'Wrap')?.Flag,
+    true,
+    'the summary cards reflow instead of clipping at narrow widths',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Containers', 'Row', 'Width'),
+    { Length: 'Fill' },
+    'the summary cards use the available page width',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Containers', 'Card', 'Grow')?.Number,
     0,
-    'the summary matrix does not absorb unused page width',
+    'cards expand across a line without stretching rows down the viewport',
   );
+  const openContainers = patches
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Tooltip' &&
+        patch.SetProp.value?.Text === 'Open Containers' &&
+        actionNodes.has(patch.SetProp.id),
+    )
+    .at(-1)?.SetProp.id;
+  assert.ok(openContainers, 'the card itself navigates without a generic button row');
   assert.ok(
-    ancestorProperty(stage, 'Containers', 'Column', 'Width'),
-    'the non-growing matrix has an explicit readable width bound',
+    stage.surface.dispatch({
+      trigger: 'Invoke',
+      node: openContainers,
+      id: `${openContainers}:Invoke`,
+      value: null,
+    }),
   );
+  assert.deepEqual(opened, ['containers'], 'the directly clickable card retains navigation');
 });
 
 test('overview refreshes every authoritative inventory in one action', async () => {
@@ -4615,6 +4673,12 @@ test('execution details, separate bounded streams, wait and retry are operationa
   const details = new ExecutionDetailsSource();
   const stage = host();
   stage.render(h(Executions, { api: controlled, resource, executionDetails: details }));
+  assert.deepEqual(ancestorTags(stage, 'Details').slice(0, 2), ['Row', 'CardActions']);
+  assert.equal(
+    ancestorProperty(stage, 'Details', 'Row', 'Wrap')?.Flag,
+    true,
+    'execution actions flow within the card instead of leaving a narrow viewport',
+  );
   invoke(stage, 'Details');
   await settled();
   await settled();

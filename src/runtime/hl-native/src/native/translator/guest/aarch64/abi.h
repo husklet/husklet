@@ -80,10 +80,20 @@ static void aarch64_soft_filter_refresh(struct cpu *);
 // Child thread resume PC: aarch64 services a syscall with pc still at the SVC, so advance +4.
 #define G_THREAD_RESUME(child, parent) ((child)->pc = (parent)->pc + 4)
 
-// Clone/thread-start hook: the aarch64 frontend does not elide memory-ordering barriers, so no
-// transition flush is needed. Evaluates to nonzero (success) so the shared clone path is byte-identical.
+// Cross-ISA x86 blocks may contain single-thread-only direct links.  The clone seam flushes them before
+// the first peer exists; same-ISA AArch64 needs no transition flush.
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+#define G_THREAD_START_FLUSH() hl_a64_x86_flush_for_thread_start()
+#else
 #define G_THREAD_START_FLUSH() 1
+#endif
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+static void hl_a64_x86_pending_reset(unsigned reason);
+#define G_CACHE_REWIND() hl_a64_x86_cache_rewind_in_place()
+#define G_PENDING_RESET(reason) hl_a64_x86_pending_reset(reason)
+#else
 #define G_CACHE_REWIND() jit_cache_rewind_in_place()
+#endif
 #define G_SHARED_MAP_BARRIERS() 1 /* aarch64 frontend elides no barriers */
 
 // aarch64 guests already use canonical (*at) syscalls -> nothing to normalize.

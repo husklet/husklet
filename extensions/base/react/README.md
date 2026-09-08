@@ -262,6 +262,11 @@ with `{sortable: true}` and handle `onSort` as a proposal carrying
 column, then publish a newer source version after accepting the order. The native
 header shows direction but never locally reorders partial virtual windows.
 
+`createWindowCache(maxEntries)` keeps author-side query results bounded while a
+virtual table traverses a large dataset. It uses least-recently-used eviction, so
+reading a window preserves it across nearby scroll churn; limits must be from 1
+through 1,024 entries.
+
 `vocabulary` exports both lists, and `tags` exports every component name.
 
 ### Terminal transcript

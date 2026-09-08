@@ -329,6 +329,7 @@ mod tests {
             translation_cache_observability: false,
             translation_symbols: None,
             direct_call_pre_spill: false,
+            a64_x86_jcc_link: false,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             execution: crate::Execution::default(),
@@ -537,6 +538,36 @@ mod tests {
             spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL"),
             Some("1")
         );
+    }
+
+
+    #[test]
+    fn aarch64_x86_conditional_links_require_a_translated_aarch64_guest() {
+        let mut launch = launch();
+        launch.a64_x86_jcc_link = true;
+        launch.execution = crate::Execution::Auto;
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64")).then_some("1")
+        );
+
+        launch.execution = crate::Execution::translated(false);
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(
+            spec.plan.options.get("HL_A64_X86_JCC_LINK"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64")).then_some("1")
+        );
+
+        launch.execution = crate::Execution::Interpreted;
+        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        launch.execution = crate::Execution::native(false);
+        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        launch.execution = crate::Execution::translated(false);
+        launch.guest = crate::Guest::X86_64;
+        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        launch.guest = crate::Guest::Aarch64;
+        launch.a64_x86_jcc_link = false;
+        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
     }
 
     #[test]

@@ -563,14 +563,43 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
 // target, so an aarch64 guest answers "absent" here rather than the call site growing an #ifdef -- the
 // same convention engine/target/x86_64.c uses for translit_enabled on an ARM64 host.
 static int translit_report(char *out, size_t size) {
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+    return snprintf(out, size,
+                    "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu reset_cache=%llu reset_smc=%llu reset_fork=%llu reset_thread=%llu\n",
+                    (unsigned long long)g_x86_rel32_candidates,
+                    (unsigned long long)g_x86_rel32_registered,
+                    (unsigned long long)g_x86_rel32_dropped,
+                    (unsigned long long)g_x86_rel32_patched,
+                    (unsigned long long)g_x86_rel32_executed,
+                    (unsigned long long)g_x86_rel32_reset_cache,
+                    (unsigned long long)g_x86_rel32_reset_smc,
+                    (unsigned long long)hl_backend_tree_a64_x86_reset_fork_count(),
+                    (unsigned long long)g_x86_rel32_reset_thread);
+#else
     return snprintf(out, size, "[prof] translit: absent, aarch64 guest\n");
+#endif
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int translit_unsupported_report(char *out, size_t size) {
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+    int written = snprintf(out, size,
+                           "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu reset_cache=%llu reset_smc=%llu reset_fork=%llu reset_thread=%llu\n",
+                           (unsigned long long)g_x86_rel32_candidates,
+                           (unsigned long long)g_x86_rel32_registered,
+                           (unsigned long long)g_x86_rel32_dropped,
+                           (unsigned long long)g_x86_rel32_patched,
+                           (unsigned long long)g_x86_rel32_executed,
+                           (unsigned long long)g_x86_rel32_reset_cache,
+                           (unsigned long long)g_x86_rel32_reset_smc,
+                           (unsigned long long)hl_backend_tree_a64_x86_reset_fork_count(),
+                           (unsigned long long)g_x86_rel32_reset_thread);
+    return written > 0 && (size_t)written < size ? written : 0;
+#else
     (void)out;
     (void)size;
     return 0;
+#endif
 }
 #endif
 

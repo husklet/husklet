@@ -967,6 +967,32 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new ExecutionOperationError(executionId, phase, cause);
         }
       },
+      execText: async (id, generation, configuration) => {
+        const { maxBytes, ...options } = configuration;
+        if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) {
+          throw new RangeError('execution text maxBytes must be between 1 and 16777216');
+        }
+        let bytes = 0;
+        let stdout = '';
+        let stderr = '';
+        const stdoutDecoder = new TextDecoder();
+        const stderrDecoder = new TextDecoder();
+        const result = await api.containers.execStreaming(id, generation, options, (page) => {
+          for (const entry of page.entries) {
+            bytes += entry.bytes.length;
+            if (bytes > maxBytes) {
+              throw new RangeError(`execution text exceeded the ${maxBytes} byte limit`);
+            }
+            const decoder = entry.stream === 'stdout' ? stdoutDecoder : stderrDecoder;
+            const text = decoder.decode(Uint8Array.from(entry.bytes), { stream: true });
+            if (entry.stream === 'stdout') stdout += text;
+            else stderr += text;
+          }
+        });
+        stdout += stdoutDecoder.decode();
+        stderr += stderrDecoder.decode();
+        return { ...result, stdout, stderr };
+      },
       attachTerminal: (id, command) =>
         session
           .call('container_attach_terminal', {
@@ -3534,6 +3560,7 @@ export const protocolCoverage = Object.freeze({
       'exec',
       'execAndWait',
       'execStreaming',
+      'execText',
       'attachTerminal',
     ],
     images: [

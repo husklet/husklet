@@ -261,39 +261,41 @@ export function Executions({
               ) : null}
             </CardContent>
             <CardActions gap={1}>
-              <Button
-                label={selected === item.id ? 'Hide details' : 'Details'}
-                enabled={!busy}
-                onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
-              />
-              <Button
-                label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-                enabled={!busy}
-                onInvoke={() => void logs(item.id)}
-              />
-              <Button
-                label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-                enabled={!busy && item.running}
-                onInvoke={() => void wait(item.id)}
-              />
-              <ConfirmAction
-                authorityKey={`execution:${item.id}:SIGTERM`}
-                label="Terminate"
-                confirmLabel="Confirm SIGTERM"
-                pendingLabel="Confirm SIGTERM"
-                question={`Send SIGTERM to execution ${item.id}?`}
-                enabled={!busy && item.running}
-                onConfirm={() => terminate(item)}
-              />
-              <ConfirmAction
-                authorityKey={`execution:${item.id}:remove`}
-                label="Remove record"
-                confirmLabel="Confirm removal"
-                pendingLabel="Confirm removal"
-                question={`Remove execution record ${shortId(item.id)}?`}
-                enabled={!busy && !item.running}
-                onConfirm={() => remove(item)}
-              />
+              <Row gap={1} wrap justify="end">
+                <Button
+                  label={selected === item.id ? 'Hide details' : 'Details'}
+                  enabled={!busy}
+                  onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
+                />
+                <Button
+                  label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
+                  enabled={!busy}
+                  onInvoke={() => void logs(item.id)}
+                />
+                <Button
+                  label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
+                  enabled={!busy && item.running}
+                  onInvoke={() => void wait(item.id)}
+                />
+                <ConfirmAction
+                  authorityKey={`execution:${item.id}:SIGTERM`}
+                  label="Terminate"
+                  confirmLabel="Confirm SIGTERM"
+                  pendingLabel="Confirm SIGTERM"
+                  question={`Send SIGTERM to execution ${item.id}?`}
+                  enabled={!busy && item.running}
+                  onConfirm={() => terminate(item)}
+                />
+                <ConfirmAction
+                  authorityKey={`execution:${item.id}:remove`}
+                  label="Remove record"
+                  confirmLabel="Confirm removal"
+                  pendingLabel="Confirm removal"
+                  question={`Remove execution record ${shortId(item.id)}?`}
+                  enabled={!busy && !item.running}
+                  onConfirm={() => remove(item)}
+                />
+              </Row>
             </CardActions>
           </Card>
         ))}

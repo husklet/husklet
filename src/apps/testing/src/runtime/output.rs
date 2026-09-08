@@ -402,7 +402,7 @@ fn backend_shape_product_v13_order(fields: &[&str]) -> bool {
             pair[0] == format!("executed_form{rank}_key") && pair[1] == format!("executed_form{rank}_count")
         })
 }
-const BACKEND_TREE_FIELDS: [&str; 33] = [
+const BACKEND_TREE_FIELDS: [&str; 34] = [
     "version",
     "root_pid",
     "claimed",
@@ -436,6 +436,7 @@ const BACKEND_TREE_FIELDS: [&str; 33] = [
     "reason14",
     "reason15",
     "reason_other",
+    "reset_fork",
 ];
 
 const BACKEND_SHAPE_FIELDS: &[&str] = &[
@@ -1503,7 +1504,21 @@ fn valid_profile_line(line: &str) -> bool {
             })
             && fields.split_whitespace().any(|field| field == "reconcile=1")
     });
-    summary || translit || x86_a64_route
+    let a64_x86_jcc_link = fields.strip_prefix("a64-x86-jcc-link ").is_some_and(|fields| {
+        [
+            "candidates", "registered", "dropped", "patched", "executed", "reset_cache", "reset_smc",
+            "reset_fork", "reset_thread",
+        ]
+            .iter()
+            .all(|wanted| {
+                fields.split_whitespace().any(|field| {
+                    field
+                        .split_once('=')
+                        .is_some_and(|(name, value)| name == *wanted && value.parse::<u64>().is_ok())
+                })
+            })
+    });
+    summary || translit || x86_a64_route || a64_x86_jcc_link
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -1645,6 +1660,19 @@ mod tests {
     }
 
     #[test]
+    fn aarch64_x86_chain_receipt_reaches_worker_counter_assertions() {
+        let captured = "[prof] a64-x86-jcc-link candidates=7 registered=6 dropped=0 patched=5 executed=99 reset_cache=1 reset_smc=2 reset_fork=3 reset_thread=4\n";
+        let mut forwarded = Vec::new();
+        forward_profile(captured, &mut forwarded).unwrap();
+        assert_eq!(forwarded, captured.as_bytes());
+        let assertions: Vec<crate::runtime::definition::diagnostics::Assertion> = serde_yaml::from_str(
+            "- { counter: patched, greater-than: 0 }\n- { counter: executed, greater-than: 0 }\n",
+        )
+        .unwrap();
+        assert!(crate::runtime::definition::diagnostics::violation(&assertions, &forwarded).is_none());
+    }
+
+    #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
         validate_profile("[prof] dispatcher crossings=41 translations=7\n").unwrap();
         validate_backend_tree(b"ordinary guest stderr\n", false).unwrap();
@@ -1692,7 +1720,7 @@ mod tests {
         );
     }
 
-    const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1\n";
+    const TREE: &str = "[diag] backend-tree version=1 root_pid=42 claimed=3 completed=1 abnormal=1 missing=1 duplicate_finalize=0 crossings=5 translated_entries=2 interpreted_entries=3 translated_steps=8 interpreted_steps=13 translations=2 map_hits=3 stw_retries=0 irq_pending=1 reason0=2 reason1=1 reason2=0 reason3=0 reason4=0 reason5=1 reason6=0 reason7=0 reason8=0 reason9=0 reason10=0 reason11=0 reason12=0 reason13=0 reason14=0 reason15=0 reason_other=1 reset_fork=0\n";
     const PRODUCT_SHAPE_ON: &str = "[diag] backend-shape version=4 available=1 mixed_sse_executed=0 mixed_sse_executed_transitions=0 mixed_sse_disabled_boundaries=0 jcc_ibtc_enabled=1 jcc_ibtc_emitted=1 jcc_ibtc_hits=1 jcc_ibtc_misses=1 jcc_ibtc_irq=0 jcc_ibtc_fills=1 jcc_ibtc_suppressed=0 jcc_ibtc_invalid_refusals=0 direct_jmp_ibtc_enabled=1 direct_jmp_ibtc_emitted=1 direct_jmp_ibtc_hits=1 direct_jmp_ibtc_misses=1 direct_jmp_ibtc_irq=0 direct_jmp_ibtc_fills=1 direct_jmp_ibtc_suppressed=0 direct_jmp_ibtc_invalid_refusals=0\n";
     const EXIT_FAMILY: &str = "[diag] x86-exit-family version=1 translated_entries=105 total=105 \
         t_fallthrough=1 t_jcc_taken=2 t_jcc_fall=3 t_direct_jmp=4 t_direct_call=5 t_ret=6 \

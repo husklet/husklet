@@ -65,6 +65,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<PathBuf>,
     pub(crate) direct_call_pre_spill: bool,
+    pub(crate) a64_x86_jcc_link: bool,
     pub(crate) checkpoint: Option<CheckpointRole>,
     pub(crate) guest: Guest,
     pub(crate) execution: crate::Execution,

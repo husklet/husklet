@@ -2,16 +2,17 @@ import React from 'react';
 import {
   Button,
   Card,
-  CardActions,
+  CardActionArea,
   CardContent,
-  CardHeader,
   Column,
   Heading,
+  Icon,
   NavigationMenu,
   NavigationMenuItem,
   Row,
   Scroll,
   Spinner,
+  Spacer,
   Text,
   type ContainerSummary,
   type ExecutionSummary,
@@ -148,7 +149,7 @@ export function Overview({
     <Scroll grow height="fill">
       <Column width="fill" pad={2} gap={2}>
         <Heading label="Workspace overview" scale="title" />
-        <Text label="Current inventory and reported runtime attention." color="text-dim" />
+        <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
         <Row gap={1} align="center">
           {refreshing ? <Spinner /> : null}
           <Button
@@ -157,49 +158,27 @@ export function Overview({
             onInvoke={refreshAll}
           />
         </Row>
-        <Column grow={false} width={{ minimum: { chars: 54 }, maximum: { chars: 70 } }} gap={2}>
-          <Row gap={2}>
-            <Summary
-              title="Containers"
-              {...containersSummary}
-              onOpen={() => onOpen('containers')}
-            />
-            <Summary
-              title="Processes"
-              value={
-                containers.loading
-                  ? '…'
-                  : containers.error
-                    ? 'Unavailable'
-                    : String(runningContainers)
-              }
-              detail="running containers available to snapshot"
-              onOpen={() => onOpen('processes')}
-            />
-            <Summary
-              title="Executions"
-              {...executionsSummary}
-              onOpen={() => onOpen('executions')}
-            />
-          </Row>
-          <Row gap={2}>
-            <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
-            <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
-            <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
-          </Row>
-          <Row gap={2}>
-            <Summary
-              title="Terminal tabs"
-              {...terminalsSummary}
-              onOpen={() => onOpen('terminals')}
-            />
-            <Summary
-              title="Extensions"
-              {...extensionsSummary}
-              onOpen={() => onOpen('extensions')}
-            />
-          </Row>
-        </Column>
+        <Row width="fill" gap={2} wrap>
+          <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
+          <Summary
+            title="Processes"
+            value={
+              containers.loading
+                ? '…'
+                : containers.error
+                  ? 'Unavailable'
+                  : String(runningContainers)
+            }
+            detail="running containers available to snapshot"
+            onOpen={() => onOpen('processes')}
+          />
+          <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
+          <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
+          <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
+          <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
+          <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
+          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
+        </Row>
         <ErrorText
           error={
             containers.error ??
@@ -237,15 +216,20 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }} variant="outline">
-      <CardHeader label={label} />
-      <CardContent gap={1}>
-        <Heading label={value} scale="title" />
-        <Text label={detail} color="text-dim" />
-      </CardContent>
-      <CardActions>
-        <Button label={`Open ${label}`} variant="ghost" onInvoke={onOpen} />
-      </CardActions>
+    <Card grow={false} width={{ minimum: { chars: 18 } }} variant="outline">
+      <CardActionArea tooltip={`Open ${label}`} onInvoke={onOpen}>
+        <CardContent gap={1} pad={1}>
+          <Row gap={1} align="center" width="fill">
+            <Text label={label} color="text-dim" />
+            <Spacer />
+            <Icon icon="go-next-symbolic" tooltip={`Open ${label}`} />
+          </Row>
+          <Row gap={1} align="center" wrap>
+            <Heading label={value} scale="title" />
+            <Text label={detail} color="text-dim" wrap />
+          </Row>
+        </CardContent>
+      </CardActionArea>
     </Card>
   );
 }
