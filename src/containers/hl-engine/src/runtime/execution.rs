@@ -707,9 +707,6 @@ fn native_auto_eligibility(
     if plan.box_policy.volumes.is_some() {
         eligibility = Err(NativeSupervisedRefusal::Volumes);
     }
-    if plan.box_policy.lower_layers.is_some() || plan.box_policy.file_owners.is_some() {
-        eligibility = Err(NativeSupervisedRefusal::Overlay);
-    }
     let isolated_ready = plan.box_policy.network_mode == 0
         && plan.box_policy.flags & BOX_NETWORK_ISOLATED != 0
         && host.isolated_hostname_projection;
@@ -1210,6 +1207,25 @@ mod native_eligibility_tests {
             native_auto_eligibility(&wrong_mode, host(), Ok(())),
             Err(NativeSupervisedRefusal::Network),
         );
+    }
+
+    #[test]
+    fn auto_accepts_the_same_validated_product_overlay_as_explicit_native() {
+        let mut overlay = plan();
+        overlay.box_policy.lower_layers = Some(b"/images/lower".to_vec());
+        overlay.box_policy.file_owners = Some(b"0:0:/usr/bin/tool".to_vec());
+        assert_eq!(verdict(&overlay, host()), Ok(()));
+        assert_eq!(native_auto_eligibility(&overlay, host(), verdict(&overlay, host())), Ok(()));
+
+        overlay.box_policy.lower_layers = Some(b"/images/one\n/images/two".to_vec());
+        assert_eq!(verdict(&overlay, host()), Err(NativeSupervisedRefusal::Overlay));
+        assert_eq!(
+            native_auto_eligibility(&overlay, host(), verdict(&overlay, host())),
+            Err(NativeSupervisedRefusal::Overlay)
+        );
+
+        overlay.box_policy.lower_layers = None;
+        assert_eq!(verdict(&overlay, host()), Err(NativeSupervisedRefusal::Ownership));
     }
 
     #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
