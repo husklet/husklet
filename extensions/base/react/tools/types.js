@@ -304,6 +304,8 @@ export interface RenderHandle {
   /** Waits until every reconciliation frame queued so far is acknowledged by the host. */
   flush(): Promise<void>;
   source(mutation: InterfaceSourceMutation): Promise<void>;
+  /** Replaces the window producer and cancels work owned by its predecessor. */
+  setRowProvider(provider: RowProvider | null): void;
   close(): Promise<void>;
 }
 

@@ -53,6 +53,8 @@ interface RenderHandle {
   update(next: ReactNode): void;
   flush(): Promise<void>;
   source(mutation: SourceMutation): Promise<void>;
+  /** Replaces the window producer and cancels work owned by its predecessor. */
+  setRowProvider(provider: RowProvider | null): void;
   close(): Promise<void>;
   rowProvider: RenderOptions['rows'];
   rowActive: Set<RowTask>;
@@ -317,6 +319,14 @@ export function render(
       });
       if (reply?.reply !== 'done')
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+    },
+    setRowProvider(provider: RowProvider | null) {
+      handle.rowQueue.length = 0;
+      for (const task of handle.rowActive) {
+        task.controller.abort(new Error('row provider was replaced'));
+      }
+      handle.rowActive.clear();
+      handle.rowProvider = provider;
     },
     close() {
       if (closed) return withdrawal ?? Promise.resolve();

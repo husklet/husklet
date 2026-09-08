@@ -68,6 +68,7 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
   assert.match(handle, /readonly ready: Promise<string>;/);
   assert.match(handle, /readonly slot: string \| null;/);
   assert.match(handle, /source\(mutation: InterfaceSourceMutation\): Promise<void>;/);
+  assert.match(handle, /setRowProvider\(provider: RowProvider \| null\): void;/);
   assert.match(handle, /close\(\): Promise<void>;/);
   assert.match(
     declarations,
