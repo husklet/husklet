@@ -59,6 +59,7 @@ test('installed catalogue extension starts an update review over real Unix frami
                         id: 'storybook',
                         title: 'Component playground',
                         description: 'Inspect components.',
+                        version: '2.0.0',
                         reference,
                         publisher: 'Husklet',
                         source: 'husklet:first-party/storybook',

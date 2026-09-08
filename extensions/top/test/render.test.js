@@ -97,6 +97,7 @@ const firstPartyCatalogue = async () => ({
       id: 'storybook',
       title: 'Component playground',
       description: 'Explore extension components, large tables, terminals, diffs, and metrics.',
+      version: '2.0.0',
       reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
       publisher: 'Husklet',
       source: 'husklet:first-party/storybook',
@@ -685,6 +686,27 @@ test('reviewing an unchanged installed digest is an explicit no-op', async () =>
   );
   assert.equal(labelled(stage, 'Update with selected access'), undefined);
   assert.equal(updates, 0);
+});
+
+test('catalogue does not advertise an update at the installed version', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [{
+            name: 'storybook', image_digest: `sha256:${'a'.repeat(64)}`,
+            version: '2.0.0', enabled: true, status: 'duty',
+          }],
+          catalogue: firstPartyCatalogue,
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.equal(labelled(stage, 'Update available'), undefined);
 });
 
 test('extension review calls out destructive image authority before consent', async () => {

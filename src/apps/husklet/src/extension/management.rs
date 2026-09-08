@@ -240,6 +240,7 @@ fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<Ext
         id: "storybook".into(),
         title: "Component playground".into(),
         description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
         reference: reference.into(),
         publisher: "Husklet".into(),
         source: "husklet:first-party/storybook".into(),

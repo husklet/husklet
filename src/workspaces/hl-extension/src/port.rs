@@ -829,6 +829,8 @@ pub struct ExtensionCatalogueEntry {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// Human-facing release version advertised for discovery and update comparison.
+    pub version: String,
     pub reference: String,
     pub publisher: String,
     pub source: String,
@@ -866,6 +868,7 @@ impl ExtensionCatalogue {
                 || !ids.insert(&entry.id)
                 || !bounded_text(&entry.title, 128)
                 || !bounded_text(&entry.description, 1024)
+                || !bounded_text(&entry.version, 64)
                 || !bounded_text(&entry.publisher, 128)
                 || !bounded_text(&entry.reference, 512)
                 || !bounded_text(&entry.source, 512)
@@ -1669,6 +1672,7 @@ mod tests {
             id: "storybook".into(),
             title: "Component playground".into(),
             description: "First-party components".into(),
+            version: "1.2.3".into(),
             reference: "registry/storybook:latest".into(),
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
@@ -1695,6 +1699,17 @@ mod tests {
             super::ExtensionCatalogue {
                 entries: vec![super::ExtensionCatalogueEntry {
                     architectures: vec!["amd64".into(), "amd64".into()],
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    version: String::new(),
                     ..entry.clone()
                 }],
                 complete: true,

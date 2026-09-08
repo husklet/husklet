@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:b425b5b931001907
+// Protocol artifact fnv1a64:9595722c936b2b68
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -40,7 +40,7 @@ export type ExtensionAcquisitionProgress = { "status": string; "id"?: string | n
 export type ExtensionAcquisitionStatus = { "job": string; "reference": string; "revision": number; "state": string; "progress"?: ExtensionAcquisitionProgress | null; "candidate"?: ExtensionCandidate | null; "error"?: string | null };
 export type ExtensionCandidate = { "name": ExtensionName; "version": string; "image_digest": string; "requested": Grant; "requested_images"?: ImageGrant; "requested_containers"?: ContainerGrant; "requested_networks"?: NetworkGrant; "requested_volumes"?: VolumeGrant; "requested_filesystem"?: FilesystemGrant; "requested_workspace_environment"?: WorkspaceEnvironmentGrant; "installed_image_digest"?: string | null };
 export type ExtensionCatalogue = { "entries": Array<ExtensionCatalogueEntry>; "complete": boolean };
-export type ExtensionCatalogueEntry = { "id": string; "title": string; "description": string; "reference": string; "publisher": string; "source": string; "protocol"?: number; "architectures"?: Array<string> };
+export type ExtensionCatalogueEntry = { "id": string; "title": string; "description": string; "version": string; "reference": string; "publisher": string; "source": string; "protocol"?: number; "architectures"?: Array<string> };
 export type ExtensionName = PeerName;
 export type ExtensionPreferences = { "revision": number; "entries": Array<[string, PreferenceValue]> };
 export type ExtensionState = { "identity": string; "contents": Array<number> };

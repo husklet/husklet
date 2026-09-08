@@ -135,6 +135,8 @@ export interface ExtensionCatalogueEntry {
     id: string;
     title: string;
     description: string;
+    /** Bounded advertised release used only for discovery and update comparison. */
+    version: string;
     reference: string;
     publisher: string;
     source: string;

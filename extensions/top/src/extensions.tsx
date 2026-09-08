@@ -1182,7 +1182,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               onRetry={reload}
             >
               {installed.map((extension) => {
-                const update = catalogue?.entries.find((entry) => entry.id === extension.name);
+                const update = catalogue?.entries.find(
+                  (entry) => entry.id === extension.name && entry.version !== extension.version,
+                );
                 const updateCompatibility = update
                   ? catalogueCompatibility(update, workspaceArchitecture)
                   : null;

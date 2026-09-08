@@ -1792,6 +1792,13 @@
           }
         },
         {
+          "name": "version",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "reference",
           "optional": false,
           "schema": {
@@ -13012,7 +13019,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:9a750d39f22f8bc4",
+  "source_fingerprint": "fnv1a64:d4d3f529f5a105a3",
   "specification_version": 1,
   "topics": [
     {

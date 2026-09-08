@@ -189,9 +189,13 @@ test('real Unix catalogue carries bounded compatibility hints', async () => {
         assert.deepEqual(frame.payload, { call: 'extension_catalogue' });
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
           reply: 'extension_catalogue', with: { complete: true, entries: [{
-            id: 'storybook', title: 'Component playground', description: 'Native components',
+            id: 'storybook', title: 'Component playground', description: 'Native components', version: '1.4.0',
             reference: 'registry/storybook:latest', publisher: 'Husklet', source: 'first-party',
             protocol: 1, architectures: ['amd64', 'arm64'],
+          }, {
+            id: 'metrics', title: 'Metrics explorer', description: 'Workspace metrics', version: '2.1.0',
+            reference: 'registry/metrics:2.1.0', publisher: 'Example', source: 'partner:metrics',
+            protocol: 1, architectures: ['amd64'],
           }] },
         } }));
       }
@@ -205,6 +209,8 @@ test('real Unix catalogue carries bounded compatibility hints', async () => {
     const session = await connect({ path: socketPath });
     const catalogue = await workspace(session).extensions.catalogue();
     assert.equal(catalogue.entries[0].protocol, 1);
+    assert.equal(catalogue.entries[0].version, '1.4.0');
+    assert.equal(catalogue.entries[1].version, '2.1.0');
     assert.deepEqual(catalogue.entries[0].architectures, ['amd64', 'arm64']);
     await session.close();
   } finally {
