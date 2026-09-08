@@ -22,7 +22,9 @@ export const FLAG_END = 1;
 export const CONTROL = 0;
 export const HEADER = 12;
 /// Largest payload the host accepts. Anything above is refused before it is read.
-export const PAYLOAD_LIMIT = 1 << 20;
+// A protocol payload may contain a bounded 1 MiB byte array. Its JSON wire
+// representation needs up to four bytes per value, plus the call envelope.
+export const PAYLOAD_LIMIT = 5 << 20;
 const KNOWN_FLAGS = 0b0000_0111;
 const KINDS = new Set(Object.values(KIND));
 const UTF8 = new TextDecoder('utf-8', { fatal: true });

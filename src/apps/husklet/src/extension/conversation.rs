@@ -1142,6 +1142,7 @@ mod tests {
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
+    use crate::extension::extension_state::StateBlob;
     use crate::extension::files::WorkspaceDirectory;
 
     /// What the adapters were actually asked for, so a refusal that still
@@ -1688,6 +1689,42 @@ mod tests {
             conversation.serve(&services(&host))
         });
         (theirs, served)
+    }
+
+    #[test]
+    fn full_state_quota_crosses_the_real_socket_and_the_conversation_survives() {
+        let root = tempfile::tempdir().expect("state root");
+        let state = StateBlob::new(root.path(), &ExtensionName::new("sample").unwrap()).expect("state store");
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").unwrap(),
+                Grant::new([Capability::StateRead, Capability::StateWrite]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            let mut ports = services(&host);
+            ports.state = &state;
+            conversation.serve(&ports)
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let contents = vec![255; 1024 * 1024];
+
+        let written = ask(&mut wire, &Request::StateWrite { contents: contents.clone() });
+        assert!(matches!(codec::read_reply(&written), Ok(Reply::Done)));
+        let read = ask(&mut wire, &Request::StateRead);
+        assert!(matches!(codec::read_reply(&read), Ok(Reply::State(state)) if state.contents == contents));
+        let cleared = ask(&mut wire, &Request::StateClear);
+        assert!(matches!(codec::read_reply(&cleared), Ok(Reply::Done)));
+        let empty = ask(&mut wire, &Request::StateRead);
+        assert!(matches!(codec::read_reply(&empty), Ok(Reply::State(state)) if state.contents.is_empty()));
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
     fn semantic_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {

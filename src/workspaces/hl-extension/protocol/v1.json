@@ -7020,7 +7020,7 @@
       }
     ],
     "payload": "json",
-    "payload_limit_bytes": 1048576
+    "payload_limit_bytes": 5242880
   },
   "protocol_version": 1,
   "request_to_capability": [

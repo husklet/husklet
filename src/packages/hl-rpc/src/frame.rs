@@ -133,7 +133,10 @@ impl Frame {
     pub const HEADER: usize = 12;
     /// Largest payload accepted. A larger declared length is refused before a
     /// single byte is reserved for it.
-    pub const PAYLOAD_LIMIT: usize = 1 << 20;
+    // JSON byte arrays need up to four payload bytes (`255,`) for each byte
+    // they carry. Keep enough room for a full 1 MiB bounded blob plus its
+    // request/reply envelope while retaining a small, absolute allocation cap.
+    pub const PAYLOAD_LIMIT: usize = 5 << 20;
 
     #[must_use]
     pub fn new(channel: ChannelId, kind: Kind, payload: Vec<u8>) -> Self {
