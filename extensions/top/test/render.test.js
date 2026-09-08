@@ -967,7 +967,7 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
 
   assert.ok(labelled(stage, 'Required workspace manager'));
   assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
-  assert.ok(labelled(stage, `Image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
+  assert.ok(labelled(stage, `Image · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
   assert.equal(labelled(stage, 'Disable'), undefined);
   assert.equal(labelled(stage, 'Remove'), undefined);
 });
@@ -2606,7 +2606,7 @@ test('volume and network panels render bounded real inventories and controls', (
     assert.ok(labels(volumeFrame).includes(label), label);
   for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
-  assert.ok(labels(networkFrame).includes('Built-in'));
+  assert.ok(labels(networkFrame).includes('Built-in · protected'));
   assert.equal(
     labels(networkFrame).filter((label) => label === 'Remove').length,
     1,

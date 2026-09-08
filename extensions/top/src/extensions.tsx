@@ -806,11 +806,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           label={extensionState(extension)}
                           tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                         />
-                        <Text
-                          label={`Image ${compactDigest(extension.image_digest)}`}
-                          tooltip={extension.image_digest}
-                        />
+                        {extension.name === 'top' ? (
+                          <Badge label="Required workspace manager" tone="positive" />
+                        ) : null}
                       </Row>
+                      <Text
+                        label={`Image · ${compactDigest(extension.image_digest)}`}
+                        tooltip={extension.image_digest}
+                      />
                       <ExtensionFault extension={extension} />
                       <InstalledFilesystemAccess grant={extension.filesystem} />
                       <LifecycleFeedback
@@ -826,9 +829,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             onInvoke={() => inspect(update.reference)}
                           />
                         )}
-                        {extension.name === 'top' ? (
-                          <Badge label="Required workspace manager" tone="positive" />
-                        ) : extension.status.startsWith('fault:') ? (
+                        {extension.name === 'top' ? null : extension.status.startsWith('fault:') ? (
                           <Button
                             label="Retry"
                             enabled={!busy}

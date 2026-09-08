@@ -286,7 +286,7 @@ export function Networks({
               <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />
               {network.kind === 'builtin' ? (
                 <CardContent gap={1}>
-                  <Badge label="Built-in" />
+                  <Badge label="Built-in · protected" tone="accent" />
                 </CardContent>
               ) : null}
               <CardActions gap={1}>
