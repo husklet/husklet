@@ -16,6 +16,50 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const page = { changes: [], next: 19, current: 19, more: false, truncated: false };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
+          reply: 'file_changes', with: page,
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'filtered-cursor', granted: ['filesystem:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const controller = new AbortController();
+    let delivered;
+    const seen = new Promise((resolve) => { delivered = resolve; });
+    const stop = await workspace(session).files.watchChanges((value) => {
+      controller.abort();
+      delivered(value);
+    }, { after: 7, pageSize: 32, pollMs: 1_000, signal: controller.signal });
+    assert.deepEqual(await seen, page);
+    await stop();
+    assert.deepEqual(calls, [{ call: 'filesystem_changes', with: { after: 7, limit: 32 } }]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix text wait reconciles an unread revision without requiring a later event', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-reconcile-'));
   const socketPath = path.join(directory, 'host.sock');

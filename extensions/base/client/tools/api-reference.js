@@ -98,6 +98,11 @@ groups
     '- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.',
   );
 groups
+  .get('Files')
+  .push(
+    '- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.',
+  );
+groups
   .get('Extension preferences')
   .push(
     '- Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.',

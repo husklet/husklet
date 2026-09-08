@@ -1051,10 +1051,11 @@ export function workspace(session, { signal } = {}) {
                 const aborted = () => signal?.aborted || stopped;
                 const running = (async () => {
                     while (!aborted()) {
+                        const requestedAfter = after;
                         const page = await api.files.changes(after, pageSize);
                         if (aborted())
                             break;
-                        if (page.truncated || page.changes.length > 0)
+                        if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter)
                             await listener(page);
                         after = page.next;
                         if (page.more)

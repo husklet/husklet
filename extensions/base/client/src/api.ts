@@ -1317,7 +1317,7 @@ export interface WorkspaceApi {
     /** Returns the current bounded inventory for the exact consented read roots. */
     inventory(): Promise<FileInventory>;
     changes(after?: number, limit?: number): Promise<FileChangePage>;
-    /** Cursor-safe polling watcher. A truncated page is delivered explicitly so callers can rescan. */
+    /** Cursor-safe polling watcher. Cursor-only and truncated pages are delivered for durable resume. */
     watchChanges(
       listener: (page: FileChangePage) => void | Promise<void>,
       options?: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal },

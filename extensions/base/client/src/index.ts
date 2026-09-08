@@ -1425,9 +1425,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         const aborted = () => signal?.aborted || stopped;
         const running = (async () => {
           while (!aborted()) {
+            const requestedAfter = after;
             const page = await api.files.changes(after, pageSize);
             if (aborted()) break;
-            if (page.truncated || page.changes.length > 0) await listener(page);
+            if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter)
+              await listener(page);
             after = page.next;
             if (page.more) continue;
             await new Promise<void>((resolve) => {

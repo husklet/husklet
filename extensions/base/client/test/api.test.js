@@ -1036,6 +1036,29 @@ test('filesystem change watcher advances opaque pages and exposes truncation', a
   ]);
 });
 
+test('filesystem change watcher exposes a cursor advance with no visible paths', async () => {
+  const calls = [];
+  const page = { changes: [], next: 19, current: 19, more: false, truncated: false };
+  const api = workspace({
+    granted: ['filesystem:read'],
+    async call(name, payload) {
+      calls.push([name, payload]);
+      return { reply: 'file_changes', with: page };
+    },
+    onEvent() { return () => {}; },
+  });
+  const controller = new AbortController();
+  let delivered;
+  const seen = new Promise((resolve) => { delivered = resolve; });
+  const stop = await api.files.watchChanges((value) => {
+    controller.abort();
+    delivered(value);
+  }, { after: 7, pollMs: 1_000, signal: controller.signal });
+  assert.deepEqual(await seen, page);
+  await stop();
+  assert.deepEqual(calls, [['filesystem_changes', { after: 7, limit: 256 }]]);
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair(); const next = frames(stage.host); await next(); const api = workspace(stage.session);
   const seen = [];

@@ -174,6 +174,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.renameObserved(...)` — `filesystem_rename_observed`, requires `filesystem:write`.
 - `host.files.remove(...)` — `filesystem_remove`, requires `filesystem:write`.
 - `host.files.removeObserved(...)` — `filesystem_remove_observed`, requires `filesystem:write`.
+- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.
 
 ## Private extension state
 
