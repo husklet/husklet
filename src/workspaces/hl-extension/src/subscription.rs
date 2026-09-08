@@ -217,13 +217,24 @@ mod tests {
     #[test]
     fn a_listing_names_the_topic_it_belongs_to() {
         assert_eq!(Snapshot::Containers(Vec::new()).topic(), Topic::Containers);
-        assert_eq!(Snapshot::Images(crate::port::ImageInventory::bounded(Vec::new())).topic(), Topic::Images);
-        assert_eq!(Snapshot::Volumes(crate::port::VolumeInventory::bounded(Vec::new())).topic(), Topic::Volumes);
-        assert_eq!(Snapshot::Networks(crate::port::NetworkInventory::bounded(Vec::new())).topic(), Topic::Networks);
+        assert_eq!(
+            Snapshot::Images(crate::port::ImageInventory::bounded(Vec::new())).topic(),
+            Topic::Images
+        );
+        assert_eq!(
+            Snapshot::Volumes(crate::port::VolumeInventory::bounded(Vec::new())).topic(),
+            Topic::Volumes
+        );
+        assert_eq!(
+            Snapshot::Networks(crate::port::NetworkInventory::bounded(Vec::new())).topic(),
+            Topic::Networks
+        );
         assert_eq!(Snapshot::Terminal(Vec::new()).topic(), Topic::Terminal);
         assert_eq!(Snapshot::Extensions(Vec::new()).topic(), Topic::Extensions);
         let filesystem = Snapshot::Filesystem(crate::port::FileInventory {
-            entries: Vec::new(), complete: true, coalesced: 0,
+            entries: Vec::new(),
+            complete: true,
+            coalesced: 0,
         });
         assert_eq!(filesystem.topic(), Topic::Filesystem);
         assert!(matches!(filesystem.with_coalesced(3), Snapshot::Filesystem(value) if value.coalesced == 3));

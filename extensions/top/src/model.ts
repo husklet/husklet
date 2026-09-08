@@ -300,6 +300,8 @@ export class NetworkDetailsSource {
       ['Name', details?.name],
       ['Driver', details?.driver],
       ['Scope', details?.scope],
+      ['Connected containers', details?.endpoints?.containers.join(', ')],
+      ['Endpoint membership truncated', details?.endpoints?.truncated],
     ]);
     this.version += 1;
     await this.send({

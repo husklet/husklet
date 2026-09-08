@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:6cb42f6d95e95b9a
+// Protocol artifact fnv1a64:58dc288c389c7301
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -61,9 +61,10 @@ export type ImageSummary = { "id": string; "reference": string; "size": number; 
 export type InspectablePane = { "slot": string; "generation"?: number; "revision"?: number; "kind": PaneKind; "provider"?: PaneProviderIdentity | null; "tab"?: string | null; "title"?: string | null; "focused": boolean };
 export type LayoutNode = { kind: "pane" } & { "pane": PaneSummary; "grid"?: GridSize | null; "focused": boolean } | { kind: "split" } & { "division": Division; "ratio_per_mille": number; "first": LayoutNode; "second": LayoutNode };
 export type Length = { "Step": number } | { "Chars": number } | "Fill" | "Content";
+export type NetworkEndpointInventory = { "containers": Array<string>; "truncated": boolean };
 export type NetworkInventory = { "networks": Array<NetworkSummary>; "truncated": boolean };
 export type NetworkKind = "builtin" | "custom";
-export type NetworkSummary = { "id": string; "name": string; "driver": string; "scope": string; "kind": NetworkKind };
+export type NetworkSummary = { "id": string; "name": string; "driver": string; "scope": string; "kind": NetworkKind; "endpoints"?: NetworkEndpointInventory | null };
 export type NodeId = number;
 export type Notification = { "id": string; "title": string; "body": string };
 export type Occupant = "terminal" | "surface";

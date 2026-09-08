@@ -275,6 +275,18 @@ export function Networks({
       >
         {view.records.map((network) => {
           const id = resourceReference(network);
+          const membership =
+            inspection.id === id && inspection.state === 'ready'
+              ? inspection.detail?.endpoints
+              : network.endpoints;
+          const containerId = container.trim();
+          const endpointAction = immutableContainerId(containerId)
+            ? membership?.containers.includes(containerId)
+              ? 'disconnect'
+              : membership && !membership.truncated
+                ? 'connect'
+                : null
+            : null;
           return (
             <Card
               key={id}
@@ -298,12 +310,14 @@ export function Networks({
                   }
                   onInvoke={() => inspect(network)}
                 />
-                <Button
-                  label="Connect"
-                  enabled={operation.state !== 'loading' && container.trim().length > 0}
-                  onInvoke={() => begin(network, 'connect')}
-                />
-                {container.trim().length > 0 ? (
+                {endpointAction === 'connect' ? (
+                  <Button
+                    label="Connect"
+                    enabled={operation.state !== 'loading'}
+                    onInvoke={() => begin(network, 'connect')}
+                  />
+                ) : null}
+                {endpointAction === 'disconnect' ? (
                   <Button
                     label="Disconnect"
                     enabled={operation.state !== 'loading'}

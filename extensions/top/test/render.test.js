@@ -2604,7 +2604,7 @@ test('volume and network panels render bounded real inventories and controls', (
       .map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove'])
     assert.ok(labels(volumeFrame).includes(label), label);
-  for (const label of ['Networks', 'private', 'Connect', 'Remove'])
+  for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
@@ -2634,7 +2634,6 @@ test('volume and network panels render bounded real inventories and controls', (
     );
   };
   assert.equal(destructive(volumeFrame, 'Remove'), false);
-  assert.equal(destructive(networkFrame, 'Disconnect'), false);
   assert.equal(destructive(networkFrame, 'Remove'), false);
 });
 
@@ -4205,7 +4204,14 @@ test('volume and network mutations expose danger only on final confirm and cance
 
   const networks = host();
   const initialNetworks = resource([
-    { id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+    {
+      id: networkId,
+      name: 'private',
+      driver: 'bridge',
+      scope: 'local',
+      kind: 'custom',
+      endpoints: { containers: [containerId], truncated: false },
+    },
   ]);
   networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
   change(networks, 'Complete container ID', containerId);
@@ -4357,7 +4363,14 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   };
   const resource = {
     data: [
-      { id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+      {
+        id: 'a'.repeat(32),
+        name: 'private',
+        driver: 'bridge',
+        scope: 'local',
+        kind: 'custom',
+        endpoints: { containers: [], truncated: false },
+      },
     ],
     loading: false,
     error: null,
@@ -4368,18 +4381,16 @@ test('network connect validates aliases, exposes progress, success, bounded fail
 
   change(stage, 'Complete container ID', 'friendly');
   change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
-  invoke(stage, 'Connect');
   await settled();
   assert.deepEqual(
     calls,
     [],
     'invalid immutable identity and aliases never reach control authority',
   );
-  assert.ok(
-    labelled(
-      stage,
-      'Enter the complete 32- or 64-character lowercase hexadecimal container ID returned by inspection.',
-    ),
+  assert.equal(
+    labelled(stage, 'Connect'),
+    undefined,
+    'an invalid identity offers no endpoint action',
   );
 
   change(stage, 'Complete container ID', 'b'.repeat(64));
@@ -4495,7 +4506,16 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
     networks: { ...api.networks, disconnect: async (...args) => calls.push(args) },
   };
   const resource = {
-    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    data: [
+      {
+        id: network,
+        name: 'private',
+        driver: 'bridge',
+        scope: 'local',
+        kind: 'custom',
+        endpoints: { containers: [first, second], truncated: false },
+      },
+    ],
     loading: false,
     error: null,
     reload: async () => {},

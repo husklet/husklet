@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:6cb42f6d95e95b9a
+// Protocol artifact fnv1a64:58dc288c389c7301
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2877,6 +2877,29 @@ const definitions = {
       }
     ]
   },
+  "NetworkEndpointInventory": {
+    "fields": [
+      {
+        "name": "containers",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "NetworkInventory": {
     "fields": [
       {
@@ -2957,6 +2980,17 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "NetworkKind"
+        }
+      },
+      {
+        "name": "endpoints",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "ref",
+            "name": "NetworkEndpointInventory"
+          }
         }
       }
     ],

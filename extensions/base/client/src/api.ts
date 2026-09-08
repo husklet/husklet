@@ -332,6 +332,7 @@ export interface NetworkSummary {
   driver: string;
   scope: string;
   kind: 'builtin' | 'custom';
+  endpoints?: { containers: string[]; truncated: boolean };
 }
 export interface NetworkInventory {
   networks: NetworkSummary[];

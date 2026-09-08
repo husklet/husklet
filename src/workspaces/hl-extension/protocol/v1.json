@@ -2576,6 +2576,29 @@
         }
       ]
     },
+    "NetworkEndpointInventory": {
+      "fields": [
+        {
+          "name": "containers",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "NetworkInventory": {
       "fields": [
         {
@@ -2656,6 +2679,17 @@
           "schema": {
             "kind": "ref",
             "name": "NetworkKind"
+          }
+        },
+        {
+          "name": "endpoints",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "NetworkEndpointInventory"
+            }
           }
         }
       ],
@@ -11926,7 +11960,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:2f5f79a17bea2090",
+  "source_fingerprint": "fnv1a64:0587e299ab5c9d72",
   "specification_version": 1,
   "topics": [
     {

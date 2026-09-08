@@ -53,7 +53,10 @@ pub use port::{
     HostError, InspectablePane, PaneInventory, PaneKind, PaneSemanticAction, PaneSemanticTree, SemanticActionKind,
     SemanticNode,
 };
-pub use port::{NetworkKind, NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount, WorkspaceTerminal};
+pub use port::{
+    NetworkEndpointInventory, NetworkKind, NetworkSummary, VolumeSummary, WorkspaceConfiguration, WorkspaceMount,
+    WorkspaceTerminal,
+};
 pub use port::{Notification, NotificationSink};
 pub use request::{ExecEnvironmentValue, Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session, SurfaceEvent, SurfaceFrame, SurfaceMutation};

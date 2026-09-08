@@ -87,10 +87,8 @@ test(
       await until(() => labelled(stage, 'Reading networks…'));
       await until(() => labelled(stage, 'stale-net'));
       change(stage, 'Complete container ID', containerId);
-      invoke(stage, 'Disconnect');
-      assert.ok(
-        labelled(stage, `Disconnect immutable container ${containerId} from network ${staleId}?`),
-      );
+      assert.equal(labelled(stage, 'Connect'), undefined);
+      assert.equal(labelled(stage, 'Disconnect'), undefined);
       invoke(stage, 'Remove');
       assert.ok(labelled(stage, `Remove immutable network ${staleId} (stale-net)?`));
 
@@ -125,8 +123,13 @@ test(
       invoke(stage, 'Refresh');
       await until(() => labelled(stage, 'current-net'));
       assert.equal(attempts, 4);
-      for (const control of ['Inspect', 'Connect', 'Disconnect', 'Remove'])
-        assert.ok(labelled(stage, control));
+      for (const control of ['Inspect', 'Remove']) assert.ok(labelled(stage, control));
+      for (const endpointControl of ['Connect', 'Disconnect'])
+        assert.equal(
+          labelled(stage, endpointControl),
+          undefined,
+          'list inventory never guesses endpoint membership',
+        );
     } finally {
       stage?.render(null);
       await new Promise((resolve) => setTimeout(resolve, 30));
