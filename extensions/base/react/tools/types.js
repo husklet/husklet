@@ -309,6 +309,13 @@ export interface RenderHandle {
 
 export const ROW_PROVIDER_CONCURRENCY: 4;
 export const ROW_PROVIDER_QUEUE_LIMIT: 32;
+export interface WindowCache<Value> {
+  readonly size: number;
+  get(key: string): Value | undefined;
+  set(key: string, value: Value): void;
+  clear(): void;
+}
+export function createWindowCache<Value>(maxEntries?: number): WindowCache<Value>;
 export interface RowProviderContext {
   /** Aborted when the window is superseded or its surface closes. */
   signal: AbortSignal;

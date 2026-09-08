@@ -10,6 +10,7 @@ import {
   Row,
   Text,
   connect,
+  createWindowCache,
   render,
   workspace,
   type ColumnSpec,
@@ -120,7 +121,8 @@ try {
     width: index === 0 ? { chars: 12 } : 'fill',
     sortable: true,
   }));
-  const cache = new Map<string, string[][]>([['0:initial', firstPage]]);
+  const cache = createWindowCache<string[][]>(32);
+  cache.set('0:initial', firstPage);
   const source = 1;
   const provideRows = async (
     request: RowRequest,
