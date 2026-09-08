@@ -198,7 +198,7 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1} grow wrap>
+      <Row gap={1} wrap>
         <Entry
           value={name}
           placeholder="Network name"
@@ -241,7 +241,7 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Card grow justify="start" variant="outline">
+      <Card justify="start" variant="outline">
         <CardContent gap={1}>
           <Text label="Container attachment" />
           <Text label="Required · complete immutable container ID" color="text-dim" />
@@ -273,9 +273,9 @@ export function Networks({
       </Card>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
-      <Column grow={false}>
+      <Column grow={false} align="start" justify="stretch">
         {inventoryState === 'empty' ? (
-          <Column gap={1}>
+          <Column gap={1} align="start" justify="start">
             <Text label="No networks" />
             <Text
               label="Create a network above to connect workspace containers."
