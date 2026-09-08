@@ -71,7 +71,7 @@ pub use model::{
     Access, BindPropagation, Check, Checkpoint, Console, Container, ContainerId, ContainerSpec, ContainerState,
     Endpoint, EndpointSpec, Entry, Environment, EnvironmentRecord, Exec, ExecId, ExecLifetime, ExecNetwork, ExecSpec,
     ExecState, Execution, ExitStatus, FaultCause, Guest, Health, HealthStatus, Healthcheck, Isolation, Logs, Mount,
-    MountSource, Network, NetworkDriver, NetworkId, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune,
+    MountSource, Network, NetworkDriver, NetworkId, NetworkKind, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune,
     Publication, RemovalPolicy, Resolver, ResourceLimit, Resources, Restart, RestartPolicy, Rootfs, Sandbox,
     SeccompBaseline, Signal, Size, Stream, Streams, Subnet, Update, Volume, VolumeKind, VolumeSource, VolumeSpec,
     WaitCondition, normalized_mount_target,

@@ -1,7 +1,8 @@
 use crate::model::now_ms;
 use crate::storage::{Containers as ContainerStore, NetworkStore};
 use crate::{
-    Container, ContainerId, Endpoint, EndpointSpec, Error, Isolation, Network, NetworkDriver, NetworkSpec, Result,
+    Container, ContainerId, Endpoint, EndpointSpec, Error, Isolation, Network, NetworkDriver, NetworkKind, NetworkSpec,
+    Result,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -45,24 +46,31 @@ impl Networks {
             ));
         }
         if let Some(existing) = self.storage.get(&spec.name).await? {
-            if existing.driver != spec.driver || existing.driver == NetworkDriver::Bridge && existing.subnet.is_none() {
+            if !existing.predefined()
+                || existing.driver != spec.driver
+                || existing.driver == NetworkDriver::Bridge && existing.subnet.is_none()
+            {
                 return Err(Error::NetworkConflict(spec.name));
             }
             existing.validate()?;
             return Ok(existing);
         }
-        self.create(spec).await
+        self.create_with_kind(spec, NetworkKind::Builtin).await
     }
 
     /// Creates and durably records a virtual network.
     ///
     /// # Errors
     /// Returns validation, overlap, persistence, or naming conflicts.
-    pub async fn create(&self, mut spec: NetworkSpec) -> Result<Network> {
+    pub async fn create(&self, spec: NetworkSpec) -> Result<Network> {
+        self.create_with_kind(spec, NetworkKind::Custom).await
+    }
+
+    async fn create_with_kind(&self, mut spec: NetworkSpec, kind: NetworkKind) -> Result<Network> {
         spec.validate()?;
         let _guard = self.operation.lock().await;
         if let Some(existing) = self.storage.get(&spec.name).await? {
-            if existing.compatible(&spec) {
+            if existing.kind == kind && existing.compatible(&spec) {
                 return Ok(existing);
             }
             return Err(Error::NetworkConflict(spec.name));
@@ -75,7 +83,10 @@ impl Networks {
         if let Some(subnet) = spec.subnet {
             pool.validate(subnet)?;
         }
-        let network = Network::from_spec(spec, now_ms());
+        let network = match kind {
+            NetworkKind::Builtin => Network::from_builtin_spec(spec, now_ms()),
+            NetworkKind::Custom => Network::from_spec(spec, now_ms()),
+        };
         self.storage.insert(&network).await?;
         Ok(network)
     }
@@ -384,13 +395,13 @@ impl Networks {
         } else {
             let mut spec = NetworkSpec::bridge_auto("bridge");
             spec.subnet = Some(Pool::from(networks.as_slice()).allocate()?);
-            let network = Network::from_spec(spec, now_ms());
+            let network = Network::from_builtin_spec(spec, now_ms());
             self.storage.insert(&network).await?;
             network
         };
-        if bridge.driver != NetworkDriver::Bridge {
+        if !bridge.predefined() || bridge.driver != NetworkDriver::Bridge {
             return Err(Error::InvalidNetwork(
-                "predefined bridge name is owned by a non-bridge network".into(),
+                "predefined bridge name is not owned by the built-in bridge network".into(),
             ));
         }
         let mut bridge = bridge;

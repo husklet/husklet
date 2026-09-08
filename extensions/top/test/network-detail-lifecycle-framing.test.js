@@ -50,6 +50,7 @@ test(
                     name: lists === 1 ? 'old-net' : 'new-net',
                     driver: 'bridge',
                     scope: 'local',
+                    kind: 'custom',
                   },
                 ],
                 truncated: false,
@@ -64,6 +65,7 @@ test(
                 name: inspections === 1 ? 'old-net' : 'new-net',
                 driver: 'bridge',
                 scope: inspections === 1 ? 'old-scope' : 'new-scope',
+                kind: 'custom',
               },
             };
           }

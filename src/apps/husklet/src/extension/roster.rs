@@ -85,6 +85,7 @@ pub struct Entry {
     pub version: String,
     /// Exactly what the person agreed to.
     pub granted: Grant,
+    pub filesystem: hl_extension::FilesystemGrant,
     pub workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     /// Where the extension stands under the lifecycle policy.
     pub stage: Stage,
@@ -159,6 +160,7 @@ impl<S: Storage> Roster<S> {
                 image_digest: record.image_digest.clone(),
                 version: record.version.clone(),
                 granted: record.granted.clone(),
+                filesystem: record.filesystem.clone(),
                 workspace_environment: record.workspace_environment.clone(),
                 stage: self.installation.stage(&record.name),
                 pane_providers: record.pane_providers.clone(),

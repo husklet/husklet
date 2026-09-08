@@ -17,7 +17,16 @@ fn volume(value: &hl_client::model::Volume) -> VolumeSummary {
 }
 
 fn network(value: &hl_client::model::Network) -> NetworkSummary {
-    NetworkSummary { id: value.id.clone(), name: value.name.clone(), driver: value.driver.clone(), scope: value.scope.clone() }
+    NetworkSummary {
+        id: value.id.clone(),
+        name: value.name.clone(),
+        driver: value.driver.clone(),
+        scope: value.scope.clone(),
+        kind: match value.husklet_kind {
+            hl_client::model::NetworkKind::Builtin => hl_extension::NetworkKind::Builtin,
+            hl_client::model::NetworkKind::Custom => hl_extension::NetworkKind::Custom,
+        },
+    }
 }
 
 fn network_connect_request(container: &str, aliases: &[String]) -> hl_client::model::NetworkConnect {

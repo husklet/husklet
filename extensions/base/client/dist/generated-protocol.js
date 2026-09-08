@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:d8002634b9fcfe49
+// Protocol artifact fnv1a64:0e00b552a7654341
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2010,6 +2010,14 @@ const definitions = {
             "name": "PaneProvider"
           }
         }
+      },
+      {
+        "name": "filesystem",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "FilesystemGrant"
+        }
       }
     ],
     "kind": "struct",
@@ -2891,6 +2899,26 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "NetworkKind": {
+    "kind": "enum",
+    "serde": {
+      "rename_all": "snake_case"
+    },
+    "variants": [
+      {
+        "name": "builtin",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "custom",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
+  },
   "NetworkSummary": {
     "fields": [
       {
@@ -2919,6 +2947,14 @@ const definitions = {
         "optional": false,
         "schema": {
           "kind": "string"
+        }
+      },
+      {
+        "name": "kind",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "NetworkKind"
         }
       }
     ],

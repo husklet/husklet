@@ -979,7 +979,7 @@ test('all bounded inventory snapshots have typed watchers with independent dispo
   const definitions = [
     ['watchImages', 'images', 'images', [{ id: 'sha256:a', reference: 'alpine:3.20', size: 42, created: 7 }]],
     ['watchVolumes', 'volumes', 'volumes', [{ name: 'cache', driver: 'local', generation: 'a'.repeat(32) }]],
-    ['watchNetworks', 'networks', 'networks', [{ id: 'b'.repeat(32), name: 'dev', driver: 'bridge', scope: 'local' }]],
+    ['watchNetworks', 'networks', 'networks', [{ id: 'b'.repeat(32), name: 'dev', driver: 'bridge', scope: 'local', kind: 'custom' }]],
     ['watchTerminal', 'terminal', 'terminal', [{ id: 'tab-1', title: 'Shell', pinned: false, panes: [] }]],
   ];
   for (const [method, topic, snapshot, value] of definitions) {
@@ -1378,7 +1378,7 @@ test('volume and network facades preserve safe request shapes', async () => {
   const replies = [
     { reply: 'volumes', with: { volumes: [], truncated: false } }, { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } },
     { reply: 'volume', with: { name: 'cache', driver: 'local', generation: 'a'.repeat(32) } }, { reply: 'done' },
-    { reply: 'networks', with: { networks: [], truncated: false } }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' } },
+    { reply: 'networks', with: { networks: [], truncated: false } }, { reply: 'network', with: { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' } },
     { reply: 'identity', with: 'n1' }, ...Array(7).fill({ reply: 'done' }),
   ];
   for (const payload of replies) stage.host.write(encode({ channel: 2, kind: KIND.response, payload }));

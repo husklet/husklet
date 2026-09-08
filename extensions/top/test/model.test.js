@@ -102,7 +102,13 @@ test('typed network inspection is revisioned and window bounded', async () => {
   const mutations = [];
   const source = new NetworkDetailsSource(async (mutation) => mutations.push(mutation));
   assert.equal(
-    await source.replace({ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }),
+    await source.replace({
+      id: 'n1',
+      name: 'private',
+      driver: 'bridge',
+      scope: 'local',
+      kind: 'custom',
+    }),
     4,
   );
   assert.deepEqual(mutations, [{ Length: { source: NETWORK_DETAIL_SOURCE, version: 1, rows: 4 } }]);

@@ -1711,6 +1711,14 @@
               "name": "PaneProvider"
             }
           }
+        },
+        {
+          "name": "filesystem",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "FilesystemGrant"
+          }
         }
       ],
       "kind": "struct",
@@ -2592,6 +2600,26 @@
       "kind": "struct",
       "serde": {}
     },
+    "NetworkKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "builtin",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "custom",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
     "NetworkSummary": {
       "fields": [
         {
@@ -2620,6 +2648,14 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "kind",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "NetworkKind"
           }
         }
       ],
@@ -11849,7 +11885,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:d4fb98306bb16211",
+  "source_fingerprint": "fnv1a64:1858ed5fb4b2d9bc",
   "specification_version": 1,
   "topics": [
     {

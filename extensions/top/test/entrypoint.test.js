@@ -286,6 +286,7 @@ test(
                                                           name: 'private',
                                                           driver: 'bridge',
                                                           scope: 'local',
+                                                          kind: 'custom',
                                                         },
                                                       ],
                                                       truncated: false,
@@ -319,6 +320,7 @@ test(
                                                           name: 'private',
                                                           driver: 'bridge',
                                                           scope: 'local',
+                                                          kind: 'custom',
                                                         },
                                                       }
                                                     : { reply: 'done' };

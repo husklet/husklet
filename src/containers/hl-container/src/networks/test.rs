@@ -47,6 +47,17 @@ fn resolver(records: Vec<Network>) -> Networks {
 }
 
 #[tokio::test]
+async fn a_custom_network_named_bridge_cannot_be_adopted_as_builtin() {
+    let custom = Network::from_spec(NetworkSpec::bridge_auto("bridge"), 0);
+    assert!(!custom.predefined());
+    let networks = resolver(vec![custom]);
+    assert!(matches!(
+        networks.ensure_predefined(NetworkSpec::bridge_auto("bridge")).await,
+        Err(Error::NetworkConflict(name)) if name == "bridge"
+    ));
+}
+
+#[tokio::test]
 async fn resolution_precedence_matches_moby() {
     let exact_id = "11111111111111111111111111111111";
     let exact = identified_network("exact", exact_id);

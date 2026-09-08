@@ -281,12 +281,20 @@ impl VolumeInventory {
 }
 
 /// A workspace-local network as an extension sees it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkKind {
+    Builtin,
+    Custom,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct NetworkSummary {
     pub id: String,
     pub name: String,
     pub driver: String,
     pub scope: String,
+    pub kind: NetworkKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -677,6 +685,9 @@ pub struct ExtensionSummary {
     pub enabled: bool,
     #[serde(default)]
     pub pane_providers: Vec<crate::PaneProvider>,
+    /// Durable, manifest-intersected workspace file authority.
+    #[serde(default)]
+    pub filesystem: crate::FilesystemGrant,
 }
 
 pub const EXTENSION_REFERENCE_BYTES: usize = 512;

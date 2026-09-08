@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:d8002634b9fcfe49
+// Protocol artifact fnv1a64:0e00b552a7654341
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -42,7 +42,7 @@ export type ExtensionCandidate = { "name": ExtensionName; "version": string; "im
 export type ExtensionCatalogue = { "entries": Array<ExtensionCatalogueEntry>; "complete": boolean };
 export type ExtensionCatalogueEntry = { "id": string; "title": string; "description": string; "reference": string; "publisher": string; "source": string };
 export type ExtensionName = PeerName;
-export type ExtensionSummary = { "name": string; "image_digest": string; "status": string; "version"?: string; "enabled"?: boolean; "pane_providers"?: Array<PaneProvider> };
+export type ExtensionSummary = { "name": string; "image_digest": string; "status": string; "version"?: string; "enabled"?: boolean; "pane_providers"?: Array<PaneProvider>; "filesystem"?: FilesystemGrant };
 export type FileInventory = { "entries": Array<Entry>; "complete": boolean; "coalesced": number };
 export type FileRange = { "path": RelativePath; "identity": string; "offset": number; "total": number; "contents": Array<number>; "eof": boolean; "truncated": boolean };
 export type FilesystemGrant = { "read"?: Array<FilesystemSelector>; "write"?: Array<FilesystemSelector>; "create"?: Array<FilesystemSelector>; "delete"?: Array<FilesystemSelector>; "rename"?: Array<FilesystemSelector> };
@@ -62,7 +62,8 @@ export type InspectablePane = { "slot": string; "generation"?: number; "revision
 export type LayoutNode = { kind: "pane" } & { "pane": PaneSummary; "grid"?: GridSize | null; "focused": boolean } | { kind: "split" } & { "division": Division; "ratio_per_mille": number; "first": LayoutNode; "second": LayoutNode };
 export type Length = { "Step": number } | { "Chars": number } | "Fill" | "Content";
 export type NetworkInventory = { "networks": Array<NetworkSummary>; "truncated": boolean };
-export type NetworkSummary = { "id": string; "name": string; "driver": string; "scope": string };
+export type NetworkKind = "builtin" | "custom";
+export type NetworkSummary = { "id": string; "name": string; "driver": string; "scope": string; "kind": NetworkKind };
 export type NodeId = number;
 export type Notification = { "id": string; "title": string; "body": string };
 export type Occupant = "terminal" | "surface";
