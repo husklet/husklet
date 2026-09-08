@@ -849,10 +849,34 @@ test(
       assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
       await barrier(peer, received, 'container-details-ready');
       const execute = invocation(requests, 'Execute');
+      peer.write(
+        encode({ channel: 29, kind: KIND.event, payload: invocation(requests, 'Add argument') }),
+      );
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Argument 1'),
+        ),
+      );
+      await barrier(peer, received, 'first-argument-ready');
+      peer.write(
+        encode({ channel: 30, kind: KIND.event, payload: invocation(requests, 'Add argument') }),
+      );
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Argument 2'),
+        ),
+      );
+      await barrier(peer, received, 'second-argument-ready');
       const changes = [
-        [29, 'Command argv JSON', '["sh","-lc","printf hello world"]'],
-        [32, 'Run as user (optional)', '1000:1000'],
-        [33, 'Working directory (optional)', '/work tree'],
+        [31, 'Program, e.g. sh', 'sh'],
+        [32, 'Argument 1', '-lc'],
+        [33, 'Argument 2', 'printf hello world'],
+        [34, 'Run as user (optional)', '1000:1000'],
+        [35, 'Working directory (optional)', '/work tree'],
       ];
       peer.write(
         Buffer.concat(

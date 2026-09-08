@@ -4771,7 +4771,7 @@ test('restart refuses a container without an observed generation', async () => {
   assert.deepEqual(calls, []);
 });
 
-test('container execution preserves argv and exposes the exact inspectable identity', async () => {
+test('container execution builds exact argv without exposing JSON', async () => {
   const calls = [];
   const controlled = {
     containers: {
@@ -4804,16 +4804,26 @@ test('container execution preserves argv and exposes the exact inspectable ident
   await settled();
   await settled();
 
-  change(stage, 'Command argv JSON', 'sh -lc echo');
+  assert.equal(labelled(stage, 'Command argv JSON'), undefined);
+  change(stage, 'Program, e.g. sh', 'x'.repeat(4_097));
   invoke(stage, 'Execute');
   await settled();
   assert.ok(
-    labelled(stage, 'Command must be valid JSON, such as ["sh","-lc","printf hello"].'),
-    'invalid ambiguous input is rejected',
+    labelled(
+      stage,
+      'Command must contain at most 64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in total.',
+    ),
+    'oversized program is rejected',
   );
   assert.deepEqual(calls, []);
 
-  change(stage, 'Command argv JSON', '["sh","-lc","printf hello world"]');
+  change(stage, 'Program, e.g. sh', 'sh');
+  invoke(stage, 'Add argument');
+  await settled();
+  invoke(stage, 'Add argument');
+  await settled();
+  change(stage, 'Argument 1', '-lc');
+  change(stage, 'Argument 2', 'printf hello world');
   change(stage, 'Run as user (optional)', '1000:1000');
   change(stage, 'Working directory (optional)', '/workspace with spaces');
   invoke(stage, 'Execute');
@@ -4834,7 +4844,7 @@ test('container execution preserves argv and exposes the exact inspectable ident
   assert.ok(
     labelled(
       stage,
-      'Runs without an interactive terminal. Inspect the resulting record for status and captured stdout/stderr.',
+      'Execute captures output for later inspection. Attach terminal opens the same command interactively.',
     ),
   );
   assert.ok(labelled(stage, 'Execution execution-exact-42 created.'));
@@ -4843,7 +4853,7 @@ test('container execution preserves argv and exposes the exact inspectable ident
   assert.deepEqual(opened, ['execution-exact-42']);
 });
 
-test('container details open an interactive terminal from the same exact argv', async () => {
+test('container details open an interactive terminal from structured command fields', async () => {
   const calls = [];
   const id = 'a'.repeat(64);
   const controlled = {
@@ -4868,7 +4878,13 @@ test('container details open an interactive terminal from the same exact argv', 
   invoke(stage, 'Details');
   await settled();
   await settled();
-  change(stage, 'Command argv JSON', '["sh","-lc","printf hello world"]');
+  change(stage, 'Program, e.g. sh', 'sh');
+  invoke(stage, 'Add argument');
+  await settled();
+  invoke(stage, 'Add argument');
+  await settled();
+  change(stage, 'Argument 1', '-lc');
+  change(stage, 'Argument 2', 'printf hello world');
   invoke(stage, 'Attach terminal');
   await settled();
   await settled();

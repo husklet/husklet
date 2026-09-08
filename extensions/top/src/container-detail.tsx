@@ -5,8 +5,12 @@ import {
   Column,
   ConfirmAction,
   Entry,
+  Expander,
+  FormControl,
+  FormLabel,
   Heading,
   Badge,
+  IconButton,
   ResourceState,
   Row,
   Separator,
@@ -17,6 +21,94 @@ import {
 import { LOG_LIMIT, boundedMessage, logText, shortId } from './model.js';
 
 const { useState } = React;
+
+const bytes = (value: string) => new TextEncoder().encode(value).length;
+
+function commandArgv(program: string, arguments_: string[]): string[] {
+  const argv = [program, ...arguments_];
+  if (!argv[0]) throw new Error('Enter a program to run.');
+  if (
+    argv.length > 64 ||
+    argv.some((argument) => argument.includes('\0') || bytes(argument) > 4_096) ||
+    argv.reduce((total, argument) => total + bytes(argument), 0) > 32_768
+  ) {
+    throw new Error(
+      'Command must contain at most 64 NUL-free arguments, each at most 4096 bytes and 32768 bytes in total.',
+    );
+  }
+  return argv;
+}
+
+function CommandEditor({
+  program,
+  arguments_,
+  enabled,
+  onProgramChange,
+  onArgumentsChange,
+}: {
+  program: string;
+  arguments_: string[];
+  enabled: boolean;
+  onProgramChange: (value: string) => void;
+  onArgumentsChange: (value: string[]) => void;
+}) {
+  return (
+    <Column gap={1} width={{ maximum: { chars: 72 } }}>
+      <FormControl gap={1}>
+        <FormLabel label={'Program'} />
+        <Entry
+          value={program}
+          placeholder={'Program, e.g. sh'}
+          enabled={enabled}
+          onChange={(event) => onProgramChange(String(event.value ?? ''))}
+        />
+      </FormControl>
+      <FormControl gap={1}>
+        <Heading label={'Arguments'} scale={'caption'} />
+        <Row gap={1} align={'center'} wrap={true} width={'content'}>
+          <Button
+            label={'Add argument'}
+            variant={'ghost'}
+            enabled={enabled && arguments_.length < 63}
+            onInvoke={() => onArgumentsChange([...arguments_, ''])}
+          />
+        </Row>
+        {arguments_.length === 0 ? (
+          <Text label={'No arguments'} color={'text-dim'} />
+        ) : (
+          <Column gap={1}>
+            {arguments_.map((argument, index) => (
+              <Row key={index} gap={1} align={'center'}>
+                <Text label={`${index + 1}`} color={'text-dim'} width={{ chars: 2 }} />
+                <Entry
+                  value={argument}
+                  placeholder={`Argument ${index + 1}`}
+                  grow={true}
+                  enabled={enabled}
+                  onChange={(event) =>
+                    onArgumentsChange(
+                      arguments_.map((held, at) =>
+                        at === index ? String(event.value ?? '') : held,
+                      ),
+                    )
+                  }
+                />
+                <IconButton
+                  icon={'user-trash-symbolic'}
+                  label={`Remove argument ${index + 1}`}
+                  tooltip={`Remove argument ${index + 1}`}
+                  variant={'ghost'}
+                  enabled={enabled}
+                  onInvoke={() => onArgumentsChange(arguments_.filter((_, at) => at !== index))}
+                />
+              </Row>
+            ))}
+          </Column>
+        )}
+      </FormControl>
+    </Column>
+  );
+}
 
 export type Inspection = {
   id: string;
@@ -67,7 +159,12 @@ export function ContainerDetail({
   onRetry,
   onOpenExecution,
 }: ContainerDetailProps) {
-  const [command, setCommand] = useState({ argv: '', user: '', workingDirectory: '' });
+  const [command, setCommand] = useState({
+    program: '',
+    arguments: [] as string[],
+    user: '',
+    workingDirectory: '',
+  });
   const [execution, setExecution] = useState<{
     state: 'idle' | 'loading' | 'ready' | 'error';
     id: string;
@@ -82,22 +179,7 @@ export function ContainerDetail({
   const run = async () => {
     setExecution({ state: 'loading', id: '', error: null });
     try {
-      let argv;
-      try {
-        argv = JSON.parse(command.argv);
-      } catch {
-        throw new Error('Command must be valid JSON, such as ["sh","-lc","printf hello"].');
-      }
-      if (
-        !Array.isArray(argv) ||
-        argv.length === 0 ||
-        argv.length > 64 ||
-        argv.some((argument) => typeof argument !== 'string' || argument.length > 4_096)
-      ) {
-        throw new Error(
-          'Command must be a JSON array of 1–64 strings, each at most 4096 characters.',
-        );
-      }
+      const argv = commandArgv(command.program, command.arguments);
       if (command.user.length > 4_096 || command.workingDirectory.length > 4_096) {
         throw new Error('User and working directory must each be at most 4096 characters.');
       }
@@ -122,24 +204,7 @@ export function ContainerDetail({
   const attach = async () => {
     setAttachment({ state: 'loading', slot: '', error: null });
     try {
-      let argv;
-      try {
-        argv = JSON.parse(command.argv);
-      } catch {
-        throw new Error('Command must be valid JSON, such as ["sh"].');
-      }
-      if (
-        !Array.isArray(argv) ||
-        argv.length === 0 ||
-        argv.length > 64 ||
-        argv.some(
-          (argument) => typeof argument !== 'string' || !argument.length || argument.length > 4_096,
-        )
-      ) {
-        throw new Error(
-          'Command must be a JSON array of 1–64 non-empty strings, each at most 4096 characters.',
-        );
-      }
+      const argv = commandArgv(command.program, command.arguments);
       const slot = await api.containers.attachTerminal(container.id, argv);
       setAttachment({ state: 'ready', slot, error: null });
     } catch (error: unknown) {
@@ -180,58 +245,54 @@ export function ContainerDetail({
       </Row>
       {logs === null ? null : <Text label={logs || 'No log output.'} wrap={true} />}
       <Separator />
-      <Heading label={'Captured execution'} scale={'caption'} />
+      <Heading label={'Run a command'} scale={'caption'} />
       <Text
         label={
-          'Runs without an interactive terminal. Inspect the resulting record for status and captured stdout/stderr.'
+          'Execute captures output for later inspection. Attach terminal opens the same command interactively.'
         }
         color={'text-dim'}
         wrap={true}
       />
-      <Text
-        label={
-          'Enter an argument array so spaces and quoting remain exact, for example ["sh","-lc","printf hello"].'
+      <CommandEditor
+        program={command.program}
+        arguments_={command.arguments}
+        enabled={execution.state !== 'loading' && attachment.state !== 'loading'}
+        onProgramChange={(program) => setCommand((value) => ({ ...value, program }))}
+        onArgumentsChange={(arguments_) =>
+          setCommand((value) => ({ ...value, arguments: arguments_ }))
         }
-        color={'text-dim'}
-        wrap={true}
       />
-      <Row gap={1} wrap={true}>
-        <Entry
-          value={command.argv}
-          placeholder={'Command argv JSON'}
-          enabled={execution.state !== 'loading'}
-          onChange={(event) =>
-            setCommand((value) => ({ ...value, argv: String(event.value ?? '') }))
-          }
-        />
-        <Entry
-          value={command.user}
-          placeholder={'Run as user (optional)'}
-          enabled={execution.state !== 'loading'}
-          onChange={(event) =>
-            setCommand((value) => ({ ...value, user: String(event.value ?? '') }))
-          }
-        />
-        <Entry
-          value={command.workingDirectory}
-          placeholder={'Working directory (optional)'}
-          enabled={execution.state !== 'loading'}
-          onChange={(event) =>
-            setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') }))
-          }
-        />
-      </Row>
+      <Expander label={'Execution options'}>
+        <Column gap={1}>
+          <Entry
+            value={command.user}
+            placeholder={'Run as user (optional)'}
+            enabled={execution.state !== 'loading'}
+            onChange={(event) =>
+              setCommand((value) => ({ ...value, user: String(event.value ?? '') }))
+            }
+          />
+          <Entry
+            value={command.workingDirectory}
+            placeholder={'Working directory (optional)'}
+            enabled={execution.state !== 'loading'}
+            onChange={(event) =>
+              setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') }))
+            }
+          />
+        </Column>
+      </Expander>
       <Row gap={1} wrap={true}>
         <Button
           label={execution.state === 'loading' ? 'Executing…' : 'Execute'}
-          enabled={execution.state !== 'loading' && command.argv.trim().length > 0}
+          enabled={execution.state !== 'loading' && command.program.trim().length > 0}
           onInvoke={run}
         />
         <Button
           label={attachment.state === 'loading' ? 'Attaching…' : 'Attach terminal'}
           enabled={
             attachment.state !== 'loading' &&
-            command.argv.trim().length > 0 &&
+            command.program.trim().length > 0 &&
             container.state === 'running'
           }
           onInvoke={attach}
