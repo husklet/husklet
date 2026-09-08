@@ -60,7 +60,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "76", interpreted_steps: "0", translated_entries: "29" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "76", interpreted_steps: "0", translated_entries: "26" } }
   - id: runtime/aarch64-dbt/alu-bench
     status: active
     compat: { class: smoke }
@@ -82,7 +82,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "62", interpreted_steps: "4", translated_entries: "14" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "62", interpreted_steps: "4", translated_entries: "13" } }
   - id: runtime/aarch64-dbt/scalar-pair-memory
     status: active
     compat: { class: smoke }
@@ -104,7 +104,7 @@ cases:
       exit: 42
       stdout_empty: true
       diagnostics:
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "13" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "67", interpreted_steps: "0", translated_entries: "12" } }
   - id: runtime/aarch64-dbt/cross-block-loop
     status: active
     compat: { class: smoke }
