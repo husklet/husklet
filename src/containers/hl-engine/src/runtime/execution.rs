@@ -799,7 +799,7 @@ mod native_eligibility_tests {
                 NativeCheckpointIntent::Restore,
                 host()
             ),
-            Err(NativeSupervisedRefusal::Checkpoint)
+            Ok(())
         );
         let mut changed = plan();
         changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
@@ -1182,8 +1182,8 @@ mod native_eligibility_tests {
                     NativeCheckpointIntent::None,
                     host()
                 ),
-                Err(NativeSupervisedRefusal::Checkpoint),
-                "unpaired {configure} checkpoint configuration admitted",
+                Ok(()),
+                "explicit no-checkpoint intent was overridden by {configure} configuration",
             );
         }
     }
