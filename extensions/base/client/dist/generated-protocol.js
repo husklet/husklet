@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:c18b6d3507624d07
+// Protocol artifact fnv1a64:20d96b0df5436463
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -186,6 +186,16 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": true,
     "wire": "state:write"
+  },
+  {
+    "executes": false,
+    "mutates": false,
+    "wire": "preferences:read"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "preferences:write"
   },
   {
     "executes": false,
@@ -377,6 +387,9 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "state_read": "state",
   "state_write": "identity",
   "state_clear": "done",
+  "preference_read": "preferences",
+  "preference_set": "revision",
+  "preference_remove": "revision",
   "interface_open_tab": "identity",
   "interface_split": "identity",
   "interface_withdraw": "done",
@@ -494,6 +507,9 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "state_read": "state:read",
   "state_write": "state:write",
   "state_clear": "state:write",
+  "preference_read": "preferences:read",
+  "preference_set": "preferences:write",
+  "preference_remove": "preferences:write",
   "interface_open_tab": "interface:render",
   "interface_split": "interface:render",
   "interface_withdraw": "interface:render",
@@ -767,6 +783,18 @@ const definitions = {
       },
       {
         "name": "state:write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "preferences:read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "preferences:write",
         "payload": {
           "kind": "unit"
         }
@@ -2116,6 +2144,42 @@ const definitions = {
   "ExtensionName": {
     "kind": "ref",
     "name": "PeerName"
+  },
+  "ExtensionPreferences": {
+    "fields": [
+      {
+        "name": "revision",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "entries",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "items": [
+              {
+                "kind": "string"
+              },
+              {
+                "kind": "ref",
+                "name": "PreferenceValue"
+              }
+            ],
+            "kind": "tuple"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
   },
   "ExtensionState": {
     "fields": [
@@ -4391,6 +4455,48 @@ const definitions = {
         "name": "scroll",
         "payload": {
           "kind": "unit"
+        }
+      }
+    ]
+  },
+  "PreferenceValue": {
+    "kind": "enum",
+    "serde": {
+      "content": "value",
+      "deny_unknown_fields": true,
+      "rename_all": "snake_case",
+      "tag": "kind"
+    },
+    "variants": [
+      {
+        "name": "boolean",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "boolean"
+          }
+        }
+      },
+      {
+        "name": "number",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "signed": true
+          }
+        }
+      },
+      {
+        "name": "string",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "string"
+          }
         }
       }
     ]
@@ -8326,6 +8432,29 @@ const roots = {
         }
       },
       {
+        "name": "preferences",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionPreferences"
+          }
+        }
+      },
+      {
+        "name": "revision",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      },
+      {
         "name": "identity",
         "payload": {
           "kind": "newtype",
@@ -10890,6 +11019,72 @@ const roots = {
           "fields": [
             {
               "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "preference_read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "preference_set",
+        "payload": {
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "PreferenceValue"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "preference_remove",
+        "payload": {
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "key",
               "optional": false,
               "schema": {
                 "kind": "string"

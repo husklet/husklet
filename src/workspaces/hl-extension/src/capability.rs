@@ -103,6 +103,12 @@ pub enum Capability {
     /// Replaces or clears only this extension's private host-managed state blob.
     #[serde(rename = "state:write")]
     StateWrite,
+    /// Reads only this extension's bounded workspace-local UI preferences.
+    #[serde(rename = "preferences:read")]
+    PreferenceRead,
+    /// Mutates one bounded preference through revision compare-and-swap.
+    #[serde(rename = "preferences:write")]
+    PreferenceWrite,
     #[serde(rename = "interface:render")]
     Interface,
     /// Publishes bounded user-visible notifications outside an extension surface.
@@ -149,6 +155,8 @@ impl Capability {
             Self::FilesystemWrite => "filesystem:write",
             Self::StateRead => "state:read",
             Self::StateWrite => "state:write",
+            Self::PreferenceRead => "preferences:read",
+            Self::PreferenceWrite => "preferences:write",
             Self::Interface => "interface:render",
             Self::NotificationPublish => "notifications:publish",
         }
@@ -180,6 +188,7 @@ impl Capability {
                 | Self::ExtensionInstall
                 | Self::FilesystemWrite
                 | Self::StateWrite
+                | Self::PreferenceWrite
                 | Self::NotificationPublish
         )
     }
@@ -235,6 +244,8 @@ impl Capability {
         Self::FilesystemWrite,
         Self::StateRead,
         Self::StateWrite,
+        Self::PreferenceRead,
+        Self::PreferenceWrite,
         Self::Interface,
         Self::NotificationPublish,
     ];

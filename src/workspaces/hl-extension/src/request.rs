@@ -456,6 +456,16 @@ pub enum Request {
     StateClear {
         observed: String,
     },
+    PreferenceRead,
+    PreferenceSet {
+        observed: u64,
+        key: String,
+        value: crate::port::PreferenceValue,
+    },
+    PreferenceRemove {
+        observed: u64,
+        key: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -592,6 +602,8 @@ impl Request {
             | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
             Self::StateRead => Capability::StateRead,
             Self::StateWrite { .. } | Self::StateClear { .. } => Capability::StateWrite,
+            Self::PreferenceRead => Capability::PreferenceRead,
+            Self::PreferenceSet { .. } | Self::PreferenceRemove { .. } => Capability::PreferenceWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -747,6 +759,8 @@ pub enum Reply {
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),
     State(crate::port::ExtensionState),
+    Preferences(crate::port::ExtensionPreferences),
+    Revision(u64),
     Identity(String),
     Done,
 }

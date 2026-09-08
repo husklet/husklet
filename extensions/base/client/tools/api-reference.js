@@ -29,6 +29,7 @@ const groups = new Map([
   ['Terminal and panes', []],
   ['Files', []],
   ['Private extension state', []],
+  ['Extension preferences', []],
   ['Images', []],
   ['Networks', []],
   ['Volumes', []],
@@ -53,6 +54,7 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             terminal: 'Terminal and panes',
             files: 'Files',
             state: 'Private extension state',
+            preferences: 'Extension preferences',
             images: 'Images',
             networks: 'Networks',
             volumes: 'Volumes',
@@ -90,6 +92,11 @@ groups
   .push(
     '- `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.',
     '- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.',
+  );
+groups
+  .get('Extension preferences')
+  .push(
+    '- Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.',
   );
 groups
   .get('Semantics')

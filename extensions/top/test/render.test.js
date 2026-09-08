@@ -13,6 +13,8 @@ import {
   Volumes,
   Workspace,
   Top,
+  boundedSidebarWidth,
+  persistSidebarWidth,
   parseArguments,
   parseLabels,
   parseMounts,
@@ -61,6 +63,31 @@ const api = {
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
   extensions: { list: async () => [] },
 };
+
+test('Top sidebar preference is narrowly bounded and retried with fresh CAS authority', async () => {
+  assert.equal(boundedSidebarWidth(9), 10);
+  assert.equal(boundedSidebarWidth(18), 18);
+  assert.equal(boundedSidebarWidth(99), 24);
+  assert.equal(boundedSidebarWidth(1.5), null);
+  const calls = [];
+  let revision = 4;
+  const preferences = {
+    read: async () => ({ revision, entries: [] }),
+    set: async (observed, key, value) => {
+      calls.push([observed, key, value]);
+      if (calls.length === 1) {
+        revision = 5;
+        throw Object.assign(new Error('conflict'), { kind: 'conflict' });
+      }
+      return 6;
+    },
+  };
+  assert.equal(await persistSidebarWidth({ preferences }, 80), 6);
+  assert.deepEqual(calls, [
+    [4, 'sidebar.width', { kind: 'number', value: 24 }],
+    [5, 'sidebar.width', { kind: 'number', value: 24 }],
+  ]);
+});
 
 const firstPartyCatalogue = async () => ({
   entries: [

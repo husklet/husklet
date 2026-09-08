@@ -30,6 +30,7 @@ import type {
   ConnectOptions,
   ExecutionSummary,
   ExtensionState,
+  PreferenceValue,
   ExtensionSummary,
   FileEntry,
   JsonState,
@@ -1580,6 +1581,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }
         throw new Error('unreachable extension state update attempt');
       },
+    },
+    preferences: {
+      read: async () => expect(await session.call('preference_read', undefined), 'preferences'),
+      set: async (observed, key, value: PreferenceValue) =>
+        expect(await session.call('preference_set', { observed, key, value }), 'revision'),
+      remove: async (observed, key) =>
+        expect(await session.call('preference_remove', { observed, key }), 'revision'),
     },
     subscribe,
     unsubscribe,
@@ -3371,6 +3379,7 @@ function facadePath(call) {
     ['terminal_', 'terminal.'],
     ['filesystem_', 'files.'],
     ['state_', 'state.'],
+    ['preference_', 'preferences.'],
     ['notification_', 'notifications.'],
   ])
     if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
@@ -3516,6 +3525,7 @@ export const protocolCoverage = Object.freeze({
       'removeObserved',
     ],
     state: ['read', 'write', 'clear'],
+    preferences: ['read', 'set', 'remove'],
     extensions: [
       'list',
       'inspect',

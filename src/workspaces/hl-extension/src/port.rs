@@ -1397,10 +1397,36 @@ pub struct ExtensionState {
     pub contents: Vec<u8>,
 }
 
+/// One deliberately small UI preference value. This is not arbitrary JSON:
+/// nested values, null, arrays, and objects are not part of the contract.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PreferenceValue {
+    Boolean(bool),
+    Number(i64),
+    String(String),
+}
+
+/// A revisioned snapshot of the authenticated extension's workspace-local preferences.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionPreferences {
+    pub revision: u64,
+    pub entries: Vec<(String, PreferenceValue)>,
+}
+
 pub trait ExtensionStateStore {
     fn read(&self) -> Result<ExtensionState, HostError>;
     fn write(&self, observed: &str, contents: &[u8]) -> Result<String, HostError>;
     fn clear(&self, observed: &str) -> Result<(), HostError>;
+    fn preferences(&self) -> Result<ExtensionPreferences, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
+    fn preference_set(&self, _observed: u64, _key: &str, _value: &PreferenceValue) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
+    fn preference_remove(&self, _observed: u64, _key: &str) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
 }
 
 impl<T: WorkspaceFiles + ?Sized> ExtensionStateStore for T {

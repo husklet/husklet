@@ -125,6 +125,61 @@ fn workspace_environment_patch(patch: &crate::port::WorkspaceEnvironmentPatch) -
     Ok(())
 }
 
+const PREFERENCE_ENTRIES: usize = 64;
+const PREFERENCE_KEY_BYTES: usize = 64;
+const PREFERENCE_STRING_BYTES: usize = 1024;
+
+fn validate_preference_key(key: &str) -> Result<(), Failure> {
+    if key.is_empty()
+        || key.len() > PREFERENCE_KEY_BYTES
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(Failure::Conflict {
+            detail: "preference keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_preference(key: &str, value: &crate::port::PreferenceValue) -> Result<(), Failure> {
+    validate_preference_key(key)?;
+    match value {
+        crate::port::PreferenceValue::Number(value) if value.unsigned_abs() > crate::JSON_SAFE_INTEGER_MAX => {
+            Err(Failure::Conflict {
+                detail: "preference numbers must be JavaScript-safe integers".into(),
+            })
+        }
+        crate::port::PreferenceValue::String(value) if value.len() > PREFERENCE_STRING_BYTES => {
+            Err(Failure::Conflict {
+                detail: "preference strings are limited to 1024 bytes".into(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_preferences(preferences: &crate::port::ExtensionPreferences) -> Result<(), Failure> {
+    if preferences.entries.len() > PREFERENCE_ENTRIES {
+        return Err(Failure::Failed {
+            detail: "host returned more than 64 preferences".into(),
+        });
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    for (key, value) in &preferences.entries {
+        validate_preference(key, value).map_err(|_| Failure::Failed {
+            detail: "host returned invalid extension preferences".into(),
+        })?;
+        if !keys.insert(key) {
+            return Err(Failure::Failed {
+                detail: "host returned duplicate preference keys".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl std::ops::Deref for Session {
     type Target = hl_rpc::Session<Topic>;
 
@@ -641,9 +696,12 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
-            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => {
-                self.state(request, services)
-            }
+            Request::StateRead
+            | Request::StateWrite { .. }
+            | Request::StateClear { .. }
+            | Request::PreferenceRead
+            | Request::PreferenceSet { .. }
+            | Request::PreferenceRemove { .. } => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -1629,6 +1687,23 @@ impl Session {
             Request::StateClear { observed } => {
                 exact_state_identity(observed)?;
                 port.clear(observed).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::PreferenceRead => {
+                let preferences = port.preferences()?;
+                validate_preferences(&preferences)?;
+                Ok(Reply::Preferences(preferences))
+            }
+            Request::PreferenceSet { observed, key, value } => {
+                validate_preference(key, value)?;
+                port.preference_set(*observed, key, value)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
+            }
+            Request::PreferenceRemove { observed, key } => {
+                validate_preference_key(key)?;
+                port.preference_remove(*observed, key)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "extension state".into(),

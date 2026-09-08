@@ -48,6 +48,7 @@ pub use port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionSummary,
 };
+pub use port::{ExtensionPreferences, PreferenceValue};
 pub use port::{FileChange, FileChangeKind, FileChangePage, FileInventory};
 pub use port::{
     HostError, InspectablePane, PaneInventory, PaneKind, PaneSemanticAction, PaneSemanticTree, SemanticActionKind,

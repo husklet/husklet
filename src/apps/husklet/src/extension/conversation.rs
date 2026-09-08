@@ -1227,8 +1227,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath,
-        Reply, Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        codec, Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind,
+        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1941,6 +1941,130 @@ mod tests {
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    fn preference_host(
+        root: std::path::PathBuf,
+        name: &'static str,
+    ) -> (Wire<UnixStream>, JoinHandle<Result<(), Fault>>) {
+        let state = StateBlob::new(&root, &ExtensionName::new(name).unwrap()).expect("preference store");
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new(name).unwrap(),
+                Grant::new([Capability::PreferenceRead, Capability::PreferenceWrite]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            let mut ports = services(&host);
+            ports.state = &state;
+            conversation.serve(&ports)
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        (wire, served)
+    }
+
+    #[test]
+    fn preferences_are_isolated_bounded_cas_safe_and_durable_over_unix_framing() {
+        let root = tempfile::tempdir().expect("preference root");
+        let (mut alpha, served) = preference_host(root.path().to_path_buf(), "alpha");
+        let initial = ask(&mut alpha, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&initial), Ok(Reply::Preferences(preferences))
+            if preferences.revision == 0 && preferences.entries.is_empty())
+        );
+
+        let set = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 0,
+                key: "sidebar.width".into(),
+                value: PreferenceValue::Number(320),
+            },
+        );
+        assert_eq!(codec::read_reply(&set), Ok(Reply::Revision(1)));
+        let stale = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 0,
+                key: "sidebar.width".into(),
+                value: PreferenceValue::Number(999),
+            },
+        );
+        assert!(matches!(codec::read_failure(&stale), Ok(Failure::Conflict { .. })));
+        let oversized = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 1,
+                key: "label".into(),
+                value: PreferenceValue::String("x".repeat(1025)),
+            },
+        );
+        assert!(matches!(codec::read_failure(&oversized), Ok(Failure::Conflict { .. })));
+        let invalid_key = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 1,
+                key: "not/a/key".into(),
+                value: PreferenceValue::Boolean(true),
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&invalid_key),
+            Ok(Failure::Conflict { .. })
+        ));
+
+        let mut revision = 1;
+        for index in 0..63 {
+            let reply = ask(
+                &mut alpha,
+                &Request::PreferenceSet {
+                    observed: revision,
+                    key: format!("item.{index}"),
+                    value: PreferenceValue::Boolean(index % 2 == 0),
+                },
+            );
+            revision += 1;
+            assert_eq!(codec::read_reply(&reply), Ok(Reply::Revision(revision)));
+        }
+        let full = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: revision,
+                key: "sixty-fifth".into(),
+                value: PreferenceValue::Boolean(true),
+            },
+        );
+        assert!(matches!(codec::read_failure(&full), Ok(Failure::Conflict { .. })));
+        drop(alpha);
+        assert_eq!(served.join().expect("alpha joined"), Ok(()));
+
+        // A new conversation and a newly opened store model an application relaunch.
+        let (mut relaunched, served) = preference_host(root.path().to_path_buf(), "alpha");
+        let persisted = ask(&mut relaunched, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&persisted), Ok(Reply::Preferences(preferences))
+            if preferences.revision == revision
+                && preferences.entries.len() == 64
+                && preferences.entries.iter().any(|(key, value)|
+                    key == "sidebar.width" && *value == PreferenceValue::Number(320)))
+        );
+        drop(relaunched);
+        assert_eq!(served.join().expect("relaunch joined"), Ok(()));
+
+        // The same workspace root and key under another authenticated extension is empty.
+        let (mut beta, served) = preference_host(root.path().to_path_buf(), "beta");
+        let isolated = ask(&mut beta, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&isolated), Ok(Reply::Preferences(preferences))
+            if preferences.revision == 0 && preferences.entries.is_empty())
+        );
+        drop(beta);
+        assert_eq!(served.join().expect("beta joined"), Ok(()));
     }
 
     fn semantic_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {

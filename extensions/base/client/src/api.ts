@@ -1,12 +1,14 @@
 import type {
   FilesystemSelector,
+  ExtensionPreferences,
+  PreferenceValue,
   Row as WireRow,
   WireCall,
   WireReplyFor,
   WireRequestFor,
   WireUiEvent,
 } from './generated-protocol.js';
-export type { FilesystemSelector } from './generated-protocol.js';
+export type { ExtensionPreferences, FilesystemSelector, PreferenceValue } from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
 
@@ -1297,6 +1299,12 @@ export interface WorkspaceApi {
       update: (current: T) => T | Promise<T>,
       options?: { attempts?: number },
     ): Promise<JsonState<T>>;
+  };
+  /** Small workspace-local UI preferences, isolated to this authenticated extension. */
+  preferences: {
+    read(): Promise<ExtensionPreferences>;
+    set(observed: number, key: string, value: PreferenceValue): Promise<number>;
+    remove(observed: number, key: string): Promise<number>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

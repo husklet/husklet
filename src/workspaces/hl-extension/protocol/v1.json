@@ -187,6 +187,16 @@
     {
       "executes": false,
       "mutates": false,
+      "wire": "preferences:read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "preferences:write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
       "wire": "interface:render"
     },
     {
@@ -458,6 +468,18 @@
         },
         {
           "name": "state:write",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preferences:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preferences:write",
           "payload": {
             "kind": "unit"
           }
@@ -1807,6 +1829,42 @@
     "ExtensionName": {
       "kind": "ref",
       "name": "PeerName"
+    },
+    "ExtensionPreferences": {
+      "fields": [
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "ref",
+                  "name": "PreferenceValue"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "ExtensionState": {
       "fields": [
@@ -4082,6 +4140,48 @@
           "name": "scroll",
           "payload": {
             "kind": "unit"
+          }
+        }
+      ]
+    },
+    "PreferenceValue": {
+      "kind": "enum",
+      "serde": {
+        "content": "value",
+        "deny_unknown_fields": true,
+        "rename_all": "snake_case",
+        "tag": "kind"
+      },
+      "variants": [
+        {
+          "name": "boolean",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "boolean"
+            }
+          }
+        },
+        {
+          "name": "number",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "string",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "string"
+            }
           }
         }
       ]
@@ -7991,6 +8091,18 @@
       "request": "state_clear"
     },
     {
+      "capability": "preferences:read",
+      "request": "preference_read"
+    },
+    {
+      "capability": "preferences:write",
+      "request": "preference_set"
+    },
+    {
+      "capability": "preferences:write",
+      "request": "preference_remove"
+    },
+    {
       "capability": "interface:render",
       "request": "interface_open_tab"
     },
@@ -8451,6 +8563,18 @@
     {
       "reply": "done",
       "request": "state_clear"
+    },
+    {
+      "reply": "preferences",
+      "request": "preference_read"
+    },
+    {
+      "reply": "revision",
+      "request": "preference_set"
+    },
+    {
+      "reply": "revision",
+      "request": "preference_remove"
     },
     {
       "reply": "identity",
@@ -8997,6 +9121,29 @@
             "of": {
               "kind": "ref",
               "name": "ExtensionState"
+            }
+          }
+        },
+        {
+          "name": "preferences",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionPreferences"
+            }
+          }
+        },
+        {
+          "name": "revision",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "signed": false
             }
           }
         },
@@ -11575,6 +11722,72 @@
           }
         },
         {
+          "name": "preference_read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preference_set",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "value",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PreferenceValue"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "preference_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "interface_open_tab",
           "payload": {
             "fields": [
@@ -12777,7 +12990,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:0ca6afe43126f480",
+  "source_fingerprint": "fnv1a64:2d95ced3e2b28d46",
   "specification_version": 1,
   "topics": [
     {
