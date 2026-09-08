@@ -26,6 +26,7 @@ use hl_engine::{
 };
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -292,7 +293,7 @@ fn backend(stderr: &[u8]) -> Backend {
         + tree_counter("reason_other=");
     let shapes = text
         .lines()
-        .filter(|line| line.starts_with("[diag] backend-shape "))
+        .filter(|line| line.starts_with("[diag] backend-shape-detail "))
         .collect::<Vec<_>>();
     assert_eq!(shapes.len(), 1, "HL_C_DIAGNOSTICS produced:\n{text}");
     let shape = shapes[0];
@@ -1303,9 +1304,13 @@ fn run_with_arguments_internal(
     fs_load_bridge: bool,
 ) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
+    let diagnostics = tempfile::NamedTempFile::new().expect("diagnostic capture");
     let mut options = Options::default();
     options.set("HL_TRANSLIT", translit, true).expect("HL_TRANSLIT");
     options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
+    options
+        .set("HL_DIAGNOSTIC_PORT", &diagnostics.as_raw_fd().to_string(), true)
+        .expect("HL_DIAGNOSTIC_PORT");
     if force_provenance_miss {
         options
             .set("HL_TRANSLIT_PROVENANCE_FALLBACK", "1", true)
@@ -1353,7 +1358,13 @@ fn run_with_arguments_internal(
     let exit = engine.wait().expect("wait");
     engine.destroy().expect("destroy");
     let out = captured.out.lock().unwrap().clone();
-    let report = backend(&captured.err.lock().unwrap());
+    let mut diagnostic_output = captured.err.lock().unwrap().clone();
+    diagnostics
+        .reopen()
+        .expect("reopen diagnostic capture")
+        .read_to_end(&mut diagnostic_output)
+        .expect("read diagnostic capture");
+    let report = backend(&diagnostic_output);
     (out, exit.guest_status, report)
 }
 
@@ -2136,6 +2147,24 @@ fn agrees(name: &str) -> Backend {
         "{name}: the engine disagrees with the host running the same image natively"
     );
     transliterated_backend
+}
+
+#[test]
+fn backend_selection_refreshes_in_both_directions_between_launches() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "operands");
+    let mut outputs = Vec::new();
+    for selected in ["0", "1", "0"] {
+        let (output, status, backend) = run(&executable, selected);
+        assert_eq!(status, 0, "HL_TRANSLIT={selected}: {}", backend.line);
+        if selected == "1" {
+            assert!(backend.entries > 0, "later translated launch stayed disabled: {}", backend.line);
+        } else {
+            assert_eq!(backend.line, "[prof] translit: not selected");
+        }
+        outputs.push(output);
+    }
+    assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
 /// Flag round-trip across block boundaries, including the PF byte-parity encoding.

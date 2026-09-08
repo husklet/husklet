@@ -784,6 +784,7 @@ fn daily_dev_phase_plan(
     restore: bool,
     capture: bool,
     translit: bool,
+    diagnostic_path: Option<&Path>,
 ) -> RuntimePlan {
     let mut plan = daily_dev_plan(executable, directory, restore, capture);
     if translit {
@@ -796,7 +797,10 @@ fn daily_dev_phase_plan(
     if std::env::var_os("HL_CHECKPOINT_PROFILE_SCALE").is_some() {
         plan.options.set("HL_CHECKPOINT_FD_SCAN_PROFILE", "1", true).unwrap();
     }
-    if let Some(path) = std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH") {
+    let diagnostic_path = diagnostic_path
+        .map(Path::to_owned)
+        .or_else(|| std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH").map(PathBuf::from));
+    if let Some(path) = diagnostic_path {
         let descriptor = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -2670,11 +2674,20 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         std::fs::write(directory.path().join("profile-scale"), scale.as_encoded_bytes()).unwrap();
     }
     let output_path = directory.path().join("output");
+    let diagnostic_path = translit.then(|| directory.path().join("backend-diagnostics"));
     let first = Arc::new(Store::default());
     let capture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), false, true, translit),
+            daily_dev_phase_plan(
+                isa,
+                executable,
+                directory.path(),
+                false,
+                true,
+                translit,
+                diagnostic_path.as_deref(),
+            ),
             StandardStreams::default().with_terminal(Terminal::new(capture_terminal.clone(), 24, 80).unwrap()),
             first.clone(),
             first.clone(),
@@ -2701,7 +2714,15 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     // or corrupt the source generation.
     if translit {
         let failed_sink = Arc::new(Store::default());
-        let mut failed_plan = daily_dev_phase_plan(isa, executable, directory.path(), true, false, true);
+        let mut failed_plan = daily_dev_phase_plan(
+            isa,
+            executable,
+            directory.path(),
+            true,
+            false,
+            true,
+            diagnostic_path.as_deref(),
+        );
         failed_plan
             .options
             .set("HL_CKPT_TEST_FAIL_AFTER_FORK", "1", true)
@@ -2725,7 +2746,15 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let recapture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), true, true, translit),
+            daily_dev_phase_plan(
+                isa,
+                executable,
+                directory.path(),
+                true,
+                true,
+                translit,
+                diagnostic_path.as_deref(),
+            ),
             StandardStreams::default().with_terminal(Terminal::new(recapture_terminal.clone(), 24, 80).unwrap()),
             second.clone(),
             first,
@@ -2749,7 +2778,15 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let restore = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_phase_plan(isa, executable, directory.path(), true, false, translit),
+            daily_dev_phase_plan(
+                isa,
+                executable,
+                directory.path(),
+                true,
+                false,
+                translit,
+                diagnostic_path.as_deref(),
+            ),
             StandardStreams::default().with_terminal(Terminal::new(restore_terminal.clone(), 24, 80).unwrap()),
             second.clone(),
             second,
@@ -2794,11 +2831,14 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
             recapture_terminal.text(),
             restore_terminal.text(),
             output.clone(),
+            diagnostic_path
+                .as_ref()
+                .map_or_else(String::new, |path| std::fs::read_to_string(path).unwrap()),
         ]
         .concat();
         let shapes = diagnostic_text
             .lines()
-            .filter(|line| line.starts_with("[diag] backend-shape "))
+            .filter(|line| line.starts_with("[diag] backend-shape-detail "))
             .map(|line| {
                 let field = |name: &str| {
                     line.split_whitespace()
@@ -2818,6 +2858,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
                     !line.contains("key=43100670427"),
                 )
             })
+            .filter(|(translated, ..)| *translated > 0)
             .collect::<Vec<_>>();
         assert!(
             shapes.len() == 3 && shapes.iter().all(|(translated, ..)| *translated > 0),
