@@ -1152,6 +1152,7 @@ export interface WorkspaceApi {
       options?: {
         lines?: number;
         timeoutMs?: number;
+        signal?: AbortSignal;
       },
     ): Promise<
       | { changed: true; readable: ReadablePane }

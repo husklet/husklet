@@ -1600,7 +1600,7 @@ export function workspace(session, { signal } = {}) {
     };
     api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
     api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
-    api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
+    api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000, signal } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
             throw new TypeError('pane text wait requires a nonempty slot');
         if (after == null ||
@@ -1613,8 +1613,11 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
             throw new RangeError('pane text wait timeout must be between 1 and 30000ms');
         }
+        if (signal?.aborted)
+            throw outputAbort(signal);
         let dispose;
         let timer;
+        let abort;
         let settled = false;
         let reading = false;
         let pending = false;
@@ -1624,6 +1627,8 @@ export function workspace(session, { signal } = {}) {
                     return;
                 settled = true;
                 clearTimeout(timer);
+                if (abort)
+                    signal?.removeEventListener('abort', abort);
                 Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
             };
             const reconcile = () => {
@@ -1657,6 +1662,8 @@ export function workspace(session, { signal } = {}) {
                     return;
                 reconcile();
             };
+            abort = () => finish(undefined, outputAbort(signal));
+            signal?.addEventListener('abort', abort, { once: true });
             api.watchPaneChanges(observe).then((stop) => {
                 dispose = stop;
                 if (settled)

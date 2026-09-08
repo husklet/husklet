@@ -1156,6 +1156,7 @@ export interface WorkspaceApi {
         waitForText(slot: string, after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>, options?: {
             lines?: number;
             timeoutMs?: number;
+            signal?: AbortSignal;
         }): Promise<{
             changed: true;
             readable: ReadablePane;
