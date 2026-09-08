@@ -2587,7 +2587,10 @@ test('image inspect renders real typed details through a bounded source and retr
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, '$.id'), 'image inspection uses the native bounded object projection');
+  assert.ok(labelled(stage, 'Image details'));
+  assert.ok(labelled(stage, 'Platform · linux/amd64'));
+  assert.ok(labelled(stage, 'References · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 201, version: 1, rows: 9 } }]);
   assert.equal(
     imageDetails.answer({ source: 201, version: 1, id: 8, range: { start: 0, count: 999 } }).rows
@@ -2621,12 +2624,27 @@ test('an empty typed image inspection has an explicit semantic empty state', asy
   );
 });
 
-test('structured resource inspection applies the manager hard bounds visibly', async () => {
+test('typed image inspection never exposes unknown host object fields', async () => {
   const oversized = Object.fromEntries(
     Array.from({ length: 200 }, (_, index) => [`field_${index}`, `value-${index}`]),
   );
   const controlled = {
-    images: { ...api.images, inspect: async () => ({ id: 'sha256:bounded', ...oversized }) },
+    images: {
+      ...api.images,
+      inspect: async () => ({
+        id: 'sha256:bounded',
+        references: ['bounded:latest'],
+        created: 'now',
+        size: 1,
+        os: 'linux',
+        architecture: 'amd64',
+        entrypoint: [],
+        command: [],
+        working_directory: '',
+        user: '',
+        ...oversized,
+      }),
+    },
   };
   const resource = {
     data: [{ id: 'sha256:bounded', reference: 'bounded:latest', size: 1 }],
@@ -2639,16 +2657,9 @@ test('structured resource inspection applies the manager hard bounds visibly', a
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(
-      stage,
-      'Inspection is bounded to 128 nodes, depth 8, and 256 characters per string. Truncated values are marked.',
-    ),
-  );
-  assert.ok(
-    !labelled(stage, '$.field_199'),
-    'fields beyond the native inspector bound never become nodes',
-  );
+  assert.ok(labelled(stage, 'Image details'));
+  assert.equal(labelled(stage, '$.field_199'), undefined);
+  assert.equal(labelled(stage, 'value-199'), undefined);
 });
 
 test('image pull progress is determinate, cancellable and retryable from retained input', async () => {
@@ -2942,9 +2953,9 @@ test('volume and network panels render bounded real inventories and controls', (
   );
   const networkStage = stageFromFrame(networkFrame);
   assert.ok(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow'), undefined);
   assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow'), undefined);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
