@@ -33,6 +33,8 @@ try {
   const container = await containers.inspect(configuration.containerId);
   if (container.state !== 'running') throw new Error('Postgres container is not running');
 
+  const query = configuration.query.trim().replace(/;$/, '');
+  if (!query) throw new TypeError('query must contain a row-producing statement');
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort('query timed out'), configuration.timeoutMs ?? 30_000);
   const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -53,7 +55,7 @@ try {
           '--dbname',
           configuration.database,
           '--command',
-          `SELECT row_to_json(husklet_row)::text FROM (${configuration.query}) AS husklet_row`,
+          `SELECT row_to_json(husklet_row)::text FROM (${query}) AS husklet_row`,
         ],
         credentials: [['PGPASSWORD', configuration.passwordCredential]],
         signal: abort.signal,
