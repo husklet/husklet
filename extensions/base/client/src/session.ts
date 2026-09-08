@@ -641,7 +641,10 @@ export class Session {
 
   #receive(chunk) {
     try {
-      for (const frame of this.#reader.take(chunk)) this.#handle(frame);
+      for (const frame of this.#reader.take(chunk)) {
+        if (this.#closed) break;
+        this.#handle(frame);
+      }
     } catch (error) {
       this.#finish(error);
       this.#socket.destroy();

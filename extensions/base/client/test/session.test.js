@@ -1960,6 +1960,73 @@ test('real Unix control frames ping both directions and close every pending oper
   }
 });
 
+test('a coalesced Unix close revokes later GUI and row frames in the same read', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-close-boundary-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const returned = [];
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.on('error', () => {});
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'close_boundary', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const rows = [];
+  const events = [];
+  let session;
+  try {
+    session = await connect({
+      path: socketPath,
+      timeout: 500,
+      onRows: (request, channel) => rows.push({ request, channel }),
+      onEvent: (event) => events.push(event),
+    });
+    peer.write(
+      Buffer.concat([
+        encode({ channel: CONTROL, kind: KIND.close, payload: Buffer.alloc(0) }),
+        encode({
+          channel: 19,
+          kind: KIND.event,
+          payload: { pane_provider: 'database', slot: 'retired-pane' },
+        }),
+        encode({
+          channel: 23,
+          kind: KIND.event,
+          payload: {
+            id: 7,
+            source: 3,
+            version: 11,
+            range: { start: 0, count: 20 },
+          },
+        }),
+      ]),
+    );
+
+    assert.match((await session.closed).message, /host closed the session/);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, [], 'a retired GUI session delivers no coalesced interaction');
+    assert.deepEqual(rows, [], 'a retired GUI session grants no row-provider authority');
+    assert.equal(
+      returned.some((frame) => frame.channel === 19 || frame.channel === 23),
+      false,
+      'post-close frames receive neither credit nor a row response',
+    );
+  } finally {
+    await session?.close();
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a matching pong outside the control channel cannot complete a heartbeat', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pong-channel-'));
   const socketPath = path.join(directory, 'host.sock');

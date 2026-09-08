@@ -574,8 +574,11 @@ export class Session {
     }
     #receive(chunk) {
         try {
-            for (const frame of this.#reader.take(chunk))
+            for (const frame of this.#reader.take(chunk)) {
+                if (this.#closed)
+                    break;
                 this.#handle(frame);
+            }
         }
         catch (error) {
             this.#finish(error);
