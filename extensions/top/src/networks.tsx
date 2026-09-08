@@ -198,36 +198,39 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1} wrap>
+      <Column gap={1} align="start">
         <Entry
           value={name}
           placeholder="Network name"
+          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
           enabled={creation.state !== 'loading'}
           onChange={(event) => {
             setName(String(event.value ?? ''));
             setCreation({ state: 'idle', name: '', error: null });
           }}
         />
-        <Button
-          variant="filled"
-          tone="accent"
-          label={
-            creation.state === 'loading'
-              ? 'Creating…'
-              : creation.state === 'error'
-                ? 'Retry create'
-                : 'Create'
-          }
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => void create()}
-        />
-        <Button
-          label="Refresh"
-          variant="outline"
-          enabled={creation.state !== 'loading'}
-          onInvoke={resource.reload}
-        />
-      </Row>
+        <Row gap={1} wrap>
+          <Button
+            variant="filled"
+            tone="accent"
+            label={
+              creation.state === 'loading'
+                ? 'Creating…'
+                : creation.state === 'error'
+                  ? 'Retry create'
+                  : 'Create'
+            }
+            enabled={creation.state !== 'loading' && name.trim().length > 0}
+            onInvoke={() => void create()}
+          />
+          <Button
+            label="Refresh"
+            variant="outline"
+            enabled={creation.state !== 'loading'}
+            onInvoke={resource.reload}
+          />
+        </Row>
+      </Column>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />
@@ -248,7 +251,7 @@ export function Networks({
           <Entry
             value={container}
             placeholder="Complete container ID"
-            width={{ minimum: { chars: 20 }, maximum: { chars: 58 } }}
+            width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
             enabled={operation.state !== 'loading'}
             onChange={(event) => {
               setContainer(String(event.value ?? ''));
@@ -256,19 +259,19 @@ export function Networks({
               setDisconnectRequest(null);
             }}
           />
-          <Row gap={1} align="center" justify="start" wrap>
+          <Column gap={1} align="start">
             <Text label="Optional aliases" color="text-dim" />
             <Entry
               value={aliases}
               placeholder="Endpoint aliases (comma-separated, optional)"
-              width={{ minimum: { chars: 20 }, maximum: { chars: 38 } }}
+              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
               enabled={operation.state !== 'loading'}
               onChange={(event) => {
                 setAliases(String(event.value ?? ''));
                 setOperation({ state: 'idle', request: null, error: null });
               }}
             />
-          </Row>
+          </Column>
         </CardContent>
       </Card>
       <OperationStatus operation={operation} onRetry={attach} />

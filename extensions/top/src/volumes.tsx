@@ -127,36 +127,39 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Row gap={1} wrap>
+      <Column gap={1} align="start">
         <Entry
           value={name}
           placeholder="Volume name"
+          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
           enabled={creation.state !== 'loading'}
           onChange={(event) => {
             setName(String(event.value ?? ''));
             setCreation({ state: 'idle', name: '', error: null });
           }}
         />
-        <Button
-          variant="filled"
-          tone="accent"
-          label={
-            creation.state === 'loading'
-              ? 'Creating…'
-              : creation.state === 'error'
-                ? 'Retry create'
-                : 'Create'
-          }
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => void create()}
-        />
-        <Button
-          label="Refresh"
-          variant="outline"
-          enabled={creation.state !== 'loading'}
-          onInvoke={resource.reload}
-        />
-      </Row>
+        <Row gap={1} wrap>
+          <Button
+            variant="filled"
+            tone="accent"
+            label={
+              creation.state === 'loading'
+                ? 'Creating…'
+                : creation.state === 'error'
+                  ? 'Retry create'
+                  : 'Create'
+            }
+            enabled={creation.state !== 'loading' && name.trim().length > 0}
+            onInvoke={() => void create()}
+          />
+          <Button
+            label="Refresh"
+            variant="outline"
+            enabled={creation.state !== 'loading'}
+            onInvoke={resource.reload}
+          />
+        </Row>
+      </Column>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />

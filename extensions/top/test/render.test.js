@@ -296,8 +296,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Row']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
   assert.deepEqual(ancestorTags(stage, 'View Component playground').slice(0, 3), [
     'Row',
     'CardContent',
@@ -1753,6 +1753,11 @@ test('every empty operational page explains what is absent and how to proceed', 
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
     if (section === 'Images') {
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'image actions stay grouped when the entry forces a narrow-line break',
+      );
       assert.equal(
         ancestorProperty(stage, 'Pull', 'Row', 'Grow'),
         undefined,
@@ -1761,6 +1766,11 @@ test('every empty operational page explains what is absent and how to proceed', 
     }
     if (section === 'Volumes') {
       assert.equal(ancestorTags(stage, 'Create')[0], 'Row');
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'volume actions stay grouped when the entry forces a narrow-line break',
+      );
       assert.equal(
         ancestorProperty(stage, 'Create', 'Row', 'Grow'),
         undefined,
@@ -1777,6 +1787,13 @@ test('every empty operational page explains what is absent and how to proceed', 
       );
       invoke(stage, 'Create first container');
       assert.ok(labelled(stage, 'Container setup'), 'the primary action reveals container setup');
+    }
+    if (section === 'Networks') {
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'network actions stay grouped when the entry forces a narrow-line break',
+      );
     }
   }
   invoke(stage, 'Processes');
@@ -3387,11 +3404,15 @@ test('container rename validates locally, retries failure, and preserves immutab
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
   await settled();
-  assert.ok(
-    labelled(
-      stage,
-      `Current name: api. Immutable ID: ${immutable.replace(/(.{8})(?=.)/g, '$1\u200b')}`,
-    ),
+  const identity = labelled(
+    stage,
+    `Current name · api  ·  Container ID · ${immutable.slice(0, 12)}`,
+  );
+  assert.ok(identity, 'the rename surface keeps immutable identity compact');
+  assert.deepEqual(
+    latestProperty(stage, identity.SetProp.id, 'Tooltip'),
+    { Text: `Immutable container ID ${immutable}` },
+    'the exact immutable identity remains available without dominating the card',
   );
 
   change(stage, `New name for ${immutable.slice(0, 12)}`, '.invalid');
@@ -5518,6 +5539,13 @@ function latestPropertyForTag(stage, tag, prop) {
   );
   return patches
     .filter((patch) => patch.SetProp?.prop === prop && nodes.has(patch.SetProp.id))
+    .at(-1)?.SetProp.value;
+}
+
+function latestProperty(stage, node, prop) {
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
     .at(-1)?.SetProp.value;
 }
 

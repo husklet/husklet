@@ -216,23 +216,28 @@ export function Images({
         : 'ready';
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
-      <Row gap={1} wrap>
+      <Column gap={1} align="start">
         <Entry
           value={reference}
           placeholder="registry/image:tag"
+          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
           onChange={(event) => setReference(String(event.value ?? ''))}
         />
-        <Button
-          variant="filled"
-          tone="accent"
-          label={pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'}
-          enabled={
-            !busy && reference.trim().length > 0 && (!pull || TERMINAL_PULL_STATES.has(pull.state))
-          }
-          onInvoke={startPull}
-        />
-        <Button label="Refresh" variant="outline" enabled={!busy} onInvoke={resource.reload} />
-      </Row>
+        <Row gap={1} wrap>
+          <Button
+            variant="filled"
+            tone="accent"
+            label={pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'}
+            enabled={
+              !busy &&
+              reference.trim().length > 0 &&
+              (!pull || TERMINAL_PULL_STATES.has(pull.state))
+            }
+            onInvoke={startPull}
+          />
+          <Button label="Refresh" variant="outline" enabled={!busy} onInvoke={resource.reload} />
+        </Row>
+      </Column>
       {pull ? <PullStatus pull={pull} onCancel={cancelPull} /> : null}
       <ErrorText error={error} />
       {notice ? <Text label={notice} color="positive" /> : null}

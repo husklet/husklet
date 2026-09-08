@@ -56,8 +56,9 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
     <Column gap={1}>
       <Heading label={'Rename container'} scale={'caption'} />
       <Text
-        label={`Current name: ${current || '(unnamed)'}. Immutable ID: ${breakableIdentity(container.id)}`}
+        label={`Current name · ${current || '(unnamed)'}  ·  Container ID · ${shortId(container.id)}`}
         color={'text-dim'}
+        tooltip={`Immutable container ID ${container.id}`}
         width="fill"
         wrap={true}
       />
@@ -97,9 +98,4 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
       ) : null}
     </Column>
   );
-}
-
-/** Gives GTK legal line breaks without abbreviating the immutable authority. */
-export function breakableIdentity(value: string): string {
-  return value.replace(/(.{8})(?=.)/g, '$1\u200b');
 }

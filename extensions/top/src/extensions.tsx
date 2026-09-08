@@ -51,7 +51,7 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'remove', label: 'Remove image' },
 ];
 
-const CONTENT_WIDTH = { minimum: { chars: 32 }, maximum: { chars: 72 } } as const;
+const CONTENT_WIDTH = { minimum: { chars: 32 }, maximum: { chars: 48 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -641,8 +641,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
-        <Row gap={3} align="start" wrap>
-          <Column gap={2} width={CONTENT_WIDTH}>
+        <Column gap={3} align="start">
+          <Column gap={2} width={CONTENT_WIDTH} grow={false}>
             {!acquisition && <Heading label="Browse extensions" scale="caption" />}
             {!acquisition && (
               <Column gap={2}>
@@ -1155,7 +1155,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               />
             )}
           </Column>
-          <Column gap={2} width={CONTENT_WIDTH}>
+          <Column gap={2} width={CONTENT_WIDTH} grow={false}>
             <Row gap={2}>
               <Heading label="Installed" scale="caption" />
               <Button
@@ -1287,7 +1287,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               })}
             </ResourceState>
           </Column>
-        </Row>
+        </Column>
       </Column>
     </Scroll>
   );
