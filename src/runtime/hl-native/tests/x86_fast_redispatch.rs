@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![cfg(all(feature = "native-test-hooks", target_os = "linux", target_arch = "x86_64"))]
 
 fn assert_consumed(scenario: u32, branch: &str) {
     assert_eq!(
@@ -40,4 +40,22 @@ fn mapped_redispatch_consumes_refused_miss_at_the_exact_target() {
 #[test]
 fn teardown_finalizes_a_pending_fallthrough_miss() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(254), 0);
+}
+
+#[test]
+fn mapped_hit_dispatch_path_invokes_the_tested_commit_seam() {
+    let source = include_str!("../src/native/engine/dispatch.c");
+    let invocation = "dispatch_fast_redispatch_commit(c, next_code);";
+    assert_eq!(
+        source.matches(invocation).count(),
+        1,
+        "the mapped-hit dispatcher must have exactly one production commit invocation"
+    );
+    assert!(
+        source.contains(concat!(
+            "REDISPATCH_COUNT(REDISPATCH_HIT);\n",
+            "                    dispatch_fast_redispatch_commit(c, next_code);"
+        )),
+        "the production commit must remain at the mapped-hit seam, before B executes"
+    );
 }

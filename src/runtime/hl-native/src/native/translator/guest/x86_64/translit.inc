@@ -10953,9 +10953,15 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
             goto done_call_ibtc;
         }
         if (scenario == 133) {
+            uint64_t jcc_invalid_before =
+                __atomic_load_n(&translit_jcc_ibtc_invalid_refusal, __ATOMIC_RELAXED);
             cpu.jcc_ibtc_miss = TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_FETCH;
             translit_jcc_ibtc_finalize_cpu(&cpu);
-            result = cpu.jcc_ibtc_miss == 0 ? 0 : 227;
+            result = cpu.jcc_ibtc_miss == 0 &&
+                             __atomic_load_n(&translit_jcc_ibtc_invalid_refusal, __ATOMIC_RELAXED) ==
+                                 jcc_invalid_before
+                         ? 0
+                         : 227;
             goto done_call_ibtc;
         }
         static const uint32_t miss_kinds[] = {
