@@ -426,6 +426,69 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
+  const references = [];
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: digest,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            return { job: 'storybook-update' };
+          },
+          acquisition: async () => ({
+            job: 'storybook-update',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            revision: 3,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '2.0.0',
+              image_digest: `sha256:${'b'.repeat(64)}`,
+              installed_image_digest: digest,
+              requested: [],
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Review update'));
+  assert.equal(
+    labelled(stage, 'Review Component playground'),
+    undefined,
+    'installed catalogue entries do not also appear as new installations',
+  );
+
+  invoke(stage, 'Review update');
+  await settled();
+  await settled();
+  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.ok(
+    labelled(
+      stage,
+      `Replaces installed image ${compactDigest(digest)}. Access below was reset and must be approved again.`,
+    ),
+  );
+  assert.ok(labelled(stage, 'Update with selected access'));
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
