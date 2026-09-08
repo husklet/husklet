@@ -124,7 +124,13 @@ impl<'a> Overview<'a> {
                 ready_gallery.ready(&ready_name, generation);
             }
         });
-        let (widget, page) = screens::workspace::extension::Interface::with_lifecycle(deliveries, sink, faulted, ready);
+        let loading = if name.as_str() == "top" {
+            "Starting workspace overview…".to_owned()
+        } else {
+            format!("Starting {name}…")
+        };
+        let (widget, page) =
+            screens::workspace::extension::Interface::with_lifecycle_label(deliveries, sink, faulted, ready, &loading);
         let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
         holder.set_hexpand(true);
         holder.set_vexpand(true);

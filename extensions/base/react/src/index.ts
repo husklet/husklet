@@ -29,12 +29,20 @@ export * from './confirm-action.js';
 export * from './resource-state.js';
 
 type RenderFrame = Parameters<ConstructorParameters<typeof Surface>[0]>[0];
+export interface RowProviderContext {
+  /** Aborted when the window is superseded or its surface closes. */
+  signal: AbortSignal;
+}
+export type RowProvider = (
+  request: RowRequest,
+  context: RowProviderContext,
+) => readonly DataRow[] | Promise<readonly DataRow[]>;
 interface RenderOptions {
   title?: string;
   split?: { slot: string; division: 'beside' | 'below' } | null;
   bootstrap?: SurfaceBootstrap | null;
   /** Supplies only the bounded table windows this surface asks for. */
-  rows?: ((request: RowRequest) => readonly DataRow[] | Promise<readonly DataRow[]>) | null;
+  rows?: RowProvider | null;
 }
 interface RenderHandle {
   surface: Surface;
@@ -45,6 +53,12 @@ interface RenderHandle {
   source(mutation: SourceMutation): Promise<void>;
   close(): Promise<void>;
   rowProvider: RenderOptions['rows'];
+  rowActive: Set<RowTask>;
+  rowQueue: RowRequest[];
+}
+interface RowTask {
+  request: RowRequest;
+  controller: AbortController;
 }
 interface Registry {
   handles: Set<RenderHandle>;
@@ -54,6 +68,10 @@ interface Registry {
 const attached = new WeakMap<Session, Registry>();
 const SURFACE_LIMIT = 32;
 const FRAME_BUFFER_LIMIT = 64;
+/** Maximum database/file window producers allowed to run concurrently per surface. */
+export const ROW_PROVIDER_CONCURRENCY = 4;
+/** Maximum pending windows retained while a producer is saturated. */
+export const ROW_PROVIDER_QUEUE_LIMIT = 32;
 
 export async function connect({
   path,
@@ -95,25 +113,62 @@ function deliverRows(
   const registry = attached.get(session);
   const handle = request.slot === undefined ? undefined : registry?.slots.get(request.slot);
   const provider = handle?.rowProvider;
-  if (!handle || !provider) return false;
-  void (async () => {
-    const rows = await provider(request);
-    if (registry?.slots.get(request.slot ?? '') !== handle || !registry.handles.has(handle)) return;
-    if (!Array.isArray(rows)) throw new TypeError('surface row provider must return an array');
-    if (rows.length > request.range.count) {
-      throw new RangeError('surface row provider returned more rows than the requested window');
+  if (!registry || !handle || !provider) return false;
+  const sameWindow = (candidate: RowRequest) =>
+    candidate.source === request.source &&
+    candidate.version === request.version &&
+    candidate.range.start === request.range.start &&
+    candidate.range.count === request.range.count;
+  handle.rowQueue = handle.rowQueue.filter((candidate) => !sameWindow(candidate));
+  for (const task of handle.rowActive) {
+    if (sameWindow(task.request)) {
+      task.controller.abort(new Error('row window was superseded'));
     }
-    await handle.source({
-      Window: {
-        source: request.source,
-        version: request.version,
-        request: request.id,
-        range: request.range,
-        rows,
-      },
-    });
-  })().catch((error) => onError?.(error));
+  }
+  handle.rowQueue.push(request);
+  if (handle.rowQueue.length > ROW_PROVIDER_QUEUE_LIMIT) handle.rowQueue.shift();
+  drainRows(registry, handle, onError);
   return true;
+}
+
+function drainRows(
+  registry: Registry,
+  handle: RenderHandle,
+  onError: ConnectOptions['onEventError'],
+) {
+  while (handle.rowActive.size < ROW_PROVIDER_CONCURRENCY && handle.rowQueue.length > 0) {
+    const request = handle.rowQueue.shift();
+    if (!request || !handle.rowProvider) return;
+    const controller = new AbortController();
+    const task = { request, controller };
+    handle.rowActive.add(task);
+    void (async () => {
+      const rows = await handle.rowProvider?.(request, { signal: controller.signal });
+      if (controller.signal.aborted || rows === undefined) return;
+      if (registry.slots.get(request.slot ?? '') !== handle || !registry.handles.has(handle))
+        return;
+      if (!Array.isArray(rows)) throw new TypeError('surface row provider must return an array');
+      if (rows.length > request.range.count) {
+        throw new RangeError('surface row provider returned more rows than the requested window');
+      }
+      await handle.source({
+        Window: {
+          source: request.source,
+          version: request.version,
+          request: request.id,
+          range: request.range,
+          rows,
+        },
+      });
+    })()
+      .catch((error) => {
+        if (!controller.signal.aborted) onError?.(error);
+      })
+      .finally(() => {
+        handle.rowActive.delete(task);
+        drainRows(registry, handle, onError);
+      });
+  }
 }
 
 /**
@@ -196,7 +251,12 @@ export function render(
           patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
         },
   );
-  const handle = { surface, rowProvider: rows } as RenderHandle;
+  const handle = {
+    surface,
+    rowProvider: rows,
+    rowActive: new Set<RowTask>(),
+    rowQueue: [],
+  } as unknown as RenderHandle;
   registry.handles.add(handle);
 
   const opening =
@@ -257,6 +317,9 @@ export function render(
     close() {
       if (closed) return withdrawal ?? Promise.resolve();
       closed = true;
+      handle.rowQueue.length = 0;
+      for (const task of handle.rowActive) task.controller.abort(new Error('surface closed'));
+      handle.rowActive.clear();
       reconciler.updateContainer(null, container, null, null);
       registry.handles.delete(handle);
       if (slot !== null) registry.slots.delete(slot);

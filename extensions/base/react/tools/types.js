@@ -296,6 +296,17 @@ export interface RenderHandle {
   close(): Promise<void>;
 }
 
+export const ROW_PROVIDER_CONCURRENCY: 4;
+export const ROW_PROVIDER_QUEUE_LIMIT: 32;
+export interface RowProviderContext {
+  /** Aborted when the window is superseded or its surface closes. */
+  signal: AbortSignal;
+}
+export type RowProvider = (
+  request: RowRequest,
+  context: RowProviderContext,
+) => readonly DataRow[] | Promise<readonly DataRow[]>;
+
 export function render(
   element: ReactNode,
   session: Session,
@@ -304,7 +315,7 @@ export function render(
     split?: { slot: string; division: 'beside' | 'below' };
     bootstrap?: SurfaceBootstrap;
     /** Supplies bounded rows on demand as the host scrolls this surface. */
-    rows?: (request: RowRequest) => readonly DataRow[] | Promise<readonly DataRow[]>;
+    rows?: RowProvider;
   },
 ): RenderHandle;
 

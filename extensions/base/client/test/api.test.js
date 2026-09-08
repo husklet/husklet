@@ -23,7 +23,14 @@ test('row requests reject unsafe or unbounded database windows', () => {
   assert.equal(validateRowRequest(request), request);
   assert.throws(() => validateRowRequest({ ...request, range: { start: 0, count: 129 } }), /between 1 and 128/);
   assert.throws(() => validateRowRequest({ ...request, sort: { column: 'name', descending: 'yes' } }), /boolean direction/);
-  assert.throws(() => validateRowRequest({ ...request, slot: '' }), /nonempty string/);
+  assert.throws(() => validateRowRequest({ ...request, slot: '' }), /nonempty NUL-free string/);
+  assert.throws(() => validateRowRequest({ ...request, slot: 'x'.repeat(257) }), /at most 256 bytes/);
+  assert.throws(() => validateRowRequest({ ...request, filter: 'x'.repeat(4097) }), /at most 4096 bytes/);
+  assert.throws(
+    () => validateRowRequest({ ...request, sort: { column: 'x'.repeat(129), descending: false } }),
+    /at most 128 bytes/,
+  );
+  assert.throws(() => validateRowRequest({ ...request, filter: 'active\0drop' }), /NUL-free/);
 });
 
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
