@@ -6,11 +6,13 @@ import {
   CardContent,
   Column,
   Heading,
+  Icon,
   NavigationMenu,
   NavigationMenuItem,
   Row,
   Scroll,
   Spinner,
+  Spacer,
   Text,
   type ContainerSummary,
   type ExecutionSummary,
@@ -217,7 +219,11 @@ function Summary({
     <Card grow={false} width={{ minimum: { chars: 18 } }} variant="outline">
       <CardActionArea tooltip={`Open ${label}`} onInvoke={onOpen}>
         <CardContent gap={1} pad={1}>
-          <Text label={label} color="text-dim" />
+          <Row gap={1} align="center" width="fill">
+            <Text label={label} color="text-dim" />
+            <Spacer />
+            <Icon icon="go-next-symbolic" tooltip={`Open ${label}`} />
+          </Row>
           <Row gap={1} align="center" wrap>
             <Heading label={value} scale="title" />
             <Text label={detail} color="text-dim" wrap />

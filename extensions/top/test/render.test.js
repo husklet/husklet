@@ -1655,6 +1655,18 @@ test('overview never presents stale inventory counts as current during loading o
       ),
       `${resource} has an unambiguous dashboard action`,
     );
+    const cue = patches
+      .filter(
+        (patch) =>
+          patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === `Open ${resource}`,
+      )
+      .find((patch) => !actionNodes.has(patch.SetProp.id));
+    assert.ok(cue, `${resource} has a visible navigation cue inside its action area`);
+    assert.deepEqual(
+      latestProperty(stage, cue.SetProp.id, 'Icon'),
+      { Text: 'go-next-symbolic' },
+      `${resource} uses the shared forward-navigation icon`,
+    );
   }
   assert.equal(
     labelled(stage, '1 running'),
