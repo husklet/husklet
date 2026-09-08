@@ -31,6 +31,8 @@ export declare class Reader {
     #private;
     /** Bytes retained for the incomplete frame at the front of the stream. */
     get buffered(): number;
+    /** Allocated framing storage, exposed so the per-session bound is testable. */
+    get capacity(): number;
     /** Adds bytes and returns every frame they completed. */
     take(chunk: any): any[];
     /** Refuses an EOF that cut a header or payload short. */
