@@ -87,6 +87,15 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
+impl From<hl_image_reference::Error> for Error {
+    fn from(error: hl_image_reference::Error) -> Self {
+        match error {
+            hl_image_reference::Error::InvalidReference(value) => Self::InvalidReference(value),
+            hl_image_reference::Error::InvalidDigest(value) => Self::InvalidDigest(value),
+        }
+    }
+}
+
 impl Error {
     /// The most of a registry response body an error will carry.
     ///

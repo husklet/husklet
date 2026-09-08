@@ -17,6 +17,7 @@ flate2.workspace = true
 futures-util.workspace = true
 fs2.workspace = true
 hl-fs = { path = "../../packages/hl-fs" }
+hl-image-reference = { path = "../../packages/hl-image-reference" }
 hl-log = { path = "../../packages/hl-log" }
 oci-spec.workspace = true
 reflink-copy.workspace = true
