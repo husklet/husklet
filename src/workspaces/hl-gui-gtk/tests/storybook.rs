@@ -2,10 +2,11 @@
 
 #[cfg(unix)]
 mod unix {
-    use std::io::Read as _;
-    use std::os::unix::net::UnixListener;
+    use std::io::{self, Read as _};
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
     use hl_extension::{
@@ -28,15 +29,43 @@ mod unix {
     ];
     const PATCH_LIMIT: usize = 1_200;
     const PRIMARY_SLOT: &str = "";
+    const SOCKET_DEADLINE: Duration = Duration::from_secs(5);
+    const SOCKET_TICK: Duration = Duration::from_millis(100);
+
+    struct StorybookChild(Child);
+
+    impl StorybookChild {
+        fn stop(&mut self) -> (std::process::ExitStatus, String) {
+            if self.0.try_wait().expect("Storybook process status reads").is_none() {
+                self.0.kill().expect("Storybook test process stops");
+            }
+            let status = self.0.wait().expect("Storybook process is reaped");
+            let mut stderr = String::new();
+            self.0
+                .stderr
+                .take()
+                .expect("captured stderr")
+                .read_to_string(&mut stderr)
+                .expect("stderr reads after the process exits");
+            (status, stderr)
+        }
+    }
+
+    impl Drop for StorybookChild {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
 
     #[test]
     fn every_composed_story_crosses_the_real_socket_and_renders_narrow_and_wide() {
         assert!(gtk::init().is_ok(), "run this test under Xvfb");
         let repository = repository();
         assert!(
-            repository
-                .join("extensions/node_modules/@husklet/react")
-                .exists(),
+            repository.join("extensions/node_modules/@husklet/react").exists(),
             "run `npm --prefix extensions ci` before the GTK Storybook E2E"
         );
         for (index, story) in STORIES.iter().enumerate() {
@@ -48,16 +77,32 @@ mod unix {
         let socket = std::env::temp_dir().join(format!("husklet-storybook-{}-{index}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).expect("the Storybook test socket binds");
-        let mut child = Command::new("node")
-            .arg(repository.join("extensions/storybook/dist/main.js"))
-            .env("HUSKLET_EXTENSION_SOCKET", &socket)
-            .env("HUSKLET_STORYBOOK_STORY", story)
-            .current_dir(repository.join("extensions/storybook"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the real Storybook entrypoint starts");
-        let (stream, _) = listener.accept().expect("Storybook connects to the host socket");
+        listener
+            .set_nonblocking(true)
+            .expect("the Storybook listener becomes deadline-bound");
+        let mut child = StorybookChild(
+            Command::new("node")
+                .arg(repository.join("extensions/storybook/dist/main.js"))
+                .env("HUSKLET_EXTENSION_SOCKET", &socket)
+                .env("HUSKLET_STORYBOOK_STORY", story)
+                .current_dir(repository.join("extensions/storybook"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("the real Storybook entrypoint starts"),
+        );
+        let stream = accept_before(&listener, Instant::now() + SOCKET_DEADLINE).unwrap_or_else(|error| {
+            panic!(
+                "Storybook connects to the host socket: {error}; stderr: {}",
+                child.stop().1
+            )
+        });
+        stream
+            .set_read_timeout(Some(SOCKET_TICK))
+            .expect("Storybook reads become deadline-bound");
+        stream
+            .set_write_timeout(Some(SOCKET_DEADLINE))
+            .expect("Storybook writes become deadline-bound");
         let mut wire = Wire::new(stream);
         wire.send(
             &codec::welcome(&Welcome {
@@ -72,14 +117,18 @@ mod unix {
         )
         .expect("welcome is sent");
         let hello: Hello =
-            codec::read_hello(&wire.receive().expect("Storybook greets the host")).expect("hello decodes");
+            codec::read_hello(&receive_before(&mut wire, SOCKET_DEADLINE).expect("Storybook greets the host"))
+                .expect("hello decodes");
         assert_eq!(hello.protocol, PROTOCOL);
 
         let mut rendered = Vec::new();
         let mut ready = false;
+        let startup_deadline = Instant::now() + SOCKET_DEADLINE;
         for _ in 0..8 {
-            let request = codec::read_request(&wire.receive().expect("Storybook sends a bounded call"))
-                .expect("Storybook request decodes through the production codec");
+            let request = codec::read_request(
+                &receive_until(&mut wire, startup_deadline).expect("Storybook sends a bounded call"),
+            )
+            .expect("Storybook request decodes through the production codec");
             let reply = match request {
                 Request::InterfaceRender { frame } => {
                     assert!(
@@ -120,8 +169,10 @@ mod unix {
                 .unwrap_or_else(|error| panic!("{story} failed in GTK: {error:?}"));
         }
         if story == "DataTable" {
+            let length_deadline = Instant::now() + SOCKET_DEADLINE;
             loop {
-                let carried = wire.receive().expect("DataTable publishes its logical length");
+                let carried =
+                    receive_until(&mut wire, length_deadline).expect("DataTable publishes its logical length");
                 if carried.kind == Kind::Credit {
                     continue;
                 }
@@ -184,15 +235,10 @@ mod unix {
                 serde_json::to_vec(&request).expect("row request encodes"),
             ))
             .expect("row request reaches Storybook");
+            let row_deadline = Instant::now() + SOCKET_DEADLINE;
             let answer = loop {
-                let carried = wire.receive().unwrap_or_else(|error| {
-                    let mut diagnostic = String::new();
-                    child
-                        .stderr
-                        .as_mut()
-                        .expect("captured stderr")
-                        .read_to_string(&mut diagnostic)
-                        .ok();
+                let carried = receive_until(&mut wire, row_deadline).unwrap_or_else(|error| {
+                    let diagnostic = child.stop().1;
                     panic!("Storybook answers the row request: {error:?}; stderr: {diagnostic}")
                 });
                 if carried.kind == Kind::Credit {
@@ -302,8 +348,10 @@ mod unix {
                     serde_json::to_vec(&request).expect("accepted-edit row request encodes"),
                 ))
                 .expect("accepted-edit row request reaches Storybook");
+                let edit_deadline = Instant::now() + SOCKET_DEADLINE;
                 let answer = loop {
-                    let carried = wire.receive().expect("Storybook answers the accepted-edit window");
+                    let carried =
+                        receive_until(&mut wire, edit_deadline).expect("Storybook answers the accepted-edit window");
                     if carried.kind != Kind::Credit && carried.channel == channel {
                         break carried;
                     }
@@ -330,8 +378,7 @@ mod unix {
             edit.version = hl_gui::Version::new(1);
             edit.value = "stale overwrite".to_owned();
             let stale = hl_gui::Event::Edit { node, id, edit };
-            let payload =
-                codec::interaction(&stale, Some(PRIMARY_SLOT)).expect("stale edit has a wire representation");
+            let payload = codec::interaction(&stale, Some(PRIMARY_SLOT)).expect("stale edit has a wire representation");
             wire.send(&Frame::new(ChannelId::new(98), Kind::Event, payload))
                 .expect("stale native edit returns to Node");
             let rejected = receive_rejected_edit(&mut wire);
@@ -393,21 +440,76 @@ mod unix {
             );
         }
 
-        child.kill().expect("Storybook test process stops");
-        let status = child.wait().expect("Storybook process is reaped");
-        let mut stderr = String::new();
-        child
-            .stderr
-            .take()
-            .expect("captured stderr")
-            .read_to_string(&mut stderr)
-            .expect("stderr reads");
+        let (status, stderr) = child.stop();
         assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
         assert!(
             !status.success(),
             "the long-running entrypoint should only end when killed"
         );
         std::fs::remove_file(socket).expect("test socket is removed");
+    }
+
+    fn accept_before(listener: &UnixListener, deadline: Instant) -> io::Result<UnixStream> {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return Ok(stream),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "connection deadline elapsed"));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn receive_before(wire: &mut Wire<UnixStream>, duration: Duration) -> Result<Frame, hl_extension::Transit> {
+        receive_until(wire, Instant::now() + duration)
+    }
+
+    fn receive_until(wire: &mut Wire<UnixStream>, deadline: Instant) -> Result<Frame, hl_extension::Transit> {
+        loop {
+            match wire.receive_step() {
+                Err(hl_extension::Transit::Pending) if Instant::now() < deadline => {}
+                Err(hl_extension::Transit::Pending) => return Err(hl_extension::Transit::Pending),
+                result => return result,
+            }
+        }
+    }
+
+    #[test]
+    fn a_peer_trickling_a_partial_frame_cannot_extend_the_wall_clock_deadline() {
+        use std::io::Write as _;
+
+        let (reader, mut writer) = UnixStream::pair().expect("socket pair");
+        reader
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .expect("short read tick");
+        let sending = std::thread::spawn(move || {
+            let bytes = Frame::control(Kind::Ping, b"still incomplete".to_vec())
+                .encode()
+                .expect("frame encodes");
+            for byte in bytes.into_iter().take(8) {
+                if writer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let mut wire = Wire::new(reader);
+        let started = Instant::now();
+
+        assert_eq!(
+            receive_before(&mut wire, Duration::from_millis(75)),
+            Err(hl_extension::Transit::Pending)
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(140),
+            "a peer's byte trickle extended the receive deadline"
+        );
+        drop(wire);
+        sending.join().expect("trickle writer exits");
     }
 
     fn capture_story(window: &gtk::Window, story: &str) {
@@ -448,8 +550,9 @@ mod unix {
     }
 
     fn receive_rerender(wire: &mut Wire<std::os::unix::net::UnixStream>, story: &str) -> hl_gui::Frame {
+        let deadline = Instant::now() + SOCKET_DEADLINE;
         for _ in 0..8 {
-            let carried = wire.receive().expect("Node answers the GTK interaction");
+            let carried = receive_until(wire, deadline).expect("Node answers the GTK interaction");
             if carried.kind == Kind::Credit {
                 continue;
             }
@@ -472,8 +575,9 @@ mod unix {
     }
 
     fn receive_rejected_edit(wire: &mut Wire<std::os::unix::net::UnixStream>) -> hl_gui::Frame {
+        let deadline = Instant::now() + SOCKET_DEADLINE;
         for _ in 0..8 {
-            let carried = wire.receive().expect("Node answers the stale native edit");
+            let carried = receive_until(wire, deadline).expect("Node answers the stale native edit");
             if carried.kind == Kind::Credit {
                 continue;
             }
