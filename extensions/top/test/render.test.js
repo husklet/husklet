@@ -2034,6 +2034,12 @@ test('image removal and prune require an explicit confirmation step', async () =
       .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label');
   const remove = labels().find((patch) => patch.SetProp.value.Text === 'Remove').SetProp.id;
   assert.ok(
+    frame.patches.some(
+      (patch) => patch.SetProp?.id === remove && patch.SetProp.value?.Variant === 'Outline',
+    ),
+    'the initial image removal is visibly outlined before confirmation',
+  );
+  assert.ok(
     stage.surface.dispatch({
       trigger: 'Invoke',
       node: remove,
@@ -2081,6 +2087,12 @@ test('image removal and prune require an explicit confirmation step', async () =
       patch.SetProp.prop === 'Label' &&
       patch.SetProp.value.Text === 'Prune unused images',
   ).SetProp.id;
+  assert.ok(
+    pruneFrame.patches.some(
+      (patch) => patch.SetProp?.id === prune && patch.SetProp.value?.Variant === 'Outline',
+    ),
+    'the initial prune action is visibly outlined before confirmation',
+  );
   assert.ok(
     pruneStage.surface.dispatch({
       trigger: 'Invoke',

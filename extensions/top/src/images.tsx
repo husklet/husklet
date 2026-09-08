@@ -263,6 +263,7 @@ export function Images({
               label="Prune unused images"
               enabled={!busy}
               tone="danger"
+              variant="outline"
               onInvoke={() => setConfirm('prune')}
             />
           )}
@@ -311,6 +312,7 @@ export function Images({
                   label="Remove"
                   enabled={!busy}
                   tone="danger"
+                  variant="outline"
                   onInvoke={() => setConfirm(item.id)}
                 />
               )}
