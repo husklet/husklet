@@ -253,6 +253,7 @@ export class Session {
     #greetingTimer;
     #backpressured = false;
     #deferredCredits = new Map();
+    #eventDelivery = Promise.resolve();
     #closing;
     #dataListener = (chunk) => this.#receive(chunk);
     #endListener = () => this.#ended();
@@ -639,10 +640,12 @@ export class Session {
             else {
                 payload = validateUiEvent(payload);
             }
-            try {
-                for (const listener of this.#events) {
+            const listeners = [...this.#events];
+            this.#eventDelivery = this.#eventDelivery
+                .then(async () => {
+                for (const listener of listeners) {
                     try {
-                        listener(payload, frame.channel);
+                        await listener(payload, frame.channel);
                     }
                     catch (error) {
                         try {
@@ -653,12 +656,15 @@ export class Session {
                         }
                     }
                 }
-            }
-            finally {
-                // Returning one credit after attempting every listener bounds a producer
-                // without allowing one faulty observer to stall the whole event stream.
-                this.#returnCredit(frame.channel);
-            }
+                // Promise-returning consumers own credit until their work settles.
+                // This keeps application queues inside the protocol's bounded window.
+                if (!this.#closed)
+                    this.#returnCredit(frame.channel);
+            })
+                .catch((error) => {
+                this.#finish(error);
+                this.#socket.destroy();
+            });
             return;
         }
         throw new Error(`unexpected ${frame.kind} frame on channel ${frame.channel}`);

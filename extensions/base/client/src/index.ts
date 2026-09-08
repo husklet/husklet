@@ -1599,12 +1599,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
   const watch = async <T>(
     topic: string,
     snapshot: string,
-    listener: (value: T) => void,
+    listener: (value: T) => void | Promise<void>,
     label: string,
   ) => {
     if (typeof listener !== 'function') throw new TypeError(`${label} listener must be a function`);
     const off = hostSession.onEvent((event) => {
-      if ('snapshot' in event && event.snapshot === snapshot) listener(event.of as T);
+      if ('snapshot' in event && event.snapshot === snapshot) return listener(event.of as T);
     });
     try {
       await subscribe(topic);

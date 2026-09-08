@@ -1192,7 +1192,7 @@ export function workspace(session, { signal } = {}) {
             throw new TypeError(`${label} listener must be a function`);
         const off = hostSession.onEvent((event) => {
             if ('snapshot' in event && event.snapshot === snapshot)
-                listener(event.of);
+                return listener(event.of);
         });
         try {
             await subscribe(topic);

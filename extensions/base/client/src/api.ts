@@ -648,7 +648,7 @@ export interface ConnectOptions {
   connectTimeout?: number;
   onRows?: (request: RowRequest, channel: number) => void;
   onReply?: (reply: unknown) => void;
-  onEvent?: (event: HostEvent, channel: number) => void;
+  onEvent?: (event: HostEvent, channel: number) => void | Promise<void>;
   onEventError?: (error: unknown) => void;
   onClose?: (error: Error) => void;
 }
@@ -677,7 +677,7 @@ export declare class Session {
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
   answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
+  onEvent(listener: (event: HostEvent, channel: number) => void | Promise<void>): () => boolean;
   close(): Promise<void>;
 }
 

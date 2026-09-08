@@ -1978,6 +1978,72 @@ test('real Unix event credit waits for drain when its listener fills the write b
   }
 });
 
+test('real Unix event credit waits for slow async consumers and serializes delivery', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-async-event-credit-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const returned = [];
+  let peer;
+  const server = net.createServer((socket) => {
+    peer = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'slow_consumer', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const releases = [];
+  const entered = [];
+  let reportEntered;
+  const entry = () => new Promise((resolve) => { reportEntered = resolve; });
+  let nextEntry = entry();
+  const session = await connect({
+    path: socketPath,
+    timeout: 1_000,
+    onEvent: async (event) => {
+      entered.push(event.slot);
+      reportEntered();
+      await new Promise((resolve) => releases.push(resolve));
+    },
+  });
+  const promptly = (promise, label) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 200)),
+    ]);
+  try {
+    peer.write(Buffer.concat([
+      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
+      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
+    ]));
+    await promptly(nextEntry, 'first async listener');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1']);
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 0);
+
+    nextEntry = entry();
+    releases.shift()();
+    await promptly(nextEntry, 'second async listener');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1', 'pane-2']);
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 1);
+
+    releases.shift()();
+    for (let attempt = 0; attempt < 20 && returned.filter((frame) => frame.kind === KIND.credit).length < 2; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 2);
+  } finally {
+    await session.close();
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a mixed cross-surface event cannot masquerade as a pane selection over Unix framing', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-selection-'));
   const socketPath = path.join(directory, 'host.sock');

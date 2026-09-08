@@ -285,7 +285,7 @@ export class Session {
   #onRows;
   #onEventError;
   #onClose;
-  #events = new Set<(event: HostEvent, channel: number) => void>();
+  #events = new Set<(event: HostEvent, channel: number) => void | Promise<void>>();
   #topics = new Set();
   #eventTopics = new Map();
   #pending = [];
@@ -305,6 +305,7 @@ export class Session {
   #greetingTimer;
   #backpressured = false;
   #deferredCredits = new Map<number, number>();
+  #eventDelivery = Promise.resolve();
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
@@ -560,7 +561,7 @@ export class Session {
   }
 
   /** Adds a pushed-event observer and returns a synchronous disposer. */
-  onEvent(listener: (event: HostEvent, channel: number) => void) {
+  onEvent(listener: (event: HostEvent, channel: number) => void | Promise<void>) {
     if (typeof listener !== 'function') throw new TypeError('event listener must be a function');
     this.#events.add(listener);
     return () => this.#events.delete(listener);
@@ -700,23 +701,28 @@ export class Session {
       } else {
         payload = validateUiEvent(payload);
       }
-      try {
-        for (const listener of this.#events) {
-          try {
-            listener(payload, frame.channel);
-          } catch (error) {
+      const listeners = [...this.#events];
+      this.#eventDelivery = this.#eventDelivery
+        .then(async () => {
+          for (const listener of listeners) {
             try {
-              this.#onEventError(error);
-            } catch {
-              /* Error reporting cannot strand event credit. */
+              await listener(payload, frame.channel);
+            } catch (error) {
+              try {
+                this.#onEventError(error);
+              } catch {
+                /* Error reporting cannot strand event credit. */
+              }
             }
           }
-        }
-      } finally {
-        // Returning one credit after attempting every listener bounds a producer
-        // without allowing one faulty observer to stall the whole event stream.
-        this.#returnCredit(frame.channel);
-      }
+          // Promise-returning consumers own credit until their work settles.
+          // This keeps application queues inside the protocol's bounded window.
+          if (!this.#closed) this.#returnCredit(frame.channel);
+        })
+        .catch((error) => {
+          this.#finish(error);
+          this.#socket.destroy();
+        });
       return;
     }
     throw new Error(`unexpected ${frame.kind} frame on channel ${frame.channel}`);
