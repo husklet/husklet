@@ -80,13 +80,27 @@ test(
       stage.render(
         h(Top, {
           api: { ...framed, subscribe: undefined, unsubscribe: undefined },
-          initial: { containers: [], executions: [], images: [], volumes: [] },
+          initial: {
+            containers: [
+              {
+                id: containerId,
+                name: 'worker',
+                image: 'alpine:3.20',
+                state: 'exited',
+                created: 1,
+                generation: 1,
+              },
+            ],
+            executions: [],
+            images: [],
+            volumes: [],
+          },
         }),
       );
       invoke(stage, 'Networks');
       await until(() => labelled(stage, 'Reading networks…'));
       await until(() => labelled(stage, 'stale-net'));
-      change(stage, 'Complete container ID', containerId);
+      choose(stage, containerId);
       assert.equal(labelled(stage, 'Connect'), undefined);
       assert.equal(labelled(stage, 'Disconnect'), undefined);
       invoke(stage, 'Remove');
@@ -161,16 +175,18 @@ function invoke(stage, label) {
   );
 }
 
-function change(stage, placeholder, value) {
+function choose(stage, value) {
   const node = stage.frames
     .flatMap((frame) => frame.patches)
     .filter(
-      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+      (patch) =>
+        patch.SetProp?.prop === 'Choices' &&
+        patch.SetProp.value?.Choices?.some((item) => item.value === value),
     )
     .at(-1)?.SetProp.id;
   assert.ok(
     stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
-    `${placeholder} changes`,
+    `container ${value} changes`,
   );
 }
 

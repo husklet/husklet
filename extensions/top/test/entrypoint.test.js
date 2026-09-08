@@ -1079,7 +1079,8 @@ test(
           (request) =>
             request.call === 'interface_render_at' &&
             request.with.frame.patches.some(
-              (patch) => patch.SetProp?.value?.Text === 'Complete container ID',
+              (patch) =>
+                patch.SetProp?.value?.Text === 'Choose a container by name and immutable ID',
             ),
         ),
       );
@@ -1118,7 +1119,11 @@ test(
         encode({
           channel: 38,
           kind: KIND.event,
-          payload: changeInvocation(requests, 'Complete container ID', containerId),
+          payload: changeInvocation(
+            requests,
+            'Choose a container by name and immutable ID',
+            containerId,
+          ),
         }),
       );
       peer.write(

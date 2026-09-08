@@ -100,14 +100,28 @@ test(
             subscribe: undefined,
             unsubscribe: undefined,
           },
-          initial: { containers: [], executions: [], images: [], volumes: [] },
+          initial: {
+            containers: [
+              {
+                id: container,
+                name: 'worker',
+                image: 'alpine:3.20',
+                state: 'exited',
+                created: 1,
+                generation: 1,
+              },
+            ],
+            executions: [],
+            images: [],
+            volumes: [],
+          },
         }),
       );
       invoke(stage, 'Networks');
       await until(() => labelled(stage, 'old-net'));
       invoke(stage, 'Inspect');
       await until(() => inspections === 1);
-      change(stage, 'Complete container ID', container);
+      choose(stage, container);
       assert.equal(labelled(stage, 'Disconnect'), undefined, 'membership waits for inspection');
       invoke(stage, 'Remove');
       assert.ok(labelled(stage, `Remove immutable network ${id} (old-net)?`));
@@ -163,10 +177,14 @@ function invoke(stage, label) {
     `${label} invokes`,
   );
 }
-function change(stage, placeholder, value) {
+function choose(stage, value) {
   const node = stage.frames
     .flatMap((f) => f.patches)
-    .filter((p) => p.SetProp?.prop === 'Placeholder' && p.SetProp.value?.Text === placeholder)
+    .filter(
+      (p) =>
+        p.SetProp?.prop === 'Choices' &&
+        p.SetProp.value?.Choices?.some((item) => item.value === value),
+    )
     .at(-1)?.SetProp.id;
   assert.ok(stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }));
 }
