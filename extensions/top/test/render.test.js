@@ -1143,27 +1143,28 @@ for (const updating of [false, true]) {
     await settled();
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0].slice(0, 3), ['scoped-review', 4, []]);
-    assert.deepEqual(calls[0][3], {
+    assert.deepEqual(calls[0].slice(0, 2), ['scoped-review', 4]);
+    assert.deepEqual(calls[0][2].capabilities, []);
+    assert.deepEqual(calls[0][2].containers, {
       selectors: [{ name: 'database' }],
       create: true,
     });
-    assert.deepEqual(calls[0][4], {
+    assert.deepEqual(calls[0][2].images, {
       read: [],
       use: [],
       pull: [],
       remove: [],
       prune_all_unused: false,
     });
-    assert.deepEqual(calls[0][5], {
+    assert.deepEqual(calls[0][2].networks, {
       selectors: [],
       create: false,
     });
-    assert.deepEqual(calls[0][6], {
+    assert.deepEqual(calls[0][2].volumes, {
       selectors: [],
       create: false,
     });
-    assert.deepEqual(calls[0][7], {
+    assert.deepEqual(calls[0][2].filesystem, {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -1229,8 +1230,11 @@ test('extension review grants one exact network without workspace-wide network a
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls[0][5], { selectors: [{ name: 'database' }], create: false });
-  assert.deepEqual(calls[0][6], { selectors: [{ name: 'data' }], create: false });
+  assert.deepEqual(calls[0][2].networks, {
+    selectors: [{ name: 'database' }],
+    create: false,
+  });
+  assert.deepEqual(calls[0][2].volumes, { selectors: [{ name: 'data' }], create: false });
 });
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
@@ -1330,12 +1334,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls.at(-1), [
-    'install',
-    'candidate',
-    7,
-    ['containers:read', 'terminals:output'],
-  ]);
+  assert.deepEqual(calls.at(-1).slice(0, 3), ['install', 'candidate', 7]);
+  assert.deepEqual(calls.at(-1)[3].capabilities, ['containers:read', 'terminals:output']);
   assert.ok(labelled(stage, 'assistant installed and verified.'));
 });
 
