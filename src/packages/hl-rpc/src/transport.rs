@@ -17,6 +17,10 @@ use crate::frame::{Frame, Malformed};
 /// The most bytes taken from the stream in one read.
 const CHUNK: usize = 16 * 1024;
 
+/// Retain enough storage for ordinary fragmented traffic, but do not let one
+/// exceptional frame permanently raise a connection's memory floor.
+const RETAINED: usize = CHUNK * 2;
+
 /// A frame stream over a blocking byte stream.
 #[derive(Debug)]
 pub struct Wire<S> {
@@ -103,9 +107,16 @@ impl<S: Read> Wire<S> {
         let Some((frame, consumed)) = Frame::decode(&self.buffer).map_err(Transit::Malformed)? else {
             return Ok(None);
         };
-        // Dropping the consumed prefix is what keeps a long-lived connection
-        // from growing a buffer the size of everything it has ever carried.
-        self.buffer.drain(..consumed);
+        // Dropping the consumed prefix bounds the live bytes. Replacing a
+        // formerly large allocation when only a small successor remains also
+        // bounds retained memory: `Vec::drain` alone leaves the peak capacity
+        // attached to this connection forever.
+        if self.buffer.capacity() > RETAINED && self.buffer.len() - consumed <= RETAINED {
+            self.buffer = self.buffer.split_off(consumed);
+            self.buffer.shrink_to(RETAINED);
+        } else {
+            self.buffer.drain(..consumed);
+        }
         Ok(Some(frame))
     }
 
@@ -237,5 +248,35 @@ mod tests {
         assert_eq!(wire.receive_step(), Err(Transit::Pending));
         assert_eq!(wire.buffered(), split);
         assert_eq!(wire.receive_step(), Ok(expected));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_large_frame_does_not_become_the_connections_permanent_memory_floor() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+        use std::time::Duration;
+
+        let large = Frame::control(Kind::Response, vec![b'x'; Frame::PAYLOAD_LIMIT]);
+        let next = Frame::control(Kind::Ping, b"next".to_vec());
+        let mut bytes = large.encode().expect("large frame");
+        let next_bytes = next.encode().expect("successor frame");
+        bytes.extend_from_slice(&next_bytes[..5]);
+        let (reader, mut writer) = UnixStream::pair().expect("real Unix stream pair");
+        reader
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read deadline");
+        let sending = std::thread::spawn(move || writer.write_all(&bytes).expect("write frames"));
+        let mut wire = Wire::new(reader);
+
+        assert_eq!(wire.receive().expect("large frame"), large);
+        assert_eq!(wire.receive_step(), Err(Transit::Pending));
+        assert_eq!(wire.buffered(), 5, "the partial successor remains readable");
+        assert!(
+            wire.buffer.capacity() <= super::RETAINED,
+            "the reader retained {} bytes after consuming its one large frame",
+            wire.buffer.capacity()
+        );
+        sending.join().expect("writer completed");
     }
 }
