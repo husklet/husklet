@@ -27,6 +27,41 @@ impl Drop for AbortTransition<'_> {
 }
 
 impl Server {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn commit_stopped_native(
+        &self,
+        pid: libc::pid_t,
+        generation: u64,
+    ) -> Result<(), CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Active { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        let image = crate::runtime::execution::native_snapshot::capture_stopped_native(pid, deadline)
+            .map_err(Self::publication_failure)?;
+        let transaction = self.transaction_token()?;
+        self.sink
+            .put_until(
+                transaction,
+                crate::runtime::execution::native_snapshot::REGISTER_OBJECT,
+                &image.registers,
+                deadline,
+            )
+            .map_err(Self::publication_failure)?;
+        self.sink
+            .put_until(
+                transaction,
+                crate::runtime::execution::native_snapshot::MEMORY_OBJECT,
+                &image.memory,
+                deadline,
+            )
+            .map_err(Self::publication_failure)?;
+        self.publish_manifest_as(&image.manifest, super::image_envelope::Reader::NativeX86V1)
+    }
+
     pub(super) fn transaction_token(&self) -> Result<NonZeroU64, CaptureFailure> {
         self.transaction
             .lock()

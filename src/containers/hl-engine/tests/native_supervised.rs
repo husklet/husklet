@@ -12,6 +12,7 @@ use hl_engine::{
     runtime::Engine,
 };
 use std::io::Read as _;
+use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
@@ -1408,6 +1409,116 @@ impl CheckpointSource for Checkpoints {
         self.touched();
         Ok(Vec::new())
     }
+}
+
+#[derive(Default)]
+struct NativeCheckpointStore {
+    state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>)>,
+}
+
+impl CheckpointSink for NativeCheckpointStore {
+    fn replace(&self, manifest: &[u8]) -> Result<(), CompositionError> {
+        self.state.lock().unwrap().0.insert("MANIFEST".into(), manifest.to_vec());
+        Ok(())
+    }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        self.state.lock().unwrap().1.clear();
+        Ok(NonZeroU64::MIN)
+    }
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        self.state.lock().unwrap().1.insert(name.into(), bytes.to_vec());
+        Ok(())
+    }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        self.state.lock().unwrap().1.clear();
+        Ok(())
+    }
+    fn commit_until(
+        &self,
+        _: NonZeroU64,
+        manifest: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        state.0 = std::mem::take(&mut state.1);
+        state.0.insert("MANIFEST".into(), manifest.to_vec());
+        Ok(())
+    }
+}
+
+impl CheckpointSource for NativeCheckpointStore {
+    fn read(&self, offset: usize) -> Result<Vec<u8>, CompositionError> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .0
+            .get("MANIFEST")
+            .and_then(|bytes| bytes.get(offset..))
+            .unwrap_or_default()
+            .to_vec())
+    }
+    fn get_until(&self, name: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        self.state
+            .lock()
+            .unwrap()
+            .0
+            .get(name)
+            .cloned()
+            .ok_or(CompositionError::RuntimeConstruction)
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(self.state.lock().unwrap().0.keys().cloned().collect())
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn supervised_checkpoint_publishes_native_image_and_terminates_the_original_process() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    let output = Arc::new(Output::default());
+    let store = Arc::new(NativeCheckpointStore::default());
+    let mut plan = selected_plan(&executable);
+    plan.arguments.push(b"checkpoint-native-capture".to_vec());
+    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    let engine = Engine::with_checkpoint(
+        HOST_ISA,
+        plan,
+        StandardStreams::default().with_output(output.clone()),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    engine.start().unwrap();
+    for _ in 0..5_000 {
+        if output.stdout.lock().unwrap().as_slice() == b"native-capture-ready\n" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(output.stdout.lock().unwrap().as_slice(), b"native-capture-ready\n");
+    let started = std::time::Instant::now();
+    let capture = engine.capture_checkpoint_until(started + std::time::Duration::from_secs(10));
+    assert!(capture.is_ok(), "capture={capture:?} stderr={}", String::from_utf8_lossy(&output.stderr.lock().unwrap()));
+    let elapsed = started.elapsed();
+    {
+        let state = store.state.lock().unwrap();
+        let objects = &state.0;
+        assert_eq!(objects.keys().cloned().collect::<Vec<_>>(), [
+            "IMAGE", "MANIFEST", "native/memory.x86-v1", "native/registers.x86-v1"
+        ]);
+        assert_eq!(&objects["IMAGE"][..8], b"HLIMAGE\0");
+    }
+    assert!(engine.wait().is_ok(), "captured native process did not terminate cleanly");
+    engine.destroy().unwrap();
+    eprintln!("native_product_capture_us={}", elapsed.as_micros());
 }
 
 #[test]

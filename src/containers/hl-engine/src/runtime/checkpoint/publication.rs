@@ -121,6 +121,14 @@ impl Server {
     }
 
     pub(super) fn publish_manifest(&self, manifest: &[u8]) -> Result<(), CaptureFailure> {
+        self.publish_manifest_as(manifest, super::image_envelope::Reader::Translated)
+    }
+
+    pub(super) fn publish_manifest_as(
+        &self,
+        manifest: &[u8],
+        reader: super::image_envelope::Reader,
+    ) -> Result<(), CaptureFailure> {
         let (id, deadline) = {
             let mut capture = self.capture_lock()?;
             loop {
@@ -175,7 +183,7 @@ impl Server {
         }
 
         let transaction = self.transaction_token()?;
-        let envelope = super::image_envelope::Reader::Translated.encode();
+        let envelope = reader.encode();
         let staged = self
             .sink
             .put_until(transaction, super::image_envelope::OBJECT, &envelope, deadline);

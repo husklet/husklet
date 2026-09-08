@@ -119,7 +119,7 @@ impl BoxProjection {
 mod checkpoint;
 #[cfg(target_os = "linux")]
 #[path = "execution_native_snapshot.rs"]
-mod native_snapshot;
+pub(super) mod native_snapshot;
 #[cfg(all(unix, test))]
 pub(crate) use checkpoint::await_capture_completion;
 #[cfg(unix)]
@@ -568,13 +568,13 @@ fn native_eligibility_with_sentry(
     }
     if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() { return Err(R::Ownership); }
     if !volume_spec_supported(box_policy.volumes.as_deref()) { return Err(R::Volumes); }
-    // Keep every configured checkpoint role translated until native late-capture/member lifecycle
-    // fixtures prove the shared trigger across a real product plan. The typed split prevents a future
-    // proof for FreshCoordinator from accidentally admitting Restore or malformed partial services.
-    if checkpoint != NativeCheckpointIntent::None
-        || box_policy.checkpoint_mode != 0
+    // NativeX86V1 currently admits one fresh coordinator. Domain members and restore need the native
+    // re-fork path; malformed service combinations must not become native merely because capture works.
+    let native_capture = checkpoint == NativeCheckpointIntent::FreshCoordinator;
+    if !matches!(checkpoint, NativeCheckpointIntent::None | NativeCheckpointIntent::FreshCoordinator)
+        || box_policy.checkpoint_mode & !1 != 0
         || box_policy.checkpoint_policy != 0
-        || plan.options.get_bytes("HL_CHECKPOINT").is_some()
+        || (plan.options.get_bytes("HL_CHECKPOINT").is_some() && !native_capture)
         || plan.options.get_bytes("HL_RESTORE").is_some()
     {
         return Err(R::Checkpoint);

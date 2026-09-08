@@ -144,6 +144,10 @@ int main(int argc, char **argv) {
         usleep(150000);
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "checkpoint-native-capture")) {
+        if (write(STDOUT_FILENO, "native-capture-ready\n", 21) != 21) return 79;
+        for (;;) pause();
+    }
     if (argc > 4 && (!strcmp(argv[1], "checkpoint-phase1") ||
                      !strcmp(argv[1], "checkpoint-descendant") ||
                      !strcmp(argv[1], "checkpoint-thread"))) {

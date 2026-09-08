@@ -1220,7 +1220,10 @@ static int hl_native_checkpoint_maps_admissible(const char *proc_root, pid_t pro
             admissible = 0; break;
         }
         struct stat status;
-        if (stat(rooted, &status) != 0 || !S_ISREG(status.st_mode) || (status.st_mode & 0222) != 0) {
+        /* Capture hashes each mapped byte range before publication and restore rechecks that digest.
+         * Unix owner-write mode is not evidence that the stopped process or any other process changed
+         * the file, and rejecting ordinary 0755 executables made this preflight refuse every real image. */
+        if (stat(rooted, &status) != 0 || !S_ISREG(status.st_mode)) {
             admissible = 0;
         }
     }
@@ -1512,13 +1515,13 @@ static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t gener
         /* The trigger is bumped while the host still owns the capture-state lock; wait until the
          * matching membership ledger is visible before announcing this stopped participant. */
         usleep(10000);
-        size_t payload_size = 8 + domain.count * sizeof(uint64_t);
+        size_t payload_size = 8 + domain.count * sizeof(uint32_t);
         unsigned char *payload = calloc(1, payload_size);
         if (payload != NULL) {
             uint32_t count = (uint32_t)domain.count;
             memcpy(payload, &count, sizeof(count));
             for (size_t index = 0; index < domain.count; ++index) {
-                uint64_t executor = (uint64_t)domain.members[index].pid;
+                uint32_t executor = (uint32_t)domain.members[index].pid;
                 memcpy(payload + 8 + index * sizeof(executor), &executor, sizeof(executor));
             }
         }
@@ -1537,9 +1540,29 @@ static int hl_native_supervised_checkpoint_phase1(pid_t workload, uint32_t gener
                     called, reply.status, (unsigned long long)reply.value,
                     hl_ckpt_channel_failure() == NULL ? "none" : hl_ckpt_channel_failure());
     }
+    int captured = 0;
+    if (registered && domain.count == 1) {
+        uint64_t process = (uint64_t)domain.members[0].pid;
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-checkpoint]\tphase=native_snapshot_request pid=%llu generation=%u\n",
+                    (unsigned long long)process, generation);
+        hl_ckpt_request request = {
+            .op = HL_CKPT_OP_NATIVE_SNAPSHOT, .length = sizeof(process), .generation = generation};
+        hl_ckpt_reply reply = {0};
+        captured = hl_ckpt_channel_call(&request, NULL, &process, &reply, NULL, 0) == 0 &&
+                   reply.status == HL_CKPT_STATUS_OK;
+        if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
+            fprintf(stderr, "[hl-native-checkpoint]\tphase=native_snapshot_reply captured=%d status=%d\n",
+                    captured, reply.status);
+    }
+    if (captured) {
+        (void)hl_native_checkpoint_member_signal(&domain.members[0], SIGKILL);
+        hl_native_checkpoint_domain_close(&domain);
+        return 0;
+    }
     hl_ckpt_request refusal = {.op = HL_CKPT_OP_CAPTURE_REFUSED, .generation = generation};
-    (void)hl_ckpt_channel_notify(&refusal, registered ? "native phase-1 supports freeze only, not image capture"
-                                                       : "native phase-1 participant registration failed");
+    (void)hl_ckpt_channel_notify(
+        &refusal, registered ? "native checkpoint image capture failed" : "native phase-1 participant registration failed");
     int thawed = hl_native_checkpoint_domain_thaw(&domain) == 0;
     if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
         fprintf(stderr, "[hl-native-checkpoint]\tgeneration=%u registered=%d members=%zu frozen=1 thawed=%d\n",
