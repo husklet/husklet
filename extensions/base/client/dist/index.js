@@ -2,7 +2,7 @@ export { ExtensionError, Session, SOCKET, PROTOCOL, validateRowRequest, validate
 export { PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS, PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest, validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot, } from './generated-protocol.js';
 import { semanticXml } from './semantic.js';
 export { semanticXml };
-import { Session } from './session.js';
+import { ExtensionError, Session } from './session.js';
 import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, } from './generated-protocol.js';
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
@@ -286,6 +286,23 @@ function exactStateIdentity(identity) {
     if (identity === 'absent' || /^sha256:[0-9a-f]{64}$/.test(identity))
         return identity;
     throw new TypeError('extension state mutation requires the exact identity returned by state.read()');
+}
+function exactStateCodec(codec) {
+    if (typeof codec?.decode !== 'function' || typeof codec?.encode !== 'function')
+        throw new TypeError('extension state JSON codec requires encode and decode functions');
+    return codec;
+}
+function decodeJsonState(state, codec) {
+    const bytes = Uint8Array.from(state.contents);
+    const encoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const value = encoded.length === 0 ? undefined : JSON.parse(encoded);
+    return { identity: state.identity, value: exactStateCodec(codec).decode(value) };
+}
+function encodeJsonState(value, codec) {
+    const encoded = JSON.stringify(exactStateCodec(codec).encode(value));
+    if (encoded === undefined)
+        throw new TypeError('extension state codec produced no JSON value');
+    return exactStateBytes(new TextEncoder().encode(encoded));
 }
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
@@ -1036,6 +1053,29 @@ export function workspace(session, { signal } = {}) {
                 contents: exactStateBytes(contents),
             }), 'identity'),
             clear: (observed) => done('state_clear', { observed: exactStateIdentity(observed) }),
+            readJson: async (codec) => decodeJsonState(await api.state.read(), codec),
+            writeJson: (observed, value, codec) => api.state.write(observed, encodeJsonState(value, codec)),
+            updateJson: async (codec, update, { attempts = 4 } = {}) => {
+                if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 16)
+                    throw new RangeError('extension state JSON update attempts must be an integer from 1 through 16');
+                if (typeof update !== 'function')
+                    throw new TypeError('extension state JSON update requires an update function');
+                for (let attempt = 0; attempt < attempts; attempt += 1) {
+                    const current = await api.state.readJson(codec);
+                    const value = await update(current.value);
+                    try {
+                        const identity = await api.state.writeJson(current.identity, value, codec);
+                        return { identity, value };
+                    }
+                    catch (error) {
+                        if (!(error instanceof ExtensionError) ||
+                            error.kind !== 'conflict' ||
+                            attempt + 1 === attempts)
+                            throw error;
+                    }
+                }
+                throw new Error('unreachable extension state update attempt');
+            },
         },
         subscribe,
         unsubscribe,

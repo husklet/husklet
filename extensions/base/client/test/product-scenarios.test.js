@@ -16,6 +16,8 @@ const capabilities = [
   'terminals:control',
   'filesystem:read',
   'filesystem:write',
+  'state:read',
+  'state:write',
   'containers:read',
   'containers:control',
   'networks:read',
@@ -212,11 +214,21 @@ test('embeddings indexer reconciles, recursively discovers, streams, and CAS-upd
           /"identity":"doc-v1"/,
         );
         respond(socket, frame, { reply: 'identity', with: 'index-v2' });
+      } else if (call === 'state_read')
+        respond(socket, frame, { reply: 'state', with: { identity: 'absent', contents: [] } });
+      else if (call === 'state_write') {
+        assert.equal(frame.payload.with.observed, 'absent');
+        assert.match(
+          new TextDecoder().decode(Uint8Array.from(frame.payload.with.contents)),
+          /"src\/a.md":\{"identity":"doc-v1","digest":"[0-9a-f]{64}"\}/,
+        );
+        respond(socket, frame, { reply: 'identity', with: `sha256:${'d'.repeat(64)}` });
       }
     },
   );
   assert.equal(run.result.bytes, document.length);
   assert.equal(run.result.indexIdentity, 'index-v2');
+  assert.equal(run.result.stateIdentity, `sha256:${'d'.repeat(64)}`);
   const ranges = run.calls.filter(({ call }) => call === 'filesystem_read_range');
   assert.deepEqual(
     ranges.map(({ with: value }) => [value.offset, value.observed]),

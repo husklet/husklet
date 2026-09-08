@@ -479,6 +479,14 @@ export interface ExtensionState {
   identity: string;
   contents: number[];
 }
+export interface StateCodec<T> {
+  decode(value: unknown): T;
+  encode(value: T): unknown;
+}
+export interface JsonState<T> {
+  identity: string;
+  value: T;
+}
 export type WorkspaceEvent =
   | {
       event: 'key';
@@ -1211,6 +1219,14 @@ export interface WorkspaceApi {
     read(): Promise<ExtensionState>;
     write(observed: string, contents: Iterable<number>): Promise<string>;
     clear(observed: string): Promise<void>;
+    readJson<T>(codec: StateCodec<T>): Promise<JsonState<T>>;
+    writeJson<T>(observed: string, value: T, codec: StateCodec<T>): Promise<string>;
+    /** The update callback may be rerun after a concurrent CAS conflict. */
+    updateJson<T>(
+      codec: StateCodec<T>,
+      update: (current: T) => T | Promise<T>,
+      options?: { attempts?: number },
+    ): Promise<JsonState<T>>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;
