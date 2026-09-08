@@ -525,7 +525,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       await api.extensions.cancelAcquisition(acquisition.job, acquisition.revision);
       setAcquisition(await api.extensions.acquisition(acquisition.job));
     } catch (cause) {
-      setError(message(cause));
+      cancelledJob.current = '';
+      try {
+        setAcquisition(await api.extensions.acquisition(acquisition.job));
+        setError(
+          'Acquisition advanced before cancellation. Review its current phase and cancel again if needed.',
+        );
+      } catch {
+        setError(
+          `Cancellation failed: ${message(cause)} Retry inspection to reconcile its current state.`,
+        );
+      }
     } finally {
       cancelling.current = false;
       setBusy('');
@@ -1339,16 +1349,21 @@ function imageGrantCount(grant: ImageGrant): number {
   );
 }
 
-function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
+export function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const progress = acquisition.progress;
   if (!progress) {
-    return acquisition.state === 'failed'
-      ? 'Inspection failed.'
-      : acquisition.state === 'cancelled'
-        ? 'Inspection cancelled.'
-        : acquisition.state === 'queued'
-          ? 'Waiting to inspect image…'
-          : 'Inspecting image…';
+    const labels: Record<string, string> = {
+      queued: 'Waiting for an acquisition worker…',
+      inspecting: 'Checking whether the image is available for this workspace architecture…',
+      'reading-manifest': 'Reading and validating the extension manifest…',
+      ready: 'Manifest validated. Review requested access before installing.',
+      committing: 'Saving the reviewed extension and its granted access…',
+      installed: 'Extension installed.',
+      updated: 'Extension updated.',
+      failed: 'Inspection failed. The reference and details are retained for retry.',
+      cancelled: 'Inspection cancelled. No extension was installed.',
+    };
+    return labels[acquisition.state] ?? 'Inspecting image…';
   }
   const amount =
     progress.current === null
@@ -1362,11 +1377,29 @@ function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
 }
 
-function acquisitionFailure(detail: string): string {
+export function acquisitionFailure(detail: string): string {
   const normalized = detail.replaceAll('\\n', ' ').replaceAll(/\s+/g, ' ').trim();
   const registryMessage = /"message"\s*:\s*"([^"]+)"/.exec(normalized)?.[1];
   if (registryMessage) {
     return `Registry refused the image: ${registryMessage}. Check that the reference exists and is accessible.`.slice(
+      0,
+      300,
+    );
+  }
+  if (/requires linux\/|but this workspace requires linux\//i.test(normalized)) {
+    return `Architecture mismatch: ${normalized} Choose an image published for this workspace architecture.`.slice(
+      0,
+      300,
+    );
+  }
+  if (/manifest/i.test(normalized)) {
+    return `Extension manifest could not be validated: ${normalized} Check the image's Husklet manifest label and protocol version.`.slice(
+      0,
+      300,
+    );
+  }
+  if (/workspace (execution domain|resources) (failed|unavailable)|Engine\(/i.test(normalized)) {
+    return `Workspace image service is unavailable. Reopen the workspace resources, then retry inspection. ${normalized}`.slice(
       0,
       300,
     );

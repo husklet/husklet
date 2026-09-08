@@ -17,6 +17,8 @@ import {
   parseLabels,
   parseMounts,
   parsePorts,
+  acquisitionFailure,
+  acquisitionLabel,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
@@ -811,7 +813,9 @@ test('extension inspection keeps invalid and failed references recoverable with 
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Inspection failed.'));
+  assert.ok(
+    labelled(stage, 'Inspection failed. The reference and details are retained for retry.'),
+  );
   assert.ok(
     labelled(
       stage,
@@ -840,6 +844,85 @@ test('extension inspection keeps invalid and failed references recoverable with 
   );
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.deepEqual(latestSwitchValues(stage), [false]);
+});
+
+test('extension acquisition phases and failures remain actionable without raw engine cascades', () => {
+  const status = (state) => ({
+    job: 'phase',
+    reference: 'registry.example/tool:1',
+    revision: 2,
+    state,
+    progress: null,
+    candidate: null,
+    error: null,
+  });
+  assert.match(acquisitionLabel(status('inspecting')), /workspace architecture/);
+  assert.match(acquisitionLabel(status('reading-manifest')), /validating the extension manifest/);
+  assert.match(acquisitionLabel(status('committing')), /Saving the reviewed extension/);
+  assert.match(acquisitionLabel(status('cancelled')), /No extension was installed/);
+  assert.match(
+    acquisitionFailure(
+      'extension image sha256:a is linux/arm64, but this workspace requires linux/amd64',
+    ),
+    /^Architecture mismatch:/,
+  );
+  assert.match(
+    acquisitionFailure('workspace execution domain failed: Engine(Load(Inspect))'),
+    /^Workspace image service is unavailable\./,
+  );
+  assert.match(
+    acquisitionFailure("the image's manifest archive is unreadable"),
+    /^Extension manifest could not be validated:/,
+  );
+});
+
+test('a stale cancellation refreshes the authoritative phase and remains cancellable', async () => {
+  let reads = 0;
+  let cancellations = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'moving-job' }),
+          acquisition: async () => ({
+            job: 'moving-job',
+            reference: 'registry.example/tool:1',
+            revision: ++reads,
+            state: reads === 1 ? 'inspecting' : 'reading-manifest',
+            progress: null,
+            candidate: null,
+            error: null,
+          }),
+          waitForAcquisition: async () => new Promise(() => {}),
+          cancelAcquisition: async () => {
+            cancellations += 1;
+            throw new Error('the acquisition revision has changed');
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/tool:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  assert.ok(
+    labelled(stage, 'Checking whether the image is available for this workspace architecture…'),
+  );
+  invoke(stage, 'Cancel');
+  await settled();
+  assert.equal(cancellations, 1);
+  assert.ok(labelled(stage, 'Reading and validating the extension manifest…'));
+  assert.ok(
+    labelled(
+      stage,
+      'Acquisition advanced before cancellation. Review its current phase and cancel again if needed.',
+    ),
+  );
+  assert.ok(labelled(stage, 'Cancel'));
 });
 
 for (const updating of [false, true]) {
