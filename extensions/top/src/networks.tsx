@@ -16,8 +16,10 @@ import {
   RecoveryState,
   Row,
   Scroll,
+  Select,
   Spinner,
   Text,
+  type ContainerSummary,
   type NetworkSummary,
   type WorkspaceApi,
 } from '@husklet/react';
@@ -54,9 +56,11 @@ const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', detail: null, erro
 export function Networks({
   api,
   resource,
+  containers,
 }: {
   api: WorkspaceApi;
   resource: Resource<NetworkSummary>;
+  containers: Resource<ContainerSummary>;
 }) {
   const [name, setName] = React.useState('');
   const [container, setContainer] = React.useState('');
@@ -187,6 +191,19 @@ export function Networks({
   };
 
   const view = bounded(resource.data);
+  const containerChoices = (containers?.data ?? [])
+    .filter((candidate) => immutableContainerId(candidate.id))
+    .map((candidate) => ({
+      value: candidate.id,
+      label: `${candidate.name || 'Unnamed container'} · ${shortId(candidate.id)} · ${candidate.state}`,
+    }));
+  React.useEffect(() => {
+    if (!container) return;
+    if (containerChoices.some((choice) => choice.value === container)) return;
+    setContainer('');
+    setOperation({ state: 'idle', request: null, error: null });
+    setDisconnectRequest(null);
+  }, [container, containerChoices, containers]);
   const inventoryState: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
     ? 'loading'
     : resource.error
@@ -248,18 +265,30 @@ export function Networks({
       <Card justify="start" variant="outline">
         <CardContent gap={1}>
           <Text label="Container attachment" />
-          <Text label="Required · complete immutable container ID" color="text-dim" />
-          <Entry
-            value={container}
-            placeholder="Complete container ID"
-            width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
-            enabled={operation.state !== 'loading'}
-            onChange={(event) => {
-              setContainer(String(event.value ?? ''));
-              setOperation({ state: 'idle', request: null, error: null });
-              setDisconnectRequest(null);
-            }}
-          />
+          <Text label="Required · choose an inspected container" color="text-dim" wrap />
+          {containerChoices.length ? (
+            <Select
+              value={container}
+              choices={containerChoices}
+              tooltip={container || 'Choose a container by name and immutable ID'}
+              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
+              enabled={operation.state !== 'loading'}
+              onChange={(event) => {
+                setContainer(String(event.value ?? ''));
+                setOperation({ state: 'idle', request: null, error: null });
+                setDisconnectRequest(null);
+              }}
+            />
+          ) : (
+            <InlineMessage
+              label={
+                containers.loading
+                  ? 'Reading containers…'
+                  : 'No containers are available to attach.'
+              }
+              tone="neutral"
+            />
+          )}
           <Column gap={1} align="start">
             <Text label="Optional aliases" color="text-dim" />
             <Entry

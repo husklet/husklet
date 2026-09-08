@@ -140,10 +140,6 @@ export function Overview({
     terminals,
     (records) => `${records.filter((tab) => tab.pinned).length} pinned`,
   );
-  const extensionsSummary = resourceSummary(extensions, (records) => {
-    const faults = records.filter((extension) => extension.status.startsWith('fault:')).length;
-    return faults ? `${faults} need attention` : 'No reported faults';
-  });
   const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
   return (
     <Scroll grow height="fill">
@@ -177,7 +173,6 @@ export function Overview({
           <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
           <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
           <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
-          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
         </Row>
         <ErrorText
           error={

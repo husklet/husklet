@@ -265,7 +265,7 @@ export function Top({
     ) : section === 'volumes' ? (
       <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
     ) : section === 'networks' ? (
-      <Networks api={api} resource={networks} />
+      <Networks api={api} resource={networks} containers={containers} />
     ) : (
       <Terminals api={api} resource={terminals} />
     );

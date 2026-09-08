@@ -65,6 +65,39 @@ const api = {
   extensions: { list: async () => [] },
 };
 
+function containerResource(...ids) {
+  return {
+    data: ids.map((id, index) => ({
+      id,
+      name: `container-${index + 1}`,
+      image: 'alpine:3.20',
+      state: 'exited',
+      created: 1,
+      generation: 1,
+    })),
+    loading: false,
+    error: null,
+    reload: async () => {},
+  };
+}
+
+function chooseContainer(stage, id) {
+  const choice = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Choices')
+    .find((patch) => patch.SetProp.value?.Choices?.some((entry) => entry.value === id));
+  assert.ok(choice, `container choice ${id} is available`);
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: choice.SetProp.id,
+      id: `${choice.SetProp.id}:Change`,
+      value: id,
+    }),
+    `container choice ${id} changes`,
+  );
+}
+
 test('Top sidebar preference is narrowly bounded and retried with fresh CAS authority', async () => {
   assert.equal(SIDEBAR_SAVE_DELAY_MS, 250);
   assert.equal(boundedSidebarWidth(159), 160);
@@ -163,6 +196,74 @@ test('Top presents workspace, extensions, and every resource navigation choice',
   assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
+});
+
+test('Top network attachment selects a named container while retaining immutable authority', async () => {
+  const containerId = 'a'.repeat(64);
+  const stage = host();
+  stage.render(
+    h(Top, {
+      api,
+      initial: {
+        containers: [
+          {
+            id: containerId,
+            name: 'api-worker',
+            image: 'alpine:3.20',
+            state: 'exited',
+            created: 1,
+            generation: 2,
+          },
+        ],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [
+          {
+            id: 'b'.repeat(32),
+            name: 'development',
+            driver: 'bridge',
+            scope: 'local',
+            kind: 'custom',
+            endpoints: { containers: [], truncated: false },
+          },
+        ],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  invoke(stage, 'Networks');
+  await settled();
+  assert.equal(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .some(
+        (patch) =>
+          patch.SetProp?.prop === 'Placeholder' &&
+          patch.SetProp.value?.Text === 'Complete container ID',
+      ),
+    false,
+    'the real Top workflow does not ask users to transcribe an immutable ID',
+  );
+  const choicePatch = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Choices')
+    .find((patch) => patch.SetProp.value?.Choices?.some((choice) => choice.value === containerId));
+  assert.deepEqual(choicePatch?.SetProp.value, {
+    Choices: [{ value: containerId, label: `api-worker · ${'a'.repeat(12)} · exited` }],
+  });
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: choicePatch.SetProp.id,
+      id: `${choicePatch.SetProp.id}:Change`,
+      value: containerId,
+    }),
+    'the native selector reports the exact immutable ID',
+  );
+  await settled();
+  assert.ok(labelled(stage, 'Connect'));
 });
 
 test('Top sidebar divider reports and bounds its retained position', () => {
@@ -1670,7 +1771,6 @@ test('overview never presents stale inventory counts as current during loading o
     'Volumes',
     'Networks',
     'Terminal tabs',
-    'Extensions',
   ]) {
     assert.ok(
       patches.some(
@@ -1700,7 +1800,11 @@ test('overview never presents stale inventory counts as current during loading o
     'loading cannot retain stale running claims',
   );
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
-  assert.ok(labelled(stage, 'No reported faults'));
+  assert.equal(
+    labelled(stage, 'No reported faults'),
+    undefined,
+    'extension management remains a single clear sidebar destination',
+  );
   assert.equal(
     ancestorProperty(stage, 'Containers', 'Row', 'Wrap')?.Flag,
     true,
@@ -3254,6 +3358,7 @@ test('volume and network panels render bounded real inventories and controls', (
   const networkFrame = host().render(
     h(Networks, {
       api,
+      containers: containerResource(),
       resource: resource([
         { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
         { id: 'n2', name: 'bridge', driver: 'bridge', scope: 'local', kind: 'builtin' },
@@ -3347,7 +3452,7 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
     reload: async () => {},
   };
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource }));
+  stage.render(h(Networks, { api: controlled, resource, containers: containerResource() }));
   invoke(stage, 'Inspect');
   await settled();
   await settled();
@@ -3380,6 +3485,7 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
     h(Networks, {
       api: { networks: { ...api.networks, inspect: async () => ({}) } },
       resource,
+      containers: containerResource(),
     }),
   );
   invoke(empty, 'Inspect');
@@ -5017,8 +5123,14 @@ test('volume and network mutations expose danger only on final confirm and cance
       endpoints: { containers: [containerId], truncated: false },
     },
   ]);
-  networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
-  change(networks, 'Complete container ID', containerId);
+  networks.render(
+    h(Networks, {
+      api: controlled,
+      resource: initialNetworks,
+      containers: containerResource(containerId),
+    }),
+  );
+  chooseContainer(networks, containerId);
   invoke(networks, 'Disconnect');
   assert.equal(isDestructive(networks, 'Confirm disconnect'), true);
   assert.ok(
@@ -5041,7 +5153,13 @@ test('volume and network mutations expose danger only on final confirm and cance
   const refreshedNetworks = resource([
     { id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
   ]);
-  networks.render(h(Networks, { api: controlled, resource: refreshedNetworks }));
+  networks.render(
+    h(Networks, {
+      api: controlled,
+      resource: refreshedNetworks,
+      containers: containerResource(containerId),
+    }),
+  );
   networks.surface.dispatch({
     trigger: 'Invoke',
     node: staleConfirm,
@@ -5171,9 +5289,10 @@ test('truncated network membership explains why inspection is required and resol
     h(Networks, {
       api: controlled,
       resource: { data: [network], loading: false, error: null, reload: async () => {} },
+      containers: containerResource(container),
     }),
   );
-  change(stage, 'Complete container ID', container);
+  chooseContainer(stage, container);
   assert.ok(labelled(stage, 'Attachment status unknown for this container · Inspect to resolve'));
   assert.equal(labelled(stage, 'Connect'), undefined);
   invoke(stage, 'Inspect');
@@ -5216,9 +5335,10 @@ test('network connect validates aliases, exposes progress, success, bounded fail
     reload: async () => calls.push(['reload']),
   };
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource }));
+  stage.render(
+    h(Networks, { api: controlled, resource, containers: containerResource('b'.repeat(64)) }),
+  );
 
-  change(stage, 'Complete container ID', 'friendly');
   change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
   await settled();
   assert.deepEqual(
@@ -5232,7 +5352,7 @@ test('network connect validates aliases, exposes progress, success, bounded fail
     'an invalid identity offers no endpoint action',
   );
 
-  change(stage, 'Complete container ID', 'b'.repeat(64));
+  chooseContainer(stage, 'b'.repeat(64));
   invoke(stage, 'Connect');
   await settled();
   assert.deepEqual(calls, [], 'duplicate aliases never reach control authority');
@@ -5308,7 +5428,7 @@ test('network creation exposes pending failure and retained retry before claimin
     reload: async () => calls.push(['reload']),
   };
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource }));
+  stage.render(h(Networks, { api: controlled, resource, containers: containerResource() }));
   change(stage, 'Network name', ' private-net ');
   invoke(stage, 'Create');
   await settled();
@@ -5361,12 +5481,18 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
     reload: async () => {},
   };
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource }));
-  change(stage, 'Complete container ID', first);
+  stage.render(
+    h(Networks, {
+      api: controlled,
+      resource,
+      containers: containerResource(first, second),
+    }),
+  );
+  chooseContainer(stage, first);
   invoke(stage, 'Disconnect');
   assert.ok(labelled(stage, `Disconnect immutable container ${first} from network ${network}?`));
   const staleConfirm = labelled(stage, 'Confirm disconnect').SetProp.id;
-  change(stage, 'Complete container ID', second);
+  chooseContainer(stage, second);
   stage.surface.dispatch({
     trigger: 'Invoke',
     node: staleConfirm,
