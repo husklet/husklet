@@ -31,3 +31,13 @@ fn mapped_redispatch_consumes_the_miss_before_signal_handler_rip() {
         "signal-handler RIP consumed the interrupted branch's stale marker"
     );
 }
+
+#[test]
+fn mapped_redispatch_consumes_refused_miss_at_the_exact_target() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(253), 0);
+}
+
+#[test]
+fn teardown_finalizes_a_pending_fallthrough_miss() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(254), 0);
+}

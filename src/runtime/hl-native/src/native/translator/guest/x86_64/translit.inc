@@ -5619,7 +5619,7 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
-    if (scenario >= 247 && scenario <= 252) {
+    if (scenario >= 247 && scenario <= 254) {
         pid_t child = fork();
         if (child < 0) return 98;
         if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(scenario - 121));
@@ -10939,7 +10939,22 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
     if (target_block == NULL || target_block->host_entry_off == 0) goto done_call_ibtc;
 
-    if (scenario >= 126 && scenario <= 131) {
+    if (scenario >= 126 && scenario <= 133) {
+        if (scenario == 132) {
+            ibtc_publish(&g_ibtc[ibtc_index(target)], 0, NULL);
+            cpu.rip = target;
+            cpu.jcc_ibtc_miss = TL_JCC_IBTC_MISS;
+            translit_jcc_ibtc_fast_redispatch(&cpu, NULL);
+            ibtc_ent refused = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+            result = cpu.jcc_ibtc_miss == 0 && refused.target == 0 ? 0 : 226;
+            goto done_call_ibtc;
+        }
+        if (scenario == 133) {
+            cpu.jcc_ibtc_miss = TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_FETCH;
+            translit_jcc_ibtc_finalize_cpu(&cpu);
+            result = cpu.jcc_ibtc_miss == 0 ? 0 : 227;
+            goto done_call_ibtc;
+        }
         static const uint32_t miss_kinds[] = {
             TL_JCC_IBTC_MISS,
             TL_DIRECT_JMP_IBTC_MISS,
