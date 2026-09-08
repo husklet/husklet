@@ -56,6 +56,9 @@ impl<T> Default for Outbox<T> {
 impl<T: Copy + PartialEq> Outbox<T> {
     /// Messages held per channel before backpressure applies.
     pub const DEPTH: usize = 32;
+    /// Messages held across a whole session, including queues whose owner
+    /// failed to pair channel closure with explicit outbox disposal.
+    pub const LIMIT: usize = Self::DEPTH * Channels::LIMIT;
 
     #[must_use]
     pub fn new() -> Self {
@@ -104,7 +107,13 @@ impl<T: Copy + PartialEq> Outbox<T> {
             superseded: 0,
         };
         match channels.reserve(channel) {
-            Ok(Permission::Send) => self.enqueue(channel, message, purpose),
+            Ok(Permission::Send) => {
+                let emission = self.enqueue(channel, message, purpose);
+                if emission == Emission::Blocked {
+                    channels.refund(channel);
+                }
+                emission
+            }
             Ok(Permission::Await) => self.withhold(channel, message, purpose),
             Err(_) => Emission::Ignored,
         }
@@ -113,8 +122,8 @@ impl<T: Copy + PartialEq> Outbox<T> {
     /// Takes what may now be sent on a channel.
     pub fn drain(&mut self, channel: ChannelId) -> Vec<Message<T>> {
         self.queues
-            .get_mut(&channel)
-            .map(|queue| queue.drain(..).collect())
+            .remove(&channel)
+            .map(|queue| queue.into_iter().collect())
             .unwrap_or_default()
     }
 
@@ -124,8 +133,9 @@ impl<T: Copy + PartialEq> Outbox<T> {
     }
 
     fn enqueue(&mut self, channel: ChannelId, message: Message<T>, purpose: Purpose) -> Emission {
+        let full = self.len() >= Self::LIMIT;
         let queue = self.queues.entry(channel).or_default();
-        if queue.len() < Self::DEPTH {
+        if !full && queue.len() < Self::DEPTH {
             queue.push_back(message);
             return Emission::Queued;
         }
@@ -156,6 +166,9 @@ impl<T: Copy + PartialEq> Outbox<T> {
         }
         let existing = queue.iter().rposition(|held| held.topic == message.topic);
         let Some(index) = existing else {
+            if queue.is_empty() {
+                return None;
+            }
             // A different topic on a full coalescing channel: drop the oldest
             // rather than refuse, since the queue is already bounded.
             let dropped = queue.pop_front().map_or(0, |_| 1);
@@ -303,5 +316,50 @@ mod tests {
         outbox.discard(channel);
 
         assert!(outbox.is_empty(), "a dead session must not retain its queue");
+    }
+
+    #[test]
+    fn retired_channel_queues_cannot_grow_a_session_without_bound() {
+        let mut channels = Channels::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
+        let mut blocked = 0;
+
+        for value in 0..(Channels::LIMIT + 8) {
+            let channel = channels.open(Purpose::Stream).expect("one live channel");
+            for _ in 0..Outbox::<Topic>::DEPTH {
+                if outbox.emit(&mut channels, channel, None, payload(value as u8)) == Emission::Blocked {
+                    blocked += 1;
+                }
+            }
+            // Deliberately model a faulty owner that omits `outbox.discard`.
+            channels.close(channel).expect("closed");
+        }
+
+        assert_eq!(outbox.len(), Outbox::<Topic>::LIMIT);
+        assert!(blocked > 0, "retired queues eventually apply global backpressure");
+    }
+
+    #[test]
+    fn a_refused_enqueue_refunds_the_credit_it_could_not_use() {
+        let mut channels = Channels::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
+        let channel = channels.open(Purpose::Stream).expect("opened");
+        for value in 0..Outbox::<Topic>::DEPTH {
+            assert_eq!(
+                outbox.emit(&mut channels, channel, None, payload(value as u8)),
+                Emission::Queued
+            );
+        }
+        channels.replenish(channel, u32::MAX).expect("forged credit is clamped");
+
+        assert_eq!(
+            outbox.emit(&mut channels, channel, None, payload(99)),
+            Emission::Blocked
+        );
+        assert_eq!(
+            channels.credit(channel),
+            Some(Channels::CREDIT),
+            "a frame that was neither retained nor sent spends no credit"
+        );
     }
 }

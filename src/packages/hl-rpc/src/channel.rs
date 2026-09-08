@@ -207,6 +207,15 @@ impl Channels {
         Ok(())
     }
 
+    /// Restores one reservation when an outbox refuses the corresponding
+    /// frame. This is crate-private because only the queue can prove no frame
+    /// was retained or sent.
+    pub(crate) fn refund(&mut self, id: ChannelId) {
+        if let Some(channel) = self.open.get_mut(&id) {
+            channel.credit = channel.credit.saturating_add(1).min(Self::CREDIT);
+        }
+    }
+
     /// Clears the coalescing tally after the superseding frame is sent.
     pub fn resolve(&mut self, id: ChannelId) -> u64 {
         self.open
