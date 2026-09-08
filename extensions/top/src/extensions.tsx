@@ -472,13 +472,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       const result = await api.extensions[updating ? 'updateAndWait' : 'installAndWait'](
         acquisition.job,
         acquisition.revision,
-        granted,
-        grantedContainers,
-        grantedImages,
-        grantedNetworks,
-        grantedVolumes,
-        grantedFilesystem,
-        { workspaceEnvironment: grantedWorkspaceEnvironment },
+        {
+          capabilities: granted,
+          containers: grantedContainers,
+          images: grantedImages,
+          networks: grantedNetworks,
+          volumes: grantedVolumes,
+          filesystem: grantedFilesystem,
+          workspaceEnvironment: grantedWorkspaceEnvironment,
+        },
       );
       setAcquisition(null);
       setReference('');

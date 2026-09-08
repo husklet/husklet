@@ -2718,6 +2718,17 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
           );
         else if (frame.payload.call === 'extension_install') {
           assert.equal(frame.payload.with.image_digest, candidate.image_digest);
+          assert.deepEqual(frame.payload.with.containers, {
+            selectors: [{ name: 'postgres' }],
+            create: false,
+          });
+          assert.deepEqual(frame.payload.with.filesystem, {
+            read: [{ exact: 'schema.sql' }],
+            write: [],
+            create: [],
+            delete: [],
+            rename: [],
+          });
           socket.write(
             encode({
               channel: 21,
@@ -2751,9 +2762,17 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).extensions.installAndWait('job-1', 7, [
-      'extensions:read',
-    ]);
+    const result = await workspace(session).extensions.installAndWait('job-1', 7, {
+      capabilities: ['extensions:read'],
+      containers: { selectors: [{ name: 'postgres' }], create: false },
+      filesystem: {
+        read: [{ exact: 'schema.sql' }],
+        write: [],
+        create: [],
+        delete: [],
+        rename: [],
+      },
+    });
     assert.equal(result.changed, true);
     assert.deepEqual(calls, [
       'extension_acquisition_status',

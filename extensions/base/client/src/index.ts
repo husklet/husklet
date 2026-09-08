@@ -3251,14 +3251,18 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     operation,
     job,
     revision,
-    granted,
-    containers = { selectors: [], create: false },
-    images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
-    networks = { selectors: [], create: false },
-    volumes = { selectors: [], create: false },
-    filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
-    { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
+    review,
+    { timeoutMs = 30_000 } = {},
   ): ReturnType<WorkspaceApi['extensions']['installAndWait']> => {
+    const {
+      capabilities: granted,
+      containers = { selectors: [], create: false },
+      images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
+      networks = { selectors: [], create: false },
+      volumes = { selectors: [], create: false },
+      filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
+      workspaceEnvironment = { read: [], write: [] },
+    } = review;
     if (!Number.isSafeInteger(revision) || revision < 0) {
       throw new TypeError(
         `extension ${operation} wait requires a nonnegative safe integer revision`,
@@ -3332,52 +3336,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       await stop();
     }
   };
-  api.extensions.installAndWait = (
-    job,
-    revision,
-    granted,
-    containers,
-    images,
-    networks,
-    volumes,
-    filesystem,
-    options,
-  ) =>
-    commitAcquisitionAndWait(
-      'install',
-      job,
-      revision,
-      granted,
-      containers,
-      images,
-      networks,
-      volumes,
-      filesystem,
-      options,
-    );
-  api.extensions.updateAndWait = (
-    job,
-    revision,
-    granted,
-    containers,
-    images,
-    networks,
-    volumes,
-    filesystem,
-    options,
-  ) =>
-    commitAcquisitionAndWait(
-      'update',
-      job,
-      revision,
-      granted,
-      containers,
-      images,
-      networks,
-      volumes,
-      filesystem,
-      options,
-    );
+  api.extensions.installAndWait = (job, revision, review, options) =>
+    commitAcquisitionAndWait('install', job, revision, review, options);
+  api.extensions.updateAndWait = (job, revision, review, options) =>
+    commitAcquisitionAndWait('update', job, revision, review, options);
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (
       typeof job !== 'string' ||

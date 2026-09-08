@@ -152,6 +152,16 @@ export interface WorkspaceEnvironmentGrant {
   read: ({ workspace: string; name: string } | { all: true })[];
   write: ({ workspace: string; name: string } | { all: true })[];
 }
+/** The complete authority approved for one reviewed extension image. */
+export interface ExtensionReviewedGrants {
+  capabilities: ExtensionCapability[];
+  containers?: ContainerGrant;
+  images?: ImageGrant;
+  networks?: NetworkGrant;
+  volumes?: VolumeGrant;
+  filesystem?: FilesystemGrant;
+  workspaceEnvironment?: WorkspaceEnvironmentGrant;
+}
 export interface ExtensionCandidate {
   name: string;
   version: string;
@@ -807,13 +817,8 @@ export interface WorkspaceApi {
     installAndWait(
       job: string,
       revision: number,
-      granted: ExtensionCapability[],
-      containers?: ContainerGrant,
-      images?: ImageGrant,
-      networks?: NetworkGrant,
-      volumes?: VolumeGrant,
-      filesystem?: FilesystemGrant,
-      options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
+      review: ExtensionReviewedGrants,
+      options?: { timeoutMs?: number },
     ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
@@ -834,13 +839,8 @@ export interface WorkspaceApi {
     updateAndWait(
       job: string,
       revision: number,
-      granted: ExtensionCapability[],
-      containers?: ContainerGrant,
-      images?: ImageGrant,
-      networks?: NetworkGrant,
-      volumes?: VolumeGrant,
-      filesystem?: FilesystemGrant,
-      options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
+      review: ExtensionReviewedGrants,
+      options?: { timeoutMs?: number },
     ): Promise<
       | { changed: true; extension: ExtensionSummary }
       | { changed: false; name: string; image_digest: string; revision: number }
