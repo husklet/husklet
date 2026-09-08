@@ -10,7 +10,6 @@ import {
   EmptyState,
   Entry,
   Heading,
-  ObjectInspector,
   ResourceState,
   Row,
   Scroll,
@@ -23,7 +22,6 @@ const RESOURCE_WIDTH = { chars: 68 } as const;
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 type Inspection = {
   name: string;
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -222,11 +220,12 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
       ) : inspection.count === 0 ? (
         <EmptyState label="No volume details" detail="The host returned no inspectable fields." />
       ) : (
-        <ObjectInspector
-          value={inspection.detail}
-          {...INSPECTOR_BOUNDS}
-          height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-        />
+        <Column gap={1}>
+          <Heading label="Volume details" scale="caption" />
+          <Text label={`Name · ${inspection.detail?.name}`} />
+          <Text label={`Driver · ${inspection.detail?.driver}`} />
+          <Text label={`Immutable generation · ${inspection.detail?.generation}`} wrap />
+        </Column>
       )}
     </CardContent>
   );

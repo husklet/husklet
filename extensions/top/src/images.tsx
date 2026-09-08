@@ -9,7 +9,6 @@ import {
   Entry,
   Heading,
   Meter,
-  ObjectInspector,
   ResourceState,
   Row,
   Scroll,
@@ -24,7 +23,6 @@ const RESOURCE_WIDTH = { chars: 68 } as const;
 import { ImageDetailsSource, bounded, boundedMessage, bytes, shortId } from './model.js';
 import type { Resource } from './overview.js';
 
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 const TERMINAL_PULL_STATES = new Set(['complete', 'failed', 'cancelled']);
 type Inspection = {
   id: string;
@@ -373,13 +371,29 @@ function PullStatus({
   );
 }
 
-function StructuredDetail({ value }: { value: unknown }) {
+function StructuredDetail({ value }: { value: ImageDetails | null }) {
+  if (!value) return null;
   return (
-    <ObjectInspector
-      value={value}
-      {...INSPECTOR_BOUNDS}
-      height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-    />
+    <Column gap={1}>
+      <Heading label="Image details" scale="caption" />
+      <Row gap={1} wrap>
+        <Text label={`Platform · ${value.os}/${value.architecture}`} />
+        <Text label={`Size · ${bytes(value.size)}`} />
+      </Row>
+      <Text label={`Created · ${value.created}`} color="text-dim" />
+      <Text label={`Immutable image ID · ${value.id}`} color="text-dim" wrap />
+      <Text
+        label={`References · ${value.references.length ? value.references.join(', ') : 'None'}`}
+        wrap
+      />
+      <Text
+        label={`Entrypoint · ${value.entrypoint.length ? value.entrypoint.join(' ') : 'Default'}`}
+        wrap
+      />
+      <Text label={`Command · ${value.command.length ? value.command.join(' ') : 'None'}`} wrap />
+      <Text label={`Working directory · ${value.working_directory || 'Default'}`} wrap />
+      <Text label={`User · ${value.user || 'Default'}`} wrap />
+    </Column>
   );
 }
 function Page({

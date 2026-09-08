@@ -3048,10 +3048,10 @@ test('volume inspection exposes loading, retry, empty and bounded typed details'
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.name'),
-    'volume inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Volume details'));
+  assert.ok(labelled(stage, 'Name · cache'));
+  assert.ok(labelled(stage, 'Driver · local'));
+  assert.equal(labelled(stage, '$.name'), undefined);
   assert.equal(
     details.answer({ source: 205, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
     2,
@@ -4262,10 +4262,10 @@ test('container details load through the bounded source and a failed read is ret
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(
-    labelled(stage, '$.id'),
-    'container inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Container details'));
+  assert.ok(labelled(stage, 'Name · api'));
+  assert.ok(labelled(stage, 'Image · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 202, version: 1, rows: 5 } }]);
   assert.equal(
     details.answer({ source: 202, version: 1, id: 2, range: { start: 0, count: 999 } }).rows.length,
