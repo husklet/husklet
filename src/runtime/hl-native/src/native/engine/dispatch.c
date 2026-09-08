@@ -422,7 +422,7 @@ static void run_guest(struct cpu *c) {
                     map_clear();
                     pend_reset();
 #ifdef G_PENDING_RESET
-                    G_PENDING_RESET();
+                    G_PENDING_RESET(HL_PENDING_RESET_CACHE);
 #endif
                     // IBTC bodies point into the cache we just dropped
                     memset(g_ibtc, 0, sizeof g_ibtc);
