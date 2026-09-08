@@ -65,6 +65,47 @@ export class ExecutionOperationError extends Error {
   }
 }
 
+/** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
+export class ExecutionOutputGapError extends Error {
+  readonly executionId;
+  readonly after;
+  readonly next;
+
+  constructor(executionId, after, next) {
+    super(`execution ${executionId} output has a gap after sequence ${after}`);
+    this.name = 'ExecutionOutputGapError';
+    this.executionId = executionId;
+    this.after = after;
+    this.next = next;
+  }
+}
+
+function outputAbort(signal) {
+  const error = new Error('execution output iteration aborted', { cause: signal?.reason });
+  error.name = 'AbortError';
+  return error;
+}
+
+function requireOutputActive(signal) {
+  if (signal?.aborted) throw outputAbort(signal);
+}
+
+function outputPoll(ms, signal) {
+  requireOutputActive(signal);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      reject(outputAbort(signal));
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export class TerminalOperationError extends Error {
   readonly operation;
@@ -642,6 +683,35 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           }),
           'execution_output',
         );
+      },
+      executionOutputPages: async function* (
+        id,
+        {
+          after = 0,
+          limit = 16,
+          pollIntervalMs = 50,
+          signal,
+        }: {
+          after?: number;
+          limit?: number;
+          pollIntervalMs?: number;
+          signal?: AbortSignal;
+        } = {},
+      ) {
+        if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 10 || pollIntervalMs > 60_000)
+          throw new RangeError('execution output poll interval must be between 10 and 60000ms');
+        const executionId = immutableIdentity(id, [32], 'execution');
+        let cursor = after;
+        for (;;) {
+          requireOutputActive(signal);
+          const page = await api.containers.executionOutput(executionId, { after: cursor, limit });
+          requireOutputActive(signal);
+          if (page.gap) throw new ExecutionOutputGapError(executionId, cursor, page.next);
+          yield page;
+          cursor = page.next;
+          if (page.eof) return;
+          if (!page.more) await outputPoll(pollIntervalMs, signal);
+        }
       },
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) =>
         expect(
@@ -2927,6 +2997,7 @@ export const protocolCoverage = Object.freeze({
       'executions',
       'executionLogs',
       'executionOutput',
+      'executionOutputPages',
       'waitExecution',
       'signalExecution',
       'removeExecution',

@@ -7,11 +7,111 @@ import test from 'node:test';
 import {
   connect,
   ExecutionOperationError,
+  ExecutionOutputGapError,
   Session,
   TerminalOperationError,
   workspace,
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
+
+test('real Unix output pages apply backpressure, cancel locally, and fail closed on a gap', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-pages-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'e'.repeat(32);
+  const connections = new Set();
+  let outputCalls = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        if (frame.payload.call === 'execution_output') {
+          outputCalls += 1;
+          const page =
+            outputCalls === 1
+              ? { entries: [], next: 0, more: false, eof: false, gap: false }
+              : {
+                  entries: [
+                    { sequence: 10, timestamp_ms: 1, stream: 'stdout', bytes: [114, 111, 119] },
+                  ],
+                  next: 10,
+                  more: false,
+                  eof: false,
+                  gap: true,
+                };
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'execution_output', with: page },
+            }),
+          );
+        } else if (frame.payload.call === 'workspace_info') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'demo', image: 'alpine', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const controller = new AbortController();
+    const pages = host.containers.executionOutputPages(executionId, {
+      pollIntervalMs: 100,
+      signal: controller.signal,
+    });
+    assert.deepEqual((await pages.next()).value, {
+      entries: [],
+      next: 0,
+      more: false,
+      eof: false,
+      gap: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(outputCalls, 1, 'an unconsumed iterator never prefetches output');
+    const waiting = pages.next();
+    controller.abort('query view closed');
+    await assert.rejects(waiting, (error) => error.name === 'AbortError');
+    assert.equal(outputCalls, 1, 'poll cancellation sends no ambiguous ordered call');
+    assert.equal((await host.info()).name, 'demo', 'local cancellation leaves the session usable');
+
+    const incomplete = host.containers.executionOutputPages(executionId, { pollIntervalMs: 10 });
+    await assert.rejects(incomplete.next(), (error) => {
+      assert(error instanceof ExecutionOutputGapError);
+      assert.deepEqual([error.executionId, error.after, error.next], [executionId, 0, 10]);
+      return true;
+    });
+    assert.equal((await host.info()).name, 'demo', 'a retention gap does not corrupt correlation');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('real Unix stream drives a typed inventory watcher and returns event credit', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-client-'));
@@ -283,7 +383,9 @@ test('real Unix acquisition wait reconnects from authoritative status without a 
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4, { timeoutMs: 100 });
+    const result = await workspace(session).extensions.waitForAcquisition('job-7', 4, {
+      timeoutMs: 100,
+    });
     assert.equal(result.changed, true);
     assert.equal(result.status.revision, 5);
     assert.deepEqual(calls, [

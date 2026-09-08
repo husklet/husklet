@@ -76,24 +76,18 @@ try {
   ]);
   const credential = new TextDecoder().decode(Uint8Array.from(credentialBytes)).trimEnd();
 
-  const executeCsv = async (statement: string): Promise<string[][]> => {
+  const executeCsv = async (statement: string, signal?: AbortSignal): Promise<string[][]> => {
     const executionId = await host.containers.exec(container.id, container.generation, {
       // Exact argv: query whitespace and metacharacters never become shell syntax.
       command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
       environment: [['PGPASSWORD', credential]],
     });
-    let cursor = 0;
     let stdout = '';
     let stderr = '';
     const stdoutDecoder = new TextDecoder();
     const stderrDecoder = new TextDecoder();
     try {
-      for (;;) {
-        const page = await host.containers.executionOutput(executionId, {
-          after: cursor,
-          limit: 16,
-        });
-        if (page.gap) throw new Error('query output aged out before it could be read');
+      for await (const page of host.containers.executionOutputPages(executionId, { signal })) {
         for (const entry of page.entries) {
           if (entry.stream === 'stdout') {
             stdout += stdoutDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
@@ -101,10 +95,6 @@ try {
             stderr += stderrDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
           }
         }
-        cursor = page.next;
-        if (page.more) continue;
-        if (page.eof) break;
-        await host.containers.waitExecution(executionId, { timeoutMs: 30_000 });
       }
       stdout += stdoutDecoder.decode();
       stderr += stderrDecoder.decode();
@@ -113,7 +103,13 @@ try {
         throw new Error(stderr.trim() || `psql exited ${finished.exit_code}`);
       return csv(stdout);
     } finally {
-      await host.containers.removeExecution(executionId);
+      if (signal?.aborted) {
+        await host.containers.signalExecution(executionId, 'SIGTERM').catch(() => {});
+        await host.containers.waitExecution(executionId, { timeoutMs: 1_000 }).catch(() => {});
+        await host.containers.removeExecution(executionId).catch(() => {});
+      } else {
+        await host.containers.removeExecution(executionId);
+      }
     }
   };
 
@@ -132,7 +128,10 @@ try {
   }));
   const cache = new Map<string, string[][]>([['0:initial', firstPage]]);
   const source = 1;
-  const provideRows = async (request: RowRequest): Promise<readonly DataRow[]> => {
+  const provideRows = async (
+    request: RowRequest,
+    { signal }: { signal: AbortSignal },
+  ): Promise<readonly DataRow[]> => {
     if (request.source !== source) return [];
     const cacheKey = `${request.range.start}:${JSON.stringify(request.sort)}:${request.filter ?? ''}`;
     let records =
@@ -146,6 +145,7 @@ try {
         : '';
       records = await executeCsv(
         `SELECT * FROM (${query}) AS husklet_page${order} LIMIT ${request.range.count} OFFSET ${request.range.start}`,
+        signal,
       );
       records.shift();
       cache.set(cacheKey, records);

@@ -10,6 +10,13 @@ export declare class ExecutionOperationError extends Error {
     readonly execution: any;
     constructor(executionId: any, phase: any, cause: any, execution?: any);
 }
+/** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
+export declare class ExecutionOutputGapError extends Error {
+    readonly executionId: any;
+    readonly after: any;
+    readonly next: any;
+    constructor(executionId: any, after: any, next: any);
+}
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export declare class TerminalOperationError extends Error {
     readonly operation: any;

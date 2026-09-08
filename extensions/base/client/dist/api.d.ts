@@ -554,6 +554,12 @@ export declare class ExecutionOperationError extends Error {
     /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
     readonly execution?: ExecutionSummary;
 }
+/** The host retained output, but not the complete sequence after the requested cursor. */
+export declare class ExecutionOutputGapError extends Error {
+    readonly executionId: string;
+    readonly after: number;
+    readonly next: number;
+}
 export declare class TerminalOperationError extends Error {
     readonly operation: 'open-tab';
     readonly result: Readonly<{
@@ -779,6 +785,16 @@ export interface WorkspaceApi {
             after?: number;
             limit?: number;
         }): Promise<ExecutionOutputPage>;
+        /**
+         * Pulls bounded output pages with consumer-driven backpressure until EOF.
+         * Cancellation is checked between calls and never tears down the ordered session.
+         */
+        executionOutputPages(id: string, options?: {
+            after?: number;
+            limit?: number;
+            pollIntervalMs?: number;
+            signal?: AbortSignal;
+        }): AsyncGenerator<ExecutionOutputPage, void, void>;
         waitExecution(id: string, options?: {
             timeoutMs?: number;
         }): Promise<ExecutionSummary>;
