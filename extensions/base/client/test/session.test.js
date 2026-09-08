@@ -1798,6 +1798,94 @@ test('real Unix partial EOF and illegal headers fail closed without sending cred
   }
 });
 
+test('truncated Unix frame tears down a pending call and subscription before clean reconnect', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-truncated-active-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let generation = 0;
+  const server = net.createServer((socket) => {
+    generation += 1;
+    const connection = generation;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        if (frame.payload.call === 'event_subscribe') {
+          socket.write(
+            encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'done' } }),
+          );
+          socket.write(
+            encode({
+              channel: 41,
+              kind: KIND.event,
+              payload: { snapshot: 'containers', of: [] },
+            }),
+          );
+        } else if (frame.payload.call === 'workspace_info' && connection === 1) {
+          const response = encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'workspace',
+              with: { name: 'broken', image: 'alpine', architecture: 'amd64' },
+            },
+          });
+          socket.end(response.subarray(0, response.length - 3));
+        } else if (frame.payload.call === 'workspace_info') {
+          socket.write(
+            encode({
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'reconnected', image: 'alpine', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: `fixture-${connection}`,
+          granted: ['containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const events = [];
+    const controller = new AbortController();
+    const first = await connect({ path: socketPath, timeout: 1_000 });
+    const stop = await workspace(first).watchContainers((snapshot) => events.push(snapshot));
+    while (events.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    const pending = workspace(first, { signal: controller.signal }).info();
+    await assert.rejects(pending, /unfinished frame/);
+    assert.match((await first.closed).message, /unfinished frame/);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    const delivered = events.length;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(events.length, delivered, 'closed sessions deliver no later subscription callbacks');
+    await assert.rejects(stop(), /closed/);
+
+    const second = await connect({ path: socketPath, timeout: 1_000 });
+    assert.equal((await workspace(second).info()).name, 'reconnected');
+    await second.close();
+    assert.equal(generation, 2, 'the same Unix listener accepted a fresh session generation');
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a malformed greeting fails immediately instead of stranding readiness', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-greeting-'));
   const socketPath = path.join(directory, 'host.sock');
