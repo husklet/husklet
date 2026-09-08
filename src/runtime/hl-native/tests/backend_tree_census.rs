@@ -283,7 +283,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "repetitions >= HL_A64_X86_BACKEDGE_BUDGET",
         "repetitions >= HL_A64_X86_BACKEDGE_BUDGET || linked >= HL_A64_X86_BACKEDGE_BUDGET",
         "cmp $7,%r14",
-        "mov %r14,%rax",
+        "mov %r12,%rax",
     ] {
         assert!(source.contains(contract), "missing stage-one contract {contract}");
     }
