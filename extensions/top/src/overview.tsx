@@ -61,7 +61,7 @@ export function Navigation({
   ];
   return (
     <Column grow={false} width="fill" height="fill" pad={1} gap={1}>
-      <Scroll grow height="fill">
+      <Scroll grow width="fill" height="fill">
         <Column gap={1}>
           {groups.map((group) => (
             <Column key={group.label} gap={0}>
@@ -142,7 +142,7 @@ export function Overview({
   );
   const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
   return (
-    <Scroll grow height="fill">
+    <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={2} gap={2}>
         <Heading label="Workspace overview" scale="title" />
         <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />

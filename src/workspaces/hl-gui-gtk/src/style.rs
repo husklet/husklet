@@ -179,7 +179,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-navigationmenu {{ padding: 2px 4px; }}\n\
          .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 0; border-radius: {radius}px; min-height: 30px; padding: 4px 8px; font-weight: 500; }}\n\
          .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; }}\n\
-         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {accent}; color: {ground}; }}\n\
+         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 3px 0 0 {accent}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
          .hl-heading {{ font-size: 16px; font-weight: 600; }}\n\
@@ -264,7 +264,9 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains("button:focus-visible { outline: 2px"));
         assert!(css.contains(".hl-navigationmenuitem { background: transparent"));
-        assert!(css.contains(".hl-navigationmenuitem:checked"));
+        assert!(css.contains(
+            ".hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover { background: #23262b; color: #e6e8eb; box-shadow: inset 3px 0 0 #4d9dff"
+        ));
         assert!(css.contains(".hl-card > box { padding: 8px"));
     }
 }

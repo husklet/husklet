@@ -3393,19 +3393,27 @@ test('volume and network panels render bounded real inventories and controls', (
     'only the custom network offers removal',
   );
   const networkStage = stageFromFrame(networkFrame);
-  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), undefined);
+  assert.deepEqual(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), {
+    Length: 'Fill',
+  });
   assert.equal(
     ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow'),
     undefined,
     'the attachment form stays content-height so the empty state follows it',
   );
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Width'), undefined);
+  assert.deepEqual(ancestorProperty(networkStage, 'private', 'Card', 'Width'), {
+    Length: 'Fill',
+  });
   assert.equal(
     ancestorProperty(networkStage, 'private', 'Card', 'Grow'),
     undefined,
     'inventory cards remain content-height on wide windows',
   );
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
+  assert.equal(
+    ancestorProperty(networkStage, 'private', 'Card', 'Justify'),
+    undefined,
+    'inventory cards retain horizontal fill instead of overriding it with start alignment',
+  );
   assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
     const id = frame.patches.find(

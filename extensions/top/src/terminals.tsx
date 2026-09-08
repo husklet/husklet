@@ -878,7 +878,7 @@ function Page({
   children: React.ReactNode;
 }) {
   return (
-    <Scroll grow height="fill">
+    <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={2}>
         <Row gap={2} align="center" justify="start" wrap>
           <Heading label={title} scale="title" />

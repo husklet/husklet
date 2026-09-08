@@ -262,7 +262,7 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Card justify="start" variant="outline">
+      <Card width="fill" variant="outline">
         <CardContent gap={1}>
           <Text label="Container attachment" />
           <Text label="Required · choose an inspected container" color="text-dim" wrap />
@@ -306,7 +306,7 @@ export function Networks({
       </Card>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
-      <Column grow={false} justify="stretch">
+      <Column width="fill" grow={false} justify="stretch">
         {inventoryState === 'empty' ? (
           <Column gap={1} align="start" justify="start">
             <Text label="No networks" />
@@ -343,11 +343,7 @@ export function Networks({
                     : null
                 : null;
               return (
-                <Card
-                  key={id}
-                  justify="start"
-                  variant={inspection.id === id ? 'filled' : 'outline'}
-                >
+                <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
                   <CardHeader
                     label={network.name}
                     detail={`${network.driver} · ${network.scope}`}
@@ -561,7 +557,7 @@ function Page({
   children: React.ReactNode;
 }) {
   return (
-    <Scroll grow height="fill">
+    <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={2}>
         <Heading label={label} scale="title" />
         <Text label={subtitle} color="text-dim" wrap />

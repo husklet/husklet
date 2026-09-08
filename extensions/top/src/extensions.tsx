@@ -635,7 +635,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     grantedWorkspaceEnvironment.write.length;
 
   const content = (
-    <Scroll grow height="fill">
+    <Scroll grow width="fill" height="fill">
       <Column pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
         <Text

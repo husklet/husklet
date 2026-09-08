@@ -171,7 +171,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const invalid = validationMessage(configuration, numbers);
   const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
-    <Scroll grow height="fill">
+    <Scroll grow width="fill" height="fill">
       <Column pad={2} gap={2}>
         <Card grow={false} justify="start" width="fill" variant="outline">
           <CardContent gap={2}>
