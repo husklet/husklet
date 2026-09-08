@@ -415,7 +415,11 @@ mod tests {
         let listener = Listener::open(&spec(&socket), |_| {}).expect("bound");
 
         let mode = std::fs::metadata(&socket).expect("metadata").permissions().mode();
-        assert_eq!(mode & 0o777, 0o666, "the owner-only directory is the credential boundary");
+        assert_eq!(
+            mode & 0o777,
+            0o666,
+            "the owner-only directory is the credential boundary"
+        );
         listener.close().expect("closed");
     }
 

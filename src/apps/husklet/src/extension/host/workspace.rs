@@ -385,8 +385,7 @@ impl Supply for Workspace {
     fn attend(&self, plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
         conversation.with_events(self.events.clone());
         let extensions = Extensions::open(&self.config).map_err(|error| error.to_string())?;
-        let state = super::super::StateBlob::new(&self.root(), &plan.record.name)
-            .map_err(|error| error.to_string())?;
+        let state = super::super::StateBlob::new(&self.root(), &plan.record.name).map_err(|error| error.to_string())?;
         conversation.with_extension_events(extensions.extension_events());
         let console = Console;
         let terminal: &dyn TerminalSurface = self.terminal.as_deref().unwrap_or(&console);

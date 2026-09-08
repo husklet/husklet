@@ -292,13 +292,19 @@ impl<'de> serde::Deserialize<'de> for NetworkSelector {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Raw { id: Option<String>, name: Option<String>, all: Option<bool> }
+        struct Raw {
+            id: Option<String>,
+            name: Option<String>,
+            all: Option<bool>,
+        }
         let raw = <Raw as serde::Deserialize>::deserialize(deserializer)?;
         match (raw.id, raw.name, raw.all) {
             (Some(id), None, None) => Ok(Self::Id { id }),
             (None, Some(name), None) => Ok(Self::Name { name }),
             (None, None, Some(all)) => Ok(Self::All { all }),
-            _ => Err(serde::de::Error::custom("a network selector must contain exactly one of id, name, or all")),
+            _ => Err(serde::de::Error::custom(
+                "a network selector must contain exactly one of id, name, or all",
+            )),
         }
     }
 }
@@ -319,7 +325,12 @@ impl NetworkGrant {
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
         Self {
-            selectors: self.selectors.iter().filter(|selector| consented.selectors.contains(selector)).cloned().collect(),
+            selectors: self
+                .selectors
+                .iter()
+                .filter(|selector| consented.selectors.contains(selector))
+                .cloned()
+                .collect(),
             create: self.create && consented.create,
         }
     }
@@ -334,15 +345,25 @@ impl NetworkGrant {
     }
 
     fn validate(&self) -> Result<(), Invalid> {
-        if self.selectors.len() > Self::SELECTOR_LIMIT { return Err(Invalid::NetworkSelectors); }
+        if self.selectors.len() > Self::SELECTOR_LIMIT {
+            return Err(Invalid::NetworkSelectors);
+        }
         let mut unique = std::collections::BTreeSet::new();
         for selector in &self.selectors {
             let valid = match selector {
                 NetworkSelector::Id { id } => id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                NetworkSelector::Name { name } => !name.is_empty() && name.len() <= 255 && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')),
+                NetworkSelector::Name { name } => {
+                    !name.is_empty()
+                        && name.len() <= 255
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+                }
                 NetworkSelector::All { all } => *all,
             };
-            if !valid || !unique.insert(selector) { return Err(Invalid::NetworkSelectors); }
+            if !valid || !unique.insert(selector) {
+                return Err(Invalid::NetworkSelectors);
+            }
         }
         Ok(())
     }

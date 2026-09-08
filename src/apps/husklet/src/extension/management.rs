@@ -499,7 +499,9 @@ mod tests {
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
             containers: hl_extension::ContainerGrant {
-                selectors: vec![hl_extension::ContainerSelector::Name { name: "database".into() }],
+                selectors: vec![hl_extension::ContainerSelector::Name {
+                    name: "database".into(),
+                }],
                 create: false,
             },
             networks: hl_extension::NetworkGrant::default(),

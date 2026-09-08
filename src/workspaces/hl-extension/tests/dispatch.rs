@@ -10,10 +10,9 @@ use std::cell::{Cell, RefCell};
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
     ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary,
-    FileInventory, FileRange,
-    GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
-    PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
-    TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    FileInventory, FileRange, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant,
+    PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode,
+    TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -92,12 +91,20 @@ impl hl_extension::port::NetworkStore for Host {
         self.ledger.note("networks.list");
         Ok(vec![
             hl_extension::port::NetworkSummary {
-                id: "a".repeat(32), name: "private".into(), driver: "bridge".into(), scope: "local".into(),
-                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+                id: "a".repeat(32),
+                name: "private".into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
             },
             hl_extension::port::NetworkSummary {
-                id: "f".repeat(32), name: "unrelated".into(), driver: "bridge".into(), scope: "local".into(),
-                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+                id: "f".repeat(32),
+                name: "unrelated".into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
             },
         ])
     }
@@ -3356,17 +3363,29 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
 #[test]
 fn exact_network_scope_filters_inventory_and_denies_unrelated_inspection_and_creation() {
     let host = Host::new();
-    let mut scoped = session(&[Capability::NetworkRead, Capability::NetworkWrite], &[])
-        .with_networks(hl_extension::NetworkGrant {
+    let mut scoped =
+        session(&[Capability::NetworkRead, Capability::NetworkWrite], &[]).with_networks(hl_extension::NetworkGrant {
             selectors: vec![hl_extension::NetworkSelector::Name { name: "private".into() }],
             create: false,
         });
     let Reply::Networks(inventory) = scoped.dispatch(&Request::NetworkList, &services(&host)).unwrap() else {
         panic!("network inventory reply");
     };
-    assert_eq!(inventory.networks.iter().map(|network| network.name.as_str()).collect::<Vec<_>>(), ["private"]);
+    assert_eq!(
+        inventory
+            .networks
+            .iter()
+            .map(|network| network.name.as_str())
+            .collect::<Vec<_>>(),
+        ["private"]
+    );
     assert!(matches!(
-        scoped.dispatch(&Request::NetworkInspect { reference: "unrelated".into() }, &services(&host)),
+        scoped.dispatch(
+            &Request::NetworkInspect {
+                reference: "unrelated".into()
+            },
+            &services(&host)
+        ),
         Err(Failure::Denied { .. })
     ));
     assert!(matches!(

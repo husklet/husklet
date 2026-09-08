@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
-    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
-    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
+    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
+    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -184,12 +184,12 @@ impl Session {
     }
 
     #[must_use]
-    pub fn visible_networks(
-        &self,
-        networks: Vec<crate::port::NetworkSummary>,
-    ) -> crate::port::NetworkInventory {
+    pub fn visible_networks(&self, networks: Vec<crate::port::NetworkSummary>) -> crate::port::NetworkInventory {
         crate::port::NetworkInventory::bounded(
-            networks.into_iter().filter(|network| self.networks.permits(&network.id, &network.name)).collect(),
+            networks
+                .into_iter()
+                .filter(|network| self.networks.permits(&network.id, &network.name))
+                .collect(),
         )
     }
 
@@ -537,7 +537,9 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
-            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => self.state(request, services),
+            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => {
+                self.state(request, services)
+            }
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -820,9 +822,7 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.networks)?;
         match request {
-            Request::NetworkList => {
-                Ok(Reply::Networks(self.visible_networks(port.list()?)))
-            }
+            Request::NetworkList => Ok(Reply::Networks(self.visible_networks(port.list()?))),
             Request::NetworkInspect { reference } => {
                 let network = port.inspect(reference)?;
                 self.permit_network(&network, capability)?;
@@ -830,7 +830,10 @@ impl Session {
             }
             Request::NetworkCreate { name } => {
                 if !self.networks.create {
-                    return Err(Failure::Denied { capability: capability.as_str().into(), detail: "network creation is outside the consented resource scope".into() });
+                    return Err(Failure::Denied {
+                        capability: capability.as_str().into(),
+                        detail: "network creation is outside the consented resource scope".into(),
+                    });
                 }
                 Ok(Reply::Identity(port.create(name)?))
             }
@@ -869,12 +872,14 @@ impl Session {
         }
     }
 
-
     fn permit_network(&self, network: &crate::port::NetworkSummary, capability: Capability) -> Result<(), Failure> {
-        self.networks.permits(&network.id, &network.name).then_some(()).ok_or_else(|| Failure::Denied {
-            capability: capability.as_str().into(),
-            detail: "network is outside the consented resource scope".into(),
-        })
+        self.networks
+            .permits(&network.id, &network.name)
+            .then_some(())
+            .ok_or_else(|| Failure::Denied {
+                capability: capability.as_str().into(),
+                detail: "network is outside the consented resource scope".into(),
+            })
     }
 
     /// Every workspace the host knows of.
@@ -1402,7 +1407,9 @@ impl Session {
                     });
                 }
                 exact_state_identity(observed)?;
-                port.write(observed, contents).map(Reply::Identity).map_err(Failure::from)
+                port.write(observed, contents)
+                    .map(Reply::Identity)
+                    .map_err(Failure::from)
             }
             Request::StateClear { observed } => {
                 exact_state_identity(observed)?;

@@ -945,8 +945,7 @@ impl Conversation {
         // semantic action. Bracket it with canonical pane observations so a
         // changing UI cannot be returned with a newer cursor.
         let pane_read_generation = match &request {
-            hl_extension::Request::TerminalReadPane { slot, .. }
-            | hl_extension::Request::PaneSemanticRead { slot } => {
+            hl_extension::Request::TerminalReadPane { slot, .. } | hl_extension::Request::PaneSemanticRead { slot } => {
                 Some(self.observe_pane_generation(services, slot)?)
             }
             _ => None,
@@ -1249,8 +1248,12 @@ mod tests {
             Ok([("a", "database"), ("b", "unrelated")]
                 .into_iter()
                 .map(|(id, name)| hl_extension::port::NetworkSummary {
-                    id: id.repeat(32), name: name.into(), driver: "bridge".into(), scope: "local".into(),
-                    kind: hl_extension::NetworkKind::Custom, endpoints: None,
+                    id: id.repeat(32),
+                    name: name.into(),
+                    driver: "bridge".into(),
+                    scope: "local".into(),
+                    kind: hl_extension::NetworkKind::Custom,
+                    endpoints: None,
                 })
                 .collect())
         }
@@ -1263,8 +1266,12 @@ mod tests {
                 ("b".repeat(32), "unrelated")
             };
             Ok(hl_extension::port::NetworkSummary {
-                id, name: name.into(), driver: "bridge".into(), scope: "local".into(),
-                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+                id,
+                name: name.into(),
+                driver: "bridge".into(),
+                scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom,
+                endpoints: None,
             })
         }
     }
@@ -1725,12 +1732,19 @@ mod tests {
                 Vec::new(),
             );
             let mut conversation = Conversation::new_scoped(
-                ours, authority, "dev", Queue::new(), hl_extension::ContainerGrant::default(),
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
                 hl_extension::NetworkGrant {
-                    selectors: vec![hl_extension::NetworkSelector::Name { name: "database".into() }],
+                    selectors: vec![hl_extension::NetworkSelector::Name {
+                        name: "database".into(),
+                    }],
                     create: false,
                 },
-                hl_extension::FilesystemGrant::default(), hl_extension::WorkspaceEnvironmentGrant::default(),
+                hl_extension::FilesystemGrant::default(),
+                hl_extension::WorkspaceEnvironmentGrant::default(),
             )?;
             conversation.greet()?;
             conversation.serve(&services(&host))
@@ -1747,13 +1761,23 @@ mod tests {
         let listed = ask(&mut wire, &Request::NetworkList);
         assert!(matches!(codec::read_reply(&listed), Ok(Reply::Networks(inventory))
             if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
-        let subscribed = ask(&mut wire, &Request::EventSubscribe { topic: hl_extension::Topic::Networks });
+        let subscribed = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::Networks,
+            },
+        );
         assert_eq!(codec::read_reply(&subscribed), Ok(Reply::Done));
         let event = wire.receive().expect("scoped network snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
         assert!(matches!(snapshot, Snapshot::Networks(inventory)
             if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
-        let denied = ask(&mut wire, &Request::NetworkInspect { reference: "unrelated".into() });
+        let denied = ask(
+            &mut wire,
+            &Request::NetworkInspect {
+                reference: "unrelated".into(),
+            },
+        );
         assert!(matches!(codec::read_failure(&denied), Ok(Failure::Denied { .. })));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
@@ -3633,16 +3657,10 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let raced = ask(
-            &mut wire,
-            &Request::PaneSemanticRead { slot: "s1".into() },
-        );
+        let raced = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".into() });
         assert!(matches!(codec::read_failure(&raced), Ok(Failure::Conflict { .. })));
 
-        let stable = ask(
-            &mut wire,
-            &Request::PaneSemanticRead { slot: "s1".into() },
-        );
+        let stable = ask(&mut wire, &Request::PaneSemanticRead { slot: "s1".into() });
         assert!(matches!(codec::read_reply(&stable), Ok(Reply::Semantics(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));

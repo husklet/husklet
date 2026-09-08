@@ -685,13 +685,19 @@ mod tests {
         let mut asked = manifest(&[Capability::NetworkRead, Capability::NetworkWrite]);
         asked.networks = crate::NetworkGrant {
             selectors: vec![
-                crate::NetworkSelector::Name { name: "database".into() },
-                crate::NetworkSelector::Name { name: "internal".into() },
+                crate::NetworkSelector::Name {
+                    name: "database".into(),
+                },
+                crate::NetworkSelector::Name {
+                    name: "internal".into(),
+                },
             ],
             create: true,
         };
         let consented = crate::NetworkGrant {
-            selectors: vec![crate::NetworkSelector::Name { name: "database".into() }],
+            selectors: vec![crate::NetworkSelector::Name {
+                name: "database".into(),
+            }],
             create: false,
         };
         let record = installation
