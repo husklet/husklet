@@ -179,6 +179,18 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               width={CONTROL_WIDTH}
               wrap
             />
+            <CardActions>
+              <Button
+                label={saving ? 'Saving…' : 'Save workspace'}
+                enabled={!saving && dirty && !invalid}
+                onInvoke={save}
+              />
+              <Button label="Discard changes" enabled={!saving && dirty} onInvoke={load} />
+              {dirty ? <Text label="Unsaved changes" color="warning" /> : null}
+            </CardActions>
+            {invalid && <InlineMessage label={invalid} tone="danger" />}
+            {error && <InlineMessage label={error} tone="danger" />}
+            {saved && <InlineMessage label={saved} tone="positive" />}
             <SettingsGroup
               name="runtime"
               label="Runtime"
@@ -320,17 +332,6 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             >
               <Mounts values={configuration.mounts} onChange={(value) => change('mounts', value)} />
             </SettingsGroup>
-            {invalid && <InlineMessage label={invalid} tone="danger" />}
-            {error && <InlineMessage label={error} tone="danger" />}
-            {saved && <InlineMessage label={saved} tone="positive" />}
-            <CardActions>
-              <Button
-                label={saving ? 'Saving…' : 'Save workspace'}
-                enabled={!saving && dirty && !invalid}
-                onInvoke={save}
-              />
-              <Button label="Discard changes" enabled={!saving && dirty} onInvoke={load} />
-            </CardActions>
           </CardContent>
         </Card>
       </Column>

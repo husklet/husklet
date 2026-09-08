@@ -166,6 +166,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
+  assert.equal(labelled(stage, 'Unsaved changes'), undefined);
+  change(stage, 'registry/image:tag', 'alpine:3.21');
+  await settled();
+  const unsaved = labelled(stage, 'Unsaved changes').SetProp.id;
+  assert.equal(isEnabled(stage, 'Save workspace'), true);
+  invoke(stage, 'Discard changes');
+  await settled();
+  await settled();
+  assert.ok(
+    stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Remove?.id === unsaved),
+    'discard removes the visible unsaved-state indicator',
+  );
   assert.ok(
     ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
     'the settings editor retains a readable width instead of stretching with the window',
