@@ -393,7 +393,7 @@ impl Conversation {
         self.arm_io_deadlines()?;
         let mut partial_since = None;
         loop {
-            match self.wire.receive() {
+            match self.wire.receive_step() {
                 Ok(frame) => {
                     partial_since = None;
                     self.exchange(&frame, services)?;
@@ -722,9 +722,18 @@ impl Conversation {
     /// Reads the reply under a deadline, so an unfinished handshake ends the
     /// connection instead of holding it.
     fn hello(&mut self) -> Result<Hello, Fault> {
-        self.control.set_read_timeout(Some(self.settle))?;
         let started = Instant::now();
-        let received = self.wire.receive();
+        let received = loop {
+            let remaining = self.settle.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break Err(Transit::Pending);
+            }
+            self.control.set_read_timeout(Some(remaining.min(Self::IO_TURN)))?;
+            match self.wire.receive_step() {
+                Err(Transit::Pending) if started.elapsed() < self.settle => {}
+                result => break result,
+            }
+        };
         self.control.set_read_timeout(None)?;
         let frame = received.map_err(|transit| self.unsettled(transit, started))?;
         codec::read_hello(&frame).map_err(|coding| Fault::Malformed(coding.to_string()))
@@ -3360,6 +3369,43 @@ mod tests {
     }
 
     #[test]
+    fn handshake_deadline_is_total_even_when_a_peer_trickles_bytes() {
+        let deadline = Duration::from_millis(150);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        codec::read_welcome(&wire.receive().expect("welcome")).expect("typed welcome");
+        let hello = Hello {
+            protocol: PROTOCOL,
+            name: ExtensionName::new("slow_peer").expect("name"),
+            features: Vec::new(),
+        };
+        let bytes = codec::hello(&hello).expect("hello").encode().expect("framed hello");
+        let mut peer = wire.into_stream();
+        let trickle = std::thread::spawn(move || {
+            for byte in bytes {
+                if peer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+
+        let started = Instant::now();
+        let fault = served
+            .join()
+            .expect("conversation thread")
+            .expect_err("slow handshake dropped");
+        let elapsed = started.elapsed();
+        assert_eq!(fault, Fault::Handshake(Compatibility::Unknown));
+        assert!(elapsed >= deadline, "deadline fired early after {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "byte trickle extended the total handshake deadline to {elapsed:?}"
+        );
+        trickle.join().expect("trickle thread");
+    }
+
+    #[test]
     fn a_peer_cannot_hold_the_only_conversation_with_an_unfinished_frame() {
         let deadline = Duration::from_millis(400);
         let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
@@ -3386,6 +3432,41 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "the partial-frame deadline remains bounded"
         );
+    }
+
+    #[test]
+    fn request_deadline_is_total_even_when_a_peer_trickles_bytes() {
+        let deadline = Duration::from_millis(150);
+        let (theirs, served) = host(deadline, Queue::new(), Arc::new(Ledger::default()));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let bytes = codec::request(&Request::ContainerList)
+            .expect("request")
+            .encode()
+            .expect("framed request");
+        let mut peer = wire.into_stream();
+        let trickle = std::thread::spawn(move || {
+            for byte in bytes {
+                if peer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+
+        let started = Instant::now();
+        let fault = served
+            .join()
+            .expect("conversation thread")
+            .expect_err("slow request dropped");
+        let elapsed = started.elapsed();
+        assert!(matches!(fault, Fault::Malformed(ref detail) if detail.contains("unfinished frame")));
+        assert!(elapsed >= deadline, "deadline fired early after {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "byte trickle extended the total request deadline to {elapsed:?}"
+        );
+        trickle.join().expect("trickle thread");
     }
 
     #[test]

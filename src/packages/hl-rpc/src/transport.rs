@@ -70,6 +70,19 @@ impl<S: Write> Wire<S> {
 }
 
 impl<S: Read> Wire<S> {
+    /// Performs at most one stream read while assembling a frame.
+    ///
+    /// This lets a caller enforce a wall-clock deadline even when a hostile
+    /// peer keeps each individual read alive with a trickle of bytes. Partial
+    /// bytes remain buffered exactly as they do after an inactivity timeout.
+    pub fn receive_step(&mut self) -> Result<Frame, Transit> {
+        if let Some(frame) = self.take()? {
+            return Ok(frame);
+        }
+        self.fill()?;
+        self.take()?.ok_or(Transit::Pending)
+    }
+
     /// Reads until one whole frame is available and returns it, leaving any
     /// bytes that followed for the next call.
     ///
@@ -207,5 +220,22 @@ mod tests {
         assert_eq!(wire.receive(), Err(Transit::Pending));
         assert_eq!(wire.buffered(), split);
         assert_eq!(wire.receive(), Ok(expected));
+    }
+
+    #[test]
+    fn an_incremental_receive_returns_control_after_one_partial_read() {
+        let expected = Frame::control(Kind::Credit, b"4".to_vec());
+        let bytes = expected.encode().expect("frame");
+        let split = 5;
+        let reader = TimedRead(
+            [Ok(bytes[..split].to_vec()), Ok(bytes[split..].to_vec())]
+                .into_iter()
+                .collect(),
+        );
+        let mut wire = Wire::new(reader);
+
+        assert_eq!(wire.receive_step(), Err(Transit::Pending));
+        assert_eq!(wire.buffered(), split);
+        assert_eq!(wire.receive_step(), Ok(expected));
     }
 }
