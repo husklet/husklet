@@ -215,11 +215,13 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                 />
               </CardContent>
               <CardActions gap={1}>
-                <Button
-                  label={selected === item.id ? 'Hide details' : 'Details'}
-                  onInvoke={() => toggleDetails(item)}
-                />
-                {containerActions(item, busy, act, remove)}
+                <Row gap={1} wrap justify="end">
+                  <Button
+                    label={selected === item.id ? 'Hide details' : 'Details'}
+                    onInvoke={() => toggleDetails(item)}
+                  />
+                  {containerActions(item, busy, act, remove)}
+                </Row>
               </CardActions>
               {selected === item.id ? (
                 <ContainerDetail

@@ -463,7 +463,7 @@ export function Terminals({
             key={tab.id}
             grow={false}
             justify="start"
-            width={{ chars: 72 }}
+            width={{ minimum: { chars: 24 }, maximum: { chars: 72 } }}
             variant={tab.pinned ? 'filled' : 'outline'}
           >
             <CardHeader label={tab.title} detail={`Tab ${tabIndex + 1}`} />
@@ -478,7 +478,7 @@ export function Terminals({
                 wrap
               />
               {tab.panes.map((pane, paneIndex) => (
-                <Row key={pane.slot} gap={1} align="center">
+                <Row key={pane.slot} gap={1} align="center" wrap>
                   <Text
                     label={`Pane ${paneIndex + 1} · ${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
                     color="text-dim"
@@ -572,7 +572,7 @@ export function Terminals({
                       />
                     ) : null}
                     {readable.kind === 'terminal' ? (
-                      <Row gap={1}>
+                      <Row gap={1} wrap>
                         <Entry
                           value={input}
                           placeholder="Send a line to this terminal"
@@ -715,23 +715,29 @@ export function Terminals({
               ) : null}
             </CardContent>
             <CardActions gap={1}>
-              {busy === tab.id ? <Spinner /> : null}
-              <Button
-                label={
-                  tab.pinned ? 'Unpin tab' : tab.panes.length === 0 ? 'Pin overview tab' : 'Pin tab'
-                }
-                enabled={busy === ''}
-                onInvoke={() => {
-                  void pin(tab);
-                }}
-              />
-              <Button
-                label={`Switch to ${tab.title}`}
-                enabled={busy === '' && Boolean(tab.panes[0])}
-                onInvoke={() => {
-                  void focus(tab);
-                }}
-              />
+              <Row gap={1} wrap justify="end">
+                {busy === tab.id ? <Spinner /> : null}
+                <Button
+                  label={
+                    tab.pinned
+                      ? 'Unpin tab'
+                      : tab.panes.length === 0
+                        ? 'Pin overview tab'
+                        : 'Pin tab'
+                  }
+                  enabled={busy === ''}
+                  onInvoke={() => {
+                    void pin(tab);
+                  }}
+                />
+                <Button
+                  label={`Switch to ${tab.title}`}
+                  enabled={busy === '' && Boolean(tab.panes[0])}
+                  onInvoke={() => {
+                    void focus(tab);
+                  }}
+                />
+              </Row>
             </CardActions>
           </Card>
         ))}

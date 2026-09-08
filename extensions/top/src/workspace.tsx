@@ -27,8 +27,7 @@ import {
 
 type Change = { value?: unknown; expanded?: boolean };
 type Numbers = { cpus: string; memory: string; scrollback: string; fontSize: string };
-const SETTINGS_WIDTH = { minimum: { chars: 28 }, maximum: { chars: 36 } } as const;
-const CONTROL_WIDTH = { chars: 60 } as const;
+const CONTROL_WIDTH = 'fill' as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
   const [configuration, setConfiguration] = React.useState<WorkspaceConfiguration | null>(null);
@@ -174,7 +173,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   return (
     <Scroll grow height="fill">
       <Column pad={2} gap={2}>
-        <Card grow={false} justify="start" width={SETTINGS_WIDTH} variant="outline">
+        <Card grow={false} justify="start" width="fill" variant="outline">
           <CardContent gap={2}>
             <Heading label="Workspace" scale="title" />
             <Text
@@ -187,7 +186,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               label={dirty ? 'Unsaved changes' : saved ? 'Saved' : 'No changes'}
               color={dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
             />
-            <CardActions>
+            <Row gap={1} wrap justify="start" width="fill">
               <Button
                 variant="filled"
                 tone="accent"
@@ -201,15 +200,10 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                 enabled={!saving && dirty}
                 onInvoke={load}
               />
-            </CardActions>
+            </Row>
             {invalid && <InlineMessage label={invalid} tone="danger" />}
             {error && <RecoveryState operation="Saving workspace settings" error={error} />}
             {saved && <InlineMessage label={saved} tone="positive" />}
-            <Text
-              label="Settings sections · Runtime · Terminal appearance · Environment variables · Filesystem mounts"
-              color="text-dim"
-              wrap
-            />
             <SettingsGroup
               name="runtime"
               label="Runtime"

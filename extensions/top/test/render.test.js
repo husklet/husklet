@@ -1826,6 +1826,11 @@ test('terminal management exposes exact pin state and acts through immutable tab
   );
   assert.ok(labelled(stage, '1 terminal pane'));
   assert.ok(labelled(stage, 'Pane 1 · Terminal'));
+  assert.equal(
+    ancestorProperty(stage, 'Switch to Build', 'Row', 'Wrap')?.Flag,
+    true,
+    'terminal actions reflow instead of leaving the narrow pane',
+  );
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify')?.Align, 'Start');
   assert.ok(
@@ -3377,7 +3382,12 @@ test('container rename validates locally, retries failure, and preserves immutab
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
   await settled();
-  assert.ok(labelled(stage, `Current name: api. Immutable ID: ${immutable}`));
+  assert.ok(
+    labelled(
+      stage,
+      `Current name: api. Immutable ID: ${immutable.replace(/(.{8})(?=.)/g, '$1\u200b')}`,
+    ),
+  );
 
   change(stage, `New name for ${immutable.slice(0, 12)}`, '.invalid');
   assert.ok(
