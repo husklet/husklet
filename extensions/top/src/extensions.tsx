@@ -210,7 +210,7 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
       <Column gap={1}>
         <Text label="Effective for this installed image digest" color="text-dim" />
         {capabilities.map((capability) => (
-          <Text key={capability} label={`${capabilityLabel(capability)} · ${capability}`} wrap />
+          <Text key={capability} label={capabilityLabel(capability)} wrap />
         ))}
         {containerSelectors.map((selector, index) => (
           <Text

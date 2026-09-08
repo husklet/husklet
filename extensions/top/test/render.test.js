@@ -1822,7 +1822,8 @@ test('installed extensions distinguish durable exact-file and subtree authority'
     ),
   );
   assert.ok(labelled(stage, 'Effective for this installed image digest'));
-  assert.ok(labelled(stage, 'View containers and processes · containers:read'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.equal(labelled(stage, 'View containers and processes · containers:read'), undefined);
   assert.ok(labelled(stage, 'Container · exact name database'));
   assert.ok(labelled(stage, `Container · exact ID ${'c'.repeat(64)}`));
   assert.ok(labelled(stage, 'Containers · create new containers'));
