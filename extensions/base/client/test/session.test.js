@@ -2140,6 +2140,69 @@ test('missing, malformed, and duplicated greetings fail closed before calls', as
   }
 });
 
+test('a pre-greeting Unix event flood reaches no callbacks and permits fresh reconnect', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pregreeting-events-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let generation = 0;
+  const event = {
+    interaction: 'key',
+    trigger: 'Key',
+    node: 7,
+    id: '7:Key',
+    slot: 'pane-1',
+    key: 'a',
+    keycode: 38,
+    modifiers: 0,
+    pressed: true,
+  };
+  const server = net.createServer((socket) => {
+    generation += 1;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: { protocol: 1, peer: `generation-${generation}`, granted: [] },
+    });
+    if (generation === 1) {
+      const flood = Array.from({ length: 4 }, (_, index) =>
+        encode({ channel: 80 + index, kind: KIND.event, payload: event }),
+      );
+      socket.write(Buffer.concat([...flood, greeting]));
+    } else {
+      socket.write(greeting);
+    }
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const delivered = [];
+    const closed = [];
+    await assert.rejects(
+      connect({
+        path: socketPath,
+        connectTimeout: 1_000,
+        pendingLimit: 2,
+        onEvent: (received) => delivered.push(received),
+        onClose: (error) => closed.push(error.message),
+      }),
+      /non-control frame before the greeting/,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(delivered, [], 'unnegotiated bytes never reach GUI callbacks');
+    assert.deepEqual(closed, ['extension host sent a non-control frame before the greeting']);
+
+    const second = await connect({ path: socketPath, connectTimeout: 1_000 });
+    assert.deepEqual(second.granted, []);
+    await second.close();
+    assert.equal(generation, 2, 'the same listener accepts a clean negotiated generation');
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real socket write backpressure admits no further calls until drain', async () => {
   const bounded = (promise, label) =>
     Promise.race([
