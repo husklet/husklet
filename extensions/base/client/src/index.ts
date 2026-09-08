@@ -682,6 +682,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         granted,
         containers = { selectors: [], create: false },
         networks = { selectors: [], create: false },
+        volumes = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
         workspaceEnvironment = { read: [], write: [] },
       ) =>
@@ -693,6 +694,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             granted,
             containers,
             networks,
+            volumes,
             filesystem,
             workspace_environment: workspaceEnvironment,
           }),
@@ -705,6 +707,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         granted,
         containers = { selectors: [], create: false },
         networks = { selectors: [], create: false },
+        volumes = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
         workspaceEnvironment = { read: [], write: [] },
       ) =>
@@ -716,6 +719,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             granted,
             containers,
             networks,
+            volumes,
             filesystem,
             workspace_environment: workspaceEnvironment,
           }),
@@ -2997,6 +3001,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     granted,
     containers = { selectors: [], create: false },
     networks = { selectors: [], create: false },
+    volumes = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
     { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
   ): ReturnType<WorkspaceApi['extensions']['installAndWait']> => {
@@ -3049,6 +3054,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         granted,
         containers,
         networks,
+        volumes,
         filesystem,
         workspaceEnvironment,
       );
@@ -3077,6 +3083,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     granted,
     containers,
     networks,
+    volumes,
     filesystem,
     options,
   ) =>
@@ -3087,6 +3094,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       granted,
       containers,
       networks,
+      volumes,
       filesystem,
       options,
     );
@@ -3096,6 +3104,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     granted,
     containers,
     networks,
+    volumes,
     filesystem,
     options,
   ) =>
@@ -3106,6 +3115,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       granted,
       containers,
       networks,
+      volumes,
       filesystem,
       options,
     );

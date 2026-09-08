@@ -46,6 +46,7 @@ pub(crate) struct AcquisitionCandidate {
     pub requested: Grant,
     pub requested_containers: hl_extension::ContainerGrant,
     pub requested_networks: hl_extension::NetworkGrant,
+    pub requested_volumes: hl_extension::VolumeGrant,
     pub requested_filesystem: hl_extension::FilesystemGrant,
     pub requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     pub installed_digest: Option<String>,
@@ -292,6 +293,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::NetworkGrant::default(),
+            &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
@@ -304,6 +306,7 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
@@ -318,6 +321,7 @@ impl ExtensionAcquisitions {
                     consented,
                     containers,
                     networks,
+                    volumes,
                     filesystem,
                     workspace_environment,
                     moment(),
@@ -345,6 +349,7 @@ impl ExtensionAcquisitions {
             consented,
             containers,
             &hl_extension::NetworkGrant::default(),
+            &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
         )
@@ -357,6 +362,7 @@ impl ExtensionAcquisitions {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
@@ -376,6 +382,7 @@ impl ExtensionAcquisitions {
                     consented,
                     containers,
                     networks,
+                    volumes,
                     filesystem,
                     workspace_environment,
                     moment(),
@@ -480,6 +487,7 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 requested: candidate.manifest.capabilities.clone(),
                 requested_containers: candidate.manifest.containers.clone(),
                 requested_networks: candidate.manifest.networks.clone(),
+                requested_volumes: candidate.manifest.volumes.clone(),
                 requested_filesystem: candidate.manifest.filesystem.clone(),
                 requested_workspace_environment: candidate.manifest.workspace_environment.clone(),
                 installed_digest,
@@ -524,6 +532,7 @@ mod tests {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").unwrap(),
             display_name: "Sample".into(),
             version: version.into(),

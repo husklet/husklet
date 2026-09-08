@@ -259,6 +259,7 @@ impl Conversation {
                 selectors: vec![hl_extension::NetworkSelector::All { all: true }],
                 create: true,
             },
+            hl_extension::VolumeGrant { selectors: vec![hl_extension::VolumeSelector::All { all: true }], create: true },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
                 write: roots.clone(),
@@ -278,6 +279,7 @@ impl Conversation {
         queue: Queue,
         containers: hl_extension::ContainerGrant,
         networks: hl_extension::NetworkGrant,
+        volumes: hl_extension::VolumeGrant,
         filesystem: hl_extension::FilesystemGrant,
         workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     ) -> io::Result<Self> {
@@ -291,6 +293,7 @@ impl Conversation {
             session: Session::new(authority)
                 .with_containers(containers)
                 .with_networks(networks)
+                .with_volumes(volumes)
                 .with_filesystem(filesystem)
                 .with_workspace_environment(workspace_environment)
                 .with_surface(""),
@@ -1657,6 +1660,7 @@ mod tests {
                 granted: hl_extension::Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             }])
@@ -1752,6 +1756,7 @@ mod tests {
                     }],
                     create: false,
                 },
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant::default(),
                 hl_extension::WorkspaceEnvironmentGrant::default(),
             )?;
@@ -1899,6 +1904,7 @@ mod tests {
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
                 hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant {
                     read: vec![
                         hl_extension::FilesystemSelector::Subtree {
@@ -1942,6 +1948,7 @@ mod tests {
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
                 hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant {
                     write: vec![hl_extension::FilesystemSelector::Exact { exact }],
                     ..hl_extension::FilesystemGrant::default()
@@ -1995,6 +2002,7 @@ mod tests {
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
                 hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant::default(),
                 grant,
             )?;
@@ -2019,6 +2027,7 @@ mod tests {
             granted: hl_extension::Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
@@ -2785,6 +2794,7 @@ mod tests {
                 create: false,
             },
             hl_extension::NetworkGrant::default(),
+            hl_extension::VolumeGrant::default(),
             hl_extension::FilesystemGrant::default(),
             hl_extension::WorkspaceEnvironmentGrant::default(),
         )

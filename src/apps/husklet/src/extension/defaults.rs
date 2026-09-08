@@ -51,6 +51,7 @@ fn install_defaults_with(
                 &candidate.manifest.capabilities,
                 &candidate.manifest.containers,
                 &candidate.manifest.networks,
+                &candidate.manifest.volumes,
                 &candidate.manifest.filesystem,
                 &candidate.manifest.workspace_environment,
                 moment(),
@@ -103,6 +104,7 @@ mod tests {
                 manifest: Manifest {
                     containers: hl_extension::ContainerGrant::default(),
                     networks: hl_extension::NetworkGrant::default(),
+                    volumes: hl_extension::VolumeGrant::default(),
                     name: ExtensionName::new(name).unwrap(),
                     display_name: name.to_owned(),
                     version: "0.1.0".to_owned(),

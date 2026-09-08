@@ -836,6 +836,7 @@ fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voic
         queue.clone(),
         plan.record.containers.clone(),
         plan.record.networks.clone(),
+        plan.record.volumes.clone(),
         plan.record.filesystem.clone(),
         plan.record.workspace_environment.clone(),
     );
@@ -1161,6 +1162,7 @@ tab_title = "Sample"
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
@@ -1181,6 +1183,7 @@ tab_title = "Sample"
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             name: manifest.name.clone(),

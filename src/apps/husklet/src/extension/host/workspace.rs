@@ -431,6 +431,7 @@ mod halt_tests {
         let manifest = Manifest {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("checkpoint-sidecar").expect("name"),
             display_name: "Checkpoint sidecar".to_owned(),
             version: "1.0.0".to_owned(),
@@ -447,6 +448,7 @@ mod halt_tests {
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             name: manifest.name.clone(),

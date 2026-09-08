@@ -1013,6 +1013,14 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     .with_containers(hl_extension::ContainerGrant {
         selectors: Vec::new(),
         create: true,
+    })
+    .with_volumes(hl_extension::VolumeGrant {
+        selectors: vec![hl_extension::VolumeSelector::Name { name: "v".repeat(255) }],
+        create: false,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::Name { name: "n".repeat(255) }],
+        create: false,
     });
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);

@@ -87,6 +87,7 @@ pub struct Entry {
     pub granted: Grant,
     pub containers: hl_extension::ContainerGrant,
     pub networks: hl_extension::NetworkGrant,
+    pub volumes: hl_extension::VolumeGrant,
     pub filesystem: hl_extension::FilesystemGrant,
     pub workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     /// Where the extension stands under the lifecycle policy.
@@ -164,6 +165,7 @@ impl<S: Storage> Roster<S> {
                 granted: record.granted.clone(),
                 containers: record.containers.clone(),
                 networks: record.networks.clone(),
+                volumes: record.volumes.clone(),
                 filesystem: record.filesystem.clone(),
                 workspace_environment: record.workspace_environment.clone(),
                 stage: self.installation.stage(&record.name),
@@ -211,6 +213,7 @@ impl<S: Storage> Roster<S> {
             consented,
             containers,
             &hl_extension::NetworkGrant::default(),
+            &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
@@ -224,6 +227,7 @@ impl<S: Storage> Roster<S> {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
@@ -237,6 +241,7 @@ impl<S: Storage> Roster<S> {
                 consented,
                 containers,
                 networks,
+                volumes,
                 filesystem,
                 workspace_environment,
                 at,
@@ -287,6 +292,7 @@ impl<S: Storage> Roster<S> {
             consented,
             containers,
             &hl_extension::NetworkGrant::default(),
+            &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
@@ -299,6 +305,7 @@ impl<S: Storage> Roster<S> {
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
         networks: &hl_extension::NetworkGrant,
+        volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
@@ -310,6 +317,7 @@ impl<S: Storage> Roster<S> {
                 consented,
                 containers,
                 networks,
+                volumes,
                 filesystem,
                 workspace_environment,
                 at,
@@ -462,6 +470,7 @@ pub fn described(record: &Record) -> Manifest {
     let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
         containers: hl_extension::ContainerGrant::default(),
         networks: hl_extension::NetworkGrant::default(),
+        volumes: hl_extension::VolumeGrant::default(),
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: record.version.clone(),
@@ -483,6 +492,7 @@ pub fn described(record: &Record) -> Manifest {
     manifest.capabilities.clone_from(&record.granted);
     manifest.containers.clone_from(&record.containers);
     manifest.networks.clone_from(&record.networks);
+    manifest.volumes.clone_from(&record.volumes);
     manifest.filesystem.clone_from(&record.filesystem);
     manifest.workspace_environment.clone_from(&record.workspace_environment);
     manifest.pane_providers.clone_from(&record.pane_providers);
@@ -497,6 +507,7 @@ fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objecti
         &record.granted,
         &record.containers,
         &record.networks,
+        &record.volumes,
         &record.filesystem,
         &record.workspace_environment,
         record.installed_at,
@@ -558,6 +569,7 @@ mod tests {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new(name).expect("name"),
             display_name: name.to_owned(),
             version: "1.0.0".to_owned(),
@@ -619,6 +631,7 @@ mod tests {
                 &asked.capabilities,
                 &asked.containers,
                 &asked.networks,
+                &asked.volumes,
                 &asked.filesystem,
                 &exact,
                 7,

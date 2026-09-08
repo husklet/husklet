@@ -31,6 +31,8 @@ export interface ExtensionSummary {
     containers?: ContainerGrant;
     /** Effective network authority persisted for this exact image digest. */
     networks?: NetworkGrant;
+    /** Effective volume authority persisted for this exact image digest. */
+    volumes?: VolumeGrant;
     /** Durable, manifest-intersected workspace file authority. */
     filesystem?: FilesystemGrant;
     /** Effective workspace-environment authority persisted for this exact image digest. */
@@ -72,6 +74,15 @@ export interface NetworkGrant {
     selectors: NetworkSelector[];
     create: boolean;
 }
+export type VolumeSelector = {
+    name: string;
+} | {
+    all: true;
+};
+export interface VolumeGrant {
+    selectors: VolumeSelector[];
+    create: boolean;
+}
 export interface FilesystemGrant {
     read: FilesystemSelector[];
     write: FilesystemSelector[];
@@ -100,6 +111,7 @@ export interface ExtensionCandidate {
     requested: ExtensionCapability[];
     requested_containers: ContainerGrant;
     requested_networks: NetworkGrant;
+    requested_volumes: VolumeGrant;
     requested_filesystem: FilesystemGrant;
     requested_workspace_environment: WorkspaceEnvironmentGrant;
     installed_image_digest: string | null;
@@ -766,9 +778,9 @@ export interface WorkspaceApi {
             revision: number;
         }>;
         cancelAcquisition(job: string, revision: number): Promise<void>;
-        install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
+        install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-        installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, filesystem?: FilesystemGrant, options?: {
+        installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
             timeoutMs?: number;
             workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{
@@ -780,9 +792,9 @@ export interface WorkspaceApi {
             image_digest: string;
             revision: number;
         }>;
-        update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
+        update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-        updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, filesystem?: FilesystemGrant, options?: {
+        updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
             timeoutMs?: number;
             workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{

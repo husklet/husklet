@@ -319,6 +319,62 @@ pub struct NetworkGrant {
     pub create: bool,
 }
 
+/// One exact volume an extension asks to see, or an explicit workspace-wide selector.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum VolumeSelector {
+    Name { name: String },
+    All { all: bool },
+}
+
+/// Volume resource authority. Creation does not grant access to an existing namesake.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VolumeGrant {
+    #[serde(default)]
+    pub selectors: Vec<VolumeSelector>,
+    #[serde(default)]
+    pub create: bool,
+}
+
+impl VolumeGrant {
+    pub const SELECTOR_LIMIT: usize = 128;
+
+    #[must_use]
+    pub fn intersect(&self, consented: &Self) -> Self {
+        Self {
+            selectors: self.selectors.iter().filter(|selector| consented.selectors.contains(selector)).cloned().collect(),
+            create: self.create && consented.create,
+        }
+    }
+
+    #[must_use]
+    pub fn permits(&self, name: &str) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            VolumeSelector::Name { name: selected } => selected == name,
+            VolumeSelector::All { all } => *all,
+        })
+    }
+
+    fn validate(&self) -> Result<(), Invalid> {
+        if self.selectors.len() > Self::SELECTOR_LIMIT {
+            return Err(Invalid::VolumeSelectors);
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for selector in &self.selectors {
+            let valid = match selector {
+                VolumeSelector::Name { name } => !name.is_empty() && name.len() <= 255
+                    && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')),
+                VolumeSelector::All { all } => *all,
+            };
+            if !valid || !unique.insert(selector) {
+                return Err(Invalid::VolumeSelectors);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl NetworkGrant {
     pub const SELECTOR_LIMIT: usize = 128;
 
@@ -340,6 +396,15 @@ impl NetworkGrant {
         self.selectors.iter().any(|selector| match selector {
             NetworkSelector::Id { id: selected } => selected.eq_ignore_ascii_case(id),
             NetworkSelector::Name { name: selected } => selected == name,
+            NetworkSelector::All { all } => *all,
+        })
+    }
+
+    #[must_use]
+    pub fn permits_reference(&self, reference: &str) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            NetworkSelector::Id { id } => id.eq_ignore_ascii_case(reference),
+            NetworkSelector::Name { name } => name == reference,
             NetworkSelector::All { all } => *all,
         })
     }
@@ -499,6 +564,9 @@ pub struct Manifest {
     /// Exact network resources requested. Omission intentionally means none.
     #[serde(default)]
     pub networks: NetworkGrant,
+    /// Exact volume resources requested. Omission intentionally means none.
+    #[serde(default)]
+    pub volumes: VolumeGrant,
     #[serde(default)]
     pub entrypoint: Option<Vec<String>>,
     #[serde(default)]
@@ -607,6 +675,13 @@ impl Manifest {
         {
             return Err(Invalid::Undeclared(Capability::NetworkRead));
         }
+        manifest.volumes.validate()?;
+        if (!manifest.volumes.selectors.is_empty() || manifest.volumes.create)
+            && !manifest.capabilities.holds(Capability::VolumeRead)
+            && !manifest.capabilities.holds(Capability::VolumeWrite)
+        {
+            return Err(Invalid::Undeclared(Capability::VolumeRead));
+        }
         Ok(manifest)
     }
 
@@ -636,6 +711,7 @@ pub enum Invalid {
     PaneProviders,
     ContainerSelectors,
     NetworkSelectors,
+    VolumeSelectors,
     FilesystemRoots,
     WorkspaceEnvironment,
 }
@@ -668,6 +744,7 @@ impl std::fmt::Display for Invalid {
             Self::PaneProviders => formatter.write_str("pane provider ids must be unique and titles must not be empty"),
             Self::ContainerSelectors => formatter.write_str("container selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
             Self::NetworkSelectors => formatter.write_str("network selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
+            Self::VolumeSelectors => formatter.write_str("volume selectors must contain at most 128 unique exact names, or one explicit `{ all = true }`"),
             Self::FilesystemRoots => formatter.write_str("filesystem scopes must contain at most 128 unique read or write roots"),
             Self::WorkspaceEnvironment => formatter.write_str("workspace environment scopes must be bounded unique exact pairs; all is reserved for top"),
         }

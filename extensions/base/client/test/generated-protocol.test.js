@@ -150,6 +150,7 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
       granted: ['containers:read'],
       containers: { selectors: [{ name: 'database' }], create: false },
       networks: { selectors: [{ name: 'database' }], create: false },
+      volumes: { selectors: [{ name: 'data' }], create: false },
       filesystem: {
         read: [],
         write: [{ exact: 'settings.json' }],
@@ -199,6 +200,18 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
           with: { ...base.with, networks: { selectors: [selector], create: false } },
         }),
       /exactly one untagged variant/,
+    );
+  }
+  for (const selector of [
+    { name: 'data', invented: true },
+    { all: true, name: 'data' },
+  ]) {
+    assert.throws(
+      () => validateRequest({
+        ...base,
+        with: { ...base.with, volumes: { selectors: [selector], create: false } },
+      }),
+      /untagged variant|all/i,
     );
   }
 });

@@ -822,6 +822,10 @@ for (const updating of [false, true]) {
       create: false,
     });
     assert.deepEqual(calls[0][5], {
+      selectors: [],
+      create: false,
+    });
+    assert.deepEqual(calls[0][6], {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -840,6 +844,7 @@ test('extension review grants one exact network without workspace-wide network a
     requested: ['networks:read'],
     requested_containers: { selectors: [], create: false },
     requested_networks: { selectors: [{ name: 'database' }, { name: 'internal' }], create: true },
+    requested_volumes: { selectors: [{ name: 'data' }], create: true },
     requested_filesystem: { read: [], write: [], create: [], delete: [], rename: [] },
     requested_workspace_environment: { read: [], write: [] },
     installed_image_digest: null,
@@ -879,11 +884,15 @@ test('extension review grants one exact network without workspace-wide network a
   );
   assert.ok(labelled(stage, 'Network named database'));
   assert.ok(labelled(stage, 'Network named internal'));
+  assert.ok(labelled(stage, 'Volume named data'));
+  assert.ok(labelled(stage, 'Create new volumes'));
   toggleSwitch(stage, 1, true);
+  toggleSwitch(stage, 4, true);
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
   assert.deepEqual(calls[0][4], { selectors: [{ name: 'database' }], create: false });
+  assert.deepEqual(calls[0][5], { selectors: [{ name: 'data' }], create: false });
 });
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {

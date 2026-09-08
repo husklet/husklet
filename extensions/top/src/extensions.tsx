@@ -29,6 +29,8 @@ import {
   type ContainerSelector,
   type NetworkGrant,
   type NetworkSelector,
+  type VolumeGrant,
+  type VolumeSelector,
   type FilesystemGrant,
   type FilesystemSelector,
   type WorkspaceEnvironmentGrant,
@@ -161,16 +163,24 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
   const containerCount = containerSelectors.length + Number(extension.containers?.create ?? false);
   const networkSelectors = extension.networks?.selectors ?? [];
   const networkCount = networkSelectors.length + Number(extension.networks?.create ?? false);
+  const volumeSelectors = extension.volumes?.selectors ?? [];
+  const volumeCount = volumeSelectors.length + Number(extension.volumes?.create ?? false);
   const filesystemCount = extension.filesystem ? filesystemGrantCount(extension.filesystem) : 0;
   const environmentRead = extension.workspace_environment?.read ?? [];
   const environmentWrite = extension.workspace_environment?.write ?? [];
   const environmentCount = environmentRead.length + environmentWrite.length;
   const total =
-    capabilities.length + containerCount + networkCount + filesystemCount + environmentCount;
+    capabilities.length +
+    containerCount +
+    networkCount +
+    volumeCount +
+    filesystemCount +
+    environmentCount;
   const summary = [
     capabilities.length ? `${capabilities.length} product` : '',
     containerCount ? `${containerCount} container` : '',
     networkCount ? `${networkCount} network` : '',
+    volumeCount ? `${volumeCount} volume` : '',
     filesystemCount ? `${filesystemCount} file` : '',
     environmentCount ? `${environmentCount} environment` : '',
   ]
@@ -205,6 +215,10 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
           />
         ))}
         {extension.networks?.create ? <Text label="Networks · create new networks" /> : null}
+        {volumeSelectors.map((selector, index) => (
+          <Text key={`volume:${index}`} label={`Volume · ${volumeSelectorLabel(selector)}`} wrap />
+        ))}
+        {extension.volumes?.create ? <Text label="Volumes · create new volumes" /> : null}
         {extension.filesystem
           ? FILESYSTEM_VERBS.flatMap(({ key, label }) =>
               filesystemRoots(extension.filesystem!, key).map((selector) => (
@@ -255,6 +269,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     create: false,
   });
   const [grantedNetworks, setGrantedNetworks] = React.useState<NetworkGrant>({
+    selectors: [],
+    create: false,
+  });
+  const [grantedVolumes, setGrantedVolumes] = React.useState<VolumeGrant>({
     selectors: [],
     create: false,
   });
@@ -369,6 +387,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
             setGrantedNetworks({ selectors: [], create: false });
+            setGrantedVolumes({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
             setGrantedWorkspaceEnvironment({ read: [], write: [] });
           }
@@ -414,6 +433,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         granted,
         grantedContainers,
         grantedNetworks,
+        grantedVolumes,
         grantedFilesystem,
         { workspaceEnvironment: grantedWorkspaceEnvironment },
       );
@@ -442,6 +462,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setGranted([]);
     setGrantedContainers({ selectors: [], create: false });
     setGrantedNetworks({ selectors: [], create: false });
+    setGrantedVolumes({ selectors: [], create: false });
     setGrantedFilesystem(emptyFilesystemGrant());
     setGrantedWorkspaceEnvironment({ read: [], write: [] });
     candidateKey.current = '';
@@ -509,6 +530,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
+  const requestedVolumes = acquisition?.candidate?.requested_volumes ?? {
+    selectors: [],
+    create: false,
+  };
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
@@ -526,6 +551,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       Number(requestedContainers.create) +
       requestedNetworks.selectors.length +
       Number(requestedNetworks.create) +
+      requestedVolumes.selectors.length +
+      Number(requestedVolumes.create) +
       filesystemGrantCount(requestedFilesystem) +
       requestedWorkspaceEnvironment.read.length +
       requestedWorkspaceEnvironment.write.length
@@ -536,6 +563,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     Number(grantedContainers.create) +
     grantedNetworks.selectors.length +
     Number(grantedNetworks.create) +
+    grantedVolumes.selectors.length +
+    Number(grantedVolumes.create) +
     filesystemGrantCount(grantedFilesystem) +
     grantedWorkspaceEnvironment.read.length +
     grantedWorkspaceEnvironment.write.length;
@@ -833,6 +862,53 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         />
                       </FormControlLabel>
                     )}
+                    {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
+                      <Text
+                        label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
+                        color="text-dim"
+                      />
+                    )}
+                    {requestedVolumes.selectors.map((selector) => {
+                      const key = volumeSelectorKey(selector);
+                      const selected = grantedVolumes.selectors.some(
+                        (candidate) => volumeSelectorKey(candidate) === key,
+                      );
+                      return (
+                        <FormControlLabel key={key} label={volumeSelectorLabel(selector)} gap={2}>
+                          <Switch
+                            checked={selected}
+                            onToggle={(event: Change) =>
+                              setGrantedVolumes((current) => ({
+                                ...current,
+                                selectors: event.value
+                                  ? [
+                                      ...current.selectors.filter(
+                                        (candidate) => volumeSelectorKey(candidate) !== key,
+                                      ),
+                                      selector,
+                                    ]
+                                  : current.selectors.filter(
+                                      (candidate) => volumeSelectorKey(candidate) !== key,
+                                    ),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      );
+                    })}
+                    {requestedVolumes.create && (
+                      <FormControlLabel label="Create new volumes" gap={2}>
+                        <Switch
+                          checked={grantedVolumes.create}
+                          onToggle={(event: Change) =>
+                            setGrantedVolumes((current) => ({
+                              ...current,
+                              create: Boolean(event.value),
+                            }))
+                          }
+                        />
+                      </FormControlLabel>
+                    )}
                     {filesystemGrantCount(requestedFilesystem) > 0 && (
                       <>
                         <Text label="Workspace files" color="text-dim" />
@@ -1110,6 +1186,14 @@ function networkSelectorLabel(selector: NetworkSelector): string {
   if ('all' in selector) return 'All workspace networks';
   if ('id' in selector) return `Exact network ${selector.id}`;
   return `Network named ${selector.name}`;
+}
+
+function volumeSelectorKey(selector: VolumeSelector): string {
+  return 'all' in selector ? 'all' : `name:${selector.name}`;
+}
+
+function volumeSelectorLabel(selector: VolumeSelector): string {
+  return 'all' in selector ? 'All workspace volumes' : `Volume named ${selector.name}`;
 }
 
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {

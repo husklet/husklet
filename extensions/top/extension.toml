@@ -27,6 +27,10 @@ create = true
 selectors = [{ all = true }]
 create = true
 
+[volumes]
+selectors = [{ all = true }]
+create = true
+
 [interface]
 tab_title = "Top"
 icon = "utilities-system-monitor-symbolic"

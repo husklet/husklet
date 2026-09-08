@@ -1589,6 +1589,14 @@
           }
         },
         {
+          "name": "requested_volumes",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "VolumeGrant"
+          }
+        },
+        {
           "name": "requested_filesystem",
           "optional": true,
           "schema": {
@@ -1812,6 +1820,14 @@
           "schema": {
             "kind": "ref",
             "name": "NetworkGrant"
+          }
+        },
+        {
+          "name": "volumes",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "VolumeGrant"
           }
         },
         {
@@ -6219,6 +6235,32 @@
       },
       "serde": {}
     },
+    "VolumeGrant": {
+      "fields": [
+        {
+          "name": "selectors",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "VolumeSelector"
+            }
+          }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
     "VolumeInventory": {
       "fields": [
         {
@@ -6242,6 +6284,44 @@
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "VolumeSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Name",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "VolumeSummary": {
       "fields": [
@@ -8994,6 +9074,14 @@
                 }
               },
               {
+                "name": "volumes",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "VolumeGrant"
+                }
+              },
+              {
                 "name": "filesystem",
                 "optional": false,
                 "schema": {
@@ -9064,6 +9152,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "NetworkGrant"
+                }
+              },
+              {
+                "name": "volumes",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "VolumeGrant"
                 }
               },
               {
@@ -12273,7 +12369,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:70a2122c6e70e159",
+  "source_fingerprint": "fnv1a64:93a4e65706fb5ab9",
   "specification_version": 1,
   "topics": [
     {
