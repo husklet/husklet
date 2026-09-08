@@ -10,8 +10,8 @@
 //! The only sound statement is the one this file makes: recompute the fingerprint from the C
 //! sources on disk and compare it to the value Cargo baked into this binary. They differ
 //! exactly when the running executable predates the tree it is being credited with testing.
-//! The companion check lives in the loader, which refuses a shared object whose own compiled-in
-//! fingerprint disagrees with this same value.
+//! The companion check lives in the loader, which additionally binds the complete C build
+//! configuration and refuses a shared object whose compiled-in identity disagrees.
 
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/inventory/fingerprint.rs"));
 
@@ -21,7 +21,7 @@ fn this_executable_was_built_from_the_native_sources_now_in_the_tree() {
     // straight off a saved binary as well as through `cargo test`, and the two do not share a cwd.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let current = native_fingerprint(&root);
-    let compiled = env!("HL_NATIVE_BUILD_FINGERPRINT");
+    let compiled = env!("HL_NATIVE_SOURCE_FINGERPRINT");
     assert_eq!(
         current, compiled,
         "this test binary was built from native C sources fingerprinted {compiled}, but the tree \

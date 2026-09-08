@@ -11,9 +11,12 @@ mod inventory;
 mod platform;
 
 use platform::{GuestIsa, HostTarget};
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 const NATIVE_ROOT: &str = "src/native";
 const NATIVE_FINGERPRINT: &str = "HL_NATIVE_BUILD_FINGERPRINT";
+const NATIVE_SOURCE_FINGERPRINT: &str = "HL_NATIVE_SOURCE_FINGERPRINT";
 const NATIVE_TEST_HOOKS: EnvFlag = EnvFlag::new("CARGO_FEATURE_NATIVE_TEST_HOOKS");
 const NATIVE_COMPILE_CHECK: EnvFlag = EnvFlag::new("HL_NATIVE_COMPILE_CHECK");
 const C_SANITIZER: EnvKey<NativeSanitizer> = EnvKey::new("HL_C_SANITIZER", NativeSanitizer::parse);
@@ -51,7 +54,9 @@ fn main() {
     // Every native source contributes to this value. It is compiled into the artifact and
     // exported as `cargo:rustc-env`, so a C edit invalidates the crate's own Cargo fingerprint
     // and the loader can refuse a shared object built from different sources than the caller.
-    let fingerprint = inventory::fingerprint::native_fingerprint(Path::new(NATIVE_ROOT));
+    let source_fingerprint = inventory::fingerprint::native_fingerprint(Path::new(NATIVE_ROOT));
+    let fingerprint = configured_fingerprint(&source_fingerprint, &environment, test_hooks, compile_check, sanitizer);
+    CargoDirectives::rustc_environment(NATIVE_SOURCE_FINGERPRINT, &source_fingerprint);
     CargoDirectives::rustc_environment(NATIVE_FINGERPRINT, &fingerprint);
     let plan = target.build_plan();
 
@@ -230,12 +235,74 @@ fn main() {
     // point at which the real cause is still visible; the rerun after it is correct.
     let settled = inventory::fingerprint::native_fingerprint(Path::new(NATIVE_ROOT));
     assert!(
-        settled == fingerprint,
+        settled == source_fingerprint,
         "the native C sources changed while this build script was running: they fingerprinted \
-         {fingerprint} when the build started and {settled} now. This artifact would mix both \
+         {source_fingerprint} when the build started and {settled} now. This artifact would mix both \
          source states. Nothing is wrong with the build - re-run it, and if you are in a shared \
          checkout that other lanes merge into, run the gate in your own worktree instead."
     );
+}
+
+// A runner and its separately published shared object must agree on the C compilation, not only the
+// source tree. These are all conditional inputs used below to select definitions, sources, compiler
+// policy, exported symbols, or the linked guest set.
+fn configured_fingerprint(
+    source: &str,
+    environment: &BuildEnvironment,
+    test_hooks: bool,
+    compile_check: bool,
+    sanitizer: NativeSanitizer,
+) -> String {
+    let fields = [
+        ("source", source.to_owned()),
+        ("target", environment.target.as_str().to_owned()),
+        ("target_os", environment.target_os.as_str().to_owned()),
+        ("target_arch", environment.target_arch.as_str().to_owned()),
+        ("target_environment", environment.target_environment.as_str().to_owned()),
+        ("profile", format!("{:?}", environment.profile)),
+        ("native_test_hooks", u8::from(test_hooks).to_string()),
+        ("native_compile_check", u8::from(compile_check).to_string()),
+        ("c_sanitizer", format!("{sanitizer:?}")),
+    ];
+    let mut digest = Sha256::new();
+    digest.update(b"husklet-native-build-configuration-v1\0");
+    for (name, value) in fields {
+        fingerprint_field(&mut digest, name.as_bytes(), value.as_bytes());
+    }
+    // These lists already drive Cargo's rebuild policy. Digesting the same inventory keeps the
+    // authentication policy from drifting when a compiler/linker input is added there.
+    for path in build_support::BUILD_POLICY_INPUTS {
+        let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("cannot fingerprint {path}: {error}"));
+        fingerprint_field(&mut digest, path.as_bytes(), &bytes);
+    }
+    let compiler_inputs = build_support::COMPILER_ENVIRONMENT_INPUTS
+        .iter()
+        .map(|value| (*value).to_owned())
+        .chain(
+            build_support::LINKER_ENVIRONMENT_INPUTS
+                .iter()
+                .map(|value| (*value).to_owned()),
+        )
+        .chain(build_support::target_compiler_environment_inputs(
+            environment.target.as_str(),
+        ));
+    for name in compiler_inputs {
+        let value = std::env::var_os(&name)
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        fingerprint_field(&mut digest, name.as_bytes(), value.as_bytes());
+    }
+    digest.finalize().iter().fold(String::with_capacity(64), |mut encoded, byte| {
+        write!(encoded, "{byte:02x}").expect("writing a digest to a String cannot fail");
+        encoded
+    })
+}
+
+fn fingerprint_field(digest: &mut Sha256, name: &[u8], value: &[u8]) {
+    digest.update((name.len() as u64).to_le_bytes());
+    digest.update(name);
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value);
 }
 
 fn archive(
@@ -337,6 +404,7 @@ fn emit_build_inputs(target_triple: &str) {
 fn emit_planned_target(environment: &BuildEnvironment) {
     let filename = artifact::filename(environment.target_os.as_str());
     CargoDirectives::cfg("supported", 0);
+    CargoDirectives::rustc_environment(NATIVE_SOURCE_FINGERPRINT, "unbuilt");
     CargoDirectives::rustc_environment(NATIVE_FINGERPRINT, "unbuilt");
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_NAME", filename);
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_PATH", filename);
