@@ -116,6 +116,8 @@ export type ExtensionCapability =
   | 'filesystem:write'
   | 'state:read'
   | 'state:write'
+  | 'credentials:read'
+  | 'credentials:write'
   | 'interface:render'
   | 'notifications:publish';
 export type ContainerSelector = { id: string } | { name: string } | { all: true };
@@ -258,6 +260,8 @@ export interface ContainerSummary {
   state: string;
   created: number;
   generation: number;
+  /** Bounded exposed and host-published ports observed for this container. */
+  ports?: ContainerPort[];
 }
 export interface ContainerInventory {
   containers: ContainerSummary[];
@@ -548,6 +552,12 @@ export interface FileRange {
 export interface ExtensionState {
   identity: string;
   contents: number[];
+}
+
+/** Host-protected per-extension credential; private file isolation, not encryption or a keychain. */
+export interface ExtensionCredential {
+  revision: number;
+  value?: number[] | null;
 }
 export interface StateCodec<T> {
   decode(value: unknown): T;
@@ -1150,6 +1160,7 @@ export interface WorkspaceApi {
       options?: {
         lines?: number;
         timeoutMs?: number;
+        signal?: AbortSignal;
       },
     ): Promise<
       | { changed: true; readable: ReadablePane }
@@ -1373,6 +1384,12 @@ export interface WorkspaceApi {
   preferences: {
     read(): Promise<ExtensionPreferences>;
     set(observed: number, key: string, value: PreferenceValue): Promise<number>;
+    remove(observed: number, key: string): Promise<number>;
+  };
+  /** Named credentials isolated to this extension; values are never enumerable. */
+  credentials: {
+    read(key: string): Promise<ExtensionCredential>;
+    set(observed: number, key: string, value: Iterable<number>): Promise<number>;
     remove(observed: number, key: string): Promise<number>;
   };
   subscribe(topic: Topic): Promise<void>;

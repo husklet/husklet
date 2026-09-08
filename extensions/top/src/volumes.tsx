@@ -250,7 +250,7 @@ function Page({
 }) {
   return (
     <Scroll grow width="fill" height="fill">
-      <Column width="fill" pad={4} gap={2}>
+      <Column width="fill" pad={2} gap={2}>
         <Heading label={title} scale="title" />
         <Text label={subtitle} color="text-dim" wrap />
         {children}

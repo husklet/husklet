@@ -16,6 +16,79 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix credential calls reveal only the named value and preserve CAS framing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue; calls.push(frame.payload);
+        const reply = frame.payload.call === 'credential_read'
+          ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
+          : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'credential-test', granted: ['credentials:read', 'credentials:write'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const credentials = workspace(session).credentials;
+    assert.deepEqual(await credentials.read('postgres.password'), { revision: 7, value: [0, 255, 10] });
+    assert.equal(await credentials.set(7, 'postgres.password', [0, 255, 10]), 8);
+    assert.equal(await credentials.remove(8, 'postgres.password'), 9);
+    assert.deepEqual(calls, [
+      { call: 'credential_read', with: { key: 'postgres.password' } },
+      { call: 'credential_set', with: { observed: 7, key: 'postgres.password', value: [0, 255, 10] } },
+      { call: 'credential_remove', with: { observed: 8, key: 'postgres.password' } },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix container inventory preserves a published PostgreSQL port', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-port-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const container = {
+    id: 'db-id', name: 'postgres', image: 'postgres:17', state: 'running', created: 1,
+    generation: 4, ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'container_list' });
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
+          reply: 'containers', with: [container],
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'postgres-port', granted: ['containers:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(await workspace(session).containers.list(), [container]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -101,6 +174,51 @@ test('real Unix text wait reconciles an unread revision without requiring a late
     assert.deepEqual(calls, [
       'event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe',
     ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix text wait aborts promptly, releases its subscription, and leaves reconnect usable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = []; const connections = new Set(); let initialRead;
+  const readReady = new Promise((resolve) => { initialRead = resolve; });
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const reply = frame.payload.call === 'pane_list'
+          ? { reply: 'panes', with: { panes: [{ slot: 'shell', generation: 2, revision: 3,
+            kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }], truncated: false } }
+          : frame.payload.call === 'terminal_read_pane'
+            ? { reply: 'text', with: { slot: 'shell', generation: 2, revision: 3, columns: 80, rows: 24,
+              lines: ['still running'], cursor_column: 13, cursor_row: 0, truncated: false } }
+            : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
+        if (frame.payload.call === 'terminal_read_pane') initialRead();
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'text-abort', granted: ['panes:observe', 'terminals:output'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const controller = new AbortController();
+    const pending = workspace(session).terminal.waitForText(
+      'shell', { generation: 2, revision: 3 }, { timeoutMs: 30_000, signal: controller.signal },
+    );
+    await readReady; controller.abort(new Error('agent cancelled'));
+    await assert.rejects(pending, /agent cancelled|aborted/);
+    assert.deepEqual(calls, ['event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe']);
+    assert.equal((await workspace(session).terminal.panes()).panes[0].slot, 'shell');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -1684,6 +1802,111 @@ test('AbortSignal writes nothing before a call and closes ordered Unix calls aft
     assert.deepEqual(delivered, [], 'no reply can be rebound after cancellation closes the stream');
     await assert.rejects(session.call('workspace_info'), /closed/);
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('throwing AbortSignal cleanup cannot strand ordered Unix calls before a trickled late reply', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-abort-cleanup-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let observedTwo;
+  const twoCalls = new Promise((resolve) => {
+    observedTwo = resolve;
+  });
+  let peerClosed;
+  const closed = new Promise((resolve) => {
+    peerClosed = resolve;
+  });
+  const late = encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: {
+      reply: 'workspace',
+      with: { name: 'late', image: 'alpine', architecture: 'amd64' },
+    },
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('error', () => {});
+    socket.on('close', () => {
+      connections.delete(socket);
+      peerClosed();
+    });
+    const reader = new Reader();
+    let calls = 0;
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2 || frame.kind !== KIND.request) continue;
+        calls += 1;
+        if (calls === 2) observedTwo();
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'abort_cleanup',
+          granted: ['workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+
+  class ThrowingCleanupSignal {
+    aborted = false;
+    reason;
+    listener;
+
+    addEventListener(_name, listener) {
+      this.listener = listener;
+    }
+
+    removeEventListener() {
+      throw new Error('hostile AbortSignal cleanup');
+    }
+
+    abort(reason) {
+      this.aborted = true;
+      this.reason = reason;
+      this.listener();
+    }
+  }
+
+  try {
+    const replies = [];
+    const session = await connect({
+      path: socketPath,
+      timeout: 1_000,
+      onReply: (reply) => replies.push(reply),
+    });
+    const signal = new ThrowingCleanupSignal();
+    const first = session.call('workspace_info', undefined, { signal });
+    const second = session.call('workspace_list');
+    await twoCalls;
+
+    assert.doesNotThrow(() => signal.abort('cancel the first ordered slot'));
+    const firstRejected = assert.rejects(first, { name: 'AbortError' });
+    const secondRejected = assert.rejects(second, { name: 'AbortError' });
+    const peer = [...connections][0];
+    peer.write(late.subarray(0, 7));
+    setImmediate(() => peer.write(late.subarray(7)));
+
+    await Promise.all([firstRejected, secondRejected]);
+    await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('cancelled ordered socket stayed open')), 200),
+      ),
+    ]);
+    assert.deepEqual(replies, [], 'the late abandoned reply has no live caller or GUI callback');
+    assert.match((await session.closed).message, /aborted/);
+  } finally {
+    for (const connection of connections) connection.destroy();
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }

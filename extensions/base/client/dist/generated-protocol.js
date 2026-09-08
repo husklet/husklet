@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:9595722c936b2b68
+// Protocol artifact fnv1a64:f04992d02b839097
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -205,6 +205,16 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": false,
     "mutates": false,
+    "wire": "credentials:read"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "credentials:write"
+  },
+  {
+    "executes": false,
+    "mutates": false,
     "wire": "interface:render"
   },
   {
@@ -395,6 +405,9 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "preference_read": "preferences",
   "preference_set": "revision",
   "preference_remove": "revision",
+  "credential_read": "credential",
+  "credential_set": "revision",
+  "credential_remove": "revision",
   "interface_open_tab": "identity",
   "interface_split": "identity",
   "interface_withdraw": "done",
@@ -515,6 +528,9 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "preference_read": "preferences:read",
   "preference_set": "preferences:write",
   "preference_remove": "preferences:write",
+  "credential_read": "credentials:read",
+  "credential_set": "credentials:write",
+  "credential_remove": "credentials:write",
   "interface_open_tab": "interface:render",
   "interface_split": "interface:render",
   "interface_withdraw": "interface:render",
@@ -806,6 +822,18 @@ const definitions = {
       },
       {
         "name": "preferences:write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "credentials:read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "credentials:write",
         "payload": {
           "kind": "unit"
         }
@@ -1410,6 +1438,17 @@ const definitions = {
           "maximum": 9007199254740991,
           "minimum": 0,
           "signed": false
+        }
+      },
+      {
+        "name": "ports",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerPort"
+          }
         }
       }
     ],
@@ -2152,6 +2191,40 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "string"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "ExtensionCredential": {
+    "fields": [
+      {
+        "name": "revision",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "value",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
+              "signed": false
+            }
           }
         }
       }
@@ -8471,6 +8544,16 @@ const roots = {
         }
       },
       {
+        "name": "credential",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionCredential"
+          }
+        }
+      },
+      {
         "name": "revision",
         "payload": {
           "kind": "newtype",
@@ -11099,6 +11182,87 @@ const roots = {
       },
       {
         "name": "preference_remove",
+        "payload": {
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "credential_read",
+        "payload": {
+          "fields": [
+            {
+              "name": "key",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "credential_set",
+        "payload": {
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "key",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "credential_remove",
         "payload": {
           "fields": [
             {

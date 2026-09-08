@@ -6,12 +6,15 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hl_extension::port::{ExtensionPreferences, ExtensionState, ExtensionStateStore, HostError, PreferenceValue};
+use hl_extension::port::{ExtensionCredential, ExtensionPreferences, ExtensionState, ExtensionStateStore, HostError, PreferenceValue};
 use sha2::Digest as _;
 
 const MAX_STATE_BYTES: usize = 1024 * 1024;
 const MAX_PREFERENCE_FILE_BYTES: usize = 72 * 1024;
 const MAX_PREFERENCES: usize = 64;
+const MAX_CREDENTIALS: usize = 64;
+const MAX_CREDENTIAL_VALUE_BYTES: usize = 64 * 1024;
+const MAX_CREDENTIAL_FILE_BYTES: usize = 4 * 1024 * 1024 + 16 * 1024;
 static TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct StateBlob {
@@ -19,6 +22,7 @@ pub struct StateBlob {
     name: CString,
     lock_name: CString,
     preferences_name: CString,
+    credentials_name: CString,
 }
 
 impl StateBlob {
@@ -29,6 +33,7 @@ impl StateBlob {
         let directory = child_directory(&extensions, c"state")?;
         rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o700))?;
         let preferences_name = CString::new(format!("{name}.preferences")).expect("extension names are NUL-free");
+        let credentials_name = CString::new(format!("{name}.credentials")).expect("extension names are NUL-free");
         let lock_name = CString::new(format!(".{name}.state.lock")).expect("extension names are NUL-free");
         let name = CString::new(format!("{name}.state")).expect("extension names are NUL-free");
         Ok(Self {
@@ -36,6 +41,7 @@ impl StateBlob {
             name,
             lock_name,
             preferences_name,
+            credentials_name,
         })
     }
 
@@ -48,6 +54,11 @@ impl StateBlob {
         fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
         self.remove_unlocked()?;
         match rustix::fs::unlinkat(&self.directory, &self.preferences_name, rustix::fs::AtFlags::empty()) {
+            Ok(()) => rustix::fs::fsync(&self.directory).map_err(Self::failure),
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(Self::failure(error)),
+        }?;
+        match rustix::fs::unlinkat(&self.directory, &self.credentials_name, rustix::fs::AtFlags::empty()) {
             Ok(()) => rustix::fs::fsync(&self.directory).map_err(Self::failure),
             Err(rustix::io::Errno::NOENT) => Ok(()),
             Err(error) => Err(Self::failure(error)),
@@ -195,7 +206,61 @@ impl StateBlob {
         }
         published.map_err(Self::failure)
     }
+
+    fn read_credentials_unlocked(&self) -> Result<CredentialFile, HostError> {
+        let descriptor = match rustix::fs::openat(
+            &self.directory, &self.credentials_name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(CredentialFile::default()),
+            Err(error) => return Err(Self::failure(error)),
+        };
+        let status = rustix::fs::fstat(&descriptor).map_err(Self::failure)?;
+        if rustix::fs::FileType::from_raw_mode(status.st_mode) != rustix::fs::FileType::RegularFile
+            || status.st_size < 0 || status.st_size as usize > MAX_CREDENTIAL_FILE_BYTES
+            || status.st_mode & 0o077 != 0
+        {
+            return Err(HostError::Failed("extension credential store is not a private bounded regular file".into()));
+        }
+        let mut bytes = Vec::with_capacity(status.st_size as usize);
+        std::fs::File::from(descriptor).take((MAX_CREDENTIAL_FILE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes).map_err(Self::failure)?;
+        let file: CredentialFile = serde_json::from_slice(&bytes).map_err(Self::failure)?;
+        let mut keys = std::collections::BTreeSet::new();
+        if file.entries.len() > MAX_CREDENTIALS
+            || file.entries.iter().any(|(key, value)| key.is_empty() || key.len() > 64
+                || !key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                || value.len() > MAX_CREDENTIAL_VALUE_BYTES || !keys.insert(key))
+        {
+            return Err(HostError::Failed("extension credential store is invalid or oversized".into()));
+        }
+        Ok(file)
+    }
+
+    fn publish_credentials_unlocked(&self, credentials: &CredentialFile) -> Result<(), HostError> {
+        let bytes = serde_json::to_vec(credentials).map_err(Self::failure)?;
+        if bytes.len() > MAX_CREDENTIAL_FILE_BYTES {
+            return Err(HostError::Conflict("extension credentials exceed their 4 MiB storage quota".into()));
+        }
+        let temporary = CString::new(format!(".{}.{}-{}.tmp", self.credentials_name.to_string_lossy(), std::process::id(), TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)))
+            .expect("generated credential filenames are NUL-free");
+        let descriptor = rustix::fs::openat(&self.directory, &temporary,
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::from_raw_mode(0o600)).map_err(Self::failure)?;
+        let mut file = std::fs::File::from(descriptor);
+        let prepared = file.write_all(&bytes).and_then(|()| file.sync_all()); drop(file);
+        if let Err(error) = prepared { let _ = rustix::fs::unlinkat(&self.directory, &temporary, rustix::fs::AtFlags::empty()); return Err(Self::failure(error)); }
+        let published = rustix::fs::renameat(&self.directory, &temporary, &self.directory, &self.credentials_name)
+            .and_then(|()| rustix::fs::fsync(&self.directory));
+        if published.is_err() { let _ = rustix::fs::unlinkat(&self.directory, &temporary, rustix::fs::AtFlags::empty()); }
+        published.map_err(Self::failure)
+    }
 }
+
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct CredentialFile { revision: u64, entries: Vec<(String, Vec<u8>)> }
 
 impl ExtensionStateStore for StateBlob {
     fn read(&self) -> Result<ExtensionState, HostError> {
@@ -313,6 +378,33 @@ impl ExtensionStateStore for StateBlob {
         self.publish_preferences_unlocked(&preferences)?;
         Ok(preferences.revision)
     }
+
+    fn credential(&self, key: &str) -> Result<ExtensionCredential, HostError> {
+        let lock = self.lock()?; fs2::FileExt::lock_shared(&lock).map_err(Self::failure)?;
+        let credentials = self.read_credentials_unlocked()?;
+        Ok(ExtensionCredential { revision: credentials.revision, value: credentials.entries.iter().find(|(current, _)| current == key).map(|(_, value)| value.clone()) })
+    }
+
+    fn credential_set(&self, observed: u64, key: &str, value: &[u8]) -> Result<u64, HostError> {
+        let lock = self.lock()?; fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        let mut credentials = self.read_credentials_unlocked()?;
+        if credentials.revision != observed { return Err(HostError::Conflict("extension credentials changed after they were read".into())); }
+        if let Some((_, current)) = credentials.entries.iter_mut().find(|(current, _)| current == key) { current.clear(); current.extend_from_slice(value); }
+        else if credentials.entries.len() < MAX_CREDENTIALS { credentials.entries.push((key.to_owned(), value.to_vec())); }
+        else { return Err(HostError::Conflict("extension credentials are limited to 64 entries".into())); }
+        credentials.entries.sort_by(|left, right| left.0.cmp(&right.0));
+        credentials.revision = credentials.revision.checked_add(1).ok_or_else(|| HostError::Conflict("extension credential revision is exhausted".into()))?;
+        self.publish_credentials_unlocked(&credentials)?; Ok(credentials.revision)
+    }
+
+    fn credential_remove(&self, observed: u64, key: &str) -> Result<u64, HostError> {
+        let lock = self.lock()?; fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        let mut credentials = self.read_credentials_unlocked()?;
+        if credentials.revision != observed { return Err(HostError::Conflict("extension credentials changed after they were read".into())); }
+        credentials.entries.retain(|(current, _)| current != key);
+        credentials.revision = credentials.revision.checked_add(1).ok_or_else(|| HostError::Conflict("extension credential revision is exhausted".into()))?;
+        self.publish_credentials_unlocked(&credentials)?; Ok(credentials.revision)
+    }
 }
 
 fn open_directory(parent: impl AsFd, name: impl rustix::path::Arg) -> io::Result<OwnedFd> {
@@ -378,6 +470,25 @@ mod tests {
         reopened.clear(&identity).unwrap();
         reopened.clear("absent").unwrap();
         assert!(reopened.read().unwrap().contents.is_empty());
+    }
+
+    #[test]
+    fn credentials_are_private_durable_cas_safe_and_extension_isolated() {
+        let root = tempfile::tempdir().unwrap();
+        let postgres = blob(root.path(), "postgres");
+        let initial = postgres.credential("password").unwrap();
+        assert_eq!(initial.revision, 0); assert_eq!(initial.value, None);
+        let revision = postgres.credential_set(0, "password", b"s3cret\0bytes").unwrap();
+        assert!(postgres.credential_set(0, "password", b"stale").is_err());
+        drop(postgres);
+
+        let reopened = blob(root.path(), "postgres");
+        assert_eq!(reopened.credential("password").unwrap().value.as_deref(), Some(b"s3cret\0bytes".as_slice()));
+        assert_eq!(blob(root.path(), "other").credential("password").unwrap().value, None);
+        let path = root.path().join("extensions/state/postgres.credentials");
+        assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
+        let removed = reopened.credential_remove(revision, "password").unwrap();
+        assert_eq!(reopened.credential("password").unwrap(), hl_extension::port::ExtensionCredential { revision: removed, value: None });
     }
 
     #[test]

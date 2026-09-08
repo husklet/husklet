@@ -1378,6 +1378,7 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
+                ports: Vec::new(),
             }])
         }
 
@@ -2633,6 +2634,7 @@ mod tests {
                 image: "husklet/api:1".to_owned(),
                 state: "running".to_owned(),
                 created: 0,
+                ports: Vec::new(),
             }])
         );
         assert_eq!(ledger.reached(), vec!["containers.list"]);
@@ -3310,6 +3312,7 @@ mod tests {
                 image: "image".into(),
                 state: "running".into(),
                 created,
+                ports: Vec::new(),
             }])
         };
 
@@ -3367,6 +3370,7 @@ mod tests {
             image: "image".into(),
             state: "running".into(),
             created: 1,
+            ports: Vec::new(),
         }]);
         let mut peer = Wire::new(theirs);
 

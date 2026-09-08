@@ -20,6 +20,15 @@ import { bounded, boundedMessage, processRows, shortId } from './model.js';
 import type { Resource } from './overview.js';
 
 const SAMPLING_CONCURRENCY = 8;
+const OBSERVED_AT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
 type Snapshot = { container: ContainerSummary; rows: ProcessList; error: null };
 type Failure = { container: ContainerSummary; rows: null; error: unknown };
 type Group = Snapshot | Failure;
@@ -122,7 +131,7 @@ export function Processes({
           wrap
         />
         {observed > 0 ? (
-          <Text label={`Observed ${new Date(observed).toISOString()}`} color="text-dim" />
+          <Text label={`Observed ${OBSERVED_AT.format(observed)} UTC`} color="text-dim" />
         ) : null}
         {view.records.map((process, index) => {
           const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
@@ -199,7 +208,7 @@ function Page({
 }) {
   return (
     <Scroll grow width="fill" height="fill">
-      <Column width="fill" pad={4} gap={2}>
+      <Column width="fill" pad={2} gap={2}>
         <Row gap={2} align="center" justify="start" wrap>
           <Heading label={title} scale="title" />
           {action}

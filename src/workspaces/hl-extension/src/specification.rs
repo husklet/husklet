@@ -153,6 +153,9 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("preference_read", "preferences"),
     ("preference_set", "revision"),
     ("preference_remove", "revision"),
+    ("credential_read", "credential"),
+    ("credential_set", "revision"),
+    ("credential_remove", "revision"),
     ("interface_open_tab", "identity"),
     ("interface_split", "identity"),
     ("interface_withdraw", "done"),
@@ -244,6 +247,8 @@ fn request_capability(request: &str) -> Capability {
         "state_write" | "state_clear" => Capability::StateWrite,
         "preference_read" => Capability::PreferenceRead,
         "preference_set" | "preference_remove" => Capability::PreferenceWrite,
+        "credential_read" => Capability::CredentialRead,
+        "credential_set" | "credential_remove" => Capability::CredentialWrite,
         "interface_open_tab"
         | "interface_split"
         | "interface_withdraw"

@@ -407,6 +407,25 @@ function exactStateIdentity(identity: string) {
   );
 }
 
+function exactCredentialKey(key: string) {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(key))
+    throw new TypeError(
+      "credential keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'",
+    );
+  return key;
+}
+
+function exactCredentialBytes(input: Iterable<number>) {
+  const values: number[] = [];
+  for (const value of input ?? []) {
+    if (values.length === 64 * 1024) throw new RangeError('credentials are limited to 64 KiB');
+    if (!Number.isInteger(value) || value < 0 || value > 255)
+      throw new TypeError('credential bytes must be integers from 0 through 255');
+    values.push(value);
+  }
+  return values;
+}
+
 function exactStateCodec<T>(codec: StateCodec<T>) {
   if (typeof codec?.decode !== 'function' || typeof codec?.encode !== 'function')
     throw new TypeError('extension state JSON codec requires encode and decode functions');
@@ -1663,6 +1682,27 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       remove: async (observed, key) =>
         expect(await session.call('preference_remove', { observed, key }), 'revision'),
     },
+    credentials: {
+      read: async (key) =>
+        expect(
+          await session.call('credential_read', { key: exactCredentialKey(key) }),
+          'credential',
+        ),
+      set: async (observed, key, value) =>
+        expect(
+          await session.call('credential_set', {
+            observed,
+            key: exactCredentialKey(key),
+            value: exactCredentialBytes(value),
+          }),
+          'revision',
+        ),
+      remove: async (observed, key) =>
+        expect(
+          await session.call('credential_remove', { observed, key: exactCredentialKey(key) }),
+          'revision',
+        ),
+    },
     subscribe,
     unsubscribe,
   } as unknown as WorkspaceApi;
@@ -2037,7 +2077,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) =>
     watch('pane-changes', 'pane_changes', listener, 'pane change');
-  api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000 } = {}) => {
+  api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000, signal } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0)
       throw new TypeError('pane text wait requires a nonempty slot');
     if (
@@ -2054,8 +2094,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('pane text wait timeout must be between 1 and 30000ms');
     }
+    if (signal?.aborted) throw outputAbort(signal);
     let dispose;
     let timer;
+    let abort;
     let settled = false;
     let reading = false;
     let pending = false;
@@ -2064,6 +2106,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (abort) signal?.removeEventListener('abort', abort);
         Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
       const reconcile = () => {
@@ -2096,6 +2139,8 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           return;
         reconcile();
       };
+      abort = () => finish(undefined, outputAbort(signal));
+      signal?.addEventListener('abort', abort, { once: true });
       api.watchPaneChanges(observe).then(
         (stop) => {
           dispose = stop;
@@ -3485,6 +3530,7 @@ function facadePath(call) {
     ['filesystem_', 'files.'],
     ['state_', 'state.'],
     ['preference_', 'preferences.'],
+    ['credential_', 'credentials.'],
     ['notification_', 'notifications.'],
   ])
     if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));

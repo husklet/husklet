@@ -128,6 +128,19 @@ fn workspace_environment_patch(patch: &crate::port::WorkspaceEnvironmentPatch) -
 const PREFERENCE_ENTRIES: usize = 64;
 const PREFERENCE_KEY_BYTES: usize = 64;
 const PREFERENCE_STRING_BYTES: usize = 1024;
+const CREDENTIAL_VALUE_BYTES: usize = 64 * 1024;
+
+fn validate_credential_key(key: &str) -> Result<(), Failure> {
+    if key.is_empty()
+        || key.len() > PREFERENCE_KEY_BYTES
+        || !key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(Failure::Conflict {
+            detail: "credential keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'".into(),
+        });
+    }
+    Ok(())
+}
 
 fn validate_preference_key(key: &str) -> Result<(), Failure> {
     if key.is_empty()
@@ -462,6 +475,7 @@ impl Session {
                 state: String::new(),
                 created: 0,
                 generation: 0,
+                ports: Vec::new(),
             });
         }
         Err(Failure::Denied {
@@ -689,7 +703,10 @@ impl Session {
             | Request::StateClear { .. }
             | Request::PreferenceRead
             | Request::PreferenceSet { .. }
-            | Request::PreferenceRemove { .. } => self.state(request, services),
+            | Request::PreferenceRemove { .. }
+            | Request::CredentialRead { .. }
+            | Request::CredentialSet { .. }
+            | Request::CredentialRemove { .. } => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -1692,6 +1709,25 @@ impl Session {
                 port.preference_remove(*observed, key)
                     .map(Reply::Revision)
                     .map_err(Failure::from)
+            }
+            Request::CredentialRead { key } => {
+                validate_credential_key(key)?;
+                let credential = port.credential(key)?;
+                if credential.value.as_ref().is_some_and(|value| value.len() > CREDENTIAL_VALUE_BYTES) {
+                    return Err(Failure::Failed { detail: "host returned an oversized credential".into() });
+                }
+                Ok(Reply::Credential(credential))
+            }
+            Request::CredentialSet { observed, key, value } => {
+                validate_credential_key(key)?;
+                if value.len() > CREDENTIAL_VALUE_BYTES {
+                    return Err(Failure::Conflict { detail: "credentials are limited to 64 KiB".into() });
+                }
+                port.credential_set(*observed, key, value).map(Reply::Revision).map_err(Failure::from)
+            }
+            Request::CredentialRemove { observed, key } => {
+                validate_credential_key(key)?;
+                port.credential_remove(*observed, key).map(Reply::Revision).map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "extension state".into(),

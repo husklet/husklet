@@ -161,6 +161,7 @@ impl Host {
             state: "running".into(),
             created: 0,
             generation: 0,
+            ports: Vec::new(),
         }
     }
 }
@@ -1645,6 +1646,9 @@ fn all_calls() -> Vec<(Request, Capability)> {
             },
             Capability::PreferenceWrite,
         ),
+        (Request::CredentialRead { key: "postgres.password".into() }, Capability::CredentialRead),
+        (Request::CredentialSet { observed: 0, key: "postgres.password".into(), value: vec![0, 255] }, Capability::CredentialWrite),
+        (Request::CredentialRemove { observed: 0, key: "postgres.password".into() }, Capability::CredentialWrite),
     ]);
     requests.extend([
         (

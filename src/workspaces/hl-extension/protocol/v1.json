@@ -202,6 +202,16 @@
     {
       "executes": false,
       "mutates": false,
+      "wire": "credentials:read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "credentials:write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
       "wire": "interface:render"
     },
     {
@@ -491,6 +501,18 @@
         },
         {
           "name": "preferences:write",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "credentials:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "credentials:write",
           "payload": {
             "kind": "unit"
           }
@@ -1095,6 +1117,17 @@
             "maximum": 9007199254740991,
             "minimum": 0,
             "signed": false
+          }
+        },
+        {
+          "name": "ports",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ContainerPort"
+            }
           }
         }
       ],
@@ -1837,6 +1870,40 @@
             "kind": "array",
             "of": {
               "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "ExtensionCredential": {
+      "fields": [
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "value",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "array",
+              "of": {
+                "bits": 8,
+                "kind": "integer",
+                "maximum": 255,
+                "minimum": 0,
+                "signed": false
+              }
             }
           }
         }
@@ -8132,6 +8199,18 @@
       "request": "preference_remove"
     },
     {
+      "capability": "credentials:read",
+      "request": "credential_read"
+    },
+    {
+      "capability": "credentials:write",
+      "request": "credential_set"
+    },
+    {
+      "capability": "credentials:write",
+      "request": "credential_remove"
+    },
+    {
       "capability": "interface:render",
       "request": "interface_open_tab"
     },
@@ -8604,6 +8683,18 @@
     {
       "reply": "revision",
       "request": "preference_remove"
+    },
+    {
+      "reply": "credential",
+      "request": "credential_read"
+    },
+    {
+      "reply": "revision",
+      "request": "credential_set"
+    },
+    {
+      "reply": "revision",
+      "request": "credential_remove"
     },
     {
       "reply": "identity",
@@ -9160,6 +9251,16 @@
             "of": {
               "kind": "ref",
               "name": "ExtensionPreferences"
+            }
+          }
+        },
+        {
+          "name": "credential",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionCredential"
             }
           }
         },
@@ -11817,6 +11918,87 @@
           }
         },
         {
+          "name": "credential_read",
+          "payload": {
+            "fields": [
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "credential_set",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "value",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "credential_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "interface_open_tab",
           "payload": {
             "fields": [
@@ -13019,7 +13201,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:d4d3f529f5a105a3",
+  "source_fingerprint": "fnv1a64:16f481e1aab505b8",
   "specification_version": 1,
   "topics": [
     {

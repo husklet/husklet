@@ -97,6 +97,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
 - `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
+- Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.
 
 ## Processes and executions
 
@@ -142,7 +143,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.
 - `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.
 - `host.terminal.readAll(...)` — discovers panes once and converts each to terminal transcript or bounded semantic XML, reports incomplete discovery, and refuses cursor races; requires `panes:observe`, `terminals:output`, and `panes:semantic-read` for mixed workspaces.
-- `host.terminal.waitForText(...)` — arms pane-change observation, immediately reconciles state that advanced between agent iterations, then waits for and returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.
+- `host.terminal.waitForText(...)` — arms pane-change observation, immediately reconciles state that advanced between agent iterations, then waits for and returns a fresh bounded text projection; accepts an `AbortSignal` for prompt cancellation and requires `panes:observe` plus the corresponding read grant.
 - `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `panes:observe`, `panes:semantic-control`, and the corresponding read grant.
 - `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
@@ -183,6 +184,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.clear(...)` — `state_clear`, requires `state:write`.
 - `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
 - `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
+- `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.
 
 ## Extension preferences
 
@@ -190,6 +192,12 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.preferences.set(...)` — `preference_set`, requires `preferences:write`.
 - `host.preferences.remove(...)` — `preference_remove`, requires `preferences:write`.
 - Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.
+
+## Extension credentials
+
+- `host.credentials.read(...)` — `credential_read`, requires `credentials:read`.
+- `host.credentials.set(...)` — `credential_set`, requires `credentials:write`.
+- `host.credentials.remove(...)` — `credential_remove`, requires `credentials:write`.
 
 ## Images
 

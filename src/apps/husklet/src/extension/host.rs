@@ -1669,6 +1669,29 @@ tab_title = "Sample"
     }
 
     #[test]
+    fn an_out_of_sequence_frame_crosses_the_real_socket_for_bounded_page_recovery() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("run/extension.sock");
+        let token = Arc::new(());
+        let (host, gallery) = hosted(
+            &socket,
+            &[Script {
+                sequence: 3,
+                draw: true,
+                linger: true,
+            }],
+            &token,
+        );
+
+        assert!(
+            until(|| gallery.frames() == vec![3]),
+            "the adversarial frame crosses the socket"
+        );
+        assert!(gallery.losses().is_empty(), "framing itself remains valid");
+        host.close().expect("closed");
+    }
+
+    #[test]
     fn a_retry_opens_the_conversation_again() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let socket = temporary.path().join("run/extension.sock");

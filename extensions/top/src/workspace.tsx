@@ -12,6 +12,7 @@ import {
   Entry,
   FormControlLabel,
   Heading,
+  IconButton,
   InlineMessage,
   RecoveryState,
   Row,
@@ -151,7 +152,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   };
   if (!configuration)
     return (
-      <Column pad={2} gap={2}>
+      <Column width="fill" pad={2} gap={2}>
         <Heading label="Workspace" scale="title" />
         {error ? (
           <RecoveryState
@@ -307,14 +308,17 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                   onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))}
                 />
               </Column>
-              <Row gap={2} align="center">
+              <Row gap={1} align="center" wrap>
                 <Switch
                   checked={configuration.terminal.cursor_blink ?? false}
                   onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))}
                 />
                 <Text label="Cursor blink" />
-                <Button
-                  label="Use host default for cursor blink"
+                <IconButton
+                  icon="edit-clear-symbolic"
+                  label="Reset cursor blink"
+                  tooltip="Use the host default for cursor blink"
+                  variant="ghost"
                   enabled={configuration.terminal.cursor_blink !== null}
                   onInvoke={() => terminal('cursor_blink', null)}
                 />
@@ -430,7 +434,7 @@ function Environment({
         </FormControlLabel>
       )}
       {values.map((row, index) => (
-        <Row key={`${index}:${row[0]}`} gap={1}>
+        <Row key={`${index}:${row[0]}`} gap={1} align="center" wrap>
           <Entry
             value={row[0]}
             placeholder="NAME"
@@ -443,8 +447,12 @@ function Environment({
             grow
             onChange={(event: Change) => replace(index, 1, event.value)}
           />
-          <Button
+          <IconButton
+            icon="user-trash-symbolic"
             label={`Remove ${row[0] || `variable ${index + 1}`}`}
+            tooltip={`Remove ${row[0] || `variable ${index + 1}`}`}
+            variant="ghost"
+            tone="danger"
             onInvoke={() => onChange(values.filter((_, at) => at !== index))}
           />
         </Row>
@@ -468,7 +476,7 @@ function Mounts({
     <Column gap={2}>
       {values.map((mount, index) => (
         <Column key={`${index}:${mount.container}`} gap={1}>
-          <Row gap={1}>
+          <Row gap={1} wrap>
             <Entry
               value={mount.host}
               placeholder="Host path"
@@ -482,14 +490,18 @@ function Mounts({
               onChange={(event: Change) => replace(index, { container: String(event.value ?? '') })}
             />
           </Row>
-          <Row gap={2} align="center">
+          <Row gap={1} align="center" wrap>
             <Switch
               checked={mount.read_only}
               onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })}
             />
             <Text label="Read only" />
-            <Button
+            <IconButton
+              icon="user-trash-symbolic"
               label={`Remove mount ${index + 1}`}
+              tooltip={`Remove mount ${index + 1}`}
+              variant="ghost"
+              tone="danger"
               onInvoke={() => onChange(values.filter((_, at) => at !== index))}
             />
           </Row>
@@ -527,13 +539,16 @@ function colorField(label: string, value: string | null, onChange: (value: strin
   return (
     <Column gap={1}>
       <Text label={label} />
-      <Row gap={1} align="center">
+      <Row gap={1} align="center" wrap>
         <ColorPicker
           value={value ?? '#000000'}
           onChange={(event: Change) => onChange(nullable(event.value))}
         />
-        <Button
-          label={`Use host default for ${label.toLowerCase()}`}
+        <IconButton
+          icon="edit-clear-symbolic"
+          label={`Reset ${label.toLowerCase()}`}
+          tooltip={`Use the host default for ${label.toLowerCase()}`}
+          variant="ghost"
           enabled={value !== null}
           onInvoke={() => onChange(null)}
         />

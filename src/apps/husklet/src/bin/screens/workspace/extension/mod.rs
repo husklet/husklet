@@ -51,6 +51,7 @@ pub struct Interface {
     /// never leave an apparently dead, entirely blank application window.
     loading: gtk::Box,
     tree: Tree,
+    poisoned: bool,
     panes: HashMap<String, PaneInterface>,
     banner: Banner,
     /// A retry is one request, not a repeatable action while the host reopens.
@@ -66,6 +67,7 @@ pub struct Interface {
 struct PaneInterface {
     surface: Surface,
     tree: Tree,
+    poisoned: bool,
 }
 
 impl PaneInterface {
@@ -73,6 +75,7 @@ impl PaneInterface {
         Self {
             surface: Surface::new(),
             tree: Tree::new(),
+            poisoned: false,
         }
     }
 }
@@ -135,6 +138,7 @@ impl Interface {
             surface,
             loading,
             tree: Tree::new(),
+            poisoned: false,
             panes: HashMap::new(),
             banner,
             recovery_pending: Cell::new(false),
@@ -415,9 +419,13 @@ impl Interface {
     fn reset(&mut self) {
         self.tree = Tree::new();
         self.surface.reset();
+        self.surface.widget().set_sensitive(true);
+        self.poisoned = false;
         for pane in self.panes.values_mut() {
             pane.tree = Tree::new();
             pane.surface.reset();
+            pane.surface.widget().set_sensitive(true);
+            pane.poisoned = false;
         }
         self.recovery_pending.set(false);
         self.banner.hide();
@@ -427,6 +435,9 @@ impl Interface {
     /// Applies one frame. A rejected frame means the producer and the tree no
     /// longer agree, which the user sees as the extension having stopped.
     fn draw(&mut self, frame: &Frame) {
+        if self.poisoned {
+            return;
+        }
         match self
             .tree
             .preflight(frame, TREE_NODE_LIMIT)
@@ -442,7 +453,12 @@ impl Interface {
                 self.loading.set_visible(false);
                 self.banner.hide();
             }
-            Err(fault) => self.banner.show(&fault),
+            Err(fault) => {
+                self.poisoned = true;
+                self.surface.widget().set_sensitive(false);
+                drop(self.surface.reports().drain());
+                self.begin_recovery(&fault);
+            }
         }
     }
 
@@ -455,6 +471,9 @@ impl Interface {
         // before terminal/lifecycle withdrawal retired that slot; accepting it
         // here must not recreate an unmounted renderer with no owning pane.
         let Some(pane) = self.panes.get_mut(slot) else { return };
+        if pane.poisoned {
+            return;
+        }
         match pane
             .tree
             .preflight(frame, TREE_NODE_LIMIT)
@@ -469,13 +488,29 @@ impl Interface {
                 self.recovery_pending.set(false);
                 self.banner.hide();
             }
-            Err(fault) => self.banner.show(&fault),
+            Err(fault) => {
+                pane.poisoned = true;
+                pane.surface.widget().set_sensitive(false);
+                drop(pane.surface.reports().drain());
+                self.begin_recovery(&fault);
+            }
+        }
+    }
+
+    fn begin_recovery(&self, fault: &str) {
+        self.banner.show(fault);
+        if !self.recovery_pending.replace(true) {
+            self.banner.pending();
+            self.sink.accept(Signal::Retry);
         }
     }
 
     /// Applies one source mutation. A mutation for a source no table is bound
     /// to is ordinary — the table was removed while it was in flight.
     fn feed(&mut self, mutation: &SourceMutation) {
+        if self.poisoned {
+            return;
+        }
         match mutation {
             SourceMutation::Length { source, version, rows } => {
                 drop(self.surface.resize(*source, *version, *rows));
@@ -491,6 +526,9 @@ impl Interface {
             return;
         }
         let Some(pane) = self.panes.get_mut(slot) else { return };
+        if pane.poisoned {
+            return;
+        }
         match mutation {
             SourceMutation::Length { source, version, rows } => {
                 drop(pane.surface.resize(*source, *version, *rows));
@@ -503,14 +541,18 @@ impl Interface {
     /// Hands interaction to the sink.
     fn report(&self) {
         for event in self.surface.reports().drain() {
-            self.sink.accept(Signal::Interaction(event));
+            if !self.poisoned {
+                self.sink.accept(Signal::Interaction(event));
+            }
         }
         for (slot, pane) in &self.panes {
             for event in pane.surface.reports().drain() {
-                self.sink.accept(Signal::InteractionAt {
-                    slot: slot.clone(),
-                    event,
-                });
+                if !pane.poisoned {
+                    self.sink.accept(Signal::InteractionAt {
+                        slot: slot.clone(),
+                        event,
+                    });
+                }
             }
         }
     }
@@ -520,14 +562,18 @@ impl Interface {
     fn request(&mut self) {
         self.clock = self.clock.wrapping_add(1);
         for request in self.surface.requests(self.clock) {
-            self.sink.accept(Signal::Interaction(Event::Rows(request)));
+            if !self.poisoned {
+                self.sink.accept(Signal::Interaction(Event::Rows(request)));
+            }
         }
         for (slot, pane) in &mut self.panes {
             for request in pane.surface.requests(self.clock) {
-                self.sink.accept(Signal::InteractionAt {
-                    slot: slot.clone(),
-                    event: Event::Rows(request),
-                });
+                if !pane.poisoned {
+                    self.sink.accept(Signal::InteractionAt {
+                        slot: slot.clone(),
+                        event: Event::Rows(request),
+                    });
+                }
             }
         }
     }

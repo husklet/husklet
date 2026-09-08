@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use hl_client::model::{Container, InspectContainer, List};
 use hl_extension::port::{
-    ContainerInventory, ContainerOutput, ContainerSummary, ExecutionList, ExecutionSummary, HostError,
+    ContainerInventory, ContainerOutput, ContainerPort, ContainerSummary, ExecutionList, ExecutionSummary, HostError,
     ProcessList, ProcessPidIdentity, ProcessScope,
 };
 
@@ -247,6 +247,15 @@ fn summary(container: &Container) -> ContainerSummary {
         state: container.state.clone(),
         created: container.created,
         generation: container.metadata.generation,
+        ports: container.ports.iter()
+            .filter(|port| matches!(port.protocol.as_str(), "tcp" | "udp"))
+            .take(64)
+            .map(|port| ContainerPort {
+                container: port.private_port,
+                host: port.public_port,
+                protocol: port.protocol.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -263,7 +272,22 @@ fn inspection(container: &InspectContainer) -> ContainerSummary {
         state: container.state.status.clone(),
         created: epoch_seconds(&container.created).unwrap_or_default(),
         generation: container.metadata.generation,
+        ports: inspected_ports(&container.network_settings.ports),
     }
+}
+
+fn inspected_ports(ports: &std::collections::BTreeMap<String, Option<Vec<hl_client::model::PortBinding>>>) -> Vec<ContainerPort> {
+    ports.iter().flat_map(|(declaration, bindings)| {
+        let Some((container, protocol)) = declaration.split_once('/') else { return Vec::new() };
+        let Ok(container) = container.parse::<u16>() else { return Vec::new() };
+        if !matches!(protocol, "tcp" | "udp") { return Vec::new() }
+        match bindings {
+            Some(bindings) if !bindings.is_empty() => bindings.iter().filter_map(|binding| {
+                binding.host_port.parse::<u16>().ok().map(|host| ContainerPort { container, host: Some(host), protocol: protocol.to_owned() })
+            }).collect(),
+            _ => vec![ContainerPort { container, host: None, protocol: protocol.to_owned() }],
+        }
+    }).take(64).collect()
 }
 
 /// Converts `YYYY-MM-DDThh:mm:ss[.fraction][Z]` to whole seconds since the epoch.
@@ -304,7 +328,7 @@ mod tests {
         epoch_seconds, inspection, output, process_snapshot, summary,
     };
     use hl_client::model::{Container, InspectContainer};
-    use hl_extension::port::ContainerInventory as _;
+    use hl_extension::port::{ContainerInventory as _, ContainerPort};
 
     fn listing() -> Container {
         serde_json::from_value(serde_json::json!({
@@ -315,7 +339,7 @@ mod tests {
             "Created": 1_700_000_000_i64,
             "State": "running",
             "Status": "Up 3 minutes",
-            "Ports": [],
+            "Ports": [{"PrivatePort": 5432, "PublicPort": 15432, "Type": "tcp"}],
             "Mounts": [],
             "Labels": {}
         }))
@@ -330,6 +354,7 @@ mod tests {
         assert_eq!(mapped.image, "ubuntu:24.04");
         assert_eq!(mapped.state, "running");
         assert_eq!(mapped.created, 1_700_000_000);
+        assert_eq!(mapped.ports, vec![ContainerPort { container: 5432, host: Some(15432), protocol: "tcp".into() }]);
     }
 
     #[test]
@@ -369,7 +394,7 @@ mod tests {
                 "AutoRemove": false,
                 "RestartPolicy": { "Name": "no", "MaximumRetryCount": 0 }
             },
-            "NetworkSettings": { "Ports": {}, "Networks": {} }
+            "NetworkSettings": { "Ports": { "5432/tcp": [{"HostIp":"127.0.0.1","HostPort":"15432"}] }, "Networks": {} }
         }))
         .expect("container inspection");
 
@@ -377,6 +402,7 @@ mod tests {
         assert_eq!(mapped.name, "demo");
         assert_eq!(mapped.state, "exited");
         assert_eq!(mapped.created, 1_700_000_000, "the same instant the listing reports");
+        assert_eq!(mapped.ports, vec![ContainerPort { container: 5432, host: Some(15432), protocol: "tcp".into() }]);
     }
 
     #[test]

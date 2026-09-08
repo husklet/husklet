@@ -43,6 +43,9 @@ pub struct ContainerSummary {
     pub created: i64,
     #[serde(default)]
     pub generation: u64,
+    /// Bounded exposed and host-published ports for this exact container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<ContainerPort>,
 }
 
 /// The process table reported by a running container.
@@ -1419,6 +1422,17 @@ pub struct ExtensionPreferences {
     pub entries: Vec<(String, PreferenceValue)>,
 }
 
+/// One named host-protected credential owned by the authenticated extension.
+///
+/// This boundary provides private files and extension isolation, not encryption
+/// or an operating-system keychain. Absence carries the current collection
+/// revision so creation is protected against stale concurrent writes.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionCredential {
+    pub revision: u64,
+    pub value: Option<Vec<u8>>,
+}
+
 pub trait ExtensionStateStore {
     fn read(&self) -> Result<ExtensionState, HostError>;
     fn write(&self, observed: &str, contents: &[u8]) -> Result<String, HostError>;
@@ -1431,6 +1445,15 @@ pub trait ExtensionStateStore {
     }
     fn preference_remove(&self, _observed: u64, _key: &str) -> Result<u64, HostError> {
         Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
+    fn credential(&self, _key: &str) -> Result<ExtensionCredential, HostError> {
+        Err(HostError::Unsupported("extension credentials are unavailable".into()))
+    }
+    fn credential_set(&self, _observed: u64, _key: &str, _value: &[u8]) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension credentials are unavailable".into()))
+    }
+    fn credential_remove(&self, _observed: u64, _key: &str) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension credentials are unavailable".into()))
     }
 }
 

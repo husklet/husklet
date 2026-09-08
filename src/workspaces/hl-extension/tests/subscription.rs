@@ -186,6 +186,7 @@ fn containers(count: usize) -> Snapshot {
             state: "running".into(),
             created: 0,
             generation: 0,
+            ports: Vec::new(),
         })
         .collect();
     Snapshot::Containers(listing)

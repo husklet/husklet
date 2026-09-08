@@ -409,6 +409,16 @@ test('Top owns workspace settings and extension management in the same tab', asy
   expand(stage, 'Environment variables');
   await settled();
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  assert.deepEqual(
+    taggedProperty(stage, 'Remove TOKEN', 'IconButton', 'Icon'),
+    { Text: 'user-trash-symbolic' },
+    'row removal is a compact secondary action instead of a full text button',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Remove TOKEN', 'Row', 'Wrap')?.Flag,
+    true,
+    'environment controls reflow instead of colliding at narrow widths',
+  );
   toggleLatestSwitch(stage, true);
   await settled();
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
@@ -858,6 +868,35 @@ test('catalogue does not advertise an update at the installed version', async ()
   assert.equal(labelled(stage, 'Review update'), undefined);
   assert.equal(labelled(stage, 'Update available'), undefined);
   assert.equal(labelled(stage, 'Update available · Version 2.0.0'), undefined);
+});
+
+test('catalogue never advertises an older release as an update', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: async () => ({
+            ...(await firstPartyCatalogue()),
+            entries: [{ ...(await firstPartyCatalogue()).entries[0], version: '0.4.0' }],
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.equal(labelled(stage, 'Update available · Version 0.4.0'), undefined);
 });
 
 test('extension review calls out destructive image authority before consent', async () => {
@@ -1717,7 +1756,12 @@ test('installed extensions distinguish durable exact-file and subtree authority'
   );
   await settled();
 
-  assert.ok(labelled(stage, 'Granted access · 1 product · 3 container · 2 file · 2 environment'));
+  assert.ok(
+    labelled(
+      stage,
+      'Granted access · 1 permission · 3 container rules · 2 file rules · 2 environment rules',
+    ),
+  );
   assert.ok(labelled(stage, 'Effective for this installed image digest'));
   assert.ok(labelled(stage, 'View containers and processes · containers:read'));
   assert.ok(labelled(stage, 'Container · exact name database'));
@@ -1965,6 +2009,11 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    assert.deepEqual(
+      outerAncestorProperty(stage, message, 'Column', 'Pad'),
+      { Length: { Step: 2 } },
+      `${section} uses the same compact page inset as the manager surfaces`,
+    );
     if (section === 'Images') {
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
       assert.deepEqual(
@@ -2670,7 +2719,8 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
   assert.ok(
     labelled(stage, 'Initial processes only; PIDs identify this snapshot and may be reused.'),
   );
-  assert.ok(labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
+  assert.ok(labelled(stage, 'Observed Nov 14, 2023, 22:13 UTC'));
+  assert.ok(!labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
   assert.ok(labelled(stage, 'The host process snapshot was truncated at its safety limit.'));
   assert.ok(labelled(stage, '/usr/bin/server'));
   assert.ok(!labelled(stage, 'Signal'), 'snapshot PID rows never acquire a control action');
@@ -5905,6 +5955,30 @@ function ancestorProperty(stage, label, tag, prop) {
     }
   }
   return undefined;
+}
+
+function outerAncestorProperty(stage, label, tag, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = labelled(stage, label)?.SetProp.id;
+  let found;
+  while (parents.has(node)) {
+    node = parents.get(node);
+    if (tags.get(node) === tag) {
+      const value = patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
+        .at(-1)?.SetProp.value;
+      if (value !== undefined) found = value;
+    }
+  }
+  return found;
 }
 
 function compactDigest(digest) {
