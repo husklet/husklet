@@ -14,6 +14,7 @@ import {
   ResourceState,
   Row,
   Scroll,
+  Separator,
   Spinner,
   Switch,
   Text,
@@ -554,7 +555,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     tone="warning"
                   />
                   <Text
-                    label="Permission choices continue below · scroll to review all"
+                    label="Review every permission choice before continuing."
                     color="text-dim"
                   />
                   <Column gap={1}>
@@ -854,26 +855,34 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     <Column grow gap={0}>
       {content}
       {acquisition?.candidate ? (
-        <Row gap={1} pad={{ top: 1, end: 2, bottom: 1, start: 2 }} wrap>
-          <Text
-            label={`${grantedPermissionCount}/${requestedPermissionCount} selected`}
-            color="text-dim"
-          />
-          <Button
-            label={
-              busy === 'update'
-                ? 'Updating…'
-                : busy === 'install'
-                  ? 'Installing…'
-                  : acquisition.candidate.installed_image_digest
-                    ? 'Update with selected access'
-                    : 'Install with selected access'
-            }
-            enabled={!busy && acquisition.state === 'ready'}
-            onInvoke={publish}
-          />
-          <Button label="Cancel review" variant="ghost" enabled={!busy} onInvoke={dismissReview} />
-        </Row>
+        <Column gap={0}>
+          <Separator orientation="horizontal" />
+          <Row gap={1} pad={{ top: 1, end: 2, bottom: 1, start: 2 }} wrap>
+            <Text
+              label={`Review decision · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
+              color="text-dim"
+            />
+            <Button
+              label={
+                busy === 'update'
+                  ? 'Updating…'
+                  : busy === 'install'
+                    ? 'Installing…'
+                    : acquisition.candidate.installed_image_digest
+                      ? 'Update with selected access'
+                      : 'Install with selected access'
+              }
+              enabled={!busy && acquisition.state === 'ready'}
+              onInvoke={publish}
+            />
+            <Button
+              label="Cancel review"
+              variant="ghost"
+              enabled={!busy}
+              onInvoke={dismissReview}
+            />
+          </Row>
+        </Column>
       ) : null}
     </Column>
   );

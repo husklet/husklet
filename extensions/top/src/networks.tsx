@@ -280,7 +280,9 @@ export function Networks({
               ? inspection.detail?.endpoints
               : network.endpoints;
           const containerId = container.trim();
-          const endpointAction = immutableContainerId(containerId)
+          const validContainer = immutableContainerId(containerId);
+          const membershipUnknown = validContainer && (!membership || membership.truncated);
+          const endpointAction = validContainer
             ? membership?.containers.includes(containerId)
               ? 'disconnect'
               : membership && !membership.truncated
@@ -301,7 +303,16 @@ export function Networks({
                   <Badge label="Built-in · protected" tone="accent" />
                 </CardContent>
               ) : null}
-              <CardActions gap={1}>
+              {membershipUnknown ? (
+                <CardContent gap={1}>
+                  <Text
+                    label="Attachment status unknown for this container · Inspect to resolve"
+                    color="warning"
+                    wrap
+                  />
+                </CardContent>
+              ) : null}
+              <CardActions gap={1} justify="start">
                 <Button
                   label={
                     inspection.id === id && inspection.state === 'error'
