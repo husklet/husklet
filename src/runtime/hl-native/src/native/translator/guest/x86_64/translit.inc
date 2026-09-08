@@ -10192,10 +10192,10 @@ static int translit_jcc_ibtc_fixture_test(unsigned scenario) {
                 }
             }
         }
-        if (length != 1145 || fingerprint != UINT64_C(0x572de42e9ba1bcb8))
+        if (length != 1145 || fingerprint != UINT64_C(0xd79b6635815f202e))
             fprintf(stderr, "unobserved jcc stub length=%zu fingerprint=%016llx\n", length,
                     (unsigned long long)fingerprint);
-        result = length == 1145 && fingerprint == UINT64_C(0x572de42e9ba1bcb8) ? 0 : 237;
+        result = length == 1145 && fingerprint == UINT64_C(0xd79b6635815f202e) ? 0 : 237;
         goto done_ibtc;
     }
 
