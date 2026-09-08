@@ -452,6 +452,7 @@ mod tests {
             "id": "01234567-89ab-cdef-0123-456789abcdef",
             "name": "application",
             "driver": "bridge",
+            "kind": "custom",
             "subnet": {"address": "172.30.0.0", "prefix": 24},
             "gateway": "172.30.0.1",
             "labels": {},

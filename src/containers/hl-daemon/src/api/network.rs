@@ -211,6 +211,7 @@ mod tests {
             "Created": "",
             "Scope": "local",
             "Driver": "bridge",
+            "HuskletKind": "custom",
             "EnableIPv6": false,
             "IPAM": {},
             "Internal": false,
