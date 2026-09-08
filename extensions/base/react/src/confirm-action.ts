@@ -102,6 +102,7 @@ export function ConfirmAction({
       label: bounded(label, LABEL_BYTE_LIMIT),
       enabled: Boolean(enabled),
       tone: 'danger',
+      variant: 'outline',
       onInvoke: open,
     });
   }

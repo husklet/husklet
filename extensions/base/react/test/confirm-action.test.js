@@ -62,6 +62,7 @@ test('confirmation is separate and only its final action is destructive', () => 
   const reveal = labelled(initial, 'Remove volume');
   assert.equal(reveal.tag, 'Button');
   assert.equal(prop(initial, reveal.id, 'Destructive'), undefined);
+  assert.deepEqual(prop(initial, reveal.id, 'Variant'), { Variant: 'Outline' });
 
   const before = stage.frames.length;
   invoke(stage, initial, 'Remove volume');
