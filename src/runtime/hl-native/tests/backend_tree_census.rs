@@ -430,6 +430,25 @@ fn aarch64_x86_add_extended_covers_every_extension_and_sp_contract() {
 }
 
 #[test]
+fn aarch64_x86_sxtw_is_the_exact_single_alias_and_preserves_zr_and_flags() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "static int hl_a64_x86_emit_sxtw",
+        "(instruction & 0xFFFFFC00u) != 0x93407C00u",
+        "hl_a64_x86_emit_sign_extend32(assembler, 0);",
+        "hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);",
+        "hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);",
+        "if (hl_a64_x86_emit_sxtw(&assembler, instruction)) continue;",
+    ] {
+        assert!(source.contains(contract), "missing SXTW contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/sxtw.c");
+    for instruction in ["sxtw x2,w1", "sxtw x1,w1", "sxtw x3,wzr", "sxtw xzr,w1", "b.ne 99f"] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn aarch64_x86_three_source_lowering_covers_the_complete_allocated_family() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [

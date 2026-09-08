@@ -222,6 +222,18 @@ static void hl_a64_x86_emit_extend(hl_x64_asm *assembler, int host_register, uns
     }
 }
 
+/* SXTW is the dominant SBFM alias in the developer compiler image.  The
+ * same-ISA backend copies its one instruction verbatim; cross-ISA needs only
+ * a register load, MOVSXD, and a register store.  x31 is ZR on both sides and
+ * the instruction does not modify NZCV. */
+static int hl_a64_x86_emit_sxtw(hl_x64_asm *assembler, uint32_t instruction) {
+    if ((instruction & 0xFFFFFC00u) != 0x93407C00u) return 0;
+    hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 0);
+    hl_a64_x86_emit_sign_extend32(assembler, 0);
+    hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 0);
+    return 1;
+}
+
 /* ADD (extended register), including SP operands. The same-ISA backend emits
  * this as one AArch64 instruction; cross-ISA keeps the equivalent body to a
  * load, one extension, optional shift, add and store without an interpreter
@@ -754,6 +766,7 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if (hl_a64_x86_emit_sxtw(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_add_extended(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_three_source(&assembler, instruction)) continue;
         if (hl_a64_x86_is_scalar_single_memory(instruction)) {
