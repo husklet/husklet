@@ -207,6 +207,12 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     labels.includes('0 enabled'),
     'the overview exposes extension inventory alongside the other workspace resources',
   );
+  assert.ok(labels.includes('On demand'), 'process snapshots remain concise at narrow widths');
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'CardActionArea').length,
+    8,
+    'every compact overview summary is one full-card navigation target',
+  );
 });
 
 test('Top network attachment selects a named container while retaining immutable authority', async () => {
@@ -1764,7 +1770,7 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'Refresh failed'));
   assert.ok(labelled(stage, 'Unavailable'));
-  assert.ok(labelled(stage, 'running containers available to snapshot'));
+  assert.ok(labelled(stage, 'Reading inventory…'));
   assert.ok(labelled(stage, '0 running'));
   const patches = stage.frames.flatMap((frame) => frame.patches);
   const actionNodes = new Set(

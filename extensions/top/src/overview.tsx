@@ -144,7 +144,10 @@ export function Overview({
     extensions,
     (records) => `${records.filter((extension) => extension.enabled).length} enabled`,
   );
-  const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
+  const processesSummary = resourceSummary(
+    containers,
+    (records) => `${records.filter((item) => item.state === 'running').length} running`,
+  );
   return (
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={2} gap={2}>
@@ -162,14 +165,8 @@ export function Overview({
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
             title="Processes"
-            value={
-              containers.loading
-                ? '…'
-                : containers.error
-                  ? 'Unavailable'
-                  : String(runningContainers)
-            }
-            detail="running containers available to snapshot"
+            {...processesSummary}
+            value={!containers.loading && !containers.error ? 'On demand' : processesSummary.value}
             onOpen={() => onOpen('processes')}
           />
           <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
@@ -224,10 +221,10 @@ function Summary({
             <Spacer />
             <Icon icon="go-next-symbolic" tooltip={`Open ${label}`} />
           </Row>
-          <Row gap={1} align="center" wrap>
+          <Column gap={0}>
             <Heading label={value} scale="title" />
             <Text label={detail} color="text-dim" wrap />
-          </Row>
+          </Column>
         </CardContent>
       </CardActionArea>
     </Card>
