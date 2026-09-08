@@ -102,20 +102,56 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Overview', 'ToggleButton', 'Checked')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Overview', 'NavigationMenuItem', 'Selected')?.Flag,
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Workspace', 'ToggleButton', 'Checked')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag,
     false,
   );
   assert.equal(
-    frame.patches.filter((patch) => patch.Create?.tag === 'ToggleButton').length,
+    frame.patches.filter((patch) => patch.Create?.tag === 'NavigationMenuItem').length,
     10,
     'every destination exposes its selected state to keyboard and assistive users',
   );
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
+});
+
+test('Top sidebar divider reports and bounds its retained position', () => {
+  const stage = host();
+  stage.render(
+    h(Top, {
+      api,
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  const splitter = stage.frames
+    .flatMap((frame) => frame.patches)
+    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: splitter,
+      id: `${splitter}:Change`,
+      value: 999,
+    }),
+  );
+  assert.deepEqual(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
+      .at(-1).SetProp.value,
+    { Number: 320 },
+  );
 });
 
 test('Top owns workspace settings and extension management in the same tab', async () => {
@@ -166,8 +202,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Workspace');
   await settled();
   await settled();
-  assert.equal(taggedProperty(stage, 'Overview', 'ToggleButton', 'Checked')?.Flag, false);
-  assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
+  assert.equal(taggedProperty(stage, 'Overview', 'NavigationMenuItem', 'Selected')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
   assert.equal(labelled(stage, 'Unsaved changes'), undefined);

@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Row,
-  Separator,
+  Splitter,
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
@@ -50,6 +50,7 @@ export { Workspace } from './workspace.js';
 export { Extensions } from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;
+let retainedSidebarPosition = 196;
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
 type TopProps = {
   api: WorkspaceApi;
@@ -80,6 +81,7 @@ export function Top({
   initialSection = 'overview',
 }: TopProps) {
   const [section, setSection] = useState<Section>(initialSection);
+  const [sidebarPosition, setSidebarPosition] = useState(retainedSidebarPosition);
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -204,11 +206,21 @@ export function Top({
       <Terminals api={api} resource={terminals} />
     );
   return (
-    <Row grow={true} gap={0}>
-      <Navigation section={section} onSelect={setSection} />
-      <Separator orientation={'vertical'} />
+    <Splitter
+      grow
+      orientation="horizontal"
+      position={sidebarPosition}
+      onChange={(event) => {
+        const position = Math.max(160, Math.min(320, Number(event.value) || 196));
+        retainedSidebarPosition = position;
+        setSidebarPosition(position);
+      }}
+    >
+      <Row width={{ minimum: { chars: 21 }, maximum: { chars: 42 } }} height="fill">
+        <Navigation section={section} onSelect={setSection} />
+      </Row>
       {body}
-    </Row>
+    </Splitter>
   );
 }
 

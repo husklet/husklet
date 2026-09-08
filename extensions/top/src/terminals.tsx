@@ -866,7 +866,7 @@ function Page({
 }) {
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={2}>
+      <Column width="fill" pad={4} gap={2}>
         <Row gap={2} align="center" justify="start" wrap>
           <Heading label={title} scale="title" />
           {action}
