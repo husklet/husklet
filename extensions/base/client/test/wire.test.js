@@ -76,6 +76,41 @@ test('frames split across chunks are reassembled', () => {
   assert.deepEqual(read.payload, { sequence: 1, patches: [] });
 });
 
+test('real Unix reset frames survive every split and coalescing position', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-reset-framing-'));
+  const socketPath = path.join(directory, 'wire.sock');
+  const reset = encode({ channel: CONTROL, kind: KIND.reset, payload: 'restart' });
+  const ordinary = encode({ channel: 7, kind: KIND.event, payload: { value: 1 } });
+  const expected = [];
+  const chunks = [];
+  for (let split = 1; split < reset.length; split += 1) {
+    chunks.push(reset.subarray(0, split), Buffer.concat([reset.subarray(split), ordinary]));
+    expected.push(KIND.reset, KIND.event);
+  }
+  chunks.push(Buffer.concat([ordinary, reset, reset]));
+  expected.push(KIND.event, KIND.reset, KIND.reset);
+  const server = net.createServer(async (socket) => {
+    for (const chunk of chunks) {
+      if (!socket.write(chunk)) await once(socket, 'drain');
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    socket.end();
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const reader = new Reader();
+  const kinds = [];
+  try {
+    const socket = net.createConnection(socketPath);
+    socket.on('data', (chunk) => kinds.push(...reader.take(chunk).map((frame) => frame.kind)));
+    await once(socket, 'end');
+    reader.finish();
+    assert.deepEqual(kinds, expected);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a trailing partial frame cannot retain a completed near-limit allocation', () => {
   const reader = new Reader();
   const large = encode({ channel: CONTROL, kind: KIND.ping, payload: Buffer.alloc(PAYLOAD_LIMIT - 1) });
