@@ -306,6 +306,7 @@ export class Session {
   #backpressured = false;
   #deferredCredits = new Map<number, number>();
   #eventDelivery = Promise.resolve();
+  #eventBacklog = 0;
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
@@ -685,6 +686,9 @@ export class Session {
       return;
     }
     if (frame.kind === KIND.event) {
+      if (this.#eventBacklog >= this.#limit)
+        throw new Error(`extension event delivery limit of ${this.#limit} is exhausted`);
+      this.#eventBacklog += 1;
       let payload = frame.payload;
       if (typeof payload?.snapshot === 'string') {
         payload = validateSnapshot(payload);
@@ -704,24 +708,28 @@ export class Session {
       const listeners = [...this.#events];
       this.#eventDelivery = this.#eventDelivery
         .then(async () => {
-          for (const listener of listeners) {
-            // A queued event belongs to this connection generation, but its
-            // consumer may not run until an earlier asynchronous delivery
-            // settles. Closure and synchronous disposal revoke that work.
-            if (this.#closed || !this.#events.has(listener)) continue;
-            try {
-              await listener(payload, frame.channel);
-            } catch (error) {
+          try {
+            for (const listener of listeners) {
+              // A queued event belongs to this connection generation, but its
+              // consumer may not run until an earlier asynchronous delivery
+              // settles. Closure and synchronous disposal revoke that work.
+              if (this.#closed || !this.#events.has(listener)) continue;
               try {
-                this.#onEventError(error);
-              } catch {
-                /* Error reporting cannot strand event credit. */
+                await listener(payload, frame.channel);
+              } catch (error) {
+                try {
+                  this.#onEventError(error);
+                } catch {
+                  /* Error reporting cannot strand event credit. */
+                }
               }
             }
+            // Promise-returning consumers own credit until their work settles.
+            // This keeps application queues inside the protocol's bounded window.
+            if (!this.#closed) this.#returnCredit(frame.channel);
+          } finally {
+            this.#eventBacklog -= 1;
           }
-          // Promise-returning consumers own credit until their work settles.
-          // This keeps application queues inside the protocol's bounded window.
-          if (!this.#closed) this.#returnCredit(frame.channel);
         })
         .catch((error) => {
           this.#finish(error);

@@ -1978,6 +1978,88 @@ test('invalid UTF-8 tears down active Unix state before bounded clean reconnect'
   }
 });
 
+test('a real Unix event flood cannot outgrow callback delivery or cross reconnection', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-event-backlog-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let generation = 0;
+  const server = net.createServer((socket) => {
+    generation += 1;
+    const connection = generation;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        if (frame.payload.call === 'event_subscribe') {
+          socket.write(
+            encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'done' } }),
+          );
+        } else if (frame.payload.call === 'workspace_info' && connection === 1) {
+          const events = [1, 2, 3].map((revision) =>
+            encode({
+              channel: 47,
+              kind: KIND.event,
+              payload: { snapshot: 'containers', of: [], revision },
+            }),
+          );
+          socket.write(Buffer.concat(events));
+        } else if (frame.payload.call === 'workspace_info') {
+          socket.write(
+            encode({
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'fresh', image: 'alpine', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: `backlog-${connection}`,
+          granted: ['containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const delivered = [];
+    const controller = new AbortController();
+    const first = await connect({ path: socketPath, pendingLimit: 2, timeout: 1_000 });
+    const host = workspace(first);
+    const stopFirst = await host.watchContainers((snapshot) => delivered.push(['first', snapshot]));
+    const stopSecond = await host.watchContainers((snapshot) => delivered.push(['second', snapshot]));
+
+    const pending = workspace(first, { signal: controller.signal }).info();
+    await assert.rejects(pending, /event delivery limit of 2 is exhausted/);
+    assert.match((await first.closed).message, /event delivery limit of 2 is exhausted/);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(delivered, [], 'queued old-generation events never reach either GUI listener');
+    await stopFirst();
+    await assert.rejects(stopSecond(), /closed/);
+
+    const second = await connect({ path: socketPath, pendingLimit: 2, timeout: 1_000 });
+    assert.equal((await workspace(second).info()).name, 'fresh');
+    await second.close();
+    assert.equal(generation, 2);
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a malformed greeting fails immediately instead of stranding readiness', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-greeting-'));
   const socketPath = path.join(directory, 'host.sock');

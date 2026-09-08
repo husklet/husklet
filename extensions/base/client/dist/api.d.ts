@@ -667,6 +667,7 @@ export declare class TerminalOperationError extends Error {
 }
 export interface ConnectOptions {
     path?: string;
+    /** Bounds pending calls, heartbeats, and queued event callback deliveries. */
     pendingLimit?: number;
     timeout?: number;
     connectTimeout?: number;
