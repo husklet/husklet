@@ -1265,6 +1265,21 @@ test('extension image entry submits from the keyboard and consent explains reque
     }),
   );
   await settled();
+  assert.equal(
+    ancestorProperty(stage, 'Inspect', 'Row', 'Wrap')?.Flag,
+    true,
+    'the OCI image input and Inspect action wrap together on a narrow viewport',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Inspect', 'Row', 'Width'),
+    { Length: 'Fill' },
+    'the OCI install row uses all available content width',
+  );
+  assert.deepEqual(
+    placeholderProperty(stage, 'registry.example/extension:version', 'Width'),
+    { Length: { Chars: 24 } },
+    'the OCI reference keeps a compact minimum while its tooltip preserves the exact value',
+  );
   change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
   submit(stage, 'registry.example/extension:version');
   await settled();

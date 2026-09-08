@@ -744,14 +744,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Expander label="Install from an OCI image" expanded={false}>
                 <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
                   <CardContent>
-                    <Row gap={1}>
+                    <Row gap={1} width="fill" wrap>
                       <Entry
                         value={reference}
                         placeholder="registry.example/extension:version"
                         tooltip={
                           reference || 'Paste a full OCI image reference; press Enter to inspect'
                         }
-                        width={{ chars: 40 }}
+                        width={{ chars: 24 }}
                         onChange={(event: Change) =>
                           setReference(String(event.value ?? '').slice(0, 512))
                         }
