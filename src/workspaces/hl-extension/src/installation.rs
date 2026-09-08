@@ -619,10 +619,11 @@ impl Installation {
 /// What an install prompt has to say about a grant.
 ///
 /// The execution line is the one that matters. An extension holding
-/// [`Capability::ContainerControl`] or [`Capability::TerminalControl`] can run
-/// programs of its choosing inside the workspace, and the isolation on offer is
-/// the workspace boundary, not a sandbox around the extension. A prompt that
-/// leaves that implicit is telling a person something untrue by omission.
+/// [`Capability::ContainerExecute`], [`Capability::TerminalInput`], or
+/// [`Capability::TerminalProcessControl`] can run programs of its choosing
+/// inside the workspace, and the isolation on offer is the workspace boundary,
+/// not a sandbox around the extension. A prompt that leaves that implicit is
+/// telling a person something untrue by omission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
     /// Whether the grant amounts to running code inside the workspace.
@@ -646,8 +647,7 @@ impl Summary {
         }
     }
 
-    pub const EXECUTION_NOTICE: &'static str =
-        "This extension can run programs inside this workspace. It is isolated from the rest of \
+    pub const EXECUTION_NOTICE: &'static str = "This extension can run programs inside this workspace. It is isolated from the rest of \
          your machine by the workspace, not from the workspace itself.";
 }
 
@@ -692,13 +692,13 @@ mod tests {
     #[test]
     fn an_install_records_the_intersection() {
         let mut installation = Installation::new();
-        let manifest = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+        let manifest = manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]);
         let record = installation
             .install(&manifest, "sha256:a", &Grant::new([Capability::ContainerRead]), 10)
             .expect("installed");
 
         assert!(record.granted.holds(Capability::ContainerRead));
-        assert!(!record.granted.holds(Capability::ContainerControl));
+        assert!(!record.granted.holds(Capability::ContainerLifecycle));
     }
 
     #[test]
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn container_resource_consent_is_intersected_and_persisted_exactly() {
         let mut installation = Installation::new();
-        let mut manifest = manifest(&[Capability::ContainerRead, Capability::ContainerControl]);
+        let mut manifest = manifest(&[Capability::ContainerRead, Capability::ContainerLifecycle]);
         manifest.containers = crate::ContainerGrant {
             selectors: vec![
                 crate::ContainerSelector::Name {
@@ -814,9 +814,11 @@ mod tests {
             .install(&manifest, "sha256:a", &manifest.capabilities, 10)
             .expect("installed");
 
-        assert!(installation
-            .install(&manifest, "sha256:b", &manifest.capabilities, 20)
-            .is_err());
+        assert!(
+            installation
+                .install(&manifest, "sha256:b", &manifest.capabilities, 20)
+                .is_err()
+        );
     }
 
     #[test]
@@ -887,9 +889,11 @@ mod tests {
 
     #[test]
     fn the_summary_names_execution_plainly() {
-        let summary = Summary::of(&Grant::new([Capability::TerminalControl]));
-        assert!(summary.execution);
-        assert!(summary.to_string().contains(Summary::EXECUTION_NOTICE));
+        for capability in [Capability::TerminalInput, Capability::TerminalProcessControl] {
+            let summary = Summary::of(&Grant::new([capability]));
+            assert!(summary.execution);
+            assert!(summary.to_string().contains(Summary::EXECUTION_NOTICE));
+        }
 
         let reading = Summary::of(&Grant::new([Capability::ContainerRead]));
         assert!(!reading.execution);

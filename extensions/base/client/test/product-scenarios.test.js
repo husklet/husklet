@@ -12,19 +12,22 @@ const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const reactExamples = path.resolve(examples, '../../react/examples');
 const capabilities = [
   'panes:observe',
+  'panes:semantic-read',
   'terminals:output',
-  'terminals:control',
+  'terminals:input',
+  'terminals:layout-control',
+  'terminals:process-control',
   'filesystem:read',
   'filesystem:write',
   'state:read',
   'state:write',
   'containers:read',
-  'containers:control',
+  'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove',
   'networks:read',
   'interface:render',
 ];
 
-async function scenario(name, configuration, reply) {
+async function scenario(name, configuration, reply, expectedCode = 0) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-product-scenario-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -74,8 +77,8 @@ async function scenario(name, configuration, reply) {
         timeout = setTimeout(() => reject(new Error('scenario timed out')), 5_000);
       }),
     ]);
-    assert.equal(code, 0, stderr);
-    return { result: JSON.parse(stdout), calls };
+    assert.equal(code, expectedCode, stderr);
+    return { result: stdout ? JSON.parse(stdout) : null, calls, stderr };
   } finally {
     clearTimeout(timeout);
     if (child.exitCode === null) child.kill('SIGKILL');
@@ -89,7 +92,7 @@ function respond(socket, frame, payload) {
   socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
 }
 
-test('LLM terminal agent observes, writes, and waits over the extension socket', async () => {
+test('LLM terminal agent observes, writes, and follows replacement over the extension socket', async () => {
   let reads = 0;
   const pane = {
     slot: 'term',
@@ -101,29 +104,43 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
     title: 'Shell',
     focused: true,
   };
+  const uiPane = {
+    slot: 'dashboard', generation: 2, revision: 3, kind: 'surface', provider: null,
+    tab: 'tab', title: 'Dashboard', focused: false,
+  };
   const run = await scenario(
     'llm-terminal-agent.ts',
     { slot: 'term', prompt: 'explain status' },
     (socket, frame) => {
       const call = frame.payload.call;
       if (call === 'pane_list')
-        respond(socket, frame, { reply: 'panes', with: { panes: [pane], truncated: false } });
+        respond(socket, frame, { reply: 'panes', with: { panes: [pane, uiPane], truncated: false } });
       else if (call === 'event_subscribe' || call === 'event_unsubscribe')
         respond(socket, frame, { reply: 'done' });
       else if (call === 'terminal_read_pane') {
         reads += 1;
-        const revision = reads < 3 ? 8 : 9;
+        const generation = reads < 3 ? 4 : 5;
+        const revision = reads < 3 ? 8 : 1;
         respond(socket, frame, {
           reply: 'text',
           with: {
             slot: 'term',
-            generation: 4,
+            generation,
             revision,
             columns: 80,
             rows: 24,
             lines: [revision === 8 ? '$ ' : '$ explain status', revision === 8 ? '' : 'healthy'],
             cursor_column: 0,
             cursor_row: 1,
+            truncated: false,
+          },
+        });
+      } else if (call === 'pane_semantic_read') {
+        respond(socket, frame, {
+          reply: 'semantics',
+          with: {
+            slot: 'dashboard', generation: 2, revision: 3,
+            root: { id: 0, role: 'group', label: 'Deployment healthy', value: null, disabled: false, destructive: false, actions: [], children: [] },
             truncated: false,
           },
         });
@@ -148,8 +165,40 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
       }
     },
   );
-  assert.equal(run.result.before, '$ \n');
-  assert.match(run.result.after, /healthy/);
+  assert.equal(run.result.selected.kind, 'terminal');
+  assert.equal(run.result.selected.before, '$ \n');
+  assert.match(run.result.selected.after, /healthy/);
+  assert.equal(run.result.selected.replacement, true);
+  assert.equal(run.result.incomplete, false);
+  assert.match(run.result.context.find(({ kind }) => kind === 'ui').text, /Deployment healthy/);
+});
+
+test('LLM terminal agent reads a selected semantic surface without terminal input', async () => {
+  const pane = {
+    slot: 'dashboard', generation: 2, revision: 3, kind: 'surface', provider: null,
+    tab: 'tab', title: 'Dashboard', focused: true,
+  };
+  const run = await scenario(
+    'llm-terminal-agent.ts',
+    { slot: 'dashboard', prompt: 'explain status' },
+    (socket, frame) => {
+      const call = frame.payload.call;
+      if (call === 'pane_list')
+        respond(socket, frame, { reply: 'panes', with: { panes: [pane], truncated: false } });
+      else if (call === 'pane_semantic_read')
+        respond(socket, frame, {
+          reply: 'semantics',
+          with: {
+            slot: 'dashboard', generation: 2, revision: 3,
+            root: { id: 0, role: 'status', label: 'Deployment healthy', value: null, disabled: false, destructive: false, actions: [], children: [] },
+            truncated: false,
+          },
+        });
+    },
+  );
+  assert.equal(run.result.selected.kind, 'ui');
+  assert.match(run.result.selected.text, /Deployment healthy/);
+  assert.equal(run.calls.includes('terminal_write_pane'), false);
 });
 
 test('embeddings indexer reconciles, recursively discovers, streams, and CAS-updates', async () => {
@@ -168,6 +217,7 @@ test('embeddings indexer reconciles, recursively discovers, streams, and CAS-upd
             ],
             complete: true,
             coalesced: 0,
+            revision: 7,
           },
         });
       else if (call === 'filesystem_list_page')
@@ -202,10 +252,17 @@ test('embeddings indexer reconciles, recursively discovers, streams, and CAS-upd
             truncated: offset + contents.length !== document.length,
           },
         });
-      } else if (call === 'filesystem_stat')
+      } else if (call === 'filesystem_changes')
+        respond(socket, frame, {
+          reply: 'file_changes',
+          with: { changes: [], next: 7, current: 7, more: false, truncated: false },
+        });
+      else if (call === 'filesystem_stat')
         respond(socket, frame, {
           reply: 'entry',
-          with: { path: '.husklet/index.json', directory: false, size: 2, identity: 'index-v1' },
+          with: frame.payload.with.path === 'src/a.md'
+            ? { path: 'src/a.md', directory: false, size: document.length, identity: 'doc-v1' }
+            : { path: '.husklet/index.json', directory: false, size: 2, identity: 'index-v1' },
         });
       else if (call === 'filesystem_write_observed') {
         assert.equal(frame.payload.with.observed, 'index-v1');
@@ -229,6 +286,7 @@ test('embeddings indexer reconciles, recursively discovers, streams, and CAS-upd
   assert.equal(run.result.bytes, document.length);
   assert.equal(run.result.indexIdentity, 'index-v2');
   assert.equal(run.result.stateIdentity, `sha256:${'d'.repeat(64)}`);
+  assert.equal(run.calls.find(({ call }) => call === 'filesystem_changes').with.after, 7);
   const ranges = run.calls.filter(({ call }) => call === 'filesystem_read_range');
   assert.deepEqual(
     ranges.map(({ with: value }) => [value.offset, value.observed]),
@@ -238,6 +296,45 @@ test('embeddings indexer reconciles, recursively discovers, streams, and CAS-upd
       [12, 'doc-v1'],
     ],
   );
+});
+
+test('embeddings indexer refuses publication after journal invalidation', async () => {
+  const document = new TextEncoder().encode('changed underneath');
+  const run = await scenario(
+    'embeddings-indexer.ts',
+    { root: 'src', document: 'src/a.md', index: '.husklet/index.json' },
+    (socket, frame) => {
+      const { call } = frame.payload;
+      if (call === 'filesystem_inventory')
+        respond(socket, frame, { reply: 'file_inventory', with: {
+          entries: [{ path: 'src/a.md', directory: false, size: document.length, identity: 'doc-v1' }],
+          complete: true, coalesced: 0, revision: 20,
+        } });
+      else if (call === 'filesystem_list_page')
+        respond(socket, frame, { reply: 'directory_page', with: {
+          entries: [{ path: 'src/a.md', directory: false, size: document.length, identity: 'doc-v1' }],
+          identity: 'src-v1', next: 'src/a.md', more: false,
+        } });
+      else if (call === 'filesystem_read_range')
+        respond(socket, frame, { reply: 'file_range', with: {
+          path: 'src/a.md', identity: 'doc-v1', offset: 0, total: document.length,
+          contents: [...document], eof: true, truncated: false,
+        } });
+      else if (call === 'filesystem_stat')
+        respond(socket, frame, { reply: 'entry', with: {
+          path: '.husklet/index.json', directory: false, size: 2, identity: 'index-v1',
+        } });
+      else if (call === 'filesystem_changes')
+        respond(socket, frame, { reply: 'file_changes', with: {
+          changes: [{ revision: 21, kind: 'invalidate', path: 'src/a.md', entry: null }],
+          next: 21, current: 21, more: false, truncated: false,
+        } });
+    },
+    1,
+  );
+  assert.match(run.stderr, /document changed after inventory/);
+  assert.equal(run.calls.some(({ call }) => call === 'filesystem_write_observed'), false);
+  assert.equal(run.calls.some(({ call }) => call === 'state_write'), false);
 });
 
 test('Postgres GUI stays live and serves a scrolled database window before host shutdown', async () => {
@@ -309,7 +406,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
       respond(socket, frame, { reply: 'identity', with: executionId });
     else if (call === 'execution_output') {
       outputCalls += 1;
-      const bytes = outputCalls === 1 ? Buffer.from('rows\n2\n') : Buffer.from('id,name\n1,alpha\n2,beta\n');
+      const bytes = outputCalls === 1 ? Buffer.from('rows\n1000000\n') : Buffer.from('id,name\n1,alpha\n2,beta\n');
       respond(socket, frame, { reply: 'execution_output', with: {
         entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [...bytes] }],
         next: 1, more: false, eof: true, gap: false,
@@ -335,7 +432,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
             slot: 'postgres-pane',
             source: 1,
             version: 1,
-            range: { start: 1, count: 1 },
+            range: { start: 999999, count: 1 },
             sort: null,
             filter: null,
           },
@@ -348,7 +445,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
   assert.deepEqual(run.result, {
     container: id,
     processes: 2,
-    queryRows: 2,
+    queryRows: 1000000,
     networks: 1,
     slot: 'postgres-pane',
   });
@@ -358,19 +455,21 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
     .filter(({ call }) => call === 'source_resize_at')
     .map(({ with: value }) => value.mutation);
   assert.equal(mutations.length, 3);
-  assert.equal(mutations[1].Length.rows, 2);
+  assert.equal(mutations[1].Length.rows, 1000000);
   assert.deepEqual(mutations[2].Window, {
     source: 1,
     version: 1,
     request: 41,
-    range: { start: 1, count: 1 },
-    rows: [{ key: 1, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
+    range: { start: 999999, count: 1 },
+    rows: [{ key: 999999, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
   });
   const execs = run.calls.filter(({ call }) => call === 'container_exec');
   assert.equal(execs.length, 3);
+  assert.equal(run.calls.filter(({ call }) => call === 'execution_inspect').length, 3);
+  assert.equal(run.calls.filter(({ call }) => call === 'execution_remove').length, 3);
   assert.deepEqual(execs[1].with.command.slice(0, 4), ['psql', '--csv', '--no-psqlrc', '--command']);
   assert.match(execs[1].with.command[4], /LIMIT 128 OFFSET 0$/);
-  assert.match(execs[2].with.command[4], /LIMIT 1 OFFSET 1$/);
+  assert.match(execs[2].with.command[4], /LIMIT 1 OFFSET 999999$/);
   assert.deepEqual(execs[1].with.environment, [['PGPASSWORD', password]]);
   for (const call of run.calls.filter(({ call }) => call !== 'container_exec'))
     assert(!JSON.stringify(call).includes(password), `credential leaked through ${call.call}`);

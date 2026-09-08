@@ -1,12 +1,18 @@
 import type {
   FilesystemSelector,
+  ExtensionPreferences,
+  PreferenceValue,
   Row as WireRow,
   WireCall,
   WireReplyFor,
   WireRequestFor,
   WireUiEvent,
 } from './generated-protocol.js';
-export type { FilesystemSelector } from './generated-protocol.js';
+export type {
+  ExtensionPreferences,
+  FilesystemSelector,
+  PreferenceValue,
+} from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
 
@@ -81,7 +87,10 @@ export type ExtensionCapability =
   | 'workspace-environment:read'
   | 'workspace-environment:write'
   | 'containers:read'
-  | 'containers:control'
+  | 'containers:create'
+  | 'containers:execute'
+  | 'containers:lifecycle'
+  | 'containers:remove'
   | 'containers:attach'
   | 'images:read'
   | 'images:pull'
@@ -92,13 +101,16 @@ export type ExtensionCapability =
   | 'networks:read'
   | 'networks:write'
   | 'terminals:read'
-  | 'terminals:control'
+  | 'terminals:input'
+  | 'terminals:layout-control'
+  | 'terminals:process-control'
   | 'terminals:output'
   | 'panes:observe'
   | 'panes:semantic-read'
   | 'panes:semantic-control'
   | 'extensions:read'
   | 'extensions:control'
+  | 'extensions:remove'
   | 'extensions:install'
   | 'filesystem:read'
   | 'filesystem:write'
@@ -157,6 +169,8 @@ export interface ExtensionCatalogueEntry {
   id: string;
   title: string;
   description: string;
+  /** Bounded advertised release used only for discovery and update comparison. */
+  version: string;
   reference: string;
   publisher: string;
   source: string;
@@ -496,6 +510,21 @@ export interface FileInventory {
   entries: FileEntry[];
   complete: boolean;
   coalesced: number;
+  /** Journal cursor from the same reconciliation snapshot. */
+  revision: number;
+}
+export interface FileChange {
+  revision: number;
+  kind: 'create' | 'modify' | 'remove' | 'invalidate';
+  path: string;
+  entry: FileEntry | null;
+}
+export interface FileChangePage {
+  changes: FileChange[];
+  next: number;
+  current: number;
+  more: boolean;
+  truncated: boolean;
 }
 export interface FileRange {
   path: string;
@@ -598,7 +627,7 @@ export declare class ExtensionError extends Error {
 
 export declare class ExecutionOperationError extends Error {
   readonly executionId: string;
-  readonly phase: 'wait' | 'logs';
+  readonly phase: 'wait' | 'logs' | 'output' | 'inspect';
   readonly cause: unknown;
   /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
   readonly execution?: ExecutionSummary;
@@ -624,7 +653,7 @@ export interface ConnectOptions {
   connectTimeout?: number;
   onRows?: (request: RowRequest, channel: number) => void;
   onReply?: (reply: unknown) => void;
-  onEvent?: (event: HostEvent, channel: number) => void;
+  onEvent?: (event: HostEvent, channel: number) => void | Promise<void>;
   onEventError?: (error: unknown) => void;
   onClose?: (error: Error) => void;
 }
@@ -653,7 +682,7 @@ export declare class Session {
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
   answer(channel: number, window: unknown): void;
-  onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
+  onEvent(listener: (event: HostEvent, channel: number) => void | Promise<void>): () => boolean;
   close(): Promise<void>;
 }
 
@@ -887,6 +916,26 @@ export interface WorkspaceApi {
         stderr?: boolean;
       },
     ): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
+    /**
+     * Execute and deliver bounded live output pages with callback backpressure.
+     * Abort or callback failure cancels the owned execution; its record is never auto-removed.
+     */
+    execStreaming(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        user?: string;
+        workingDirectory?: string;
+        pageLimit?: number;
+        pollIntervalMs?: number;
+        signal?: AbortSignal;
+        cancelSignal?: string;
+        cancelTimeoutMs?: number;
+      },
+      onPage: (page: ExecutionOutputPage) => void | Promise<void>,
+    ): Promise<{ executionId: string; execution: ExecutionSummary }>;
     signalExecution(id: string, signal: string): Promise<void>;
     /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */
     cancelExecution(id: string, options?: { signal?: string; timeoutMs?: number }): Promise<void>;
@@ -1118,7 +1167,15 @@ export interface WorkspaceApi {
       generation: number,
       revision: number,
       input: string | Iterable<number>,
-      options?: { lines?: number; timeoutMs?: number },
+      options?: { lines?: number; timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<
+      { changed: true; before: PaneText; after: PaneText } | { changed: false; before: PaneText }
+    >;
+    /** Write against the exact bounded terminal snapshot already inspected by the caller. */
+    writeObservedAndWait(
+      before: PaneText,
+      input: string | Iterable<number>,
+      options?: { lines?: number; timeoutMs?: number; signal?: AbortSignal },
     ): Promise<
       { changed: true; before: PaneText; after: PaneText } | { changed: false; before: PaneText }
     >;
@@ -1227,6 +1284,12 @@ export interface WorkspaceApi {
   files: {
     /** Returns the current bounded inventory for the exact consented read roots. */
     inventory(): Promise<FileInventory>;
+    changes(after?: number, limit?: number): Promise<FileChangePage>;
+    /** Cursor-safe polling watcher. A truncated page is delivered explicitly so callers can rescan. */
+    watchChanges(
+      listener: (page: FileChangePage) => void | Promise<void>,
+      options?: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal },
+    ): Promise<() => Promise<void>>;
     list(path: string): Promise<FileEntry[]>;
     /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
     listPage(
@@ -1273,6 +1336,12 @@ export interface WorkspaceApi {
       update: (current: T) => T | Promise<T>,
       options?: { attempts?: number },
     ): Promise<JsonState<T>>;
+  };
+  /** Small workspace-local UI preferences, isolated to this authenticated extension. */
+  preferences: {
+    read(): Promise<ExtensionPreferences>;
+    set(observed: number, key: string, value: PreferenceValue): Promise<number>;
+    remove(observed: number, key: string): Promise<number>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

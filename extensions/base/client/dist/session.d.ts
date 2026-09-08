@@ -40,6 +40,6 @@ export declare class Session {
     /** Round-trips an opaque bounded heartbeat without consuming call ordering. */
     ping(): Promise<unknown>;
     /** Adds a pushed-event observer and returns a synchronous disposer. */
-    onEvent(listener: (event: HostEvent, channel: number) => void): () => boolean;
+    onEvent(listener: (event: HostEvent, channel: number) => void | Promise<void>): () => boolean;
     close(): any;
 }

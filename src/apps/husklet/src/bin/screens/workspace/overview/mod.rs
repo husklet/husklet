@@ -57,6 +57,7 @@ impl<'a> Overview<'a> {
         // lives in the library; this is the whole of the translation.
         let audience = Box::new(move |report| {
             let delivery = match report {
+                Report::Reset => Delivery::Reset,
                 Report::Frame(frame) => Delivery::FrameAt {
                     slot: frame.slot,
                     frame: frame.frame,
@@ -267,12 +268,51 @@ impl<'a> Overview<'a> {
         if let Some(window) = self.window {
             screens::workspace::terminal::Window::exhibit(window, gallery.clone());
         }
-        let shelf = Self::shelf(ws, &view, &relay, &gallery, self.window);
-        if shelf.is_none() {
-            let failure = gtk::Label::new(Some("Extensions could not be loaded. Reopen this workspace to retry."));
-            failure.set_wrap(true);
-            failure.add_css_class("error");
-            view.attach("failure", "Unavailable", failure.upcast_ref());
+        let shelf = Rc::new(RefCell::new(Self::shelf(ws, &view, &relay, &gallery, self.window)));
+        if shelf.borrow().is_none() {
+            let recovery = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            recovery.set_halign(gtk::Align::Start);
+            recovery.set_valign(gtk::Align::Start);
+            recovery.set_margin_top(24);
+            recovery.set_margin_start(24);
+            recovery.set_margin_end(24);
+            recovery.set_accessible_role(gtk::AccessibleRole::Alert);
+            let title = gtk::Label::new(Some("Extensions unavailable"));
+            title.add_css_class("title-2");
+            title.set_xalign(0.0);
+            let detail = gtk::Label::new(Some(
+                "Husklet could not read this workspace's extensions. No extensions were changed.",
+            ));
+            detail.set_xalign(0.0);
+            detail.set_wrap(true);
+            detail.set_width_chars(1);
+            detail.set_max_width_chars(56);
+            let retry = gtk::Button::with_label("Retry extensions");
+            retry.add_css_class("suggested-action");
+            retry.set_halign(gtk::Align::Start);
+            recovery.append(&title);
+            recovery.append(&detail);
+            recovery.append(&retry);
+            view.attach("failure", "Unavailable", recovery.upcast_ref());
+
+            let workspace = ws.clone();
+            let held_view = Rc::clone(&view);
+            let held_relay = Rc::clone(&relay);
+            let held_gallery = gallery.clone();
+            let held_window = self.window.map(Rc::downgrade);
+            let held_shelf = Rc::clone(&shelf);
+            retry.connect_clicked(move |button| {
+                button.set_sensitive(false);
+                let window = held_window.as_ref().and_then(std::rc::Weak::upgrade);
+                let Some(recovered) = Self::shelf(&workspace, &held_view, &held_relay, &held_gallery, window.as_ref())
+                else {
+                    button.set_sensitive(true);
+                    return;
+                };
+                recovered.install();
+                held_shelf.replace(Some(recovered));
+                held_view.detach("failure");
+            });
         }
         if let Some(window) = self.window {
             Console::new(window, errands).install();
@@ -292,7 +332,7 @@ impl<'a> Overview<'a> {
             }
             // Reconciliation reads only a process-local counter while idle;
             // durable records are reopened after a lifecycle mutation.
-            if let Some(shelf) = &shelf {
+            if let Some(shelf) = shelf.borrow().as_ref() {
                 shelf.reconcile();
             }
             glib::ControlFlow::Continue

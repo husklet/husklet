@@ -19,8 +19,8 @@ use hl_extension::port::{
     WorkspaceState,
 };
 use hl_extension::{
-    codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
-    Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
+    Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, PROTOCOL, RelativePath, Reply, Request,
+    Services, Session, Transit, Welcome, WorkspaceInfo, codec,
 };
 use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
@@ -995,7 +995,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let mut session = Session::new(Authority::new(
         ExtensionName::new("containers").expect("name"),
         Grant::new([
-            Capability::ContainerControl,
+            Capability::ContainerCreate,
             Capability::VolumeWrite,
             Capability::NetworkWrite,
         ]),

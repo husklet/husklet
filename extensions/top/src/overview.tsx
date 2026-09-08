@@ -7,11 +7,12 @@ import {
   CardHeader,
   Column,
   Heading,
+  NavigationMenu,
+  NavigationMenuItem,
   Row,
   Scroll,
   Spinner,
   Text,
-  ToggleButton,
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
@@ -58,27 +59,45 @@ export function Navigation({
     { label: 'Interface', sections: ['terminals'] },
   ];
   return (
-    <Column grow={false} width={{ chars: 14 }} height="fill" pad={1} gap={1}>
+    <Column grow={false} width="fill" height="fill" pad={1} gap={1}>
       <Scroll grow height="fill">
         <Column gap={1}>
           {groups.map((group) => (
             <Column key={group.label} gap={0}>
               <Text label={group.label.toUpperCase()} color="text-dim" />
-              {group.sections.map((name) => (
-                <ToggleButton
-                  key={name}
-                  label={title(name)}
-                  checked={section === name}
-                  variant="ghost"
-                  onInvoke={() => onSelect(name)}
-                />
-              ))}
+              <NavigationMenu gap={0}>
+                {group.sections.map((name) => (
+                  <NavigationMenuItem
+                    key={name}
+                    label={title(name)}
+                    icon={navigationIcon(name)}
+                    selected={section === name}
+                    variant={section === name ? 'filled' : 'ghost'}
+                    tone={section === name ? 'accent' : 'neutral'}
+                    tooltip={`Open ${title(name)}`}
+                    onInvoke={() => onSelect(name)}
+                  />
+                ))}
+              </NavigationMenu>
             </Column>
           ))}
         </Column>
       </Scroll>
     </Column>
   );
+}
+
+function navigationIcon(section: Section): string {
+  if (section === 'overview') return 'view-grid-symbolic';
+  if (section === 'workspace') return 'document-open-symbolic';
+  if (section === 'extensions') return 'list-add-symbolic';
+  if (section === 'containers') return 'view-list-symbolic';
+  if (section === 'processes') return 'edit-find-symbolic';
+  if (section === 'executions') return 'system-run-symbolic';
+  if (section === 'images') return 'drive-harddisk-symbolic';
+  if (section === 'volumes') return 'folder-symbolic';
+  if (section === 'networks') return 'network-workgroup-symbolic';
+  return 'view-more-symbolic';
 }
 
 export function Overview({
@@ -127,7 +146,7 @@ export function Overview({
   const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
   return (
     <Scroll grow height="fill">
-      <Column pad={2} gap={2}>
+      <Column width="fill" pad={2} gap={2}>
         <Heading label="Workspace overview" scale="title" />
         <Text label="Current inventory and reported runtime attention." color="text-dim" />
         <Row gap={1} align="center">

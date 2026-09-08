@@ -29,11 +29,12 @@ fn controls(css: &mut String, theme: &Theme) {
     let radius = theme.radius.pixels().unwrap_or(4);
     let _ = writeln!(
         css,
-        "button {{ background: {raised}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
+        "button {{ background: {raised}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 28px; min-width: 28px; padding: 3px 10px; font-size: 13px; font-weight: 500; }}\n\
          button:hover {{ background: {line}; }}\n\
+         button:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button:disabled {{ color: {faint}; background: {surface}; }}\n\
          entry, spinbutton, textview, textview text, dropdown, dropdown > button, calendar {{ \
-           background: {ground}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
+           background: {ground}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
          entry text, spinbutton text {{ color: {text}; }}\n\
          entry:focus-within, textview:focus-within {{ border-color: {accent}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
@@ -170,9 +171,15 @@ fn components(css: &mut String, theme: &Theme) {
     let radius = theme.radius.pixels().unwrap_or(4);
     let _ = writeln!(
         css,
-        ".hl-badge {{ background: {raised}; color: {dim}; border-radius: {pill}px; padding: 1px 8px; font-size: 11px; }}\n\
+        ".hl-badge {{ background: {raised}; color: {dim}; border-radius: {pill}px; padding: 2px 8px; font-size: 11px; font-weight: 600; }}\n\
          .hl-avatar {{ background: {accent}; color: {ground}; border-radius: 18px; font-weight: 700; }}\n\
          .hl-banner, .hl-toast {{ background: {raised}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 12px; }}\n\
+         .hl-card > box {{ padding: 8px; }}\n\
+         .hl-cardactions {{ margin-top: 2px; }}\n\
+         .hl-navigationmenu {{ padding: 2px 4px; }}\n\
+         .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 0; border-radius: {radius}px; min-height: 30px; padding: 4px 8px; font-weight: 500; }}\n\
+         .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; }}\n\
+         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {accent}; color: {ground}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
          .hl-heading {{ font-size: 16px; font-weight: 600; }}\n\
@@ -250,5 +257,14 @@ mod tests {
             css.contains(".variant-outline:disabled") && css.contains("color: #6b7179; border-color: #2e3238"),
             "semantic variants must not override disabled affordance"
         );
+    }
+
+    #[test]
+    fn product_components_have_compact_distinct_chrome() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains("button:focus-visible { outline: 2px"));
+        assert!(css.contains(".hl-navigationmenuitem { background: transparent"));
+        assert!(css.contains(".hl-navigationmenuitem:checked"));
+        assert!(css.contains(".hl-card > box { padding: 8px"));
     }
 }

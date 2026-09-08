@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
+use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -133,6 +133,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("terminal_switch_occupant", "done"),
     ("terminal_switch_occupant_observed", "done"),
     ("filesystem_inventory", "file_inventory"),
+    ("filesystem_changes", "file_changes"),
     ("filesystem_list", "entries"),
     ("filesystem_list_page", "directory_page"),
     ("filesystem_read", "contents"),
@@ -149,6 +150,9 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("state_read", "state"),
     ("state_write", "identity"),
     ("state_clear", "done"),
+    ("preference_read", "preferences"),
+    ("preference_set", "revision"),
+    ("preference_remove", "revision"),
     ("interface_open_tab", "identity"),
     ("interface_split", "identity"),
     ("interface_withdraw", "done"),
@@ -169,9 +173,8 @@ fn request_capability(request: &str) -> Capability {
         | "workspace_restart" => Capability::WorkspaceControl,
         "workspace_environment_patch" => Capability::WorkspaceEnvironmentWrite,
         "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
-        "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {
-            Capability::ExtensionControl
-        }
+        "extension_enable" | "extension_disable" | "extension_retry" => Capability::ExtensionControl,
+        "extension_remove" => Capability::ExtensionRemove,
         "extension_acquisition_start"
         | "extension_acquisition_status"
         | "extension_acquisition_cancel"
@@ -186,9 +189,11 @@ fn request_capability(request: &str) -> Capability {
         | "execution_logs"
         | "execution_output"
         | "execution_wait" => Capability::ContainerRead,
-        "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause"
-        | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec"
-        | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerControl,
+        "container_create" => Capability::ContainerCreate,
+        "container_start" | "container_stop" | "container_pause" | "container_unpause" | "container_restart"
+        | "container_rename" | "container_kill" => Capability::ContainerLifecycle,
+        "container_remove" => Capability::ContainerRemove,
+        "container_exec" | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerExecute,
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
         "image_pull_start" | "image_pull_status" | "image_pull_cancel" => Capability::ImagePull,
@@ -203,13 +208,12 @@ fn request_capability(request: &str) -> Capability {
         "terminal_read_pane" => Capability::TerminalOutput,
         "pane_semantic_read" => Capability::PaneSemanticRead,
         "pane_semantic_action" => Capability::PaneSemanticControl,
+        "terminal_write_pane" => Capability::TerminalInput,
+        "terminal_spawn" | "terminal_spawn_observed" => Capability::TerminalProcessControl,
         "terminal_open_tab"
         | "terminal_pin_tab"
         | "terminal_split"
         | "terminal_split_observed"
-        | "terminal_spawn"
-        | "terminal_spawn_observed"
-        | "terminal_write_pane"
         | "terminal_resize_grid"
         | "terminal_resize_grid_observed"
         | "terminal_close_pane"
@@ -219,10 +223,10 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_retitle_pane"
         | "terminal_retitle_pane_observed"
         | "terminal_ratio"
-        | "terminal_ratio_observed"
-        | "terminal_switch_occupant"
-        | "terminal_switch_occupant_observed" => Capability::TerminalControl,
+        | "terminal_ratio_observed" => Capability::TerminalLayoutControl,
+        "terminal_switch_occupant" | "terminal_switch_occupant_observed" => Capability::TerminalProcessControl,
         "filesystem_inventory"
+        | "filesystem_changes"
         | "filesystem_list"
         | "filesystem_list_page"
         | "filesystem_read"
@@ -238,6 +242,8 @@ fn request_capability(request: &str) -> Capability {
         | "filesystem_remove_observed" => Capability::FilesystemWrite,
         "state_read" => Capability::StateRead,
         "state_write" | "state_clear" => Capability::StateWrite,
+        "preference_read" => Capability::PreferenceRead,
+        "preference_set" | "preference_remove" => Capability::PreferenceWrite,
         "interface_open_tab"
         | "interface_split"
         | "interface_withdraw"

@@ -13,16 +13,20 @@ import {
   Volumes,
   Workspace,
   Top,
+  SIDEBAR_SAVE_DELAY_MS,
+  boundedSidebarWidth,
+  persistSidebarWidth,
   parseArguments,
   parseLabels,
   parseMounts,
   parsePorts,
+  acquisitionFailure,
+  acquisitionLabel,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from '../dist/model.js';
 import { host } from './host.js';
@@ -61,12 +65,39 @@ const api = {
   extensions: { list: async () => [] },
 };
 
+test('Top sidebar preference is narrowly bounded and retried with fresh CAS authority', async () => {
+  assert.equal(SIDEBAR_SAVE_DELAY_MS, 250);
+  assert.equal(boundedSidebarWidth(159), 160);
+  assert.equal(boundedSidebarWidth(240), 240);
+  assert.equal(boundedSidebarWidth(321), 320);
+  assert.equal(boundedSidebarWidth(1.5), null);
+  const calls = [];
+  let revision = 4;
+  const preferences = {
+    read: async () => ({ revision, entries: [] }),
+    set: async (observed, key, value) => {
+      calls.push([observed, key, value]);
+      if (calls.length === 1) {
+        revision = 5;
+        throw Object.assign(new Error('conflict'), { kind: 'conflict' });
+      }
+      return 6;
+    },
+  };
+  assert.equal(await persistSidebarWidth({ preferences }, 240), 6);
+  assert.deepEqual(calls, [
+    [4, 'sidebar.width', { kind: 'number', value: 240 }],
+    [5, 'sidebar.width', { kind: 'number', value: 240 }],
+  ]);
+});
+
 const firstPartyCatalogue = async () => ({
   entries: [
     {
       id: 'storybook',
       title: 'Component playground',
       description: 'Explore extension components, large tables, terminals, diffs, and metrics.',
+      version: '2.0.0',
       reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
       publisher: 'Husklet',
       source: 'husklet:first-party/storybook',
@@ -103,20 +134,71 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Overview', 'ToggleButton', 'Checked')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Overview', 'NavigationMenuItem', 'Selected')?.Flag,
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Workspace', 'ToggleButton', 'Checked')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag,
     false,
   );
   assert.equal(
-    frame.patches.filter((patch) => patch.Create?.tag === 'ToggleButton').length,
+    frame.patches.filter((patch) => patch.Create?.tag === 'NavigationMenuItem').length,
     10,
     'every destination exposes its selected state to keyboard and assistive users',
   );
+  const icons = [
+    'Overview',
+    'Workspace',
+    'Extensions',
+    'Containers',
+    'Processes',
+    'Executions',
+    'Images',
+    'Volumes',
+    'Networks',
+    'Terminals',
+  ].map(
+    (label) => taggedProperty(stageFromFrame(frame), label, 'NavigationMenuItem', 'Icon')?.Text,
+  );
+  assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
+});
+
+test('Top sidebar divider reports and bounds its retained position', () => {
+  const stage = host();
+  stage.render(
+    h(Top, {
+      api,
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  const splitter = stage.frames
+    .flatMap((frame) => frame.patches)
+    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: splitter,
+      id: `${splitter}:Change`,
+      value: 999,
+    }),
+  );
+  assert.deepEqual(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
+      .at(-1).SetProp.value,
+    { Number: 320 },
+  );
 });
 
 test('Top owns workspace settings and extension management in the same tab', async () => {
@@ -167,8 +249,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Workspace');
   await settled();
   await settled();
-  assert.equal(taggedProperty(stage, 'Overview', 'ToggleButton', 'Checked')?.Flag, false);
-  assert.equal(taggedProperty(stage, 'Workspace', 'ToggleButton', 'Checked')?.Flag, true);
+  assert.equal(taggedProperty(stage, 'Overview', 'NavigationMenuItem', 'Selected')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, true);
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
   assert.equal(labelled(stage, 'Unsaved changes'), undefined);
@@ -205,18 +287,20 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Browse extensions'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
     labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
     'discovery names the exact OCI input that review will inspect',
   );
-  assert.ok(labelled(stage, 'Install from image'));
+  assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 2), ['Column', 'Row']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
+  assert.ok(labelled(stage, 'Version 2.0.0'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
@@ -227,9 +311,9 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'cross-axis alignment lets the declared maximum width govern the GTK card',
   );
   assert.equal(
-    ancestorProperty(stage, 'Install from image', 'Card', 'Width') !== undefined,
-    true,
-    'the acquisition card uses the same compact geometry',
+    taggedProperty(stage, 'Install from an OCI image', 'Expander', 'Expanded')?.Flag,
+    false,
+    'advanced image installation is collapsed until requested',
   );
 });
 
@@ -422,7 +506,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review Component playground');
+  invoke(stage, 'Review Component playground installation');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -479,11 +563,11 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.equal(isEnabled(stage, 'Review Unknown'), true);
+  assert.equal(isEnabled(stage, 'Review Unknown installation'), true);
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
-  assert.equal(isEnabled(stage, 'Review ARM only'), false);
+  assert.equal(isEnabled(stage, 'Review ARM only installation'), false);
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
-  assert.equal(isEnabled(stage, 'Review Future protocol'), false);
+  assert.equal(isEnabled(stage, 'Review Future protocol installation'), false);
 });
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
@@ -531,7 +615,7 @@ test('an installed catalogue extension exposes its update review without retypin
   await settled();
   assert.ok(labelled(stage, 'Review update'));
   assert.equal(
-    labelled(stage, 'Review Component playground'),
+    labelled(stage, 'Review Component playground installation'),
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
@@ -606,6 +690,88 @@ test('reviewing an unchanged installed digest is an explicit no-op', async () =>
   assert.equal(updates, 0);
 });
 
+test('catalogue does not advertise an update at the installed version', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.equal(labelled(stage, 'Update available'), undefined);
+});
+
+test('extension review calls out destructive image authority before consent', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'image-review' }),
+          acquisition: async () => ({
+            job: 'image-review',
+            reference: 'registry.example/tools:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'tools',
+              version: '1',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['images:remove', 'images:prune'],
+              requested_images: {
+                read: [],
+                use: [],
+                pull: [],
+                remove: [{ digest: `sha256:${'b'.repeat(64)}` }],
+                prune_all_unused: true,
+              },
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/tools:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ),
+  );
+  assert.equal(
+    ancestorTags(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ).includes('Expander'),
+    false,
+    'destructive authority is announced while exact grants remain collapsed',
+  );
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
@@ -651,13 +817,15 @@ test('extension discovery can retry a failed catalogue without leaving the page'
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'Catalogue unavailable: catalogue service is offline'));
+  assert.ok(labelled(stage, 'Extension catalogue could not be completed.'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'catalogue service is offline'));
   assert.ok(labelled(stage, 'Retry catalogue'));
 
   invoke(stage, 'Retry catalogue');
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'Review Component playground'));
+  assert.ok(labelled(stage, 'Review Component playground installation'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
@@ -720,7 +888,9 @@ test('extension inspection keeps invalid and failed references recoverable with 
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Inspection failed.'));
+  assert.ok(
+    labelled(stage, 'Inspection failed. The reference and details are retained for retry.'),
+  );
   assert.ok(
     labelled(
       stage,
@@ -749,6 +919,85 @@ test('extension inspection keeps invalid and failed references recoverable with 
   );
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.deepEqual(latestSwitchValues(stage), [false]);
+});
+
+test('extension acquisition phases and failures remain actionable without raw engine cascades', () => {
+  const status = (state) => ({
+    job: 'phase',
+    reference: 'registry.example/tool:1',
+    revision: 2,
+    state,
+    progress: null,
+    candidate: null,
+    error: null,
+  });
+  assert.match(acquisitionLabel(status('inspecting')), /workspace architecture/);
+  assert.match(acquisitionLabel(status('reading-manifest')), /validating the extension manifest/);
+  assert.match(acquisitionLabel(status('committing')), /Saving the reviewed extension/);
+  assert.match(acquisitionLabel(status('cancelled')), /No extension was installed/);
+  assert.match(
+    acquisitionFailure(
+      'extension image sha256:a is linux/arm64, but this workspace requires linux/amd64',
+    ),
+    /^Architecture mismatch:/,
+  );
+  assert.match(
+    acquisitionFailure('workspace execution domain failed: Engine(Load(Inspect))'),
+    /^Workspace image service is unavailable\./,
+  );
+  assert.match(
+    acquisitionFailure("the image's manifest archive is unreadable"),
+    /^Extension manifest could not be validated:/,
+  );
+});
+
+test('a stale cancellation refreshes the authoritative phase and remains cancellable', async () => {
+  let reads = 0;
+  let cancellations = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'moving-job' }),
+          acquisition: async () => ({
+            job: 'moving-job',
+            reference: 'registry.example/tool:1',
+            revision: ++reads,
+            state: reads === 1 ? 'inspecting' : 'reading-manifest',
+            progress: null,
+            candidate: null,
+            error: null,
+          }),
+          waitForAcquisition: async () => new Promise(() => {}),
+          cancelAcquisition: async () => {
+            cancellations += 1;
+            throw new Error('the acquisition revision has changed');
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/tool:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  assert.ok(
+    labelled(stage, 'Checking whether the image is available for this workspace architecture…'),
+  );
+  invoke(stage, 'Cancel');
+  await settled();
+  assert.equal(cancellations, 1);
+  assert.ok(labelled(stage, 'Reading and validating the extension manifest…'));
+  assert.ok(
+    labelled(
+      stage,
+      'Acquisition advanced before cancellation. Review its current phase and cancel again if needed.',
+    ),
+  );
+  assert.ok(labelled(stage, 'Cancel'));
 });
 
 for (const updating of [false, true]) {
@@ -1009,7 +1258,7 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
-  assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
+  assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
   assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
   assert.ok(labelled(stage, 'Exact grants · 0/2 selected'));
   expand(stage, 'Exact grants · 0/2 selected');
@@ -1144,7 +1393,9 @@ test('installed extension removal requires final consent and a failure remains r
   rejectRemoval();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Remove failed: extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove extension could not be completed.'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'extension is still stopping'));
   assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
   invoke(stage, 'Remove');
   invoke(stage, 'Remove assistant');
@@ -1178,7 +1429,9 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
 
   assert.ok(labelled(stage, 'Required workspace manager'));
   assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
-  assert.ok(labelled(stage, `Image · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
+  assert.deepEqual(property(stage, 'top', 'Tooltip'), {
+    Text: `Installed image sha256:${'a'.repeat(64)}`,
+  });
   assert.equal(labelled(stage, 'Disable'), undefined);
   assert.equal(labelled(stage, 'Remove'), undefined);
 });
@@ -1233,19 +1486,21 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   release();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
+  assert.ok(labelled(stage, 'Disabled'), 'disabled state replaces stale stopped status');
   invoke(stage, 'Enable');
   await settled();
   assert.ok(labelled(stage, 'Enabling assistant…'));
   release();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'running'));
+  assert.ok(labelled(stage, 'Running'));
 
   extension = { ...extension, enabled: true, status: 'fault: socket closed' };
   publish([extension]);
   await settled();
-  assert.ok(labelled(stage, 'faulted'));
+  assert.ok(labelled(stage, 'Faulted'));
+  assert.ok(labelled(stage, 'Extension lost its connection. No change was assumed.'));
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(labelled(stage, 'socket closed'));
   assert.equal(
     labelled(stage, 'fault: socket closed'),
@@ -1339,7 +1594,7 @@ test('installed extensions translate the host duty stage into a developer-facing
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'enabled'));
+  assert.ok(labelled(stage, 'Enabled'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
@@ -1498,6 +1753,32 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    if (section === 'Images') {
+      assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'image actions stay grouped when the entry forces a narrow-line break',
+      );
+      assert.equal(
+        ancestorProperty(stage, 'Pull', 'Row', 'Grow'),
+        undefined,
+        'the image toolbar cannot consume vertical empty-state space',
+      );
+    }
+    if (section === 'Volumes') {
+      assert.equal(ancestorTags(stage, 'Create')[0], 'Row');
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'volume actions stay grouped when the entry forces a narrow-line break',
+      );
+      assert.equal(
+        ancestorProperty(stage, 'Create', 'Row', 'Grow'),
+        undefined,
+        'the volume toolbar cannot consume vertical empty-state space',
+      );
+    }
     if (section === 'Containers') {
       assert.ok(labelled(stage, 'Create first container'));
       assert.ok(labelled(stage, 'Create a container to start a service or open a shell.'));
@@ -1508,6 +1789,13 @@ test('every empty operational page explains what is absent and how to proceed', 
       );
       invoke(stage, 'Create first container');
       assert.ok(labelled(stage, 'Container setup'), 'the primary action reveals container setup');
+    }
+    if (section === 'Networks') {
+      assert.deepEqual(
+        ancestorTags(stage, 'Refresh').slice(0, 2),
+        ['Row', 'Column'],
+        'network actions stay grouped when the entry forces a narrow-line break',
+      );
     }
   }
   invoke(stage, 'Processes');
@@ -1562,6 +1850,11 @@ test('terminal management exposes exact pin state and acts through immutable tab
   );
   assert.ok(labelled(stage, '1 terminal pane'));
   assert.ok(labelled(stage, 'Pane 1 · Terminal'));
+  assert.equal(
+    ancestorProperty(stage, 'Switch to Build', 'Row', 'Wrap')?.Flag,
+    true,
+    'terminal actions reflow instead of leaving the narrow pane',
+  );
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify')?.Align, 'Start');
   assert.ok(
@@ -2397,6 +2690,11 @@ test('image removal and prune require an explicit confirmation step', async () =
   };
   const stage = host();
   const frame = stage.render(h(Images, { api: controlled, resource }));
+  assert.equal(
+    ancestorProperty(stageFromFrame(frame), 'Image maintenance', 'Card', 'Grow'),
+    undefined,
+    'maintenance stays content-height on wide windows',
+  );
   const labels = () =>
     stage.frames
       .flatMap((current) => current.patches)
@@ -2418,7 +2716,7 @@ test('image removal and prune require an explicit confirmation step', async () =
   );
   assert.deepEqual(calls, [], 'opening image removal performs no operation');
   assert.ok(labels().some((patch) => patch.SetProp.value.Text === 'Confirm remove'));
-  assert.ok(labelled(stage, `Remove immutable image ${originalDigest}?`));
+  assert.ok(labelled(stage, `Remove alpine:3.20 (${originalDigest.slice(0, 12)})?`));
   const staleConfirm = labels()
     .filter((patch) => patch.SetProp.value.Text === 'Confirm remove')
     .at(-1).SetProp.id;
@@ -2442,7 +2740,7 @@ test('image removal and prune require an explicit confirmation step', async () =
     labelled(stage, `Image ${originalDigest} changed or disappeared; inspect and confirm again.`),
   );
   invoke(stage, 'Remove');
-  assert.ok(labelled(stage, `Remove immutable image ${refreshedDigest}?`));
+  assert.ok(labelled(stage, `Remove alpine:3.20 (${refreshedDigest.slice(0, 12)})?`));
   invoke(stage, 'Confirm remove');
   await settled();
   assert.deepEqual(calls, [['remove', refreshedDigest]]);
@@ -2532,7 +2830,10 @@ test('image inspect renders real typed details through a bounded source and retr
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, '$.id'), 'image inspection uses the native bounded object projection');
+  assert.ok(labelled(stage, 'Image details'));
+  assert.ok(labelled(stage, 'Platform · linux/amd64'));
+  assert.ok(labelled(stage, 'References · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 201, version: 1, rows: 9 } }]);
   assert.equal(
     imageDetails.answer({ source: 201, version: 1, id: 8, range: { start: 0, count: 999 } }).rows
@@ -2566,12 +2867,27 @@ test('an empty typed image inspection has an explicit semantic empty state', asy
   );
 });
 
-test('structured resource inspection applies the manager hard bounds visibly', async () => {
+test('typed image inspection never exposes unknown host object fields', async () => {
   const oversized = Object.fromEntries(
     Array.from({ length: 200 }, (_, index) => [`field_${index}`, `value-${index}`]),
   );
   const controlled = {
-    images: { ...api.images, inspect: async () => ({ id: 'sha256:bounded', ...oversized }) },
+    images: {
+      ...api.images,
+      inspect: async () => ({
+        id: 'sha256:bounded',
+        references: ['bounded:latest'],
+        created: 'now',
+        size: 1,
+        os: 'linux',
+        architecture: 'amd64',
+        entrypoint: [],
+        command: [],
+        working_directory: '',
+        user: '',
+        ...oversized,
+      }),
+    },
   };
   const resource = {
     data: [{ id: 'sha256:bounded', reference: 'bounded:latest', size: 1 }],
@@ -2584,16 +2900,9 @@ test('structured resource inspection applies the manager hard bounds visibly', a
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(
-      stage,
-      'Inspection is bounded to 128 nodes, depth 8, and 256 characters per string. Truncated values are marked.',
-    ),
-  );
-  assert.ok(
-    !labelled(stage, '$.field_199'),
-    'fields beyond the native inspector bound never become nodes',
-  );
+  assert.ok(labelled(stage, 'Image details'));
+  assert.equal(labelled(stage, '$.field_199'), undefined);
+  assert.equal(labelled(stage, 'value-199'), undefined);
 });
 
 test('image pull progress is determinate, cancellable and retryable from retained input', async () => {
@@ -2886,10 +3195,18 @@ test('volume and network panels render bounded real inventories and controls', (
     'only the custom network offers removal',
   );
   const networkStage = stageFromFrame(networkFrame);
-  assert.ok(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 0);
-  assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
-  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
+  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), undefined);
+  assert.equal(
+    ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow'),
+    undefined,
+    'the attachment form stays content-height so the empty state follows it',
+  );
+  assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Width'), undefined);
+  assert.equal(
+    ancestorProperty(networkStage, 'private', 'Card', 'Grow'),
+    undefined,
+    'inventory cards remain content-height on wide windows',
+  );
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
   assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
   const destructive = (frame, label) => {
@@ -2909,7 +3226,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(destructive(networkFrame, 'Remove'), false);
 });
 
-test('network inspection exposes loading, retry, empty and bounded typed details', async () => {
+test('network inspection exposes loading, retry, empty and domain-specific details', async () => {
   let attempts = 0;
   const controlled = {
     networks: {
@@ -2917,7 +3234,14 @@ test('network inspection exposes loading, retry, empty and bounded typed details
       inspect: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
-        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' };
+        return {
+          id: 'n1',
+          name: 'private',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: ['a'.repeat(64)], truncated: false },
+        };
       },
     },
   };
@@ -2927,9 +3251,8 @@ test('network inspection exposes loading, retry, empty and bounded typed details
     error: null,
     reload: async () => {},
   };
-  const details = new NetworkDetailsSource();
   const stage = host();
-  stage.render(h(Networks, { api: controlled, resource, networkDetails: details }));
+  stage.render(h(Networks, { api: controlled, resource }));
   invoke(stage, 'Inspect');
   await settled();
   await settled();
@@ -2938,21 +3261,18 @@ test('network inspection exposes loading, retry, empty and bounded typed details
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.id'),
-    'network inspection uses the native bounded object projection',
-  );
-  assert.equal(
-    details.answer({ source: 204, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
-    4,
-  );
+  assert.ok(labelled(stage, 'Network details'));
+  assert.ok(labelled(stage, 'Driver · bridge'));
+  assert.ok(labelled(stage, 'Scope · local'));
+  assert.ok(labelled(stage, 'Connected containers · 1'));
+  assert.ok(labelled(stage, `Container · ${'a'.repeat(64)}`));
+  assert.equal(labelled(stage, '$.id'), undefined, 'host source paths never enter the product UI');
 
   const empty = host();
   empty.render(
     h(Networks, {
       api: { networks: { ...api.networks, inspect: async () => ({}) } },
       resource,
-      networkDetails: new NetworkDetailsSource(),
     }),
   );
   invoke(empty, 'Inspect');
@@ -2990,10 +3310,10 @@ test('volume inspection exposes loading, retry, empty and bounded typed details'
   invoke(stage, 'Retry inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, '$.name'),
-    'volume inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Volume details'));
+  assert.ok(labelled(stage, 'Name · cache'));
+  assert.ok(labelled(stage, 'Driver · local'));
+  assert.equal(labelled(stage, '$.name'), undefined);
   assert.equal(
     details.answer({ source: 205, version: 1, id: 1, range: { start: 0, count: 99 } }).rows.length,
     2,
@@ -3086,7 +3406,16 @@ test('container rename validates locally, retries failure, and preserves immutab
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
   await settled();
-  assert.ok(labelled(stage, `Current name: api. Immutable ID: ${immutable}`));
+  const identity = labelled(
+    stage,
+    `Current name · api  ·  Container ID · ${immutable.slice(0, 12)}`,
+  );
+  assert.ok(identity, 'the rename surface keeps immutable identity compact');
+  assert.deepEqual(
+    latestProperty(stage, identity.SetProp.id, 'Tooltip'),
+    { Text: `Immutable container ID ${immutable}` },
+    'the exact immutable identity remains available without dominating the card',
+  );
 
   change(stage, `New name for ${immutable.slice(0, 12)}`, '.invalid');
   assert.ok(
@@ -4204,10 +4533,10 @@ test('container details load through the bounded source and a failed read is ret
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(
-    labelled(stage, '$.id'),
-    'container inspection uses the native bounded object projection',
-  );
+  assert.ok(labelled(stage, 'Container details'));
+  assert.ok(labelled(stage, 'Name · api'));
+  assert.ok(labelled(stage, 'Image · alpine:3.20'));
+  assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 202, version: 1, rows: 5 } }]);
   assert.equal(
     details.answer({ source: 202, version: 1, id: 2, range: { start: 0, count: 999 } }).rows.length,
@@ -4697,7 +5026,7 @@ test('volume creation exposes pending failure and retained retry before claiming
         patch.SetProp?.prop === 'Label' &&
         patch.SetProp.value?.Text?.startsWith('storage unavailable'),
     );
-  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  assert.ok(new TextEncoder().encode(failures.at(-1).SetProp.value.Text).byteLength <= 1024);
   invoke(stage, 'Retry create');
   await settled();
   await settled();
@@ -4885,7 +5214,7 @@ test('network creation exposes pending failure and retained retry before claimin
         patch.SetProp?.prop === 'Label' &&
         patch.SetProp.value?.Text?.startsWith('registry unavailable'),
     );
-  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  assert.ok(new TextEncoder().encode(failures.at(-1).SetProp.value.Text).byteLength <= 1024);
   assert.equal(failures.length, 1, 'a network creation failure is rendered exactly once');
 
   invoke(stage, 'Retry create');
@@ -5212,6 +5541,13 @@ function latestPropertyForTag(stage, tag, prop) {
   );
   return patches
     .filter((patch) => patch.SetProp?.prop === prop && nodes.has(patch.SetProp.id))
+    .at(-1)?.SetProp.value;
+}
+
+function latestProperty(stage, node, prop) {
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
     .at(-1)?.SetProp.value;
 }
 

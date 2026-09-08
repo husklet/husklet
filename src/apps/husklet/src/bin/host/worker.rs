@@ -18,6 +18,7 @@ enum Operation {
     AttachContainer {
         name: String,
         container: String,
+        generation: u64,
         command: Vec<String>,
     },
 }
@@ -49,6 +50,10 @@ impl Operation {
                     .next()
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "container identity is missing".to_owned())?;
+                let generation = arguments
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| "container generation is missing or invalid".to_owned())?;
                 let command: Vec<String> = arguments.collect();
                 if command.is_empty() {
                     return Err("container attachment command is missing".into());
@@ -56,6 +61,7 @@ impl Operation {
                 Ok(Some(Self::AttachContainer {
                     name,
                     container,
+                    generation,
                     command,
                 }))
             }
@@ -128,8 +134,9 @@ impl Worker {
             Operation::AttachContainer {
                 name,
                 container,
+                generation,
                 command,
-            } => hl::runtime::worker::Worker::attach_container(&name, &container, &command),
+            } => hl::runtime::worker::Worker::attach_container(&name, &container, generation, &command),
         })
     }
 }
@@ -179,6 +186,7 @@ mod tests {
             "attach-container",
             "dev",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "7",
             "sh",
             "-lc",
             "printf '%s' \"$HOME\"",
@@ -187,9 +195,10 @@ mod tests {
         .unwrap();
         assert!(matches!(
             operation,
-            Operation::AttachContainer { name, container, command }
+            Operation::AttachContainer { name, container, generation, command }
                 if name == "dev"
                     && container == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    && generation == 7
                     && command == ["sh", "-lc", "printf '%s' \"$HOME\""]
         ));
     }

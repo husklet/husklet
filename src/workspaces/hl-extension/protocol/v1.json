@@ -47,7 +47,22 @@
     {
       "executes": true,
       "mutates": true,
-      "wire": "containers:control"
+      "wire": "containers:create"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "containers:execute"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "containers:lifecycle"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "containers:remove"
     },
     {
       "executes": true,
@@ -102,7 +117,17 @@
     {
       "executes": true,
       "mutates": true,
-      "wire": "terminals:control"
+      "wire": "terminals:input"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "terminals:layout-control"
+    },
+    {
+      "executes": true,
+      "mutates": true,
+      "wire": "terminals:process-control"
     },
     {
       "executes": false,
@@ -137,6 +162,11 @@
     {
       "executes": false,
       "mutates": true,
+      "wire": "extensions:remove"
+    },
+    {
+      "executes": false,
+      "mutates": true,
       "wire": "extensions:install"
     },
     {
@@ -158,6 +188,16 @@
       "executes": false,
       "mutates": true,
       "wire": "state:write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
+      "wire": "preferences:read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "preferences:write"
     },
     {
       "executes": false,
@@ -270,7 +310,25 @@
           }
         },
         {
-          "name": "containers:control",
+          "name": "containers:create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:execute",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:lifecycle",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:remove",
           "payload": {
             "kind": "unit"
           }
@@ -336,7 +394,19 @@
           }
         },
         {
-          "name": "terminals:control",
+          "name": "terminals:input",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:layout-control",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:process-control",
           "payload": {
             "kind": "unit"
           }
@@ -378,6 +448,12 @@
           }
         },
         {
+          "name": "extensions:remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "extensions:install",
           "payload": {
             "kind": "unit"
@@ -403,6 +479,18 @@
         },
         {
           "name": "state:write",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preferences:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preferences:write",
           "payload": {
             "kind": "unit"
           }
@@ -1704,6 +1792,13 @@
           }
         },
         {
+          "name": "version",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "reference",
           "optional": false,
           "schema": {
@@ -1752,6 +1847,42 @@
     "ExtensionName": {
       "kind": "ref",
       "name": "PeerName"
+    },
+    "ExtensionPreferences": {
+      "fields": [
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "entries",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "items": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "ref",
+                  "name": "PreferenceValue"
+                }
+              ],
+              "kind": "tuple"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "ExtensionState": {
       "fields": [
@@ -1888,6 +2019,135 @@
       "kind": "struct",
       "serde": {}
     },
+    "FileChange": {
+      "fields": [
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "kind",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "FileChangeKind"
+          }
+        },
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "entry",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "ref",
+              "name": "Entry"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "FileChangeKind": {
+      "kind": "enum",
+      "serde": {
+        "rename_all": "snake_case"
+      },
+      "variants": [
+        {
+          "name": "create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "modify",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "invalidate",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
+    "FileChangePage": {
+      "fields": [
+        {
+          "name": "changes",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "FileChange"
+            }
+          }
+        },
+        {
+          "name": "next",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "current",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "truncated",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "FileInventory": {
       "fields": [
         {
@@ -1910,6 +2170,17 @@
         },
         {
           "name": "coalesced",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
           "optional": false,
           "schema": {
             "bits": 64,
@@ -3902,6 +4173,48 @@
         }
       ]
     },
+    "PreferenceValue": {
+      "kind": "enum",
+      "serde": {
+        "content": "value",
+        "deny_unknown_fields": true,
+        "rename_all": "snake_case",
+        "tag": "kind"
+      },
+      "variants": [
+        {
+          "name": "boolean",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "boolean"
+            }
+          }
+        },
+        {
+          "name": "number",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "signed": true
+            }
+          }
+        },
+        {
+          "name": "string",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ]
+    },
     "ProcessList": {
       "fields": [
         {
@@ -5637,6 +5950,18 @@
         },
         {
           "name": "NavigationRailItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NavigationMenu",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NavigationMenuItem",
           "payload": {
             "kind": "unit"
           }
@@ -7435,7 +7760,7 @@
       "request": "extension_retry"
     },
     {
-      "capability": "extensions:control",
+      "capability": "extensions:remove",
       "request": "extension_remove"
     },
     {
@@ -7499,55 +7824,55 @@
       "request": "execution_wait"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_kill"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_cancel"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "execution_remove"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:create",
       "request": "container_create"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_start"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_stop"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:remove",
       "request": "container_remove"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_pause"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_unpause"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_restart"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_rename"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:lifecycle",
       "request": "container_kill"
     },
     {
-      "capability": "containers:control",
+      "capability": "containers:execute",
       "request": "container_exec"
     },
     {
@@ -7635,27 +7960,27 @@
       "request": "pane_list"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_open_tab"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_pin_tab"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_split"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_split_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_spawn"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_spawn_observed"
     },
     {
@@ -7671,60 +7996,64 @@
       "request": "pane_semantic_action"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:input",
       "request": "terminal_write_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_resize_grid"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_resize_grid_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_close_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_close_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_focus_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_focus_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_retitle_pane"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_retitle_pane_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_ratio"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:layout-control",
       "request": "terminal_ratio_observed"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_switch_occupant"
     },
     {
-      "capability": "terminals:control",
+      "capability": "terminals:process-control",
       "request": "terminal_switch_occupant_observed"
     },
     {
       "capability": "filesystem:read",
       "request": "filesystem_inventory"
+    },
+    {
+      "capability": "filesystem:read",
+      "request": "filesystem_changes"
     },
     {
       "capability": "filesystem:read",
@@ -7789,6 +8118,18 @@
     {
       "capability": "state:write",
       "request": "state_clear"
+    },
+    {
+      "capability": "preferences:read",
+      "request": "preference_read"
+    },
+    {
+      "capability": "preferences:write",
+      "request": "preference_set"
+    },
+    {
+      "capability": "preferences:write",
+      "request": "preference_remove"
     },
     {
       "capability": "interface:render",
@@ -8185,6 +8526,10 @@
       "request": "filesystem_inventory"
     },
     {
+      "reply": "file_changes",
+      "request": "filesystem_changes"
+    },
+    {
       "reply": "entries",
       "request": "filesystem_list"
     },
@@ -8247,6 +8592,18 @@
     {
       "reply": "done",
       "request": "state_clear"
+    },
+    {
+      "reply": "preferences",
+      "request": "preference_read"
+    },
+    {
+      "reply": "revision",
+      "request": "preference_set"
+    },
+    {
+      "reply": "revision",
+      "request": "preference_remove"
     },
     {
       "reply": "identity",
@@ -8718,6 +9075,16 @@
           }
         },
         {
+          "name": "file_changes",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "FileChangePage"
+            }
+          }
+        },
+        {
           "name": "entries",
           "payload": {
             "kind": "newtype",
@@ -8783,6 +9150,29 @@
             "of": {
               "kind": "ref",
               "name": "ExtensionState"
+            }
+          }
+        },
+        {
+          "name": "preferences",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionPreferences"
+            }
+          }
+        },
+        {
+          "name": "revision",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "bits": 64,
+              "kind": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "signed": false
             }
           }
         },
@@ -10930,6 +11320,36 @@
           }
         },
         {
+          "name": "filesystem_changes",
+          "payload": {
+            "fields": [
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_list",
           "payload": {
             "fields": [
@@ -11321,6 +11741,72 @@
             "fields": [
               {
                 "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "preference_read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "preference_set",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "value",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "PreferenceValue"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "preference_remove",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "key",
                 "optional": false,
                 "schema": {
                   "kind": "string"
@@ -12533,7 +13019,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:5aca27ce255c3cb7",
+  "source_fingerprint": "fnv1a64:d4d3f529f5a105a3",
   "specification_version": 1,
   "topics": [
     {

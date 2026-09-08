@@ -2,10 +2,11 @@ import React from 'react';
 import {
   Button,
   CardContent,
+  Column,
   ConfirmAction,
   Entry,
   Heading,
-  ObjectInspector,
+  Badge,
   ResourceState,
   Row,
   Separator,
@@ -16,7 +17,6 @@ import {
 import { LOG_LIMIT, boundedMessage, logText, shortId } from './model.js';
 
 const { useState } = React;
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 
 export type Inspection = {
   id: string;
@@ -33,13 +33,20 @@ export type LifecycleAction = (
   generation?: number,
 ) => Promise<void>;
 
-function StructuredDetail({ value }: { value: unknown }) {
+function StructuredDetail({ value }: { value: ContainerSummary | null }) {
+  if (!value) return null;
   return (
-    <ObjectInspector
-      value={value}
-      {...INSPECTOR_BOUNDS}
-      height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-    />
+    <Column gap={1}>
+      <Heading label="Container details" scale="caption" />
+      <Row gap={1} wrap>
+        <Badge label={`State · ${value.state}`} />
+        <Text label={`Name · ${value.name || 'Unnamed'}`} />
+      </Row>
+      <Text label={`Image · ${value.image}`} wrap />
+      <Text label={`Immutable container ID · ${value.id}`} color="text-dim" wrap />
+      <Text label={`Created · ${value.created}`} color="text-dim" />
+      <Text label={`Generation · ${value.generation ?? 'Unavailable'}`} color="text-dim" />
+    </Column>
   );
 }
 

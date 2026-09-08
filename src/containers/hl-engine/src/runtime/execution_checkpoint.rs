@@ -98,10 +98,14 @@ impl CheckpointControl {
         }
     }
 
-    pub(super) fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
+    pub(super) fn begin_recovery(
+        &self,
+        deadline: std::time::Instant,
+        native: bool,
+    ) -> Result<RecoveryAdmission, EngineError> {
         let id = match self
             .server
-            .begin_recovery_after_admission(deadline, || self.transport.bump())
+            .begin_recovery_after_admission(deadline, native, || self.transport.bump())
         {
             Ok(id) => id,
             Err(failure) => {

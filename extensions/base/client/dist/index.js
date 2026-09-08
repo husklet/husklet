@@ -663,6 +663,36 @@ export function workspace(session, { signal } = {}) {
                     throw new ExecutionOperationError(executionId, phase, cause, execution);
                 }
             },
+            execStreaming: async (id, generation, { command, environment = [], user, workingDirectory, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, }, onPage) => {
+                if (typeof onPage !== 'function')
+                    throw new TypeError('streaming execution requires an output callback');
+                requireOutputActive(signal);
+                const executionId = await api.containers.exec(id, generation, {
+                    command,
+                    environment,
+                    user,
+                    workingDirectory,
+                });
+                let phase = 'output';
+                try {
+                    for await (const page of api.containers.executionOutputPages(executionId, {
+                        limit: pageLimit,
+                        pollIntervalMs,
+                        signal,
+                    })) {
+                        await onPage(page);
+                    }
+                    phase = 'inspect';
+                    const execution = await api.containers.execution(executionId);
+                    return { executionId, execution };
+                }
+                catch (cause) {
+                    await api.containers
+                        .cancelExecution(executionId, { signal: cancelSignal, timeoutMs: cancelTimeoutMs })
+                        .catch(() => { });
+                    throw new ExecutionOperationError(executionId, phase, cause);
+                }
+            },
             attachTerminal: (id, command) => session
                 .call('container_attach_terminal', {
                 id: immutableIdentity(id, [32, 64], 'container'),
@@ -962,6 +992,67 @@ export function workspace(session, { signal } = {}) {
         },
         files: {
             inventory: async () => expect(await session.call('filesystem_inventory'), 'file_inventory'),
+            changes: async (after = 0, limit = 256) => {
+                if (!Number.isSafeInteger(after) || after < 0)
+                    throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+                exactFilesystemPageSize(limit);
+                const page = expect(await session.call('filesystem_changes', { after, limit }), 'file_changes');
+                if (page.changes.length > limit ||
+                    (!page.truncated && page.next < after) ||
+                    page.current < page.next ||
+                    page.changes.some((change, index) => change.revision <= after ||
+                        change.revision > page.next ||
+                        (index > 0 && change.revision <= page.changes[index - 1].revision) ||
+                        change.path !== (change.entry?.path ?? change.path)) ||
+                    (page.changes.length > 0 && page.next < page.changes.at(-1).revision) ||
+                    (page.truncated && (page.changes.length > 0 || page.next !== page.current)) ||
+                    (page.more && page.next >= page.current))
+                    throw new TypeError('host returned an inconsistent filesystem change page');
+                return page;
+            },
+            watchChanges: async (listener, { after = 0, pageSize = 256, pollMs = 250, signal, } = {}) => {
+                exactFilesystemPageSize(pageSize);
+                if (!Number.isSafeInteger(after) || after < 0)
+                    throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+                if (!Number.isSafeInteger(pollMs) || pollMs < 1)
+                    throw new TypeError('filesystem change poll interval must be a positive integer');
+                let stopped = false;
+                let wake;
+                const aborted = () => signal?.aborted || stopped;
+                const running = (async () => {
+                    while (!aborted()) {
+                        const page = await api.files.changes(after, pageSize);
+                        if (aborted())
+                            break;
+                        if (page.truncated || page.changes.length > 0)
+                            await listener(page);
+                        after = page.next;
+                        if (page.more)
+                            continue;
+                        await new Promise((resolve) => {
+                            const finish = () => {
+                                clearTimeout(timer);
+                                signal?.removeEventListener('abort', finish);
+                                resolve();
+                            };
+                            wake = finish;
+                            const timer = setTimeout(finish, pollMs);
+                            signal?.addEventListener('abort', finish, { once: true });
+                            void Promise.resolve().then(() => {
+                                if (aborted())
+                                    finish();
+                            });
+                        });
+                        wake = undefined;
+                    }
+                })();
+                return async () => {
+                    stopped = true;
+                    if (wake)
+                        wake();
+                    await running;
+                };
+            },
             list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
             listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
                 if ((after === null) !== (observed === null)) {
@@ -1114,6 +1205,11 @@ export function workspace(session, { signal } = {}) {
                 throw new Error('unreachable extension state update attempt');
             },
         },
+        preferences: {
+            read: async () => expect(await session.call('preference_read', undefined), 'preferences'),
+            set: async (observed, key, value) => expect(await session.call('preference_set', { observed, key, value }), 'revision'),
+            remove: async (observed, key) => expect(await session.call('preference_remove', { observed, key }), 'revision'),
+        },
         subscribe,
         unsubscribe,
     };
@@ -1126,7 +1222,7 @@ export function workspace(session, { signal } = {}) {
             throw new TypeError(`${label} listener must be a function`);
         const off = hostSession.onEvent((event) => {
             if ('snapshot' in event && event.snapshot === snapshot)
-                listener(event.of);
+                return listener(event.of);
         });
         try {
             await subscribe(topic);
@@ -1535,7 +1631,7 @@ export function workspace(session, { signal } = {}) {
             timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
         });
     };
-    api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000 } = {}) => {
+    api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000, signal } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
             throw new TypeError('terminal input wait requires a nonempty slot');
         if (!Number.isSafeInteger(generation) ||
@@ -1551,31 +1647,39 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
             throw new RangeError('terminal input wait timeout must be between 1 and 30000ms');
         }
+        if (signal?.aborted)
+            throw outputAbort(signal);
+        const scoped = signal ? api.withSignal(signal) : api;
         let changed;
         const observed = new Promise((resolve) => {
             changed = resolve;
         });
-        const stop = await api.watchPaneChanges((change) => {
+        const stop = await scoped.watchPaneChanges((change) => {
             if (change.slot === slot &&
                 (change.generation !== generation || change.revision !== revision))
                 changed(change);
         });
         let timer;
+        let abort;
         try {
-            const before = await api.terminal.read(slot, lines);
+            const before = await scoped.terminal.read(slot, lines);
             if (before.generation !== generation || before.revision !== revision) {
                 throw new Error('terminal screen cursor changed before input authority');
             }
-            await api.terminal.writeInput(slot, generation, revision, contents);
+            await scoped.terminal.writeInput(slot, generation, revision, contents);
             const change = await Promise.race([
                 observed,
                 new Promise((resolve) => {
                     timer = setTimeout(() => resolve(null), timeoutMs);
                 }),
+                new Promise((_, reject) => {
+                    abort = () => reject(outputAbort(signal));
+                    signal?.addEventListener('abort', abort, { once: true });
+                }),
             ]);
             if (change === null)
                 return { changed: false, before };
-            const after = await api.terminal.read(slot, lines);
+            const after = await scoped.terminal.read(slot, lines);
             if (after.generation === generation && after.revision === revision) {
                 throw new Error('pane change did not advance the terminal screen cursor');
             }
@@ -1583,8 +1687,19 @@ export function workspace(session, { signal } = {}) {
         }
         finally {
             clearTimeout(timer);
+            if (abort)
+                signal?.removeEventListener('abort', abort);
             await stop();
         }
+    };
+    api.terminal.writeObservedAndWait = (before, input, options) => {
+        if (!before ||
+            typeof before.slot !== 'string' ||
+            !Number.isSafeInteger(before.generation) ||
+            !Number.isSafeInteger(before.revision)) {
+            throw new TypeError('observed terminal input requires a snapshot with an exact cursor');
+        }
+        return api.terminal.writeAndWait(before.slot, before.generation, before.revision, input, options);
     };
     api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
@@ -2370,8 +2485,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension enable wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (current && current.image_digest !== digest) {
                     reject(new Error(`extension ${name} was replaced while enabling`));
@@ -2384,6 +2502,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.enable(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2406,8 +2525,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension disable wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current)
                     reject(new Error(`extension ${name} disappeared while disabling`));
@@ -2420,6 +2542,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.disable(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2442,8 +2565,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension retry wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current)
                     reject(new Error(`extension ${name} disappeared while retrying`));
@@ -2456,6 +2582,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.retry(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2478,8 +2605,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension remove wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current || current.image_digest !== digest)
                     resolve(current ?? null);
@@ -2488,6 +2618,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.remove(name, digest);
             const replacement = await Promise.race([
                 inventory,
@@ -2703,6 +2834,7 @@ function facadePath(call) {
         ['terminal_', 'terminal.'],
         ['filesystem_', 'files.'],
         ['state_', 'state.'],
+        ['preference_', 'preferences.'],
         ['notification_', 'notifications.'],
     ])
         if (call.startsWith(prefix))
@@ -2766,6 +2898,7 @@ export const protocolCoverage = Object.freeze({
             'kill',
             'exec',
             'execAndWait',
+            'execStreaming',
             'attachTerminal',
         ],
         images: [
@@ -2820,6 +2953,8 @@ export const protocolCoverage = Object.freeze({
         ],
         files: [
             'inventory',
+            'changes',
+            'watchChanges',
             'list',
             'listPage',
             'walk',
@@ -2837,6 +2972,7 @@ export const protocolCoverage = Object.freeze({
             'removeObserved',
         ],
         state: ['read', 'write', 'clear'],
+        preferences: ['read', 'set', 'remove'],
         extensions: [
             'list',
             'inspect',

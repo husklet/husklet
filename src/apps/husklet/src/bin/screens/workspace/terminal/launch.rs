@@ -166,6 +166,7 @@ pub(crate) fn make_container_terminal_ex(
     tw: &Rc<TermWin>,
     slot: &str,
     container: &str,
+    generation: u64,
     command: &[String],
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
     make_terminal_with_operation(
@@ -174,7 +175,7 @@ pub(crate) fn make_container_terminal_ex(
         None,
         slot,
         &ProductionPaneLauncher,
-        Some((container, command)),
+        Some((container, generation, command)),
     )
 }
 
@@ -226,7 +227,7 @@ fn make_terminal_with_operation<L: PaneLauncher>(
     history: Option<String>,
     slot: &str,
     launcher: &L,
-    attachment: Option<(&str, &[String])>,
+    attachment: Option<(&str, u64, &[String])>,
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
@@ -268,13 +269,16 @@ fn make_terminal_with_operation<L: PaneLauncher>(
     let dbg = AppConfig::get().debug_log.as_ref();
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
     let directory = cwd_arg.as_deref().unwrap_or("");
-    let mut launch_args: Vec<&str> = if let Some((container, _)) = attachment {
+    let generation_text;
+    let mut launch_args: Vec<&str> = if let Some((container, generation, _)) = attachment {
+        generation_text = generation.to_string();
         vec![
             application.as_str(),
             "--worker",
             "attach-container",
             workspace_key.as_str(),
             container,
+            generation_text.as_str(),
         ]
     } else {
         vec![
@@ -287,7 +291,7 @@ fn make_terminal_with_operation<L: PaneLauncher>(
             directory,
         ]
     };
-    if let Some((_, command)) = attachment {
+    if let Some((_, _, command)) = attachment {
         launch_args.extend(command.iter().map(String::as_str));
     }
     // A CLEAN minimal env — NOT the full parent env. Husklet runs under the nix devshell, whose

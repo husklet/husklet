@@ -186,10 +186,12 @@ fn query_plan_is_nested_selectable_and_hot() {
     s.flush().unwrap();
     let node = s.tagged(Tag::QueryPlanNode).unwrap();
     assert!(node.has_css_class("query-plan-hot"));
-    assert!(subtree(&node)
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Label>().ok())
-        .all(|l| l.is_selectable()));
+    assert!(
+        subtree(&node)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
     assert!(s.tagged(Tag::QueryPlanMetric).is_some());
     s.producer.set(n, Prop::Value, PropValue::text("id=j state=normal"));
     s.flush().unwrap();
@@ -219,10 +221,12 @@ fn dependency_graph_is_selectable_nested_and_conflict_styled() {
     s.flush().unwrap();
     let node = s.tagged(Tag::DependencyNode).unwrap();
     assert!(node.has_css_class("dependency-conflict"));
-    assert!(subtree(&node)
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Label>().ok())
-        .all(|l| l.is_selectable()));
+    assert!(
+        subtree(&node)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
     assert!(s.tagged(Tag::DependencyEdge).is_some())
 }
 
@@ -253,10 +257,12 @@ fn network_waterfall_is_selectable_hierarchical_and_status_styled() {
     let phase = session.tagged(Tag::NetworkPhase).unwrap();
     assert!(request.has_css_class("network-failure"));
     assert!(phase.has_css_class("network-phase"));
-    assert!(subtree(&request)
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Label>().ok())
-        .all(|l| l.is_selectable()));
+    assert!(
+        subtree(&request)
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .all(|l| l.is_selectable())
+    );
     let bar = subtree(&phase)
         .into_iter()
         .find_map(|w| w.downcast::<gtk::LevelBar>().ok())
@@ -885,7 +891,9 @@ fn every_tag_honours_the_property_it_is_for() {
 fn asked(aspect: Aspect) -> Prop {
     match aspect {
         Aspect::Label => Prop::Label,
-        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time | Aspect::ColorValue => Prop::Value,
+        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time | Aspect::ColorValue => {
+            Prop::Value
+        }
         Aspect::Revealed => Prop::Expanded,
         Aspect::Icon => Prop::Icon,
         Aspect::Uri => Prop::Uri,
@@ -943,7 +951,8 @@ fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
         Aspect::Measure => widget.size_request().0 == 16,
         Aspect::Date => dated(widget),
         Aspect::Time => timed(widget),
-        Aspect::ColorValue => widget.downcast_ref::<gtk::ColorDialogButton>()
+        Aspect::ColorValue => widget
+            .downcast_ref::<gtk::ColorDialogButton>()
             .is_some_and(|picker| color_text(&picker.rgba()) == "#336699"),
     }
 }
@@ -1272,6 +1281,7 @@ fn structural(tag: Tag) -> Aspect {
         | Tag::Step
         | Tag::StepContent
         | Tag::NavigationRail
+        | Tag::NavigationMenu
         | Tag::BottomNavigation
         | Tag::AccordionDetails
         | Tag::AccordionActions => Aspect::Gap,
@@ -1336,12 +1346,16 @@ fn stack_frames_keep_selectable_function_and_location() {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Label>().ok())
         .collect::<Vec<_>>();
-    assert!(labels
-        .iter()
-        .any(|label| label.text() == "host::dispatch" && label.is_selectable()));
-    assert!(labels
-        .iter()
-        .any(|label| label.text() == "src/host.rs:42" && label.is_selectable()));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "host::dispatch" && label.is_selectable())
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.text() == "src/host.rs:42" && label.is_selectable())
+    );
 }
 
 fn a_validation_summary_keeps_actions_below_its_message() {

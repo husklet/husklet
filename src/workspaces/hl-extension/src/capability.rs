@@ -26,8 +26,20 @@ pub enum Capability {
     WorkspaceEnvironmentWrite,
     #[serde(rename = "containers:read")]
     ContainerRead,
-    #[serde(rename = "containers:control")]
-    ContainerControl,
+    /// Creates a new container from an explicitly consented image and configuration.
+    #[serde(rename = "containers:create")]
+    ContainerCreate,
+    /// Starts detached processes inside explicitly consented containers and
+    /// controls only those execution records.
+    #[serde(rename = "containers:execute")]
+    ContainerExecute,
+    /// Starts, stops, pauses, resumes, restarts, renames, or signals an
+    /// explicitly consented container without granting deletion.
+    #[serde(rename = "containers:lifecycle")]
+    ContainerLifecycle,
+    /// Permanently removes an explicitly consented container.
+    #[serde(rename = "containers:remove")]
+    ContainerRemove,
     /// Opens an interactive, kill-on-disconnect terminal in an existing container.
     /// Kept separate from detached container mutation and ordinary terminal control.
     #[serde(rename = "containers:attach")]
@@ -50,8 +62,15 @@ pub enum Capability {
     NetworkWrite,
     #[serde(rename = "terminals:read")]
     TerminalRead,
-    #[serde(rename = "terminals:control")]
-    TerminalControl,
+    /// Injecting bytes into an existing terminal pane.
+    #[serde(rename = "terminals:input")]
+    TerminalInput,
+    /// Creating, removing, focusing, or rearranging terminal panes and tabs.
+    #[serde(rename = "terminals:layout-control")]
+    TerminalLayoutControl,
+    /// Replacing the process running in an existing terminal pane.
+    #[serde(rename = "terminals:process-control")]
+    TerminalProcessControl,
     /// Reading the bytes flowing through a pane. Deliberately separate from
     /// `TerminalRead`: listing panes and reading what was typed into a shell
     /// are different kinds of access.
@@ -68,9 +87,12 @@ pub enum Capability {
     /// Reading installed extension identity and lifecycle status.
     #[serde(rename = "extensions:read")]
     ExtensionRead,
-    /// Enabling, disabling, or removing installed extension records.
+    /// Enabling, disabling, or retrying installed extension records.
     #[serde(rename = "extensions:control")]
     ExtensionControl,
+    /// Permanently removing an installed extension record and its grant.
+    #[serde(rename = "extensions:remove")]
+    ExtensionRemove,
     /// Acquiring and consent-committing extension images.
     #[serde(rename = "extensions:install")]
     ExtensionInstall,
@@ -84,6 +106,12 @@ pub enum Capability {
     /// Replaces or clears only this extension's private host-managed state blob.
     #[serde(rename = "state:write")]
     StateWrite,
+    /// Reads only this extension's bounded workspace-local UI preferences.
+    #[serde(rename = "preferences:read")]
+    PreferenceRead,
+    /// Mutates one bounded preference through revision compare-and-swap.
+    #[serde(rename = "preferences:write")]
+    PreferenceWrite,
     #[serde(rename = "interface:render")]
     Interface,
     /// Publishes bounded user-visible notifications outside an extension surface.
@@ -102,7 +130,10 @@ impl Capability {
             Self::WorkspaceEnvironmentRead => "workspace-environment:read",
             Self::WorkspaceEnvironmentWrite => "workspace-environment:write",
             Self::ContainerRead => "containers:read",
-            Self::ContainerControl => "containers:control",
+            Self::ContainerCreate => "containers:create",
+            Self::ContainerExecute => "containers:execute",
+            Self::ContainerLifecycle => "containers:lifecycle",
+            Self::ContainerRemove => "containers:remove",
             Self::ContainerAttach => "containers:attach",
             Self::ImageRead => "images:read",
             Self::ImagePull => "images:pull",
@@ -113,18 +144,23 @@ impl Capability {
             Self::NetworkRead => "networks:read",
             Self::NetworkWrite => "networks:write",
             Self::TerminalRead => "terminals:read",
-            Self::TerminalControl => "terminals:control",
+            Self::TerminalInput => "terminals:input",
+            Self::TerminalLayoutControl => "terminals:layout-control",
+            Self::TerminalProcessControl => "terminals:process-control",
             Self::TerminalOutput => "terminals:output",
             Self::PaneObserve => "panes:observe",
             Self::PaneSemanticRead => "panes:semantic-read",
             Self::PaneSemanticControl => "panes:semantic-control",
             Self::ExtensionRead => "extensions:read",
             Self::ExtensionControl => "extensions:control",
+            Self::ExtensionRemove => "extensions:remove",
             Self::ExtensionInstall => "extensions:install",
             Self::FilesystemRead => "filesystem:read",
             Self::FilesystemWrite => "filesystem:write",
             Self::StateRead => "state:read",
             Self::StateWrite => "state:write",
+            Self::PreferenceRead => "preferences:read",
+            Self::PreferenceWrite => "preferences:write",
             Self::Interface => "interface:render",
             Self::NotificationPublish => "notifications:publish",
         }
@@ -138,19 +174,26 @@ impl Capability {
             self,
             Self::WorkspaceControl
                 | Self::WorkspaceEnvironmentWrite
-                | Self::ContainerControl
+                | Self::ContainerCreate
+                | Self::ContainerExecute
+                | Self::ContainerLifecycle
+                | Self::ContainerRemove
                 | Self::ContainerAttach
                 | Self::ImagePull
                 | Self::ImageRemove
                 | Self::ImagePrune
                 | Self::VolumeWrite
                 | Self::NetworkWrite
-                | Self::TerminalControl
+                | Self::TerminalInput
+                | Self::TerminalLayoutControl
+                | Self::TerminalProcessControl
                 | Self::PaneSemanticControl
                 | Self::ExtensionControl
+                | Self::ExtensionRemove
                 | Self::ExtensionInstall
                 | Self::FilesystemWrite
                 | Self::StateWrite
+                | Self::PreferenceWrite
                 | Self::NotificationPublish
         )
     }
@@ -161,7 +204,12 @@ impl Capability {
     pub const fn executes(self) -> bool {
         matches!(
             self,
-            Self::WorkspaceControl | Self::ContainerControl | Self::ContainerAttach | Self::TerminalControl
+            Self::WorkspaceControl
+                | Self::ContainerCreate
+                | Self::ContainerExecute
+                | Self::ContainerAttach
+                | Self::TerminalInput
+                | Self::TerminalProcessControl
         )
     }
 
@@ -173,7 +221,10 @@ impl Capability {
         Self::WorkspaceEnvironmentRead,
         Self::WorkspaceEnvironmentWrite,
         Self::ContainerRead,
-        Self::ContainerControl,
+        Self::ContainerCreate,
+        Self::ContainerExecute,
+        Self::ContainerLifecycle,
+        Self::ContainerRemove,
         Self::ContainerAttach,
         Self::ImageRead,
         Self::ImagePull,
@@ -184,18 +235,23 @@ impl Capability {
         Self::NetworkRead,
         Self::NetworkWrite,
         Self::TerminalRead,
-        Self::TerminalControl,
+        Self::TerminalInput,
+        Self::TerminalLayoutControl,
+        Self::TerminalProcessControl,
         Self::TerminalOutput,
         Self::PaneObserve,
         Self::PaneSemanticRead,
         Self::PaneSemanticControl,
         Self::ExtensionRead,
         Self::ExtensionControl,
+        Self::ExtensionRemove,
         Self::ExtensionInstall,
         Self::FilesystemRead,
         Self::FilesystemWrite,
         Self::StateRead,
         Self::StateWrite,
+        Self::PreferenceRead,
+        Self::PreferenceWrite,
         Self::Interface,
         Self::NotificationPublish,
     ];
@@ -225,7 +281,7 @@ mod tests {
     fn a_grant_reports_exactly_what_it_holds() {
         let grant = Grant::new([Capability::ContainerRead, Capability::Interface]);
         assert!(grant.holds(Capability::ContainerRead));
-        assert!(!grant.holds(Capability::ContainerControl));
+        assert!(!grant.holds(Capability::ContainerLifecycle));
         assert_eq!(grant.len(), 2);
     }
 
@@ -246,18 +302,21 @@ mod tests {
     #[test]
     fn a_wider_request_is_narrowed_to_the_recorded_grant() {
         let recorded = Grant::new([Capability::ContainerRead]);
-        let requested = Grant::new([Capability::ContainerRead, Capability::ContainerControl]);
+        let requested = Grant::new([Capability::ContainerRead, Capability::ContainerLifecycle]);
 
         assert!(!recorded.covers(&requested));
-        assert_eq!(recorded.missing(&requested), vec![Capability::ContainerControl]);
+        assert_eq!(recorded.missing(&requested), vec![Capability::ContainerLifecycle]);
         assert_eq!(recorded.intersect(&requested), recorded);
     }
 
     #[test]
     fn execution_grants_are_identified_for_the_consent_prompt() {
-        assert!(Grant::new([Capability::ContainerControl]).executes());
+        assert!(Grant::new([Capability::ContainerExecute]).executes());
+        assert!(!Grant::new([Capability::ContainerLifecycle]).executes());
         assert!(Grant::new([Capability::WorkspaceControl]).executes());
-        assert!(Grant::new([Capability::TerminalControl]).executes());
+        assert!(Grant::new([Capability::TerminalInput]).executes());
+        assert!(Grant::new([Capability::TerminalProcessControl]).executes());
+        assert!(!Grant::new([Capability::TerminalLayoutControl]).executes());
         assert!(!Grant::new([Capability::ContainerRead, Capability::Interface]).executes());
     }
 }

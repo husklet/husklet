@@ -65,6 +65,7 @@ export declare const protocolCoverage: Readonly<{
         terminal: string[];
         files: string[];
         state: string[];
+        preferences: string[];
         extensions: string[];
         notifications: string[];
         interfaceEvents: string[];

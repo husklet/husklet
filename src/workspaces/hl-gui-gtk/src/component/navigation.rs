@@ -20,12 +20,34 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::StepConnector => connector().upcast(),
         Tag::NavigationRail => rail().upcast(),
         Tag::NavigationRailItem | Tag::BottomNavigationAction => destination().upcast(),
+        Tag::NavigationMenu => menu().upcast(),
+        Tag::NavigationMenuItem => menu_item().upcast(),
         Tag::BottomNavigation => bar().upcast(),
         // Accordion and Expander are the last navigation tags routed here: both
         // are one disclosure, and an accordion is the disclosure that names its
         // summary and its details as parts.
         _ => gtk::Expander::new(None).upcast(),
     }
+}
+
+fn menu() -> gtk::Box {
+    let widget = axis::column(2);
+    widget.set_hexpand(true);
+    widget
+}
+
+fn menu_item() -> gtk::ToggleButton {
+    let widget = gtk::ToggleButton::new();
+    widget.set_has_frame(false);
+    widget.set_hexpand(true);
+    widget.set_halign(gtk::Align::Fill);
+    let content = axis::row(8);
+    content.append(&slot::emblem_image());
+    let caption = slot::caption_label();
+    caption.set_hexpand(true);
+    content.append(&caption);
+    widget.set_child(Some(&content));
+    widget
 }
 
 fn trail(spacing: i32) -> gtk::Box {

@@ -41,6 +41,7 @@ pub const CAPACITY: usize = 16;
 pub enum Request {
     AttachContainer {
         id: String,
+        generation: u64,
         command: Vec<String>,
     },
     /// Every tab and the panes in it.
@@ -255,9 +256,10 @@ impl Relay {
 }
 
 impl TerminalSurface for Relay {
-    fn attach_container(&self, id: &str, command: &[String]) -> Result<String, HostError> {
+    fn attach_container(&self, id: &str, generation: u64, command: &[String]) -> Result<String, HostError> {
         self.slot(Request::AttachContainer {
             id: id.to_owned(),
+            generation,
             command: command.to_vec(),
         })
     }

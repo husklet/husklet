@@ -1,16 +1,22 @@
 //! Files beneath one workspace's storage directory.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 
-use hl_extension::port::{DirectoryPage, Entry, FileInventory, FileRange, HostError, WorkspaceFiles};
 use hl_extension::RelativePath;
+use hl_extension::port::{
+    DirectoryPage, Entry, FileChange, FileChangeKind, FileChangePage, FileInventory, FileRange, HostError,
+    WorkspaceFiles,
+};
+use notify::{RecursiveMode, Watcher as _};
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -24,12 +30,34 @@ pub struct WorkspaceDirectory {
     root_device: u64,
     root_inode: u64,
     mutations: Mutex<()>,
+    journals: Mutex<BTreeMap<Vec<hl_extension::FilesystemSelector>, FileJournal>>,
+    watcher: Mutex<WatcherState>,
+}
+
+struct WatcherState {
+    _watcher: notify::RecommendedWatcher,
+    events: Receiver<notify::Result<notify::Event>>,
+    overflow: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct FileJournal {
+    revision: u64,
+    oldest: u64,
+    entries: BTreeMap<RelativePath, Entry>,
+    changes: VecDeque<FileChange>,
+    initialized: bool,
+    scan_truncated: bool,
+    event_overflow: bool,
+    pending_invalidations: std::collections::BTreeSet<RelativePath>,
 }
 
 const PATH_DEPTH_LIMIT: usize = 128;
 const READ_BYTES_LIMIT: usize = (1 << 20) - (8 << 10);
 const LIST_ENTRIES_LIMIT: usize = 4096;
 const LIST_PATH_BYTES_LIMIT: usize = 512 << 10;
+const JOURNAL_ENTRIES_LIMIT: usize = 16_384;
+const JOURNAL_HISTORY_LIMIT: usize = 4_096;
 
 impl WorkspaceDirectory {
     /// Roots the port at `root`, creating it if it does not exist.
@@ -45,11 +73,35 @@ impl WorkspaceDirectory {
         std::fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
         let metadata = std::fs::metadata(&root)?;
+        let (sender, events) = mpsc::sync_channel(JOURNAL_HISTORY_LIMIT);
+        let overflow = Arc::new(AtomicBool::new(false));
+        let callback_overflow = Arc::clone(&overflow);
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if matches!(
+                event.as_ref().map(|event| &event.kind),
+                Ok(notify::EventKind::Access(_))
+            ) {
+                return;
+            }
+            if sender.try_send(event).is_err() {
+                callback_overflow.store(true, Ordering::Release);
+            }
+        })
+        .map_err(io::Error::other)?;
+        watcher
+            .watch(&root, RecursiveMode::Recursive)
+            .map_err(io::Error::other)?;
         Ok(Self {
             root,
             root_device: metadata.dev(),
             root_inode: metadata.ino(),
             mutations: Mutex::new(()),
+            journals: Mutex::new(BTreeMap::new()),
+            watcher: Mutex::new(WatcherState {
+                _watcher: watcher,
+                events,
+                overflow,
+            }),
         })
     }
 
@@ -179,10 +231,173 @@ impl WorkspaceDirectory {
             }
         })
     }
+
+    fn scan(
+        &self,
+        roots: &[hl_extension::FilesystemSelector],
+    ) -> Result<(BTreeMap<RelativePath, Entry>, bool), HostError> {
+        let mut pending = roots
+            .iter()
+            .map(|selector| match selector {
+                hl_extension::FilesystemSelector::Exact { exact } => (exact.clone(), false),
+                hl_extension::FilesystemSelector::Subtree { subtree } => (subtree.clone(), true),
+            })
+            .collect::<Vec<_>>();
+        pending.reverse();
+        let mut entries = BTreeMap::new();
+        while let Some((path, descend)) = pending.pop() {
+            if path.parts().is_empty() {
+                if descend {
+                    for child in self.list(&path)?.into_iter().rev() {
+                        pending.push((child.path, true));
+                    }
+                }
+                continue;
+            }
+            let entry = match self.stat(&path) {
+                Ok(entry) => entry,
+                Err(HostError::Absent(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            let directory = entry.directory;
+            entries.insert(path.clone(), entry);
+            if entries.len() >= JOURNAL_ENTRIES_LIMIT {
+                return Ok((entries, true));
+            }
+            if directory && descend {
+                let children = self.list(&path)?;
+                for child in children.into_iter().rev() {
+                    pending.push((child.path, true));
+                }
+            }
+        }
+        Ok((entries, false))
+    }
+
+    fn drain_watcher(&self) -> Result<(std::collections::BTreeSet<RelativePath>, bool), HostError> {
+        let watcher = self
+            .watcher
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem watcher lock is poisoned".into()))?;
+        let mut paths = std::collections::BTreeSet::new();
+        let mut overflow = watcher.overflow.swap(false, Ordering::AcqRel);
+        while let Ok(event) = watcher.events.try_recv() {
+            match event {
+                Ok(event) => {
+                    for path in event.paths {
+                        let Ok(relative) = path.strip_prefix(&self.root) else {
+                            overflow = true;
+                            continue;
+                        };
+                        let Some(relative) = relative.to_str() else {
+                            overflow = true;
+                            continue;
+                        };
+                        if relative.is_empty() {
+                            continue;
+                        }
+                        match RelativePath::new(relative) {
+                            Ok(path) => {
+                                paths.insert(path);
+                            }
+                            Err(_) => overflow = true,
+                        }
+                    }
+                }
+                Err(_) => overflow = true,
+            }
+        }
+        Ok((paths, overflow))
+    }
+
+    fn refresh_journal(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<(), HostError> {
+        let (invalidated, watcher_overflow) = self.drain_watcher()?;
+        let (next, scan_truncated) = self.scan(roots)?;
+        let mut journals = self
+            .journals
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem journal lock is poisoned".into()))?;
+        let mut key = roots.to_vec();
+        key.sort();
+        key.dedup();
+        for (selectors, journal) in journals.iter_mut() {
+            journal.event_overflow |= watcher_overflow;
+            journal.pending_invalidations.extend(
+                invalidated
+                    .iter()
+                    .filter(|path| selectors.iter().any(|selector| selector.permits(path)))
+                    .cloned(),
+            );
+        }
+        let journal = journals.entry(key).or_default();
+        if !journal.initialized {
+            journal.entries = next;
+            journal.initialized = true;
+            journal.scan_truncated = scan_truncated;
+            journal.event_overflow |= watcher_overflow;
+            journal.pending_invalidations.clear();
+            return Ok(());
+        }
+        let mut changes = BTreeMap::new();
+        for (path, entry) in &next {
+            match journal.entries.get(path) {
+                None => {
+                    changes.insert(path.clone(), (FileChangeKind::Create, Some(entry.clone())));
+                }
+                Some(before) if before != entry => {
+                    changes.insert(path.clone(), (FileChangeKind::Modify, Some(entry.clone())));
+                }
+                Some(_) => {}
+            }
+        }
+        for path in journal.entries.keys() {
+            if !next.contains_key(path) {
+                changes.insert(path.clone(), (FileChangeKind::Remove, None));
+            }
+        }
+        journal.pending_invalidations.extend(
+            invalidated
+                .into_iter()
+                .filter(|path| roots.iter().any(|selector| selector.permits(path))),
+        );
+        for path in std::mem::take(&mut journal.pending_invalidations) {
+            changes.entry(path).or_insert((FileChangeKind::Invalidate, None));
+        }
+        for (path, (kind, entry)) in changes {
+            journal.revision = journal.revision.saturating_add(1);
+            let revision = journal.revision;
+            journal.changes.push_back(FileChange {
+                revision,
+                kind,
+                path,
+                entry,
+            });
+            if journal.changes.len() > JOURNAL_HISTORY_LIMIT {
+                if let Some(discarded) = journal.changes.pop_front() {
+                    journal.oldest = discarded.revision;
+                }
+            }
+        }
+        journal.entries = next;
+        journal.scan_truncated = scan_truncated;
+        journal.event_overflow |= watcher_overflow;
+        Ok(())
+    }
 }
 
 impl WorkspaceFiles for WorkspaceDirectory {
     fn inventory(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<FileInventory, HostError> {
+        self.refresh_journal(roots)?;
+        let revision = {
+            let journals = self
+                .journals
+                .lock()
+                .map_err(|_| HostError::Failed("filesystem journal lock is poisoned".into()))?;
+            let mut key = roots.to_vec();
+            key.sort();
+            key.dedup();
+            journals.get(&key).expect("refresh creates the scoped journal").revision
+        };
         const LIMIT: usize = 256;
         const PATH_BYTES_LIMIT: usize = 256 * 1024;
         let mut pending = roots
@@ -226,10 +441,64 @@ impl WorkspaceFiles for WorkspaceDirectory {
                 pending.push((child.path, true));
             }
         }
-        Ok(FileInventory {
+        let inventory = FileInventory {
             entries: entries.into_values().collect(),
             complete,
             coalesced: 0,
+            revision,
+        };
+        if inventory.complete {
+            let mut journals = self
+                .journals
+                .lock()
+                .map_err(|_| HostError::Failed("filesystem journal lock is poisoned".into()))?;
+            let mut key = roots.to_vec();
+            key.sort();
+            key.dedup();
+            if let Some(journal) = journals.get_mut(&key) {
+                journal.event_overflow = false;
+            }
+        }
+        Ok(inventory)
+    }
+
+    fn changes_since(
+        &self,
+        roots: &[hl_extension::FilesystemSelector],
+        after: u64,
+        limit: usize,
+    ) -> Result<FileChangePage, HostError> {
+        self.refresh_journal(roots)?;
+        let journals = self
+            .journals
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem journal lock is poisoned".into()))?;
+        let mut key = roots.to_vec();
+        key.sort();
+        key.dedup();
+        let journal = journals.get(&key).expect("refresh creates the scoped journal");
+        let truncated =
+            journal.scan_truncated || journal.event_overflow || after < journal.oldest || after > journal.revision;
+        let changes = if truncated {
+            Vec::new()
+        } else {
+            journal
+                .changes
+                .iter()
+                .filter(|change| change.revision > after)
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let next = changes.last().map_or(journal.revision, |change| change.revision);
+        let more = journal.changes.iter().any(|change| change.revision > next);
+        let next = if more { next } else { journal.revision };
+        Ok(FileChangePage {
+            more: !truncated && more,
+            changes,
+            next: if truncated { journal.revision } else { next },
+            current: journal.revision,
+            truncated,
         })
     }
 
@@ -945,6 +1214,7 @@ mod tests {
     use super::WorkspaceDirectory;
     use hl_extension::port::{HostError, WorkspaceFiles};
     use hl_extension::{FilesystemSelector, RelativePath};
+    use std::sync::atomic::Ordering;
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -952,6 +1222,90 @@ mod tests {
 
     fn subtree(value: &str) -> FilesystemSelector {
         FilesystemSelector::Subtree { subtree: path(value) }
+    }
+
+    #[test]
+    fn watcher_overflow_is_explicit_until_a_complete_inventory_rebases_the_scope() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let files = WorkspaceDirectory::new(&root).unwrap();
+        let roots = [subtree("docs")];
+        let baseline = files.changes_since(&roots, 0, 32).unwrap();
+        files.watcher.lock().unwrap().overflow.store(true, Ordering::Release);
+        let overflow = files.changes_since(&roots, baseline.next, 32).unwrap();
+        assert!(overflow.truncated);
+        assert!(overflow.changes.is_empty());
+        let rebased = files.inventory(&roots).unwrap();
+        assert!(rebased.complete);
+        assert!(!files.changes_since(&roots, rebased.revision, 32).unwrap().truncated);
+    }
+
+    #[test]
+    fn complete_inventory_cursor_bridges_without_losing_a_later_change() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/readme.md"), b"before").unwrap();
+        let files = WorkspaceDirectory::new(&root).unwrap();
+        let roots = [subtree("docs")];
+
+        let inventory = files.inventory(&roots).unwrap();
+        assert!(inventory.complete);
+        std::fs::write(root.join("docs/readme.md"), b"after").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        let page = files.changes_since(&roots, inventory.revision, 32).unwrap();
+        assert!(!page.truncated);
+        assert!(
+            page.changes
+                .iter()
+                .any(|change| { change.revision > inventory.revision && change.path.as_str() == "docs/readme.md" })
+        );
+    }
+
+    #[test]
+    fn one_scoped_reader_cannot_drain_another_readers_watcher_invalidations() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("alpha")).unwrap();
+        std::fs::create_dir_all(root.join("beta")).unwrap();
+        let files = WorkspaceDirectory::new(&root).unwrap();
+        let alpha = [subtree("alpha")];
+        let beta = [subtree("beta")];
+        files.changes_since(&alpha, 0, 32).unwrap();
+        files.changes_since(&beta, 0, 32).unwrap();
+        std::fs::write(root.join("alpha/transient"), b"x").unwrap();
+        std::fs::remove_file(root.join("alpha/transient")).unwrap();
+        std::fs::write(root.join("beta/transient"), b"x").unwrap();
+        std::fs::remove_file(root.join("beta/transient")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let alpha_page = files.changes_since(&alpha, 0, 32).unwrap();
+        let beta_page = files.changes_since(&beta, 0, 32).unwrap();
+        assert!(
+            alpha_page
+                .changes
+                .iter()
+                .any(|change| change.path.as_str() == "alpha/transient")
+        );
+        assert!(
+            beta_page
+                .changes
+                .iter()
+                .any(|change| change.path.as_str() == "beta/transient")
+        );
+        assert!(
+            alpha_page
+                .changes
+                .iter()
+                .all(|change| !change.path.as_str().starts_with("beta/"))
+        );
+        assert!(
+            beta_page
+                .changes
+                .iter()
+                .all(|change| !change.path.as_str().starts_with("alpha/"))
+        );
     }
 
     #[test]
@@ -1140,10 +1494,12 @@ mod tests {
         let whole = files
             .inventory(&[subtree("source"), subtree("private")])
             .expect("declared-root inventory");
-        assert!(whole
-            .entries
-            .iter()
-            .any(|entry| entry.path.to_string() == "private/key"));
+        assert!(
+            whole
+                .entries
+                .iter()
+                .any(|entry| entry.path.to_string() == "private/key")
+        );
         for index in 0..260 {
             std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file");
         }
@@ -1238,15 +1594,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
-        assert!(std::fs::read_dir(temporary.path())
-            .expect("directory listing")
-            .all(|entry| {
-                !entry
-                    .expect("entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".husklet-write-")
-            }));
+        assert!(
+            std::fs::read_dir(temporary.path())
+                .expect("directory listing")
+                .all(|entry| {
+                    !entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".husklet-write-")
+                })
+        );
     }
 
     #[test]
@@ -1364,10 +1722,12 @@ mod tests {
         .expect("atomic publication");
 
         assert_eq!(std::fs::read(&target).expect("published contents"), b"new bytes");
-        assert!(!std::fs::symlink_metadata(&target)
-            .expect("published metadata")
-            .file_type()
-            .is_symlink());
+        assert!(
+            !std::fs::symlink_metadata(&target)
+                .expect("published metadata")
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(std::fs::read(&outside).expect("outside contents"), b"outside bytes");
     }
 
@@ -1425,10 +1785,12 @@ mod tests {
 
         assert_eq!(std::fs::read(&outside).expect("outside"), b"outside");
         assert!(!root.join("remove-link").exists());
-        assert!(std::fs::symlink_metadata(root.join("renamed-link"))
-            .expect("renamed link")
-            .file_type()
-            .is_symlink());
+        assert!(
+            std::fs::symlink_metadata(root.join("renamed-link"))
+                .expect("renamed link")
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

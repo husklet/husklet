@@ -29,6 +29,7 @@ const groups = new Map([
   ['Terminal and panes', []],
   ['Files', []],
   ['Private extension state', []],
+  ['Extension preferences', []],
   ['Images', []],
   ['Networks', []],
   ['Volumes', []],
@@ -53,6 +54,7 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             terminal: 'Terminal and panes',
             files: 'Files',
             state: 'Private extension state',
+            preferences: 'Extension preferences',
             images: 'Images',
             networks: 'Networks',
             volumes: 'Volumes',
@@ -62,33 +64,42 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
   assert(group, `no documentation group for ${wire}`);
   groups
     .get(group)
-    .push(wire === 'notification_publish'
-      ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
-      : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
+    .push(
+      wire === 'notification_publish'
+        ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
+        : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`,
+    );
 }
 groups
   .get('Terminal and panes')
   .push(
+    "- Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.",
     '- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.',
     '- `host.terminal.readAll(...)` — discovers panes once and converts each to terminal transcript or bounded semantic XML, reports incomplete discovery, and refuses cursor races; requires `panes:observe`, `terminals:output`, and `panes:semantic-read` for mixed workspaces.',
     '- `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.',
     '- `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `panes:observe`, `panes:semantic-control`, and the corresponding read grant.',
-    '- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe` and `terminals:control`.',
-    '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe` and `terminals:control`.',
-    '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe` and `terminals:control`.',
-    '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:control`.',
-    '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:control`.',
-    '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-    '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-    '- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.',
-    '- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:control`.',
-    '- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe` and `terminals:control`.',
+    '- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
+    '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
+    '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
+    '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
+    '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
+    '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
+    '- `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
+    '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:process-control`.',
+    '- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:layout-control`.',
+    '- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:layout-control`.',
+    '- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
   );
 groups
   .get('Private extension state')
   .push(
     '- `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.',
     '- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.',
+  );
+groups
+  .get('Extension preferences')
+  .push(
+    '- Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.',
   );
 groups
   .get('Semantics')
@@ -102,18 +113,19 @@ groups
     '- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.',
-    '- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.',
+    '- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:remove`.',
     '- `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, send its reviewed immutable digest as commit CAS authority, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.',
-    '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.',
-    '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.',
-    '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.',
-    '- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.',
+    '- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:lifecycle`.',
+    '- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:lifecycle`.',
+    '- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:remove`.',
+    '- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:lifecycle`.',
   );
 groups
   .get('Processes and executions')
   .push(
     '- `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.',
-    '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.',
+    '- `host.containers.execStreaming(id, generation, options, onPage)` — executes by immutable container ID, delivers bounded output pages with callback backpressure, cancels on abort or callback failure, and returns the execution ID and completed summary without auto-removing the record.',
+    '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:execute`.',
   );
 
 const topicCapability = Object.fromEntries(

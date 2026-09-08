@@ -76,6 +76,10 @@ pub const VACANCY: &str = "no extension is installed in this workspace";
 /// joins them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Report {
+    /// A new sidecar generation is starting. Its frame sequence and node
+    /// identities begin again, so retained authority from the old process
+    /// must be discarded before accepting its first frame.
+    Reset,
     /// A description of what to draw.
     Frame(hl_extension::SurfaceFrame),
     /// A change to a windowed source the extension's tables draw from.
@@ -711,6 +715,7 @@ fn run<S: Supply>(supply: &Arc<S>, hall: &Hall, plan: &Plan) {
         return;
     }
     while !hall.halted() {
+        hall.deliver(Report::Reset);
         match session(supply, hall, plan) {
             Passage::Stopped => break,
             Passage::Renewal => continue,

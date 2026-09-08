@@ -56,8 +56,10 @@ export function ContainerRename({ api, container, reload, blocked }: ContainerRe
     <Column gap={1}>
       <Heading label={'Rename container'} scale={'caption'} />
       <Text
-        label={`Current name: ${current || '(unnamed)'}. Immutable ID: ${container.id}`}
+        label={`Current name · ${current || '(unnamed)'}  ·  Container ID · ${shortId(container.id)}`}
         color={'text-dim'}
+        tooltip={`Immutable container ID ${container.id}`}
+        width="fill"
         wrap={true}
       />
       <Row gap={1} wrap={true} align={'center'}>

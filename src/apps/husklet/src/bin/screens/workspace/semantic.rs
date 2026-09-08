@@ -198,6 +198,8 @@ impl Registry {
         let entry = entries.get(&node).ok_or(Refusal::Absent(node))?;
         if entry.path.starts_with("settings/") {
             Ok(hl_extension::Capability::WorkspaceControl)
+        } else if entry.path.starts_with("extensions/") && entry.path.ends_with("/Remove") {
+            Ok(hl_extension::Capability::ExtensionRemove)
         } else if entry.path.starts_with("extensions/") {
             Ok(hl_extension::Capability::ExtensionControl)
         } else {
@@ -467,8 +469,16 @@ mod tests {
             &[ActionKind::Invoke],
             Rc::new(|_, _| {}),
         );
-        let extension = registry.register(
+        let extension_control = registry.register(
             "extensions/installed/demo/Disable",
+            "button",
+            None,
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(|_, _| {}),
+        );
+        let extension_remove = registry.register(
+            "extensions/installed/demo/Remove",
             "button",
             None,
             None,
@@ -480,8 +490,12 @@ mod tests {
             Ok(hl_extension::Capability::WorkspaceControl)
         );
         assert_eq!(
-            registry.requirement(extension),
+            registry.requirement(extension_control),
             Ok(hl_extension::Capability::ExtensionControl)
+        );
+        assert_eq!(
+            registry.requirement(extension_remove),
+            Ok(hl_extension::Capability::ExtensionRemove)
         );
     }
 }

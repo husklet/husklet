@@ -68,9 +68,42 @@ fn vacancy() -> gtk::Box {
     widget.set_valign(gtk::Align::Center);
     widget.set_halign(gtk::Align::Center);
     widget.append(&slot::emblem_image());
-    widget.append(&slot::caption_label());
-    widget.append(&slot::detail_label());
+    let caption = slot::caption_label();
+    caption.set_wrap(true);
+    caption.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    caption.set_max_width_chars(56);
+    widget.append(&caption);
+    let detail = slot::detail_label();
+    detail.set_wrap(true);
+    detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    detail.set_max_width_chars(56);
+    widget.append(&detail);
     widget
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vacancy;
+    use gtk::prelude::*;
+
+    #[test]
+    fn empty_state_text_wraps_in_narrow_pages() {
+        if gtk::init().is_err() || gtk::gdk::Display::default().is_none() {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+        let state = vacancy();
+        let labels: Vec<gtk::Label> = [
+            state.first_child().and_then(|widget| widget.next_sibling()),
+            state.last_child(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|widget| widget.downcast().ok())
+        .collect();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.iter().all(gtk::Label::wraps));
+    }
 }
 
 /// One measured figure over its caption. The figure is the value slot, so a

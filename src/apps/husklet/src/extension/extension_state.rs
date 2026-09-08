@@ -6,16 +6,19 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hl_extension::port::{ExtensionState, ExtensionStateStore, HostError};
+use hl_extension::port::{ExtensionPreferences, ExtensionState, ExtensionStateStore, HostError, PreferenceValue};
 use sha2::Digest as _;
 
 const MAX_STATE_BYTES: usize = 1024 * 1024;
+const MAX_PREFERENCE_FILE_BYTES: usize = 72 * 1024;
+const MAX_PREFERENCES: usize = 64;
 static TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct StateBlob {
     directory: OwnedFd,
     name: CString,
     lock_name: CString,
+    preferences_name: CString,
 }
 
 impl StateBlob {
@@ -25,12 +28,14 @@ impl StateBlob {
         let extensions = child_directory(&root, c"extensions")?;
         let directory = child_directory(&extensions, c"state")?;
         rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o700))?;
+        let preferences_name = CString::new(format!("{name}.preferences")).expect("extension names are NUL-free");
         let lock_name = CString::new(format!(".{name}.state.lock")).expect("extension names are NUL-free");
         let name = CString::new(format!("{name}.state")).expect("extension names are NUL-free");
         Ok(Self {
             directory,
             name,
             lock_name,
+            preferences_name,
         })
     }
 
@@ -41,7 +46,12 @@ impl StateBlob {
     pub fn purge(&self) -> Result<(), HostError> {
         let lock = self.lock()?;
         fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
-        self.remove_unlocked()
+        self.remove_unlocked()?;
+        match rustix::fs::unlinkat(&self.directory, &self.preferences_name, rustix::fs::AtFlags::empty()) {
+            Ok(()) => rustix::fs::fsync(&self.directory).map_err(Self::failure),
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(Self::failure(error)),
+        }
     }
 
     fn remove_unlocked(&self) -> Result<(), HostError> {
@@ -105,6 +115,85 @@ impl StateBlob {
         }
         let identity = identity(&contents);
         Ok(ExtensionState { identity, contents })
+    }
+
+    fn read_preferences_unlocked(&self) -> Result<ExtensionPreferences, HostError> {
+        let descriptor = match rustix::fs::openat(
+            &self.directory,
+            &self.preferences_name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => {
+                return Ok(ExtensionPreferences {
+                    revision: 0,
+                    entries: Vec::new(),
+                });
+            }
+            Err(error) => return Err(Self::failure(error)),
+        };
+        let status = rustix::fs::fstat(&descriptor).map_err(Self::failure)?;
+        if rustix::fs::FileType::from_raw_mode(status.st_mode) != rustix::fs::FileType::RegularFile
+            || status.st_size < 0
+            || status.st_size as usize > MAX_PREFERENCE_FILE_BYTES
+        {
+            return Err(HostError::Failed(
+                "extension preferences are invalid or oversized".into(),
+            ));
+        }
+        let mut bytes = Vec::with_capacity(status.st_size as usize);
+        std::fs::File::from(descriptor)
+            .take((MAX_PREFERENCE_FILE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(Self::failure)?;
+        let preferences: ExtensionPreferences = serde_json::from_slice(&bytes).map_err(Self::failure)?;
+        if preferences.entries.len() > MAX_PREFERENCES {
+            return Err(HostError::Failed(
+                "extension preferences exceed the 64-entry quota".into(),
+            ));
+        }
+        Ok(preferences)
+    }
+
+    fn publish_preferences_unlocked(&self, preferences: &ExtensionPreferences) -> Result<(), HostError> {
+        let bytes = serde_json::to_vec(preferences).map_err(Self::failure)?;
+        if bytes.len() > MAX_PREFERENCE_FILE_BYTES {
+            return Err(HostError::Conflict(
+                "extension preferences exceed their bounded storage quota".into(),
+            ));
+        }
+        let temporary = CString::new(format!(
+            ".{}.{}-{}.tmp",
+            self.preferences_name.to_string_lossy(),
+            std::process::id(),
+            TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+        .expect("generated preference filenames are NUL-free");
+        let descriptor = rustix::fs::openat(
+            &self.directory,
+            &temporary,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map_err(Self::failure)?;
+        let mut file = std::fs::File::from(descriptor);
+        let prepared = file.write_all(&bytes).and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = prepared {
+            let _ = rustix::fs::unlinkat(&self.directory, &temporary, rustix::fs::AtFlags::empty());
+            return Err(Self::failure(error));
+        }
+        let published = rustix::fs::renameat(&self.directory, &temporary, &self.directory, &self.preferences_name)
+            .and_then(|()| rustix::fs::fsync(&self.directory));
+        if published.is_err() {
+            let _ = rustix::fs::unlinkat(&self.directory, &temporary, rustix::fs::AtFlags::empty());
+        }
+        published.map_err(Self::failure)
     }
 }
 
@@ -173,6 +262,57 @@ impl ExtensionStateStore for StateBlob {
         }
         self.remove_unlocked()
     }
+
+    fn preferences(&self) -> Result<ExtensionPreferences, HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_shared(&lock).map_err(Self::failure)?;
+        self.read_preferences_unlocked()
+    }
+
+    fn preference_set(&self, observed: u64, key: &str, value: &PreferenceValue) -> Result<u64, HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        let mut preferences = self.read_preferences_unlocked()?;
+        if preferences.revision != observed {
+            return Err(HostError::Conflict(
+                "extension preferences changed after they were read".into(),
+            ));
+        }
+        if let Some(position) = preferences.entries.iter().position(|(current, _)| current == key) {
+            preferences.entries[position].1.clone_from(value);
+        } else if preferences.entries.len() < MAX_PREFERENCES {
+            preferences.entries.push((key.to_owned(), value.clone()));
+        } else {
+            return Err(HostError::Conflict(
+                "extension preferences are limited to 64 entries".into(),
+            ));
+        }
+        preferences.entries.sort_by(|left, right| left.0.cmp(&right.0));
+        preferences.revision = preferences
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| HostError::Conflict("extension preference revision is exhausted".into()))?;
+        self.publish_preferences_unlocked(&preferences)?;
+        Ok(preferences.revision)
+    }
+
+    fn preference_remove(&self, observed: u64, key: &str) -> Result<u64, HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        let mut preferences = self.read_preferences_unlocked()?;
+        if preferences.revision != observed {
+            return Err(HostError::Conflict(
+                "extension preferences changed after they were read".into(),
+            ));
+        }
+        preferences.entries.retain(|(current, _)| current != key);
+        preferences.revision = preferences
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| HostError::Conflict("extension preference revision is exhausted".into()))?;
+        self.publish_preferences_unlocked(&preferences)?;
+        Ok(preferences.revision)
+    }
 }
 
 fn open_directory(parent: impl AsFd, name: impl rustix::path::Arg) -> io::Result<OwnedFd> {
@@ -210,12 +350,12 @@ fn identity(contents: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
 
     use hl_extension::port::ExtensionStateStore as _;
 
-    use super::{StateBlob, MAX_STATE_BYTES};
+    use super::{MAX_STATE_BYTES, StateBlob};
 
     fn blob(root: &Path, name: &str) -> StateBlob {
         StateBlob::new(root, &hl_extension::ExtensionName::new(name).unwrap()).unwrap()

@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
-    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
-    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
+    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
+    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -121,6 +121,61 @@ fn workspace_environment_patch(patch: &crate::port::WorkspaceEnvironmentPatch) -
             detail: "workspace environment patch must contain at most 128 unique, disjoint, bounded names and values"
                 .into(),
         });
+    }
+    Ok(())
+}
+
+const PREFERENCE_ENTRIES: usize = 64;
+const PREFERENCE_KEY_BYTES: usize = 64;
+const PREFERENCE_STRING_BYTES: usize = 1024;
+
+fn validate_preference_key(key: &str) -> Result<(), Failure> {
+    if key.is_empty()
+        || key.len() > PREFERENCE_KEY_BYTES
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(Failure::Conflict {
+            detail: "preference keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_preference(key: &str, value: &crate::port::PreferenceValue) -> Result<(), Failure> {
+    validate_preference_key(key)?;
+    match value {
+        crate::port::PreferenceValue::Number(value) if value.unsigned_abs() > crate::JSON_SAFE_INTEGER_MAX => {
+            Err(Failure::Conflict {
+                detail: "preference numbers must be JavaScript-safe integers".into(),
+            })
+        }
+        crate::port::PreferenceValue::String(value) if value.len() > PREFERENCE_STRING_BYTES => {
+            Err(Failure::Conflict {
+                detail: "preference strings are limited to 1024 bytes".into(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_preferences(preferences: &crate::port::ExtensionPreferences) -> Result<(), Failure> {
+    if preferences.entries.len() > PREFERENCE_ENTRIES {
+        return Err(Failure::Failed {
+            detail: "host returned more than 64 preferences".into(),
+        });
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    for (key, value) in &preferences.entries {
+        validate_preference(key, value).map_err(|_| Failure::Failed {
+            detail: "host returned invalid extension preferences".into(),
+        })?;
+        if !keys.insert(key) {
+            return Err(Failure::Failed {
+                detail: "host returned duplicate preference keys".into(),
+            });
+        }
     }
     Ok(())
 }
@@ -254,7 +309,7 @@ impl Session {
             Ok(())
         } else {
             Err(Failure::Denied {
-                capability: Capability::ContainerControl.as_str().into(),
+                capability: Capability::ContainerCreate.as_str().into(),
                 detail: "container image use is outside the extension's consented image scope".into(),
             })
         }
@@ -522,24 +577,12 @@ impl Session {
             Request::ContainerAttachTerminal { id, command } => {
                 immutable_identity(id, &[32, 64], "container")?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
-                let immutable_scope = self.containers.all()
-                    || self
-                        .containers
-                        .selectors
-                        .iter()
-                        .any(|selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id));
-                if !immutable_scope {
-                    return Err(Failure::Denied {
-                        capability: Capability::ContainerAttach.as_str().into(),
-                        detail: "name-scoped terminal attachment is unsupported until its worker handoff is generation-bound".into(),
-                    });
-                }
                 validate_terminal_command(command)?;
                 let port = self
                     .peer
                     .authority()
                     .port(Capability::ContainerAttach, services.terminal)?;
-                Ok(Reply::Identity(port.attach_container(&target.id, command)?))
+                Ok(Reply::Identity(port.attach_container(&target.id, target.generation, command)?))
             }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
@@ -627,6 +670,7 @@ impl Session {
                     .map_err(Failure::from)
             }
             Request::FilesystemInventory
+            | Request::FilesystemChanges { .. }
             | Request::FilesystemList { .. }
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
@@ -640,9 +684,12 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
-            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => {
-                self.state(request, services)
-            }
+            Request::StateRead
+            | Request::StateWrite { .. }
+            | Request::StateClear { .. }
+            | Request::PreferenceRead
+            | Request::PreferenceSet { .. }
+            | Request::PreferenceRemove { .. } => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -763,7 +810,7 @@ impl Session {
             validate_container_create(spec)?;
             if !self.containers.create {
                 return Err(Failure::Denied {
-                    capability: Capability::ContainerControl.as_str().into(),
+                    capability: Capability::ContainerCreate.as_str().into(),
                     detail: "container creation was not consented".into(),
                 });
             }
@@ -791,10 +838,7 @@ impl Session {
                 self.permit_network_reference(network, Capability::NetworkWrite)?;
             }
         }
-        let port = self
-            .peer
-            .authority()
-            .port(Capability::ContainerControl, services.control)?;
+        let port = self.peer.authority().port(request.capability(), services.control)?;
         match request {
             Request::ContainerCreate { spec } => {
                 validate_container_create(spec)?;
@@ -1288,10 +1332,23 @@ impl Session {
         if let Request::TerminalReadPane { slot, lines } = request {
             return self.text(slot, *lines, services);
         }
-        let port = self
-            .peer
-            .authority()
-            .port(Capability::TerminalControl, services.terminal)?;
+        // Compound operations must pass every check before the host port is
+        // obtained: opening/closing changes layout and process lifetime, while
+        // occupant switching replaces what runs in an existing slot.
+        if matches!(
+            request,
+            Request::TerminalOpenTab { .. }
+                | Request::TerminalSplit { .. }
+                | Request::TerminalSplitObserved { .. }
+                | Request::TerminalClosePane { .. }
+                | Request::TerminalClosePaneObserved { .. }
+                | Request::TerminalSwitchOccupant { .. }
+                | Request::TerminalSwitchOccupantObserved { .. }
+        ) {
+            self.peer.authority().permit(Capability::TerminalLayoutControl)?;
+            self.peer.authority().permit(Capability::TerminalProcessControl)?;
+        }
+        let port = self.peer.authority().port(request.capability(), services.terminal)?;
         Self::command(request, port.port())
     }
 
@@ -1411,6 +1468,19 @@ impl Session {
             Request::FilesystemInventory => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::FileInventory(port.inventory(&self.filesystem.read)?))
+            }
+            Request::FilesystemChanges { after, limit } => {
+                if *limit == 0 || *limit > 256 {
+                    return Err(Failure::Failed {
+                        detail: "filesystem change page limit must be from 1 through 256".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::FileChanges(port.changes_since(
+                    &self.filesystem.read,
+                    *after,
+                    usize::from(*limit),
+                )?))
             }
             Request::FilesystemList { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
@@ -1605,6 +1675,23 @@ impl Session {
             Request::StateClear { observed } => {
                 exact_state_identity(observed)?;
                 port.clear(observed).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::PreferenceRead => {
+                let preferences = port.preferences()?;
+                validate_preferences(&preferences)?;
+                Ok(Reply::Preferences(preferences))
+            }
+            Request::PreferenceSet { observed, key, value } => {
+                validate_preference(key, value)?;
+                port.preference_set(*observed, key, value)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
+            }
+            Request::PreferenceRemove { observed, key } => {
+                validate_preference_key(key)?;
+                port.preference_remove(*observed, key)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "extension state".into(),

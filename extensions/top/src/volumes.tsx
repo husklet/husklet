@@ -10,8 +10,8 @@ import {
   EmptyState,
   Entry,
   Heading,
-  ObjectInspector,
   ResourceState,
+  RecoveryState,
   Row,
   Scroll,
   Spinner,
@@ -19,11 +19,9 @@ import {
   type VolumeSummary,
   type WorkspaceApi,
 } from '@husklet/react';
-const RESOURCE_WIDTH = { chars: 68 } as const;
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 type Inspection = {
   name: string;
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -129,29 +127,39 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Row gap={1} width={RESOURCE_WIDTH}>
+      <Column gap={1} align="start">
         <Entry
           value={name}
           placeholder="Volume name"
+          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
           enabled={creation.state !== 'loading'}
           onChange={(event) => {
             setName(String(event.value ?? ''));
             setCreation({ state: 'idle', name: '', error: null });
           }}
         />
-        <Button
-          label={
-            creation.state === 'loading'
-              ? 'Creating…'
-              : creation.state === 'error'
-                ? 'Retry create'
-                : 'Create'
-          }
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => void create()}
-        />
-        <Button label="Refresh" enabled={creation.state !== 'loading'} onInvoke={resource.reload} />
-      </Row>
+        <Row gap={1} wrap>
+          <Button
+            variant="filled"
+            tone="accent"
+            label={
+              creation.state === 'loading'
+                ? 'Creating…'
+                : creation.state === 'error'
+                  ? 'Retry create'
+                  : 'Create'
+            }
+            enabled={creation.state !== 'loading' && name.trim().length > 0}
+            onInvoke={() => void create()}
+          />
+          <Button
+            label="Refresh"
+            variant="outline"
+            enabled={creation.state !== 'loading'}
+            onInvoke={resource.reload}
+          />
+        </Row>
+      </Column>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />
@@ -159,7 +167,7 @@ export function Volumes({
         </Row>
       ) : null}
       {creation.state === 'error' ? (
-        <Text label={boundedMessage(creation.error)} color="danger" wrap />
+        <RecoveryState operation="Creating volume" error={creation.error} />
       ) : null}
       {creation.state === 'success' ? (
         <Text label={`Created volume ${creation.name}.`} color="positive" wrap />
@@ -177,8 +185,6 @@ export function Volumes({
         {view.records.map((volume) => (
           <Card
             key={`${volume.name}:${volume.generation}`}
-            grow={false}
-            width={RESOURCE_WIDTH}
             variant={inspection.name === volume.name ? 'filled' : 'outline'}
           >
             <CardHeader label={volume.name} detail={volume.driver} />
@@ -222,11 +228,12 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
       ) : inspection.count === 0 ? (
         <EmptyState label="No volume details" detail="The host returned no inspectable fields." />
       ) : (
-        <ObjectInspector
-          value={inspection.detail}
-          {...INSPECTOR_BOUNDS}
-          height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-        />
+        <Column gap={1}>
+          <Heading label="Volume details" scale="caption" />
+          <Text label={`Name · ${inspection.detail?.name}`} />
+          <Text label={`Driver · ${inspection.detail?.driver}`} />
+          <Text label={`Immutable generation · ${inspection.detail?.generation}`} wrap />
+        </Column>
       )}
     </CardContent>
   );
@@ -243,7 +250,7 @@ function Page({
 }) {
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={2}>
+      <Column width="fill" pad={4} gap={2}>
         <Heading label={title} scale="title" />
         <Text label={subtitle} color="text-dim" wrap />
         {children}

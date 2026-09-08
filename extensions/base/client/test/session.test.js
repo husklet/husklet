@@ -189,9 +189,13 @@ test('real Unix catalogue carries bounded compatibility hints', async () => {
         assert.deepEqual(frame.payload, { call: 'extension_catalogue' });
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
           reply: 'extension_catalogue', with: { complete: true, entries: [{
-            id: 'storybook', title: 'Component playground', description: 'Native components',
+            id: 'storybook', title: 'Component playground', description: 'Native components', version: '1.4.0',
             reference: 'registry/storybook:latest', publisher: 'Husklet', source: 'first-party',
             protocol: 1, architectures: ['amd64', 'arm64'],
+          }, {
+            id: 'metrics', title: 'Metrics explorer', description: 'Workspace metrics', version: '2.1.0',
+            reference: 'registry/metrics:2.1.0', publisher: 'Example', source: 'partner:metrics',
+            protocol: 1, architectures: ['amd64'],
           }] },
         } }));
       }
@@ -205,6 +209,8 @@ test('real Unix catalogue carries bounded compatibility hints', async () => {
     const session = await connect({ path: socketPath });
     const catalogue = await workspace(session).extensions.catalogue();
     assert.equal(catalogue.entries[0].protocol, 1);
+    assert.equal(catalogue.entries[0].version, '1.4.0');
+    assert.equal(catalogue.entries[1].version, '2.1.0');
     assert.deepEqual(catalogue.entries[0].architectures, ['amd64', 'arm64']);
     await session.close();
   } finally {
@@ -288,6 +294,7 @@ test('real Unix filesystem inventory can reconcile immediately after reconnect',
                 entries: [{ path: 'src/index.ts', directory: false, size: 17, identity: 'sha256:abc' }],
                 complete: false,
                 coalesced: 9,
+                revision: 12,
               },
             },
           }),
@@ -341,7 +348,7 @@ test('real Unix execution cancellation is one bounded ordered operation', async 
       encode({
         channel: CONTROL,
         kind: KIND.open,
-        payload: { protocol: 1, peer: 'fixture', granted: ['containers:control'] },
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'] },
       }),
     );
   });
@@ -1060,7 +1067,7 @@ test('real Unix occupant switch arms before CAS and verifies provider inventory'
         payload: {
           protocol: 1,
           peer: 'switch-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control', 'terminals:process-control'],
         },
       }),
     );
@@ -1250,7 +1257,7 @@ test('real Unix extension remove arms inventory before authority and observes ab
         payload: {
           protocol: 1,
           peer: 'remove-wait',
-          granted: ['extensions:read', 'extensions:control'],
+          granted: ['extensions:read', 'extensions:remove'],
         },
       }),
     );
@@ -1978,6 +1985,120 @@ test('real Unix event credit waits for drain when its listener fills the write b
   }
 });
 
+test('real Unix event credit waits for slow async consumers and serializes delivery', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-async-event-credit-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const returned = [];
+  let peer;
+  const server = net.createServer((socket) => {
+    peer = socket;
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'slow_consumer', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const releases = [];
+  const entered = [];
+  let reportEntered;
+  const entry = () => new Promise((resolve) => { reportEntered = resolve; });
+  let nextEntry = entry();
+  const session = await connect({
+    path: socketPath,
+    timeout: 1_000,
+    onEvent: async (event) => {
+      entered.push(event.slot);
+      reportEntered();
+      await new Promise((resolve) => releases.push(resolve));
+    },
+  });
+  const promptly = (promise, label) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 200)),
+    ]);
+  try {
+    peer.write(Buffer.concat([
+      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
+      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
+    ]));
+    await promptly(nextEntry, 'first async listener');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1']);
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 0);
+
+    nextEntry = entry();
+    releases.shift()();
+    await promptly(nextEntry, 'second async listener');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1', 'pane-2']);
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 1);
+
+    releases.shift()();
+    for (let attempt = 0; attempt < 20 && returned.filter((frame) => frame.kind === KIND.credit).length < 2; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 2);
+  } finally {
+    await session.close();
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix half-close revokes queued event work from the old session generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stale-event-generation-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'stale_generation', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const session = await connect({ path: socketPath, timeout: 1_000 });
+  const entered = [];
+  let release;
+  let reportEntered;
+  const firstEntered = new Promise((resolve) => { reportEntered = resolve; });
+  const dispose = session.onEvent(async (event) => {
+    entered.push(event.slot);
+    reportEntered();
+    await new Promise((resolve) => { release = resolve; });
+  });
+  try {
+    peer.write(Buffer.concat([
+      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
+      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
+    ]));
+    await Promise.race([
+      firstEntered,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('first event timed out')), 200)),
+    ]);
+
+    dispose();
+    peer.end();
+    await session.closed;
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1']);
+  } finally {
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a mixed cross-surface event cannot masquerade as a pane selection over Unix framing', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-selection-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -2334,7 +2455,7 @@ test('real Unix container start wait arms first and ignores unchanged initial st
         payload: {
           protocol: 1,
           peer: 'container-start-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2407,7 +2528,7 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
         payload: {
           protocol: 1,
           peer: 'container-stop-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2492,7 +2613,7 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
         payload: {
           protocol: 1,
           peer: 'remove-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2569,7 +2690,7 @@ test('real Unix restart wait requires the same container at a newer running gene
         payload: {
           protocol: 1,
           peer: 'restart-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -2670,7 +2791,7 @@ test('real Unix splitAndWait arms before CAS, verifies the returned slot, and di
         payload: {
           protocol: 1,
           peer: 'split-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -2793,7 +2914,7 @@ test('real Unix closeAndWait requires complete absence and disposes success and 
         payload: {
           protocol: 1,
           peer: 'close-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -2899,7 +3020,7 @@ test('real Unix retitleAndWait arms before CAS and verifies exact title and revi
         payload: {
           protocol: 1,
           peer: 'retitle-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3005,7 +3126,7 @@ test('real Unix focusAndWait arms before CAS and verifies exact focused pane ide
         payload: {
           protocol: 1,
           peer: 'focus-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3117,7 +3238,7 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
         payload: {
           protocol: 1,
           peer: 'write-wait',
-          granted: ['panes:observe', 'terminals:output', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:output', 'terminals:input'],
         },
       }),
     );
@@ -3155,6 +3276,24 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
       'terminal_write_pane',
       'event_unsubscribe',
     ]);
+    calls.length = 0;
+    reads = 0;
+    const cancellation = new AbortController();
+    const cancelled = terminal.writeObservedAndWait(screen(7, ['$ ']), [3], {
+      lines: 20,
+      timeoutMs: 1_000,
+      signal: cancellation.signal,
+    });
+    setTimeout(() => cancellation.abort('agent stopped'), 5);
+    await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'terminal_read_pane',
+      'terminal_write_pane',
+      'event_unsubscribe',
+    ]);
+    assert.equal((await terminal.read(slot, 20)).revision, 8);
+    assert.equal(calls.at(-1), 'terminal_read_pane', 'the session remains usable after cancellation');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -3231,7 +3370,7 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
         payload: {
           protocol: 1,
           peer: 'signal-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -3349,7 +3488,7 @@ test('real Unix removeExecutionAndWait requires a finished cursor and complete l
         payload: {
           protocol: 1,
           peer: 'execution-remove-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -3469,7 +3608,7 @@ test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns 
         payload: {
           protocol: 1,
           peer: 'spawn-wait',
-          granted: ['panes:observe', 'terminals:output', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:output', 'terminals:process-control'],
         },
       }),
     );
@@ -3593,7 +3732,7 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
         payload: {
           protocol: 1,
           peer: 'open-tab-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3692,7 +3831,7 @@ test('real Unix openTabAndWait retains the created tab when inventory verificati
         payload: {
           protocol: 1,
           peer: 'open-tab-recovery',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3931,7 +4070,7 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
         payload: {
           protocol: 1,
           peer: 'exec-wait',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -4010,7 +4149,7 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
         payload: {
           protocol: 1,
           peer: 'exec-wait-failure',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );
@@ -4100,7 +4239,7 @@ test('real Unix execAndWait preserves the completed execution when bounded log r
         payload: {
           protocol: 1,
           peer: 'exec-log-failure',
-          granted: ['containers:read', 'containers:control'],
+          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
         },
       }),
     );

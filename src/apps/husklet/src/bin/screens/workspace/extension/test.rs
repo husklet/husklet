@@ -116,6 +116,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         provider_authority_waits_for_a_valid_frame();
         startup_is_visible_until_the_first_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
+        a_new_generation_restarts_at_frame_one_without_a_sequence_fault();
         an_empty_wire_slot_addresses_the_overview_surface();
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
@@ -155,16 +156,49 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
 
 fn startup_is_visible_until_the_first_valid_frame() {
     let mut fixture = Fixture::new();
-    assert!(visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
 
     fixture.describe(&panel("Ready"));
     fixture.page.tick();
 
-    assert!(!visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        !visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
+}
+
+fn a_new_generation_restarts_at_frame_one_without_a_sequence_fault() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&panel("First generation"));
+    fixture.page.tick();
+
+    fixture.post.send(Delivery::Reset).expect("the page is listening");
+    fixture.reconciliation = Reconciliation::new();
+    fixture.describe(&panel("Replacement generation"));
+    fixture.page.tick();
+
+    assert!(
+        !fixture.page.banner().is_visible(),
+        "a declared generation boundary is not a frame gap"
+    );
+    assert_eq!(
+        fixture.page.surface().len(),
+        4,
+        "only the replacement generation's root, heading, and action remain mounted"
+    );
+    let semantics = fixture.page.semantics("").expect("replacement semantics");
+    assert_eq!(semantics.revision, 3, "the replacement committed its first frame");
+    let labels = visible_labels(&fixture);
+    assert!(labels.iter().any(|label| label == "Replacement generation"));
+    assert!(
+        labels.iter().all(|label| label != "First generation"),
+        "the previous generation has no remaining visible authority"
+    );
 }
 
 fn visible_labels(fixture: &Fixture) -> Vec<String> {
@@ -193,17 +227,25 @@ fn a_long_fault_is_bounded_wrapped_and_accessible() {
         .find(|label| label.text().as_str() == "Extension unavailable")
         .expect("the fault has a stable heading");
     assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
-    let detail = labels
-        .iter()
-        .find(|label| label.has_css_class("hl-extension-banner-detail"))
-        .expect("the fault has diagnostic detail");
+    let details = descendants(&banner.clone().upcast())
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Expander>().ok())
+        .expect("the fault has a technical-details disclosure");
+    assert!(!details.is_expanded());
+    let detail = details
+        .child()
+        .and_then(|widget| widget.downcast::<gtk::Label>().ok())
+        .expect("the disclosure has diagnostic detail");
     assert!(detail.wraps());
     assert_eq!(detail.wrap_mode(), gtk::pango::WrapMode::WordChar);
     assert!(detail.text().ends_with('…'));
     assert!(detail.text().chars().count() <= hl_extension::port::SEMANTIC_TEXT_LIMIT);
 
     let (minimum, _, _, _) = banner.measure(gtk::Orientation::Horizontal, -1);
-    assert!(minimum <= 160, "an unbroken diagnostic forced a {minimum}px minimum width");
+    assert!(
+        minimum <= 160,
+        "an unbroken diagnostic forced a {minimum}px minimum width"
+    );
 
     let semantics = fixture.page.semantics("pane-1").expect("fault semantics");
     let fault = &semantics.root.children[0];
@@ -225,7 +267,10 @@ fn an_empty_wire_slot_addresses_the_overview_surface() {
         .expect("the page is listening");
 
     assert_eq!(fixture.page.tick(), 1);
-    assert!(fixture.tagged(Tag::Button).is_some(), "the primary wire slot reached the overview");
+    assert!(
+        fixture.tagged(Tag::Button).is_some(),
+        "the primary wire slot reached the overview"
+    );
 }
 
 fn network_waterfall_projects_exact_structured_semantics() {

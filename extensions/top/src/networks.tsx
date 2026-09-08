@@ -11,8 +11,9 @@ import {
   EmptyState,
   Entry,
   Heading,
-  ObjectInspector,
+  InlineMessage,
   ResourceState,
+  RecoveryState,
   Row,
   Scroll,
   Spinner,
@@ -21,7 +22,6 @@ import {
   type WorkspaceApi,
 } from '@husklet/react';
 import {
-  NetworkDetailsSource,
   bounded,
   boundedMessage,
   endpointAliases,
@@ -30,11 +30,9 @@ import {
 } from './model.js';
 import type { Resource } from './overview.js';
 
-const INSPECTOR_BOUNDS = Object.freeze({ maxDepth: 8, maxNodes: 128, maxStringLength: 256 });
 type Inspection = {
   id: string;
   state: 'idle' | 'loading' | 'ready' | 'error';
-  count: number;
   detail: NetworkSummary | null;
   error: unknown;
 };
@@ -50,20 +48,15 @@ type Operation = {
   request: EndpointRequest | null;
   error: unknown;
 };
-const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', count: 0, detail: null, error: null };
-const RESOURCE_WIDTH = { chars: 68 } as const;
+const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', detail: null, error: null };
 
 export function Networks({
   api,
   resource,
-  networkDetails,
 }: {
   api: WorkspaceApi;
   resource: Resource<NetworkSummary>;
-  networkDetails?: NetworkDetailsSource;
 }) {
-  const localDetails = React.useMemo(() => new NetworkDetailsSource(), []);
-  const detailsSource = networkDetails ?? localDetails;
   const [name, setName] = React.useState('');
   const [container, setContainer] = React.useState('');
   const [aliases, setAliases] = React.useState('');
@@ -122,16 +115,14 @@ export function Networks({
   const inspect = async (network: NetworkSummary) => {
     const id = resourceReference(network);
     const revision = ++inspectionRevision.current;
-    setInspection({ id, state: 'loading', count: 0, detail: null, error: null });
+    setInspection({ id, state: 'loading', detail: null, error: null });
     try {
       const detail = await api.networks.inspect(id);
       if (revision !== inspectionRevision.current) return;
-      const count = await detailsSource.replace(detail);
-      if (revision !== inspectionRevision.current) return;
-      setInspection({ id, state: 'ready', count, detail, error: null });
+      setInspection({ id, state: 'ready', detail: detail.id ? detail : null, error: null });
     } catch (cause) {
       if (revision === inspectionRevision.current) {
-        setInspection({ id, state: 'error', count: 0, detail: null, error: cause });
+        setInspection({ id, state: 'error', detail: null, error: cause });
       }
     }
   };
@@ -207,29 +198,39 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1} width={RESOURCE_WIDTH}>
+      <Column gap={1} align="start">
         <Entry
           value={name}
           placeholder="Network name"
+          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
           enabled={creation.state !== 'loading'}
           onChange={(event) => {
             setName(String(event.value ?? ''));
             setCreation({ state: 'idle', name: '', error: null });
           }}
         />
-        <Button
-          label={
-            creation.state === 'loading'
-              ? 'Creating…'
-              : creation.state === 'error'
-                ? 'Retry create'
-                : 'Create'
-          }
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => void create()}
-        />
-        <Button label="Refresh" enabled={creation.state !== 'loading'} onInvoke={resource.reload} />
-      </Row>
+        <Row gap={1} wrap>
+          <Button
+            variant="filled"
+            tone="accent"
+            label={
+              creation.state === 'loading'
+                ? 'Creating…'
+                : creation.state === 'error'
+                  ? 'Retry create'
+                  : 'Create'
+            }
+            enabled={creation.state !== 'loading' && name.trim().length > 0}
+            onInvoke={() => void create()}
+          />
+          <Button
+            label="Refresh"
+            variant="outline"
+            enabled={creation.state !== 'loading'}
+            onInvoke={resource.reload}
+          />
+        </Row>
+      </Column>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />
@@ -237,20 +238,20 @@ export function Networks({
         </Row>
       ) : null}
       {creation.state === 'error' ? (
-        <Text label={boundedMessage(creation.error)} color="danger" wrap />
+        <RecoveryState operation="Creating network" error={creation.error} />
       ) : null}
       {creation.state === 'success' ? (
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Card grow={false} justify="start" width={RESOURCE_WIDTH} variant="outline">
+      <Card justify="start" variant="outline">
         <CardContent gap={1}>
           <Text label="Container attachment" />
           <Text label="Required · complete immutable container ID" color="text-dim" />
           <Entry
             value={container}
             placeholder="Complete container ID"
-            width={{ chars: 58 }}
+            width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
             enabled={operation.state !== 'loading'}
             onChange={(event) => {
               setContainer(String(event.value ?? ''));
@@ -258,120 +259,134 @@ export function Networks({
               setDisconnectRequest(null);
             }}
           />
-          <Row gap={1} align="center" justify="start">
+          <Column gap={1} align="start">
             <Text label="Optional aliases" color="text-dim" />
             <Entry
               value={aliases}
               placeholder="Endpoint aliases (comma-separated, optional)"
-              width={{ chars: 38 }}
+              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
               enabled={operation.state !== 'loading'}
               onChange={(event) => {
                 setAliases(String(event.value ?? ''));
                 setOperation({ state: 'idle', request: null, error: null });
               }}
             />
-          </Row>
+          </Column>
         </CardContent>
       </Card>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
-      <ResourceState
-        state={inventoryState}
-        loadingLabel="Reading networks…"
-        emptyLabel="No networks"
-        emptyDetail="Create a network above to connect workspace containers."
-        error={boundedMessage(resource.error)}
-        retryLabel="Retry networks"
-        onRetry={resource.reload}
-      >
-        {view.records.map((network) => {
-          const id = resourceReference(network);
-          const membership =
-            inspection.id === id && inspection.state === 'ready'
-              ? inspection.detail?.endpoints
-              : network.endpoints;
-          const containerId = container.trim();
-          const validContainer = immutableContainerId(containerId);
-          const membershipUnknown = validContainer && (!membership || membership.truncated);
-          const endpointAction = validContainer
-            ? membership?.containers.includes(containerId)
-              ? 'disconnect'
-              : membership && !membership.truncated
-                ? 'connect'
-                : null
-            : null;
-          return (
-            <Card
-              key={id}
-              grow={false}
-              justify="start"
-              width={RESOURCE_WIDTH}
-              variant={inspection.id === id ? 'filled' : 'outline'}
-            >
-              <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />
-              {network.kind === 'builtin' ? (
-                <CardContent gap={1}>
-                  <Badge label="Built-in · protected" tone="accent" />
-                </CardContent>
-              ) : null}
-              {membershipUnknown ? (
-                <CardContent gap={1}>
-                  <Text
-                    label="Attachment status unknown for this container · Inspect to resolve"
-                    color="warning"
-                    wrap
+      <Column grow={false} justify="stretch">
+        {inventoryState === 'empty' ? (
+          <Column gap={1} align="start" justify="start">
+            <Text label="No networks" />
+            <Text
+              label="Create a network above to connect workspace containers."
+              color="text-dim"
+              wrap
+            />
+          </Column>
+        ) : (
+          <ResourceState
+            state={inventoryState}
+            loadingLabel="Reading networks…"
+            emptyLabel="No networks"
+            emptyDetail="Create a network above to connect workspace containers."
+            error={boundedMessage(resource.error)}
+            retryLabel="Retry networks"
+            onRetry={resource.reload}
+          >
+            {view.records.map((network) => {
+              const id = resourceReference(network);
+              const membership =
+                inspection.id === id && inspection.state === 'ready'
+                  ? inspection.detail?.endpoints
+                  : network.endpoints;
+              const containerId = container.trim();
+              const validContainer = immutableContainerId(containerId);
+              const membershipUnknown = validContainer && (!membership || membership.truncated);
+              const endpointAction = validContainer
+                ? membership?.containers.includes(containerId)
+                  ? 'disconnect'
+                  : membership && !membership.truncated
+                    ? 'connect'
+                    : null
+                : null;
+              return (
+                <Card
+                  key={id}
+                  justify="start"
+                  variant={inspection.id === id ? 'filled' : 'outline'}
+                >
+                  <CardHeader
+                    label={network.name}
+                    detail={`${network.driver} · ${network.scope}`}
                   />
-                </CardContent>
-              ) : null}
-              <CardActions gap={1} justify="start">
-                <Button
-                  label={
-                    inspection.id === id && inspection.state === 'error'
-                      ? 'Retry inspect'
-                      : 'Inspect'
-                  }
-                  onInvoke={() => inspect(network)}
-                />
-                {endpointAction === 'connect' ? (
-                  <Button
-                    label="Connect"
-                    enabled={operation.state !== 'loading'}
-                    onInvoke={() => begin(network, 'connect')}
-                  />
-                ) : null}
-                {endpointAction === 'disconnect' ? (
-                  <Button
-                    label="Disconnect"
-                    enabled={operation.state !== 'loading'}
-                    tone="danger"
-                    onInvoke={() => begin(network, 'disconnect')}
-                  />
-                ) : null}
-                {network.kind !== 'builtin' ? (
-                  <ConfirmAction
-                    authorityKey={`network:${id}:remove`}
-                    label="Remove"
-                    confirmLabel="Confirm remove"
-                    pendingLabel="Confirm remove"
-                    question={`Remove immutable network ${id} (${network.name})?`}
-                    onConfirm={() => remove(network)}
-                  />
-                ) : null}
-              </CardActions>
-              {disconnectRequest?.network === id ? (
-                <DisconnectConsent
-                  request={disconnectRequest}
-                  loading={operation.state === 'loading'}
-                  onConfirm={attach}
-                  onCancel={() => setDisconnectRequest(null)}
-                />
-              ) : null}
-              {inspection.id === id ? <NetworkDetail inspection={inspection} /> : null}
-            </Card>
-          );
-        })}
-        <Omitted count={view.omitted} />
-      </ResourceState>
+                  {network.kind === 'builtin' ? (
+                    <CardContent gap={1}>
+                      <Badge label="Built-in · protected" tone="accent" />
+                    </CardContent>
+                  ) : null}
+                  {membershipUnknown ? (
+                    <CardContent gap={1}>
+                      <Text
+                        label="Attachment status unknown for this container · Inspect to resolve"
+                        color="warning"
+                        wrap
+                      />
+                    </CardContent>
+                  ) : null}
+                  <CardActions gap={1} justify="start">
+                    <Button
+                      label={
+                        inspection.id === id && inspection.state === 'error'
+                          ? 'Retry inspect'
+                          : 'Inspect'
+                      }
+                      onInvoke={() => inspect(network)}
+                    />
+                    {endpointAction === 'connect' ? (
+                      <Button
+                        label="Connect"
+                        enabled={operation.state !== 'loading'}
+                        onInvoke={() => begin(network, 'connect')}
+                      />
+                    ) : null}
+                    {endpointAction === 'disconnect' ? (
+                      <Button
+                        label="Disconnect"
+                        enabled={operation.state !== 'loading'}
+                        tone="danger"
+                        onInvoke={() => begin(network, 'disconnect')}
+                      />
+                    ) : null}
+                    {network.kind !== 'builtin' ? (
+                      <ConfirmAction
+                        authorityKey={`network:${id}:remove`}
+                        label="Remove"
+                        confirmLabel="Confirm remove"
+                        pendingLabel="Confirm remove"
+                        question={`Remove immutable network ${id} (${network.name})?`}
+                        onConfirm={() => remove(network)}
+                      />
+                    ) : null}
+                  </CardActions>
+                  {disconnectRequest?.network === id ? (
+                    <DisconnectConsent
+                      request={disconnectRequest}
+                      loading={operation.state === 'loading'}
+                      onConfirm={attach}
+                      onCancel={() => setDisconnectRequest(null)}
+                    />
+                  ) : null}
+                  {inspection.id === id ? <NetworkDetail inspection={inspection} /> : null}
+                </Card>
+              );
+            })}
+            <Omitted count={view.omitted} />
+          </ResourceState>
+        )}
+      </Column>
     </Page>
   );
 }
@@ -456,16 +471,47 @@ function NetworkDetail({ inspection }: { inspection: Inspection }) {
         </Row>
       ) : inspection.state === 'error' ? (
         <Text label={boundedMessage(inspection.error)} color="danger" wrap />
-      ) : inspection.count === 0 ? (
+      ) : !inspection.detail ? (
         <EmptyState label="No network details" detail="The host returned no inspectable fields." />
       ) : (
-        <ObjectInspector
-          value={inspection.detail}
-          {...INSPECTOR_BOUNDS}
-          height={{ minimum: { step: 10 }, maximum: { step: 32 } }}
-        />
+        <NetworkSummaryDetail network={inspection.detail} />
       )}
     </CardContent>
+  );
+}
+
+function NetworkSummaryDetail({ network }: { network: NetworkSummary }) {
+  const endpoints = network.endpoints;
+  const containers = endpoints?.containers ?? [];
+  return (
+    <Column gap={1}>
+      <Heading label="Network details" scale="caption" />
+      <Row gap={1} wrap>
+        <Badge label={`Driver · ${network.driver}`} />
+        <Badge label={`Scope · ${network.scope}`} />
+        <Badge label={network.kind === 'builtin' ? 'Built-in' : 'Custom'} />
+      </Row>
+      <Text label={`Immutable network ID · ${network.id}`} color="text-dim" wrap />
+      <Heading label={`Connected containers · ${containers.length}`} scale="caption" />
+      {!endpoints ? (
+        <InlineMessage
+          label="Endpoint membership was not included in this inspection."
+          tone="warning"
+        />
+      ) : containers.length === 0 ? (
+        <EmptyState label="No connected containers" detail="This network has no endpoints." />
+      ) : (
+        containers.map((container) => (
+          <Text key={container} label={`Container · ${container}`} wrap />
+        ))
+      )}
+      {endpoints?.truncated ? (
+        <InlineMessage
+          label="Additional connected containers were omitted by the host safety limit."
+          tone="warning"
+        />
+      ) : null}
+    </Column>
   );
 }
 
@@ -480,7 +526,7 @@ function Page({
 }) {
   return (
     <Scroll grow height="fill">
-      <Column pad={4} gap={2}>
+      <Column width="fill" pad={4} gap={2}>
         <Heading label={label} scale="title" />
         <Text label={subtitle} color="text-dim" wrap />
         {children}

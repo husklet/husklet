@@ -28,7 +28,13 @@ test(
           payload: {
             protocol: 1,
             extension: 'execution-list-resource-test',
-            granted: ['containers:read', 'containers:control'],
+            granted: [
+              'containers:read',
+              'containers:create',
+              'containers:execute',
+              'containers:lifecycle',
+              'containers:remove',
+            ],
           },
         }),
       );

@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PaneChange,
+    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
     PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -502,11 +502,13 @@ impl Conversation {
             }
         }
         if self.may_observe(Topic::ImagePulls) {
+            let available = self.available_credit(Topic::ImagePulls);
             snapshots.extend(
                 services
                     .images
                     .pull_changes(self.session.extension_identity(), self.image_pull_cursor)
                     .into_iter()
+                    .take(available)
                     .map(Snapshot::ImagePulls),
             );
         }
@@ -555,8 +557,10 @@ impl Conversation {
         if self.may_observe(Topic::WorkspaceLifecycle) {
             if let Some(revision) = self.workspace_lifecycle_revision {
                 if let Ok(changes) = services.workspace_control.lifecycle_since(revision) {
-                    for change in changes {
-                        self.workspace_lifecycle_revision = Some(change.revision);
+                    for change in changes
+                        .into_iter()
+                        .take(self.available_credit(Topic::WorkspaceLifecycle))
+                    {
                         snapshots.push(Snapshot::WorkspaceLifecycle(change));
                     }
                 }
@@ -575,9 +579,17 @@ impl Conversation {
             {
                 continue;
             }
-            self.publish(&snapshot)?;
-            if let Snapshot::ImagePulls(change) = &snapshot {
-                self.image_pull_cursor = self.image_pull_cursor.max(change.sequence);
+            let emission = self.publish(&snapshot)?;
+            if emission == Emission::Queued {
+                match &snapshot {
+                    Snapshot::ImagePulls(change) => {
+                        self.image_pull_cursor = self.image_pull_cursor.max(change.sequence);
+                    }
+                    Snapshot::WorkspaceLifecycle(change) => {
+                        self.workspace_lifecycle_revision = Some(change.revision);
+                    }
+                    _ => {}
+                }
             }
             if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle {
                 self.observed.insert(topic, snapshot);
@@ -588,11 +600,12 @@ impl Conversation {
     }
 
     /// Whether collecting a topic can produce an event the peer is currently
-    /// allowed to receive. The first collection has no route yet and is what
-    /// allocates one; after that, exhausted channel credit stops work at the
-    /// service boundary rather than repeatedly rebuilding snapshots which
-    /// cannot leave the host. Returned credit makes the next observation read
-    /// fresh state, so a stalled peer resumes from the latest full snapshot.
+    /// allowed to receive. The first collection has no route yet; its first
+    /// successful publication allocates one. After that, exhausted channel
+    /// credit stops work at the service boundary rather than repeatedly
+    /// rebuilding snapshots which cannot leave the host. Returned credit makes
+    /// the next observation read fresh state, so a stalled peer resumes from
+    /// the latest full snapshot.
     fn may_observe(&self, topic: Topic) -> bool {
         if !self.session.may_emit(topic) {
             return false;
@@ -600,6 +613,15 @@ impl Conversation {
         self.subscriptions
             .channel(topic)
             .is_none_or(|channel| self.channels.credit(channel).is_some_and(|credit| credit > 0))
+    }
+
+    fn available_credit(&self, topic: Topic) -> usize {
+        self.subscriptions
+            .channel(topic)
+            .and_then(|channel| self.channels.credit(channel))
+            .unwrap_or(Channels::CREDIT)
+            .try_into()
+            .unwrap_or(usize::MAX)
     }
 
     fn flush_interactions(&mut self) -> Result<(), Fault> {
@@ -1205,8 +1227,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, RelativePath, Reply,
-        Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL,
+        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -1218,6 +1240,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct Ledger {
         reached: Mutex<Vec<&'static str>>,
+        image_pull_changes: Mutex<Vec<hl_extension::port::ImagePullChange>>,
         semantic_revision: AtomicU64,
         semantic_transition: AtomicU64,
         semantic_reads: AtomicU64,
@@ -1232,6 +1255,10 @@ mod tests {
 
         fn reached(&self) -> Vec<&'static str> {
             self.reached.lock().expect("ledger").clone()
+        }
+
+        fn image_pull_changes(&self, changes: Vec<hl_extension::port::ImagePullChange>) {
+            *self.image_pull_changes.lock().expect("image pull changes") = changes;
         }
 
         fn semantic_revision(&self, revision: u64) {
@@ -1425,9 +1452,17 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn pull_changes(&self, _owner: &str, _after: u64) -> Vec<hl_extension::port::ImagePullChange> {
+        fn pull_changes(&self, _owner: &str, after: u64) -> Vec<hl_extension::port::ImagePullChange> {
             self.ledger.note("images.pull_changes");
-            Vec::new()
+            self.ledger
+                .image_pull_changes
+                .lock()
+                .expect("image pull changes")
+                .iter()
+                .filter(|change| change.sequence > after)
+                .take(64)
+                .cloned()
+                .collect()
         }
     }
 
@@ -1681,6 +1716,7 @@ mod tests {
                     id: "storybook".into(),
                     title: "Component playground".into(),
                     description: "First-party components".into(),
+                    version: "1.0.0".into(),
                     reference: "registry/storybook:latest".into(),
                     publisher: "Husklet".into(),
                     source: "husklet:first-party/storybook".into(),
@@ -1773,6 +1809,22 @@ mod tests {
         let served = std::thread::spawn(move || {
             let host = Host { ledger };
             let mut conversation = Conversation::new(ours, authority(), "dev", queue)?.settling(settle);
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn image_pull_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("image-observer").expect("name"),
+                Grant::new([Capability::ImagePull]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
             conversation.greet()?;
             conversation.serve(&services(&host))
         });
@@ -1892,6 +1944,130 @@ mod tests {
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
 
+    fn preference_host(
+        root: std::path::PathBuf,
+        name: &'static str,
+    ) -> (Wire<UnixStream>, JoinHandle<Result<(), Fault>>) {
+        let state = StateBlob::new(&root, &ExtensionName::new(name).unwrap()).expect("preference store");
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new(name).unwrap(),
+                Grant::new([Capability::PreferenceRead, Capability::PreferenceWrite]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            let mut ports = services(&host);
+            ports.state = &state;
+            conversation.serve(&ports)
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        (wire, served)
+    }
+
+    #[test]
+    fn preferences_are_isolated_bounded_cas_safe_and_durable_over_unix_framing() {
+        let root = tempfile::tempdir().expect("preference root");
+        let (mut alpha, served) = preference_host(root.path().to_path_buf(), "alpha");
+        let initial = ask(&mut alpha, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&initial), Ok(Reply::Preferences(preferences))
+            if preferences.revision == 0 && preferences.entries.is_empty())
+        );
+
+        let set = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 0,
+                key: "sidebar.width".into(),
+                value: PreferenceValue::Number(320),
+            },
+        );
+        assert_eq!(codec::read_reply(&set), Ok(Reply::Revision(1)));
+        let stale = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 0,
+                key: "sidebar.width".into(),
+                value: PreferenceValue::Number(999),
+            },
+        );
+        assert!(matches!(codec::read_failure(&stale), Ok(Failure::Conflict { .. })));
+        let oversized = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 1,
+                key: "label".into(),
+                value: PreferenceValue::String("x".repeat(1025)),
+            },
+        );
+        assert!(matches!(codec::read_failure(&oversized), Ok(Failure::Conflict { .. })));
+        let invalid_key = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: 1,
+                key: "not/a/key".into(),
+                value: PreferenceValue::Boolean(true),
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&invalid_key),
+            Ok(Failure::Conflict { .. })
+        ));
+
+        let mut revision = 1;
+        for index in 0..63 {
+            let reply = ask(
+                &mut alpha,
+                &Request::PreferenceSet {
+                    observed: revision,
+                    key: format!("item.{index}"),
+                    value: PreferenceValue::Boolean(index % 2 == 0),
+                },
+            );
+            revision += 1;
+            assert_eq!(codec::read_reply(&reply), Ok(Reply::Revision(revision)));
+        }
+        let full = ask(
+            &mut alpha,
+            &Request::PreferenceSet {
+                observed: revision,
+                key: "sixty-fifth".into(),
+                value: PreferenceValue::Boolean(true),
+            },
+        );
+        assert!(matches!(codec::read_failure(&full), Ok(Failure::Conflict { .. })));
+        drop(alpha);
+        assert_eq!(served.join().expect("alpha joined"), Ok(()));
+
+        // A new conversation and a newly opened store model an application relaunch.
+        let (mut relaunched, served) = preference_host(root.path().to_path_buf(), "alpha");
+        let persisted = ask(&mut relaunched, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&persisted), Ok(Reply::Preferences(preferences))
+            if preferences.revision == revision
+                && preferences.entries.len() == 64
+                && preferences.entries.iter().any(|(key, value)|
+                    key == "sidebar.width" && *value == PreferenceValue::Number(320)))
+        );
+        drop(relaunched);
+        assert_eq!(served.join().expect("relaunch joined"), Ok(()));
+
+        // The same workspace root and key under another authenticated extension is empty.
+        let (mut beta, served) = preference_host(root.path().to_path_buf(), "beta");
+        let isolated = ask(&mut beta, &Request::PreferenceRead);
+        assert!(
+            matches!(codec::read_reply(&isolated), Ok(Reply::Preferences(preferences))
+            if preferences.revision == 0 && preferences.entries.is_empty())
+        );
+        drop(beta);
+        assert_eq!(served.join().expect("beta joined"), Ok(()));
+    }
+
     fn semantic_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let served = std::thread::spawn(move || {
@@ -1917,7 +2093,7 @@ mod tests {
                 Grant::new([
                     Capability::ContainerRead,
                     Capability::TerminalOutput,
-                    Capability::TerminalControl,
+                    Capability::TerminalLayoutControl,
                 ]),
                 Vec::new(),
             );
@@ -1995,6 +2171,50 @@ mod tests {
                 hl_extension::VolumeGrant::default(),
                 hl_extension::FilesystemGrant {
                     write: vec![hl_extension::FilesystemSelector::Exact { exact }],
+                    ..hl_extension::FilesystemGrant::default()
+                },
+                hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            let mut ports = services(&host);
+            ports.files = &files;
+            conversation.greet()?;
+            conversation.serve(&ports)
+        });
+        (theirs, served)
+    }
+
+    fn filesystem_journal_host(root: std::path::PathBuf) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host {
+                ledger: Arc::new(Ledger::default()),
+            };
+            let files = WorkspaceDirectory::new(root).expect("workspace directory");
+            let authority = Authority::new(
+                ExtensionName::new("indexer").expect("name"),
+                Grant::new([Capability::FilesystemRead]),
+                vec![
+                    RelativePath::new("docs").unwrap(),
+                    RelativePath::new("README.md").unwrap(),
+                ],
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
+                hl_extension::VolumeGrant::default(),
+                hl_extension::FilesystemGrant {
+                    read: vec![
+                        hl_extension::FilesystemSelector::Subtree {
+                            subtree: RelativePath::new("docs").unwrap(),
+                        },
+                        hl_extension::FilesystemSelector::Exact {
+                            exact: RelativePath::new("README.md").unwrap(),
+                        },
+                    ],
                     ..hl_extension::FilesystemGrant::default()
                 },
                 hl_extension::WorkspaceEnvironmentGrant::default(),
@@ -2310,6 +2530,7 @@ mod tests {
                         id: String::new(),
                         title: "Invalid".into(),
                         description: "empty identifiers are ambiguous".into(),
+                        version: "1.0.0".into(),
                         reference: "registry/invalid:latest".into(),
                         publisher: "Husklet".into(),
                         source: "test:invalid".into(),
@@ -2458,6 +2679,111 @@ mod tests {
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn terminal_or_container_file_writes_cross_scoped_cursor_pages_over_a_real_socket() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("private")).unwrap();
+        std::fs::write(root.join("docs/old.md"), b"old").unwrap();
+        for index in 0..300 {
+            std::fs::write(root.join(format!("docs/{index:03}.md")), b"stable").unwrap();
+        }
+        std::fs::write(root.join("README.md"), b"readme").unwrap();
+        std::fs::write(root.join("private/secret"), b"secret").unwrap();
+        let (theirs, served) = filesystem_journal_host(root.clone());
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let baseline = ask(&mut wire, &Request::FilesystemChanges { after: 0, limit: 2 });
+        assert!(
+            matches!(codec::read_reply(&baseline), Ok(Reply::FileChanges(page)) if page.changes.is_empty() && !page.truncated)
+        );
+        let foreign_cursor = ask(&mut wire, &Request::FilesystemChanges { after: 999, limit: 2 });
+        let Reply::FileChanges(foreign_cursor) = codec::read_reply(&foreign_cursor).unwrap() else {
+            panic!("page")
+        };
+        assert!(foreign_cursor.truncated, "{foreign_cursor:?}");
+        assert_eq!(foreign_cursor.next, foreign_cursor.current);
+
+        std::fs::write(root.join("docs/transient.md"), b"short lived").unwrap();
+        std::fs::remove_file(root.join("docs/transient.md")).unwrap();
+        let mut transient_seen = false;
+        let mut transient_cursor = 0;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(10));
+            let framed = ask(
+                &mut wire,
+                &Request::FilesystemChanges {
+                    after: transient_cursor,
+                    limit: 256,
+                },
+            );
+            let Reply::FileChanges(page) = codec::read_reply(&framed).unwrap() else {
+                panic!("page")
+            };
+            transient_seen |= page.changes.iter().any(|change| {
+                change.path.as_str() == "docs/transient.md" && change.kind == hl_extension::FileChangeKind::Invalidate
+            });
+            transient_cursor = page.next;
+            if transient_seen {
+                break;
+            }
+        }
+        assert!(transient_seen, "a transient create-delete must leave an invalidation");
+
+        std::fs::write(root.join("docs/old.md"), b"changed").unwrap();
+        std::fs::write(root.join("docs/new.md"), b"new").unwrap();
+        std::fs::write(root.join("docs/299.md"), b"changed beyond the old inventory prefix").unwrap();
+        std::fs::remove_file(root.join("README.md")).unwrap();
+        std::fs::write(root.join("private/secret"), b"not visible").unwrap();
+
+        let first = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                after: transient_cursor,
+                limit: 2,
+            },
+        );
+        let Reply::FileChanges(first) = codec::read_reply(&first).unwrap() else {
+            panic!("page")
+        };
+        assert_eq!(first.changes.len(), 2);
+        assert!(first.more);
+        let mut paths = first
+            .changes
+            .iter()
+            .map(|change| change.path.to_string())
+            .collect::<Vec<_>>();
+        let mut cursor = first.next;
+        let current = loop {
+            let framed = ask(
+                &mut wire,
+                &Request::FilesystemChanges {
+                    after: cursor,
+                    limit: 2,
+                },
+            );
+            let Reply::FileChanges(page) = codec::read_reply(&framed).unwrap() else {
+                panic!("page")
+            };
+            paths.extend(page.changes.iter().map(|change| change.path.to_string()));
+            cursor = page.next;
+            if !page.more {
+                break page.current;
+            }
+        };
+        assert_eq!(
+            paths,
+            vec!["README.md", "docs", "docs/299.md", "docs/new.md", "docs/old.md"]
+        );
+        assert_eq!(cursor, current);
+        assert!(!paths.iter().any(|path| path.starts_with("private/")));
+
+        drop(wire);
+        assert_eq!(served.join().unwrap(), Ok(()));
     }
 
     #[test]
@@ -2713,6 +3039,76 @@ mod tests {
                 .count()
                 >= 2,
             "the absence of a duplicate is from equality, not a stopped producer"
+        );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn sixty_four_image_pull_changes_cross_two_credited_unix_pages_in_order() {
+        let ledger = Arc::new(Ledger::default());
+        ledger.image_pull_changes(
+            (1..=64)
+                .map(|sequence| hl_extension::port::ImagePullChange {
+                    sequence,
+                    job: format!("{sequence:032x}"),
+                    revision: 1,
+                    state: "pulling".into(),
+                    coalesced: 0,
+                })
+                .collect(),
+        );
+        let (theirs, served) = image_pull_host(Arc::clone(&ledger));
+        theirs
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("peer deadline");
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(
+            &mut wire,
+            &Request::EventSubscribe {
+                topic: hl_extension::Topic::ImagePulls,
+            },
+        );
+        assert_eq!(codec::read_reply(&answer), Ok(Reply::Done));
+
+        let mut first = Vec::new();
+        let mut channel = None;
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("first credited image pull page");
+            channel = Some(event.channel);
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed image pull change");
+            let Snapshot::ImagePulls(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            first.push(change.sequence);
+        }
+        assert_eq!(first, (1..=32).collect::<Vec<_>>());
+
+        wire.send(&Frame::new(
+            channel.expect("event channel"),
+            Kind::Credit,
+            serde_json::to_vec(&Channels::CREDIT).expect("credit"),
+        ))
+        .expect("return first page credit");
+        let mut second = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("second credited image pull page");
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed image pull change");
+            let Snapshot::ImagePulls(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            second.push(change.sequence);
+        }
+        assert_eq!(second, (33..=64).collect::<Vec<_>>());
+        assert!(
+            ledger
+                .reached()
+                .iter()
+                .filter(|call| **call == "images.pull_changes")
+                .count()
+                >= 2,
+            "the second page came from a cursor read, not a retained flood"
         );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
@@ -3145,6 +3541,70 @@ mod tests {
     }
 
     #[test]
+    fn workspace_lifecycle_cursor_waits_for_each_credited_page() {
+        let host = Host {
+            ledger: Arc::new(Ledger::default()),
+        };
+        let lifecycle = LifecycleHost(
+            (1..=64)
+                .map(|revision| hl_extension::WorkspaceLifecycleChange {
+                    workspace: format!("workspace-{revision}"),
+                    action: hl_extension::WorkspaceLifecycleAction::Start,
+                    revision,
+                    coalesced: 0,
+                })
+                .collect(),
+        );
+        let (ours, peer) = UnixStream::pair().expect("socket pair");
+        peer.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+        let authority = Authority::new(
+            ExtensionName::new("observer").expect("name"),
+            Grant::new([Capability::WorkspaceRead]),
+            Vec::new(),
+        );
+        let mut conversation = Conversation::new(ours, authority, "dev", Queue::new()).expect("conversation");
+        conversation.session.follow(hl_extension::Topic::WorkspaceLifecycle);
+        conversation.workspace_lifecycle_revision = Some(0);
+        let mut ports = services(&host);
+        ports.workspace_control = &lifecycle;
+        let mut wire = Wire::new(peer);
+
+        conversation.observe(&ports).expect("first lifecycle page");
+        let mut channel = None;
+        let mut first = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("first credited lifecycle page");
+            channel = Some(event.channel);
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("snapshot");
+            let Snapshot::WorkspaceLifecycle(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            first.push(change.revision);
+        }
+        assert_eq!(first, (1..=32).collect::<Vec<_>>());
+        assert_eq!(conversation.workspace_lifecycle_revision, Some(32));
+
+        let credit = Frame::new(
+            channel.expect("event channel"),
+            Kind::Credit,
+            serde_json::to_vec(&Channels::CREDIT).expect("credit"),
+        );
+        conversation.exchange(&credit, &ports).expect("return page credit");
+        conversation.observe(&ports).expect("second lifecycle page");
+        let mut second = Vec::new();
+        for _ in 0..Channels::CREDIT {
+            let event = wire.receive().expect("second credited lifecycle page");
+            let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("snapshot");
+            let Snapshot::WorkspaceLifecycle(change) = snapshot else {
+                panic!("unexpected snapshot");
+            };
+            second.push(change.revision);
+        }
+        assert_eq!(second, (33..=64).collect::<Vec<_>>());
+        assert_eq!(conversation.workspace_lifecycle_revision, Some(64));
+    }
+
+    #[test]
     fn native_and_socket_mutations_reach_the_same_subscriber() {
         let host = Host {
             ledger: Arc::new(Ledger::default()),
@@ -3379,7 +3839,7 @@ mod tests {
         let welcome = codec::read_welcome(&frame).expect("a welcome");
         assert_eq!(welcome.protocol, PROTOCOL);
         assert!(welcome.granted.holds(Capability::ContainerRead));
-        assert!(!welcome.granted.holds(Capability::ContainerControl));
+        assert!(!welcome.granted.holds(Capability::ContainerLifecycle));
         drop(wire);
         let _ = served.join().expect("joined");
     }
@@ -3700,7 +4160,7 @@ mod tests {
         let Failure::Denied { capability, .. } = codec::read_failure(&answer).expect("a failure") else {
             panic!("an ungranted call is a denial");
         };
-        assert_eq!(capability, Capability::ContainerControl.as_str());
+        assert_eq!(capability, Capability::ContainerLifecycle.as_str());
         assert!(ledger.reached().is_empty(), "nothing may be reached before the check");
         drop(wire);
         let _ = served.join().expect("joined");
@@ -3715,7 +4175,7 @@ mod tests {
             let host = Host { ledger: host_ledger };
             let authority = Authority::new(
                 ExtensionName::new("sample").expect("name"),
-                Grant::new([Capability::ContainerRead, Capability::ContainerControl]),
+                Grant::new([Capability::ContainerRead, Capability::ContainerExecute]),
                 Vec::new(),
             );
             let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
@@ -3833,7 +4293,7 @@ mod tests {
         );
         assert!(matches!(
             codec::read_failure(&denied),
-            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalControl.as_str()
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalInput.as_str()
         ));
         assert!(!denied.payload.windows(secret.len()).any(|window| window == secret));
         assert!(ledger.reached().is_empty(), "denied input reached terminal inspection");

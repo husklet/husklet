@@ -27,6 +27,104 @@ impl Drop for AbortTransition<'_> {
 }
 
 impl Server {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn prepare_native_restore(
+        &self,
+        pid: libc::pid_t,
+        pidfd: std::os::fd::OwnedFd,
+        generation: u64,
+    ) -> Result<crate::runtime::execution::native_snapshot::PreparedNativeRestore, CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Recovery { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        let manifest = self
+            .source
+            .get_until("MANIFEST", deadline)
+            .map_err(Self::publication_failure)?;
+        let registers = self
+            .source
+            .get_until(crate::runtime::execution::native_snapshot::REGISTER_OBJECT, deadline)
+            .map_err(Self::publication_failure)?;
+        let memory = self
+            .source
+            .get_until(crate::runtime::execution::native_snapshot::MEMORY_OBJECT, deadline)
+            .map_err(Self::publication_failure)?;
+        crate::runtime::execution::native_snapshot::validate_native_objects(&manifest, |name| match name {
+            crate::runtime::execution::native_snapshot::REGISTER_OBJECT => Some(registers.clone()),
+            crate::runtime::execution::native_snapshot::MEMORY_OBJECT => Some(memory.clone()),
+            _ => None,
+        })
+        .map_err(|_| CaptureFailure::InvalidImage)?;
+        crate::runtime::execution::native_snapshot::prepare_native_restore(pid, pidfd, &registers, &memory, deadline)
+            .map_err(|error| {
+                hl_log::hl_error!(hl_log::tag::CHECKPOINT, "native checkpoint restore failed: {error}");
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    CaptureFailure::Deadline
+                } else {
+                    CaptureFailure::Failed
+                }
+            })
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn complete_prepared_native_restore(
+        &self,
+        prepared: crate::runtime::execution::native_snapshot::PreparedNativeRestore,
+        generation: u64,
+    ) -> Result<(), CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Recovery { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        crate::runtime::execution::native_snapshot::complete_native_restore(prepared, deadline).map_err(|error| {
+            hl_log::hl_error!(hl_log::tag::CHECKPOINT, "native checkpoint restore failed: {error}");
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                CaptureFailure::Deadline
+            } else {
+                CaptureFailure::Failed
+            }
+        })?;
+        self.complete_native_recovery(generation)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn commit_stopped_native(&self, pid: libc::pid_t, generation: u64) -> Result<(), CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Active { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        let image = crate::runtime::execution::native_snapshot::capture_stopped_native(pid, deadline)
+            .map_err(Self::publication_failure)?;
+        let transaction = self.transaction_token()?;
+        self.sink
+            .put_until(
+                transaction,
+                crate::runtime::execution::native_snapshot::REGISTER_OBJECT,
+                &image.registers,
+                deadline,
+            )
+            .map_err(Self::publication_failure)?;
+        self.sink
+            .put_until(
+                transaction,
+                crate::runtime::execution::native_snapshot::MEMORY_OBJECT,
+                &image.memory,
+                deadline,
+            )
+            .map_err(Self::publication_failure)?;
+        self.publish_manifest_as(&image.manifest, super::image_envelope::Reader::NativeX86V1)
+    }
+
     pub(super) fn transaction_token(&self) -> Result<NonZeroU64, CaptureFailure> {
         self.transaction
             .lock()

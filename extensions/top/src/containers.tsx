@@ -215,11 +215,13 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                 />
               </CardContent>
               <CardActions gap={1}>
-                <Button
-                  label={selected === item.id ? 'Hide details' : 'Details'}
-                  onInvoke={() => toggleDetails(item)}
-                />
-                {containerActions(item, busy, act, remove)}
+                <Row gap={1} wrap justify="end">
+                  <Button
+                    label={selected === item.id ? 'Hide details' : 'Details'}
+                    onInvoke={() => toggleDetails(item)}
+                  />
+                  {containerActions(item, busy, act, remove)}
+                </Row>
               </CardActions>
               {selected === item.id ? (
                 <ContainerDetail
@@ -301,7 +303,7 @@ function Page({
 }) {
   return (
     <Scroll grow={true} height={'fill'}>
-      <Column pad={4} gap={2}>
+      <Column width="fill" pad={4} gap={2}>
         <Row gap={2} align="center" justify="start" wrap>
           <Heading label={label} scale={'title'} />
           {action}

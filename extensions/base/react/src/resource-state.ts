@@ -1,5 +1,6 @@
 import React from 'react';
-import { Button, Column, EmptyState, InlineMessage, Progress } from './components.js';
+import { EmptyState, Progress } from './components.js';
+import { RecoveryState } from './recovery-state.js';
 
 export const RESOURCE_STATE_TEXT_BYTE_LIMIT = 1024;
 const encoder = new TextEncoder();
@@ -20,6 +21,7 @@ interface ResourceStateProps extends Record<string, unknown> {
   emptyDetail?: string;
   error?: string;
   retryLabel?: string;
+  operation?: string;
   onRetry?: () => void;
   children?: React.ReactNode;
 }
@@ -30,6 +32,7 @@ export function ResourceState({
   emptyDetail = '',
   error = 'The resource could not be loaded.',
   retryLabel = 'Retry',
+  operation = 'This view',
   onRetry,
   children,
   ...props
@@ -49,10 +52,11 @@ export function ResourceState({
       label: bounded(emptyLabel),
       detail: bounded(emptyDetail),
     });
-  return React.createElement(
-    Column,
-    { ...props, gap: 1 },
-    React.createElement(InlineMessage, { label: bounded(error), tone: 'danger' }),
-    onRetry ? React.createElement(Button, { label: bounded(retryLabel), onInvoke: onRetry }) : null,
-  );
+  return React.createElement(RecoveryState, {
+    ...props,
+    error: bounded(error),
+    operation,
+    retryLabel: bounded(retryLabel),
+    onRetry,
+  });
 }

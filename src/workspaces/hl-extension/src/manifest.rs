@@ -615,11 +615,7 @@ impl Resources {
         if value == 0 {
             return ceiling;
         }
-        if value > ceiling {
-            ceiling
-        } else {
-            value
-        }
+        if value > ceiling { ceiling } else { value }
     }
 }
 
@@ -792,8 +788,8 @@ impl Manifest {
         if !manifest.images.read.is_empty() && !manifest.capabilities.holds(Capability::ImageRead) {
             return Err(Invalid::Undeclared(Capability::ImageRead));
         }
-        if !manifest.images.r#use.is_empty() && !manifest.capabilities.holds(Capability::ContainerControl) {
-            return Err(Invalid::Undeclared(Capability::ContainerControl));
+        if !manifest.images.r#use.is_empty() && !manifest.capabilities.holds(Capability::ContainerCreate) {
+            return Err(Invalid::Undeclared(Capability::ContainerCreate));
         }
         if !manifest.images.pull.is_empty() && !manifest.capabilities.holds(Capability::ImagePull) {
             return Err(Invalid::Undeclared(Capability::ImagePull));
@@ -806,7 +802,10 @@ impl Manifest {
         }
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)
-            && !manifest.capabilities.holds(Capability::ContainerControl)
+            && !manifest.capabilities.holds(Capability::ContainerCreate)
+            && !manifest.capabilities.holds(Capability::ContainerExecute)
+            && !manifest.capabilities.holds(Capability::ContainerLifecycle)
+            && !manifest.capabilities.holds(Capability::ContainerRemove)
             && !manifest.capabilities.holds(Capability::ContainerAttach)
         {
             return Err(Invalid::Undeclared(Capability::ContainerRead));
@@ -903,10 +902,12 @@ mod tests {
     use super::{
         ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
     };
-    use crate::{RelativePath, PROTOCOL};
+    use crate::{PROTOCOL, RelativePath};
 
     fn document(extra: &str) -> String {
-        format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}")
+        format!(
+            "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}"
+        )
     }
 
     #[test]
@@ -1013,7 +1014,9 @@ mod tests {
         assert_eq!(narrowed.remove, vec![reference]);
 
         for invalid in ["alpine:3.20", "registry-1.docker.io/library/alpine:3.20 "] {
-            let manifest = format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"images:read\"]\n[images]\nread = [{{ reference = \"{invalid}\" }}]\n");
+            let manifest = format!(
+                "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"images:read\"]\n[images]\nread = [{{ reference = \"{invalid}\" }}]\n"
+            );
             assert!(Manifest::parse(&manifest, PROTOCOL).is_err(), "accepted {invalid:?}");
         }
     }

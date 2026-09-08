@@ -60,6 +60,12 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && ln -s "$(npm root --global)/react-reconciler" node_modules/react-reconciler \
     && ln -s "$(npm root --global)/typescript" node_modules/typescript \
     && ln -s "$(npm root --global)/vite" node_modules/vite \
+    && ln -s "$(npm root --global)/eslint" node_modules/eslint \
+    && ln -s "$(npm root --global)/@eslint" node_modules/@eslint \
+    && ln -s "$(npm root --global)/typescript-eslint" node_modules/typescript-eslint \
+    && ln -s "$(npm root --global)/eslint-plugin-react-hooks" node_modules/eslint-plugin-react-hooks \
+    && ln -s "$(npm root --global)/eslint-config-prettier" node_modules/eslint-config-prettier \
+    && ln -s "$(npm root --global)/prettier" node_modules/prettier \
     && ln -s "$(npm root --global)/@types/node" node_modules/@types/node \
     && ln -s "$(npm root --global)/@types/react" node_modules/@types/react \
     && mkdir -p /run/husklet \

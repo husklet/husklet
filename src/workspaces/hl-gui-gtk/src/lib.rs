@@ -60,6 +60,23 @@ impl Surface {
         &self.root
     }
 
+    /// Discards one producer generation while preserving this mounted root.
+    ///
+    /// A restarted producer begins its node identities and frame sequence at
+    /// one again. Keeping the root lets its page remain mounted, while every
+    /// widget, callback, source binding, and queued interaction from the old
+    /// generation loses authority before the replacement can draw.
+    pub fn reset(&mut self) {
+        while let Some(child) = self.root.first_child() {
+            self.root.remove(&child);
+        }
+        self.registry = Registry::default();
+        self.registry.insert(NodeId::ROOT, self.root.clone().upcast());
+        self.bindings = event::Bindings::default();
+        self.sources.clear();
+        self.reports = Reports::new();
+    }
+
     /// Interaction reported since the previous drain.
     #[must_use]
     pub fn reports(&self) -> &Reports {

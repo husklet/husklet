@@ -390,6 +390,10 @@ pub enum Request {
         target: crate::port::PaneOccupantTarget,
     },
     FilesystemInventory,
+    FilesystemChanges {
+        after: u64,
+        limit: u16,
+    },
     FilesystemList {
         path: RelativePath,
     },
@@ -452,6 +456,16 @@ pub enum Request {
     StateClear {
         observed: String,
     },
+    PreferenceRead,
+    PreferenceSet {
+        observed: u64,
+        key: String,
+        value: crate::port::PreferenceValue,
+    },
+    PreferenceRemove {
+        observed: u64,
+        key: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -499,10 +513,10 @@ impl Request {
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
             Self::WorkspaceEnvironmentPatch { .. } => Capability::WorkspaceEnvironmentWrite,
             Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
-            Self::ExtensionEnable { .. }
-            | Self::ExtensionDisable { .. }
-            | Self::ExtensionRetry { .. }
-            | Self::ExtensionRemove { .. } => Capability::ExtensionControl,
+            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRetry { .. } => {
+                Capability::ExtensionControl
+            }
+            Self::ExtensionRemove { .. } => Capability::ExtensionRemove,
             Self::ExtensionAcquisitionStart { .. }
             | Self::ExtensionAcquisitionStatus { .. }
             | Self::ExtensionAcquisitionCancel { .. }
@@ -517,19 +531,19 @@ impl Request {
             | Self::ExecutionLogs { .. }
             | Self::ExecutionOutput { .. }
             | Self::ExecutionWait { .. } => Capability::ContainerRead,
-            Self::ContainerCreate { .. }
-            | Self::ContainerStart { .. }
+            Self::ContainerCreate { .. } => Capability::ContainerCreate,
+            Self::ContainerStart { .. }
             | Self::ContainerStop { .. }
-            | Self::ContainerRemove { .. }
             | Self::ContainerPause { .. }
             | Self::ContainerUnpause { .. }
             | Self::ContainerRestart { .. }
             | Self::ContainerRename { .. }
-            | Self::ContainerKill { .. }
-            | Self::ExecutionKill { .. }
+            | Self::ContainerKill { .. } => Capability::ContainerLifecycle,
+            Self::ContainerRemove { .. } => Capability::ContainerRemove,
+            Self::ExecutionKill { .. }
             | Self::ExecutionCancel { .. }
             | Self::ExecutionRemove { .. }
-            | Self::ContainerExec { .. } => Capability::ContainerControl,
+            | Self::ContainerExec { .. } => Capability::ContainerExecute,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {
@@ -546,13 +560,12 @@ impl Request {
             | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
+            Self::TerminalWritePane { .. } => Capability::TerminalInput,
+            Self::TerminalSpawn { .. } | Self::TerminalSpawnObserved { .. } => Capability::TerminalProcessControl,
             Self::TerminalOpenTab { .. }
             | Self::TerminalPinTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSplitObserved { .. }
-            | Self::TerminalSpawn { .. }
-            | Self::TerminalSpawnObserved { .. }
-            | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
             | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
@@ -562,9 +575,10 @@ impl Request {
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRetitlePaneObserved { .. }
             | Self::TerminalRatio { .. }
-            | Self::TerminalRatioObserved { .. }
-            | Self::TerminalSwitchOccupant { .. }
-            | Self::TerminalSwitchOccupantObserved { .. } => Capability::TerminalControl,
+            | Self::TerminalRatioObserved { .. } => Capability::TerminalLayoutControl,
+            Self::TerminalSwitchOccupant { .. } | Self::TerminalSwitchOccupantObserved { .. } => {
+                Capability::TerminalProcessControl
+            }
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
@@ -572,6 +586,7 @@ impl Request {
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemInventory
+            | Self::FilesystemChanges { .. }
             | Self::FilesystemList { .. }
             | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
@@ -587,6 +602,8 @@ impl Request {
             | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
             Self::StateRead => Capability::StateRead,
             Self::StateWrite { .. } | Self::StateClear { .. } => Capability::StateWrite,
+            Self::PreferenceRead => Capability::PreferenceRead,
+            Self::PreferenceSet { .. } | Self::PreferenceRemove { .. } => Capability::PreferenceWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -735,12 +752,15 @@ pub enum Reply {
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
     FileInventory(crate::port::FileInventory),
+    FileChanges(crate::port::FileChangePage),
     Entries(Vec<Entry>),
     DirectoryPage(crate::port::DirectoryPage),
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),
     State(crate::port::ExtensionState),
+    Preferences(crate::port::ExtensionPreferences),
+    Revision(u64),
     Identity(String),
     Done,
 }
@@ -820,7 +840,7 @@ mod tests {
                 generation: 4
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerLifecycle
         );
         assert_eq!(
             Request::ContainerCreate {
@@ -843,7 +863,7 @@ mod tests {
                 },
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerCreate
         );
         assert_eq!(
             Request::ContainerExec {
@@ -855,7 +875,7 @@ mod tests {
                 working_directory: None,
             }
             .capability(),
-            Capability::ContainerControl
+            Capability::ContainerExecute
         );
         assert_eq!(
             Request::ContainerAttachTerminal {
@@ -921,7 +941,7 @@ mod tests {
                 ratio: 0.5,
             },
         ] {
-            assert_eq!(request.capability(), Capability::TerminalControl, "{request:?}");
+            assert_eq!(request.capability(), Capability::TerminalLayoutControl, "{request:?}");
         }
         assert_eq!(
             Request::InterfaceSplit {

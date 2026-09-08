@@ -30,7 +30,13 @@ test(
           payload: {
             protocol: 1,
             extension: 'execution-lifecycle-test',
-            granted: ['containers:read', 'containers:control'],
+            granted: [
+              'containers:read',
+              'containers:create',
+              'containers:execute',
+              'containers:lifecycle',
+              'containers:remove',
+            ],
           },
         }),
       );

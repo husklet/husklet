@@ -36,7 +36,7 @@ pub use capability::{Capability, Grant};
 pub use codec::Coding;
 pub use hl_rpc::{
     Authority, ChannelId, Channels, Compatibility, Denial, Emission, Flags, Frame, Hello, Kind, Limits, Malformed,
-    Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
+    PROTOCOL, Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire,
 };
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{
@@ -44,11 +44,12 @@ pub use manifest::{
     ImageSelector, Invalid, Manifest, NetworkGrant, NetworkSelector, PaneProvider, PaneSelection, Presentation,
     Resources, VolumeGrant, VolumeSelector, WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector,
 };
-pub use port::FileInventory;
 pub use port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionSummary,
 };
+pub use port::{ExtensionPreferences, PreferenceValue};
+pub use port::{FileChange, FileChangeKind, FileChangePage, FileInventory};
 pub use port::{
     HostError, InspectablePane, PaneInventory, PaneKind, PaneSemanticAction, PaneSemanticTree, SemanticActionKind,
     SemanticNode,

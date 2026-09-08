@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Row,
-  Separator,
+  Splitter,
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
@@ -16,7 +16,6 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
-  NetworkDetailsSource,
   VolumeDetailsSource,
 } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
@@ -48,9 +47,38 @@ export {
 export { ContainerDetail } from './container-detail.js';
 export { Containers } from './containers.js';
 export { Workspace } from './workspace.js';
-export { Extensions } from './extensions.js';
+export { Extensions, acquisitionFailure, acquisitionLabel } from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;
+export const SIDEBAR_WIDTH_KEY = 'sidebar.width';
+export const SIDEBAR_WIDTH_MIN = 160;
+export const SIDEBAR_WIDTH_MAX = 320;
+export const SIDEBAR_WIDTH_DEFAULT = 196;
+export const SIDEBAR_SAVE_DELAY_MS = 250;
+
+export function boundedSidebarWidth(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null;
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, value));
+}
+
+export async function persistSidebarWidth(api: WorkspaceApi, width: number): Promise<number> {
+  const bounded = boundedSidebarWidth(width);
+  if (bounded === null) throw new RangeError('sidebar width must be a safe integer');
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = await api.preferences.read();
+    try {
+      return await api.preferences.set(current.revision, SIDEBAR_WIDTH_KEY, {
+        kind: 'number',
+        value: bounded,
+      });
+    } catch (error) {
+      if ((error as { kind?: unknown })?.kind !== 'conflict') throw error;
+      last = error;
+    }
+  }
+  throw last;
+}
 type Selections = { subscribe(listener: (event: HostEvent) => void): (() => void) | undefined };
 type TopProps = {
   api: WorkspaceApi;
@@ -58,7 +86,6 @@ type TopProps = {
   containerDetails?: ContainerDetailsSource;
   executionDetails?: ExecutionDetailsSource;
   imageDetails?: ImageDetailsSource;
-  networkDetails?: NetworkDetailsSource;
   volumeDetails?: VolumeDetailsSource;
   initial?: Partial<{
     containers: ContainerSummary[];
@@ -77,12 +104,48 @@ export function Top({
   containerDetails,
   executionDetails,
   imageDetails,
-  networkDetails,
   volumeDetails,
   initial = {},
   initialSection = 'overview',
 }: TopProps) {
   const [section, setSection] = useState<Section>(initialSection);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
+  const persistedSidebarWidth = useRef<number | null>(null);
+  const preferencesReady = useRef(false);
+  useEffect(() => {
+    if (!api.preferences) return undefined;
+    let live = true;
+    void api.preferences
+      .read()
+      .then((preferences) => {
+        const entry = preferences.entries.find(([key]) => key === SIDEBAR_WIDTH_KEY)?.[1];
+        const width = entry?.kind === 'number' ? boundedSidebarWidth(entry.value) : null;
+        if (!live) return;
+        if (width !== null) setSidebarWidth(width);
+        persistedSidebarWidth.current = width ?? SIDEBAR_WIDTH_DEFAULT;
+        preferencesReady.current = true;
+      })
+      .catch(() => {
+        // Preferences are cosmetic; the default remains usable when persistence is unavailable.
+      });
+    return () => {
+      live = false;
+    };
+  }, [api]);
+  useEffect(() => {
+    if (!preferencesReady.current || sidebarWidth === persistedSidebarWidth.current)
+      return undefined;
+    const timer = setTimeout(() => {
+      void persistSidebarWidth(api, sidebarWidth)
+        .then(() => {
+          persistedSidebarWidth.current = sidebarWidth;
+        })
+        .catch(() => {
+          // A later resize retries; preference failure must not disable navigation.
+        });
+    }, SIDEBAR_SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [api, sidebarWidth]);
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -202,16 +265,25 @@ export function Top({
     ) : section === 'volumes' ? (
       <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
     ) : section === 'networks' ? (
-      <Networks api={api} resource={networks} networkDetails={networkDetails} />
+      <Networks api={api} resource={networks} />
     ) : (
       <Terminals api={api} resource={terminals} />
     );
   return (
-    <Row grow={true} gap={0}>
-      <Navigation section={section} onSelect={setSection} />
-      <Separator orientation={'vertical'} />
+    <Splitter
+      grow
+      orientation="horizontal"
+      position={sidebarWidth}
+      onChange={(event) => {
+        const position = boundedSidebarWidth(Number(event.value));
+        if (position !== null) setSidebarWidth(position);
+      }}
+    >
+      <Row width={{ minimum: { chars: 21 }, maximum: { chars: 42 } }} height="fill">
+        <Navigation section={section} onSelect={setSection} />
+      </Row>
       {body}
-    </Row>
+    </Splitter>
   );
 }
 

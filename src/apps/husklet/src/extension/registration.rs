@@ -16,11 +16,11 @@ use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::sync::mpsc::Sender;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
-use hl_client::model::{CreateContainer, InspectImage};
+use hl_client::model::{CreateContainer, HostConfig, InspectImage};
 use hl_extension::port::HostError;
 use hl_extension::{Manifest, PROTOCOL};
 
@@ -269,10 +269,7 @@ fn split(reference: &str) -> (&str, Option<&str>) {
 /// Copies one path out of a container made from `reference`, and removes it again.
 fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancellation) -> Result<Vec<u8>, String> {
     let client = bridge.client();
-    let request = CreateContainer {
-        image: reference.to_owned(),
-        ..CreateContainer::default()
-    };
+    let request = manifest_container_request(reference);
     let created = cancellable(bridge, cancellation, client.containers().create(&request, None))?
         .map_err(|error| error.to_string())?;
     let archive = cancellable(bridge, cancellation, read(bridge, &created.id, path))?;
@@ -282,6 +279,17 @@ fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancella
     let _ = bridge
         .wait(async { tokio::time::timeout(CLEANUP_BOUND, client.containers().remove(&created.id, true, true)).await });
     archive
+}
+
+fn manifest_container_request(reference: &str) -> CreateContainer {
+    CreateContainer {
+        image: reference.to_owned(),
+        host_config: Some(HostConfig {
+            readonly_rootfs: true,
+            ..HostConfig::default()
+        }),
+        ..CreateContainer::default()
+    }
 }
 
 fn cancellable<F: std::future::Future>(
@@ -372,7 +380,9 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, immutable_content, manifest_path, split, Acquisition, Candidate};
+    use super::{
+        Acquisition, Candidate, document, immutable_content, manifest_container_request, manifest_path, split,
+    };
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
 
@@ -441,6 +451,14 @@ mod tests {
     #[test]
     fn an_unlabelled_image_is_read_at_the_default_path() {
         assert_eq!(manifest_path(&BTreeMap::new()).unwrap(), Manifest::DEFAULT_PATH);
+    }
+
+    #[test]
+    fn manifest_inspection_requests_an_immutable_read_only_root() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let request = manifest_container_request(&digest);
+        assert_eq!(request.image, digest);
+        assert!(request.host_config.expect("host policy").readonly_rootfs);
     }
 
     #[test]
@@ -626,7 +644,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn both_architecture_candidates_are_bound_to_their_workspace_without_starting() {
-        use super::super::sidecar::{Image, SidecarSpec, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
+        use super::super::sidecar::{Image, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, SidecarSpec};
         use hl_client::model::EventQuery;
         use hl_container::{Config, Containers, Persistence};
         use hl_daemon::Daemon;

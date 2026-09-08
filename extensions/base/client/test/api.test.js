@@ -994,7 +994,7 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   assert.deepEqual((await next()).payload, { call: 'event_subscribe', with: { topic: 'filesystem' } });
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
-  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4 };
+  const inventory = { entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }], complete: false, coalesced: 4, revision: 19 };
   stage.host.write(encode({ channel: 17, kind: KIND.event, payload: { snapshot: 'filesystem', of: inventory } }));
   assert.equal((await next()).kind, KIND.credit);
   assert.deepEqual(seen, [inventory]);
@@ -1003,6 +1003,36 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await stopping;
   stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('filesystem change watcher advances opaque pages and exposes truncation', async () => {
+  const calls = [];
+  const pages = [
+    { changes: [{ revision: 11, kind: 'modify', path: 'src/late.ts', entry: { path: 'src/late.ts', directory: false, size: 4, identity: 'v2' } }], next: 11, current: 12, more: true, truncated: false },
+    { changes: [{ revision: 12, kind: 'remove', path: 'src/gone.ts', entry: null }], next: 12, current: 12, more: false, truncated: false },
+  ];
+  const api = workspace({
+    granted: ['filesystem:read'],
+    async call(name, payload) {
+      calls.push([name, payload]);
+      return { reply: 'file_changes', with: pages.shift() ?? { changes: [], next: 12, current: 12, more: false, truncated: false } };
+    },
+    onEvent() { return () => {}; },
+  });
+  const seen = [];
+  const controller = new AbortController();
+  const delivered = new Promise((resolve) => {
+    void api.files.watchChanges((page) => {
+      seen.push(...page.changes.map((change) => change.path));
+      if (seen.length === 2) { controller.abort(); resolve(); }
+    }, { after: 10, pageSize: 1, pollMs: 1000, signal: controller.signal });
+  });
+  await delivered;
+  assert.deepEqual(seen, ['src/late.ts', 'src/gone.ts']);
+  assert.deepEqual(calls.slice(0, 2), [
+    ['filesystem_changes', { after: 10, limit: 1 }],
+    ['filesystem_changes', { after: 11, limit: 1 }],
+  ]);
 });
 
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
@@ -1112,6 +1142,64 @@ test('image pull completes through start and status without cancelling', async (
   });
   assert.deepEqual(await api.images.pull('alpine:3.20'), image);
   assert.deepEqual(calls, ['image_pull_start', 'image_pull_status']);
+});
+
+test('streaming execution applies callback backpressure and cancels callback failure', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const pages = [
+    { entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [97] }], next: 1, more: true, eof: false, gap: false },
+    { entries: [{ sequence: 2, timestamp_ms: 2, stream: 'stderr', bytes: [98] }], next: 2, more: false, eof: true, gap: false },
+  ];
+  const calls = [];
+  api.containers.exec = async () => 'e'.repeat(32);
+  api.containers.executionOutputPages = async function* () { yield* pages; };
+  api.containers.execution = async (id) => ({ id, running: false, exit_code: 0, pid: null });
+  api.containers.cancelExecution = async (...arguments_) => { calls.push(['cancel', ...arguments_]); };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'] },
+      async (page) => {
+        calls.push(['page', page.next]);
+        await Promise.resolve();
+        if (page.next === 2) throw new Error('consumer refused output');
+      },
+    ),
+    (error) => error.name === 'ExecutionOperationError' && error.executionId === 'e'.repeat(32) && error.phase === 'output',
+  );
+  assert.deepEqual(calls, [
+    ['page', 1],
+    ['page', 2],
+    ['cancel', 'e'.repeat(32), { signal: 'SIGTERM', timeoutMs: 1_000 }],
+  ]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('pre-aborted streaming execution never starts a container command', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const controller = new AbortController();
+  controller.abort(new Error('caller stopped'));
+  let starts = 0;
+  api.containers.exec = async () => {
+    starts += 1;
+    return 'e'.repeat(32);
+  };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'], signal: controller.signal },
+      () => {},
+    ),
+    (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
+  );
+  assert.equal(starts, 0);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
 test('image pull preserves host failure when best-effort cancellation also fails', async () => {
@@ -1445,32 +1533,34 @@ test('extension retry wait arms before authority and requires exact durable duty
   const digest = `sha256:${'d'.repeat(64)}`;
   const pending = api.extensions.retryAndWait('manager', digest, { timeoutMs: 1_000 });
   assert.equal((await next()).payload.call, 'event_subscribe');
+  const duty = {
+    name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true,
+    pane_providers: [],
+  };
+  // A watcher's initial state predates restart authority and cannot prove that
+  // an already-running extension was actually retried.
+  stage.host.write(encode({
+    channel: 26, kind: KIND.event,
+    payload: { snapshot: 'extensions', of: [duty] },
+  }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, {
+  const first = await next();
+  const second = await next();
+  const mutation = [first, second].find(({ payload }) => payload?.call === 'extension_retry');
+  assert.deepEqual(mutation.payload, {
     call: 'extension_retry',
     with: { name: 'manager', image_digest: digest },
   });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal(await Promise.race([pending.then(() => true), new Promise((resolve) => setImmediate(() => resolve(false)))]), false);
   stage.host.write(
     encode({
       channel: 26,
       kind: KIND.event,
-      payload: {
-        snapshot: 'extensions',
-        of: [
-          {
-            name: 'manager',
-            image_digest: digest,
-            version: '1',
-            status: 'duty',
-            enabled: true,
-            pane_providers: [],
-          },
-        ],
-      },
+      payload: { snapshot: 'extensions', of: [duty] },
     }),
   );
   assert.equal((await next()).kind, KIND.credit);
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const result = await pending;

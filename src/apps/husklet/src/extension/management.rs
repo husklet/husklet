@@ -9,9 +9,9 @@ use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
+use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
-use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -232,19 +232,22 @@ fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &st
 }
 
 fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<ExtensionCatalogueEntry> {
-    reference
-        .map(|reference| ExtensionCatalogueEntry {
-            id: "storybook".into(),
-            title: "Component playground".into(),
-            description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
-            reference: reference.into(),
-            publisher: "Husklet".into(),
-            source: "husklet:first-party/storybook".into(),
-            protocol: hl_extension::PROTOCOL,
-            architectures: vec![architecture.into()],
-        })
-        .into_iter()
-        .collect()
+    let reference = reference.unwrap_or(concat!(
+        "ghcr.io/husklet/husklet/extension-storybook:",
+        env!("CARGO_PKG_VERSION")
+    ));
+    std::iter::once(ExtensionCatalogueEntry {
+        id: "storybook".into(),
+        title: "Component playground".into(),
+        description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        reference: reference.into(),
+        publisher: "Husklet".into(),
+        source: "husklet:first-party/storybook".into(),
+        protocol: hl_extension::PROTOCOL,
+        architectures: vec![architecture.into()],
+    })
+    .collect()
 }
 
 fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAcquisitionStatus {
@@ -355,7 +358,13 @@ mod tests {
         assert_eq!(entries[0].protocol, hl_extension::PROTOCOL);
         assert_eq!(entries[0].architectures, ["arm64"]);
         assert_eq!(entries[0].reference, "registry.example/husklet/storybook:4");
-        assert!(first_party_catalogue(None, "amd64").is_empty());
+        assert_eq!(
+            first_party_catalogue(None, "amd64")[0].reference,
+            format!(
+                "ghcr.io/husklet/husklet/extension-storybook:{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]
@@ -448,9 +457,11 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management
-            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert!(events.drain().is_none());
     }
 
@@ -463,9 +474,11 @@ mod tests {
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
         state.write("absent", b"migration-checkpoint").unwrap();
 
-        assert!(management
-            .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert_eq!(state.read().unwrap().contents, b"migration-checkpoint");
     }
 

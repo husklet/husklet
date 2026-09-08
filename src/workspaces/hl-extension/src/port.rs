@@ -694,6 +694,38 @@ pub struct FileInventory {
     pub entries: Vec<Entry>,
     pub complete: bool,
     pub coalesced: u64,
+    /// Journal cursor immediately preceding this reconciliation snapshot.
+    pub revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeKind {
+    Create,
+    Modify,
+    Remove,
+    /// The path changed between metadata snapshots; consumers must restat it.
+    Invalidate,
+}
+
+/// One metadata change in the workspace filesystem journal.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileChange {
+    pub revision: u64,
+    pub kind: FileChangeKind,
+    pub path: RelativePath,
+    pub entry: Option<Entry>,
+}
+
+/// A bounded page of changes. `truncated` requires a fresh inventory before
+/// continuing at `current`; it is never represented as an empty successful page.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileChangePage {
+    pub changes: Vec<FileChange>,
+    pub next: u64,
+    pub current: u64,
+    pub more: bool,
+    pub truncated: bool,
 }
 
 /// One installed extension and its durable lifecycle policy.
@@ -797,6 +829,8 @@ pub struct ExtensionCatalogueEntry {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// Human-facing release version advertised for discovery and update comparison.
+    pub version: String,
     pub reference: String,
     pub publisher: String,
     pub source: String,
@@ -834,6 +868,7 @@ impl ExtensionCatalogue {
                 || !ids.insert(&entry.id)
                 || !bounded_text(&entry.title, 128)
                 || !bounded_text(&entry.description, 1024)
+                || !bounded_text(&entry.version, 64)
                 || !bounded_text(&entry.publisher, 128)
                 || !bounded_text(&entry.reference, 512)
                 || !bounded_text(&entry.source, 512)
@@ -1191,7 +1226,7 @@ pub trait TerminalSurface {
     /// Opens a non-persisted terminal tab running `command` directly in the
     /// immutable container identity. The attachment owns the process and must
     /// kill it when the pane disconnects.
-    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+    fn attach_container(&self, _id: &str, _generation: u64, _command: &[String]) -> Result<String, HostError> {
         Err(HostError::Unsupported(
             "container terminal attachment is unavailable".into(),
         ))
@@ -1367,10 +1402,36 @@ pub struct ExtensionState {
     pub contents: Vec<u8>,
 }
 
+/// One deliberately small UI preference value. This is not arbitrary JSON:
+/// nested values, null, arrays, and objects are not part of the contract.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PreferenceValue {
+    Boolean(bool),
+    Number(i64),
+    String(String),
+}
+
+/// A revisioned snapshot of the authenticated extension's workspace-local preferences.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionPreferences {
+    pub revision: u64,
+    pub entries: Vec<(String, PreferenceValue)>,
+}
+
 pub trait ExtensionStateStore {
     fn read(&self) -> Result<ExtensionState, HostError>;
     fn write(&self, observed: &str, contents: &[u8]) -> Result<String, HostError>;
     fn clear(&self, observed: &str) -> Result<(), HostError>;
+    fn preferences(&self) -> Result<ExtensionPreferences, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
+    fn preference_set(&self, _observed: u64, _key: &str, _value: &PreferenceValue) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
+    fn preference_remove(&self, _observed: u64, _key: &str) -> Result<u64, HostError> {
+        Err(HostError::Unsupported("extension preferences are unavailable".into()))
+    }
 }
 
 impl<T: WorkspaceFiles + ?Sized> ExtensionStateStore for T {
@@ -1389,6 +1450,17 @@ pub trait WorkspaceFiles {
     /// Recursively inventories only the roots declared by this extension.
     fn inventory(&self, _roots: &[crate::FilesystemSelector]) -> Result<FileInventory, HostError> {
         Err(HostError::Unsupported("filesystem observation is unavailable".into()))
+    }
+
+    fn changes_since(
+        &self,
+        _roots: &[crate::FilesystemSelector],
+        _after: u64,
+        _limit: usize,
+    ) -> Result<FileChangePage, HostError> {
+        Err(HostError::Unsupported(
+            "filesystem change journal is unavailable".into(),
+        ))
     }
 
     /// # Errors
@@ -1471,8 +1543,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
-        PANE_TEXT_BYTES,
+        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
+        bounded_pane_text, pane_lines,
     };
 
     #[test]
@@ -1600,41 +1672,61 @@ mod tests {
             id: "storybook".into(),
             title: "Component playground".into(),
             description: "First-party components".into(),
+            version: "1.2.3".into(),
             reference: "registry/storybook:latest".into(),
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_ok());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone(), entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                architectures: vec!["amd64".into(), "amd64".into()],
-                ..entry.clone()
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                description: "unsafe\nmetadata".into(),
-                ..entry
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone(), entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    architectures: vec!["amd64".into(), "amd64".into()],
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    version: String::new(),
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    description: "unsafe\nmetadata".into(),
+                    ..entry
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

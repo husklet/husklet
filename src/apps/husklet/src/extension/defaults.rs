@@ -37,7 +37,12 @@ fn install_defaults_with(
             }
             continue;
         }
-        let candidate = read(workspace, reference)?;
+        let candidate = read(workspace, reference).map_err(|reason| {
+            format!(
+                "default extension {expected} {version} is unavailable from public image {reference}: {reason}; check registry access, then retry workspace provisioning",
+                version = env!("CARGO_PKG_VERSION")
+            )
+        })?;
         if candidate.manifest.name != name {
             return Err(format!(
                 "{reference} declares extension {}, expected {expected}",
@@ -153,5 +158,18 @@ mod tests {
         assert_eq!(entries[0].stage, Stage::Duty);
         assert!(entries[0].granted.holds(Capability::ExtensionRead));
         assert!(entries[0].granted.holds(Capability::WorkspaceRead));
+    }
+
+    #[test]
+    fn unavailable_default_names_the_public_release_image_and_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let error = install_defaults_with(&workspace, |_, _| Err("registry denied anonymous pull".into()))
+            .expect_err("unavailable image");
+        assert!(error.contains(DEFAULT_EXTENSIONS[0].1));
+        assert!(error.contains(env!("CARGO_PKG_VERSION")));
+        assert!(error.contains("check registry access"));
+        assert!(error.contains("retry workspace provisioning"));
     }
 }

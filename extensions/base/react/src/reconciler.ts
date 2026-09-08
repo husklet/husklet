@@ -52,6 +52,10 @@ export class Surface {
     send: (frame: Frame) => void,
     { sequence = 0, next = 1, patches = [] }: SurfaceSeed = {},
   ) {
+    if (!Number.isSafeInteger(sequence) || sequence < 0)
+      throw new RangeError('surface sequence must be a non-negative safe integer');
+    if (!Number.isSafeInteger(next) || next < 1)
+      throw new RangeError('next node identity must be a positive safe integer');
     this.#send = send;
     this.#sequence = sequence;
     this.#next = next;
@@ -93,6 +97,8 @@ export class Surface {
   /** Sends everything queued as one frame, and nothing at all when idle. */
   flush() {
     if (this.#queue.length === 0) return null;
+    if (this.#sequence === Number.MAX_SAFE_INTEGER)
+      throw new RangeError('surface frame sequence is exhausted; start a new session generation');
     const frame = { sequence: ++this.#sequence, patches: this.#queue };
     this.#queue = [];
     this.#send(frame);

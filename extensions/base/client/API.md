@@ -86,16 +86,16 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.list(...)` — `container_list`, requires `containers:read`.
 - `host.containers.inspect(...)` — `container_inspect`, requires `containers:read`.
 - `host.containers.logs(...)` — `container_logs`, requires `containers:read`.
-- `host.containers.create(...)` — `container_create`, requires `containers:control`.
-- `host.containers.start(...)` — `container_start`, requires `containers:control`.
-- `host.containers.stop(...)` — `container_stop`, requires `containers:control`.
-- `host.containers.remove(...)` — `container_remove`, requires `containers:control`.
-- `host.containers.pause(...)` — `container_pause`, requires `containers:control`.
-- `host.containers.unpause(...)` — `container_unpause`, requires `containers:control`.
-- `host.containers.restart(...)` — `container_restart`, requires `containers:control`.
-- `host.containers.rename(...)` — `container_rename`, requires `containers:control`.
-- `host.containers.kill(...)` — `container_kill`, requires `containers:control`.
-- `host.containers.exec(...)` — `container_exec`, requires `containers:control`.
+- `host.containers.create(...)` — `container_create`, requires `containers:create`.
+- `host.containers.start(...)` — `container_start`, requires `containers:lifecycle`.
+- `host.containers.stop(...)` — `container_stop`, requires `containers:lifecycle`.
+- `host.containers.remove(...)` — `container_remove`, requires `containers:remove`.
+- `host.containers.pause(...)` — `container_pause`, requires `containers:lifecycle`.
+- `host.containers.unpause(...)` — `container_unpause`, requires `containers:lifecycle`.
+- `host.containers.restart(...)` — `container_restart`, requires `containers:lifecycle`.
+- `host.containers.rename(...)` — `container_rename`, requires `containers:lifecycle`.
+- `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
+- `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
 
 ## Processes and executions
@@ -106,55 +106,59 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.executionLogs(...)` — `execution_logs`, requires `containers:read`.
 - `host.containers.executionOutput(...)` — `execution_output`, requires `containers:read`.
 - `host.containers.waitExecution(...)` — `execution_wait`, requires `containers:read`.
-- `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:control`.
-- `host.containers.cancelExecution(...)` — `execution_cancel`, requires `containers:control`.
-- `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:control`.
+- `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:execute`.
+- `host.containers.cancelExecution(...)` — `execution_cancel`, requires `containers:execute`.
+- `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:execute`.
 - `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.
-- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.
+- `host.containers.execStreaming(id, generation, options, onPage)` — executes by immutable container ID, delivers bounded output pages with callback backpressure, cancels on abort or callback failure, and returns the execution ID and completed summary without auto-removing the record.
+- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:execute`.
 
 ## Terminal and panes
 
 - `host.terminal.tabs(...)` — `terminal_tabs`, requires `terminals:read`.
 - `host.terminal.topology(...)` — `terminal_topology`, requires `terminals:read`.
 - `host.terminal.panes(...)` — `pane_list`, requires `panes:observe`.
-- `host.terminal.openTab(...)` — `terminal_open_tab`, requires `terminals:control`.
-- `host.terminal.pinTab(...)` — `terminal_pin_tab`, requires `terminals:control`.
-- `host.terminal.split(...)` — `terminal_split`, requires `terminals:control`.
-- `host.terminal.splitObserved(...)` — `terminal_split_observed`, requires `terminals:control`.
-- `host.terminal.spawn(...)` — `terminal_spawn`, requires `terminals:control`.
-- `host.terminal.spawnObserved(...)` — `terminal_spawn_observed`, requires `terminals:control`.
+- `host.terminal.openTab(...)` — `terminal_open_tab`, requires `terminals:layout-control`.
+- `host.terminal.pinTab(...)` — `terminal_pin_tab`, requires `terminals:layout-control`.
+- `host.terminal.split(...)` — `terminal_split`, requires `terminals:layout-control`.
+- `host.terminal.splitObserved(...)` — `terminal_split_observed`, requires `terminals:layout-control`.
+- `host.terminal.spawn(...)` — `terminal_spawn`, requires `terminals:process-control`.
+- `host.terminal.spawnObserved(...)` — `terminal_spawn_observed`, requires `terminals:process-control`.
 - `host.terminal.read(...)` — `terminal_read_pane`, requires `terminals:output`.
-- `host.terminal.writeInput(...)` — `terminal_write_pane`, requires `terminals:control`.
-- `host.terminal.resizeGrid(...)` — `terminal_resize_grid`, requires `terminals:control`.
-- `host.terminal.resizeGridObserved(...)` — `terminal_resize_grid_observed`, requires `terminals:control`.
-- `host.terminal.close(...)` — `terminal_close_pane`, requires `terminals:control`.
-- `host.terminal.closeObserved(...)` — `terminal_close_pane_observed`, requires `terminals:control`.
-- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:control`.
-- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:control`.
-- `host.terminal.retitle(...)` — `terminal_retitle_pane`, requires `terminals:control`.
-- `host.terminal.retitleObserved(...)` — `terminal_retitle_pane_observed`, requires `terminals:control`.
-- `host.terminal.ratio(...)` — `terminal_ratio`, requires `terminals:control`.
-- `host.terminal.ratioObserved(...)` — `terminal_ratio_observed`, requires `terminals:control`.
-- `host.terminal.switchOccupant(...)` — `terminal_switch_occupant`, requires `terminals:control`.
-- `host.terminal.switchOccupantObserved(...)` — `terminal_switch_occupant_observed`, requires `terminals:control`.
+- `host.terminal.writeInput(...)` — `terminal_write_pane`, requires `terminals:input`.
+- `host.terminal.resizeGrid(...)` — `terminal_resize_grid`, requires `terminals:layout-control`.
+- `host.terminal.resizeGridObserved(...)` — `terminal_resize_grid_observed`, requires `terminals:layout-control`.
+- `host.terminal.close(...)` — `terminal_close_pane`, requires `terminals:layout-control`.
+- `host.terminal.closeObserved(...)` — `terminal_close_pane_observed`, requires `terminals:layout-control`.
+- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:layout-control`.
+- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:layout-control`.
+- `host.terminal.retitle(...)` — `terminal_retitle_pane`, requires `terminals:layout-control`.
+- `host.terminal.retitleObserved(...)` — `terminal_retitle_pane_observed`, requires `terminals:layout-control`.
+- `host.terminal.ratio(...)` — `terminal_ratio`, requires `terminals:layout-control`.
+- `host.terminal.ratioObserved(...)` — `terminal_ratio_observed`, requires `terminals:layout-control`.
+- `host.terminal.switchOccupant(...)` — `terminal_switch_occupant`, requires `terminals:process-control`.
+- `host.terminal.switchOccupantObserved(...)` — `terminal_switch_occupant_observed`, requires `terminals:process-control`.
+- Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.
 - `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.
 - `host.terminal.readAll(...)` — discovers panes once and converts each to terminal transcript or bounded semantic XML, reports incomplete discovery, and refuses cursor races; requires `panes:observe`, `terminals:output`, and `panes:semantic-read` for mixed workspaces.
 - `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.
 - `host.terminal.actAndWait(...)` — arms pane observation before a revision-bound semantic action, then returns its changed bounded projection; requires `panes:observe`, `panes:semantic-control`, and the corresponding read grant.
-- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe` and `terminals:control`.
-- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe` and `terminals:control`.
-- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe` and `terminals:control`.
-- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:control`.
-- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:control`.
-- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.
-- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.
-- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:control`.
-- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:control`.
-- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe` and `terminals:control`.
+- `host.terminal.switchOccupantAndWait(...)` — arms observation before an observed occupant switch and verifies the exact terminal or extension/provider identity; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
+- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
+- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
+- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
+- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
+- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.
+- `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.
+- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:process-control`.
+- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:layout-control`.
+- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:layout-control`.
+- `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 
 ## Files
 
 - `host.files.inventory(...)` — `filesystem_inventory`, requires `filesystem:read`.
+- `host.files.changes(...)` — `filesystem_changes`, requires `filesystem:read`.
 - `host.files.list(...)` — `filesystem_list`, requires `filesystem:read`.
 - `host.files.listPage(...)` — `filesystem_list_page`, requires `filesystem:read`.
 - `host.files.read(...)` — `filesystem_read`, requires `filesystem:read`.
@@ -176,6 +180,13 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.clear(...)` — `state_clear`, requires `state:write`.
 - `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
 - `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
+
+## Extension preferences
+
+- `host.preferences.read(...)` — `preference_read`, requires `preferences:read`.
+- `host.preferences.set(...)` — `preference_set`, requires `preferences:write`.
+- `host.preferences.remove(...)` — `preference_remove`, requires `preferences:write`.
+- Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.
 
 ## Images
 
@@ -211,7 +222,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.extensions.enable(...)` — `extension_enable`, requires `extensions:control`.
 - `host.extensions.disable(...)` — `extension_disable`, requires `extensions:control`.
 - `host.extensions.retry(...)` — `extension_retry`, requires `extensions:control`.
-- `host.extensions.remove(...)` — `extension_remove`, requires `extensions:control`.
+- `host.extensions.remove(...)` — `extension_remove`, requires `extensions:remove`.
 - `host.extensions.startAcquisition(...)` — `extension_acquisition_start`, requires `extensions:install`.
 - `host.extensions.acquisition(...)` — `extension_acquisition_status`, requires `extensions:install`.
 - `host.extensions.cancelAcquisition(...)` — `extension_acquisition_cancel`, requires `extensions:install`.
@@ -221,12 +232,12 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extensions:read` and `extensions:control`.
 - `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.
 - `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.
-- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:control`.
+- `host.extensions.removeAndWait(...)` — arms inventory before removing an exact installed digest, then proves that digest is absent and reports any same-name replacement; requires `extensions:read` and `extensions:remove`.
 - `host.extensions.installAndWait(...)` / `updateAndWait(...)` — inspect the exact ready acquisition revision, send its reviewed immutable digest as commit CAS authority, arm inventory before commit, and verify the returned and published name/digest; requires `extensions:install` and `extensions:read`.
-- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:control`.
-- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:control`.
-- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:control`.
-- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:control`.
+- `host.containers.startAndWait(...)` — acknowledges bounded inventory before starting an immutable ID, ignores the unchanged initial snapshot, and returns only on a later running state; requires `containers:read` and `containers:lifecycle`.
+- `host.containers.stopAndWait(...)` — acknowledges bounded inventory before stopping an immutable ID, ignores unchanged/running snapshots, and returns only on a later exited state; requires `containers:read` and `containers:lifecycle`.
+- `host.containers.removeAndWait(...)` — arms an explicit completeness-bearing inventory before removal and accepts absence only from a later `complete: true` snapshot; requires `containers:read` and `containers:remove`.
+- `host.containers.restartAndWait(...)` — arms inventory before restarting an immutable ID and accepts only `running` at a generation newer than the caller observed; requires `containers:read` and `containers:lifecycle`.
 
 ## Notifications
 
