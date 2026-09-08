@@ -73,7 +73,9 @@ export const populatedFixture = {
 };
 
 /** Adds deterministic process data while all mutations still cross the real host connection. */
-export function fixtureApi(api: WorkspaceApi): WorkspaceApi {
+export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi {
+  const unavailable = mode === 'error';
+  let catalogueAttempts = 0;
   return {
     ...api,
     subscribe: async () => {},
@@ -91,5 +93,19 @@ export function fixtureApi(api: WorkspaceApi): WorkspaceApi {
         truncated: false,
       }),
     },
+    extensions: unavailable
+      ? {
+          ...api.extensions,
+          catalogue: async () => {
+            catalogueAttempts += 1;
+            if (catalogueAttempts === 1) {
+              throw new Error(
+                'expected frame 9, received 12: extension catalogue transport closed',
+              );
+            }
+            return api.extensions.catalogue();
+          },
+        }
+      : api.extensions,
   };
 }

@@ -39,7 +39,9 @@ const [{ render, Text, workspace }, { Top }, models] = await Promise.all([
   import('./app.js'),
   import('./model.js'),
 ]);
-const fixture = process.env.HUSKLET_TOP_FIXTURE === 'populated';
+const fixture = ['populated', 'error'].includes(process.env.HUSKLET_TOP_FIXTURE ?? '')
+  ? process.env.HUSKLET_TOP_FIXTURE
+  : undefined;
 const fixtureModule = fixture ? await import('./fixture.js') : null;
 const api = workspace(session);
 surface = render(<Text label={'Loading workspace resources…'} />, session, {
@@ -53,7 +55,7 @@ executionDetails = new models.ExecutionDetailsSource(send);
 volumeDetails = new models.VolumeDetailsSource(send);
 surface.update(
   <Top
-    api={fixtureModule ? fixtureModule.fixtureApi(api) : api}
+    api={fixtureModule ? fixtureModule.fixtureApi(api, fixture) : api}
     selections={providerSelections}
     containerDetails={containerDetails}
     executionDetails={executionDetails}

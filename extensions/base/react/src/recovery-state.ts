@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { Button, Column, Expander, InlineMessage, Text } from './components.js';
+import { Button, Column, Expander, InlineMessage, Row, Text } from './components.js';
 
 export const RECOVERY_DIAGNOSTIC_BYTE_LIMIT = 1024;
 const encoder = new TextEncoder();
@@ -54,12 +54,16 @@ export function RecoveryState({
       tone: 'danger',
     }),
     onRetry
-      ? React.createElement(Button, {
-          label: retryLabel,
-          variant: 'outline',
-          tone: 'accent',
-          onInvoke: onRetry,
-        })
+      ? React.createElement(
+          Row,
+          { align: 'start' },
+          React.createElement(Button, {
+            label: retryLabel,
+            variant: 'outline',
+            tone: 'accent',
+            onInvoke: onRetry,
+          }),
+        )
       : null,
     diagnostic
       ? React.createElement(
