@@ -546,11 +546,17 @@ mod tests {
         let mut launch = launch();
         launch.a64_x86_jcc_link = true;
         launch.execution = crate::Execution::Auto;
-        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), Some("1"));
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64")).then_some("1")
+        );
 
         launch.execution = crate::Execution::translated(false);
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(spec.plan.options.get("HL_A64_X86_JCC_LINK"), Some("1"));
+        assert_eq!(
+            spec.plan.options.get("HL_A64_X86_JCC_LINK"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64")).then_some("1")
+        );
 
         launch.execution = crate::Execution::Interpreted;
         assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);

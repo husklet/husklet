@@ -427,6 +427,7 @@ impl Spec {
             options,
             "HL_A64_X86_JCC_LINK",
             launch.a64_x86_jcc_link
+                && cfg!(all(target_os = "linux", target_arch = "x86_64"))
                 && matches!(launch.guest, crate::Guest::Aarch64)
                 && matches!(
                     launch.execution,

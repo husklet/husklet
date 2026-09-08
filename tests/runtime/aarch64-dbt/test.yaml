@@ -12,7 +12,29 @@ cases:
     build: { source: source/chain_lifecycle.c, output: conditional-chain-lifecycle, flags: [-static, -no-pie, -O2, -pthread] }
     artifact: { destination: /opt/husklet/conditional-chain-lifecycle }
     run: []
-    expect: { exit: 42, stdout_empty: true }
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: candidates, greater-than: 0 }
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "73043" } }
+  - id: runtime/aarch64-dbt/conditional-chain-lifecycle-off
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_lifecycle.c, output: conditional-chain-lifecycle-off, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-lifecycle-off }
+    environment: { HL_A64_X86_JCC_LINK: "0" }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { counter: candidates, equals: 0 }
+        - { counter: patched, equals: 0 }
+        - { counter: executed, equals: 0 }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "154278" } }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }

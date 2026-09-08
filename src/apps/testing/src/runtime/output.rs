@@ -1503,7 +1503,18 @@ fn valid_profile_line(line: &str) -> bool {
             })
             && fields.split_whitespace().any(|field| field == "reconcile=1")
     });
-    summary || translit || x86_a64_route
+    let a64_x86_jcc_link = fields.strip_prefix("a64-x86-jcc-link ").is_some_and(|fields| {
+        ["candidates", "registered", "dropped", "patched", "executed"]
+            .iter()
+            .all(|wanted| {
+                fields.split_whitespace().any(|field| {
+                    field
+                        .split_once('=')
+                        .is_some_and(|(name, value)| name == *wanted && value.parse::<u64>().is_ok())
+                })
+            })
+    });
+    summary || translit || x86_a64_route || a64_x86_jcc_link
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -1639,6 +1650,19 @@ mod tests {
             "- { counter: body_retired, equals: 12 }\n\
              - { counter: major10, equals: 1 }\n\
              - { counter: branch_system, equals: 1 }\n",
+        )
+        .unwrap();
+        assert!(crate::runtime::definition::diagnostics::violation(&assertions, &forwarded).is_none());
+    }
+
+    #[test]
+    fn aarch64_x86_chain_receipt_reaches_worker_counter_assertions() {
+        let captured = "[prof] a64-x86-jcc-link candidates=7 registered=6 dropped=0 patched=5 executed=99\n";
+        let mut forwarded = Vec::new();
+        forward_profile(captured, &mut forwarded).unwrap();
+        assert_eq!(forwarded, captured.as_bytes());
+        let assertions: Vec<crate::runtime::definition::diagnostics::Assertion> = serde_yaml::from_str(
+            "- { counter: patched, greater-than: 0 }\n- { counter: executed, greater-than: 0 }\n",
         )
         .unwrap();
         assert!(crate::runtime::definition::diagnostics::violation(&assertions, &forwarded).is_none());
