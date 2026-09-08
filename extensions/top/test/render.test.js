@@ -409,6 +409,16 @@ test('Top owns workspace settings and extension management in the same tab', asy
   expand(stage, 'Environment variables');
   await settled();
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
+  assert.deepEqual(
+    taggedProperty(stage, 'Remove TOKEN', 'IconButton', 'Icon'),
+    { Text: 'user-trash-symbolic' },
+    'row removal is a compact secondary action instead of a full text button',
+  );
+  assert.equal(
+    ancestorProperty(stage, 'Remove TOKEN', 'Row', 'Wrap')?.Flag,
+    true,
+    'environment controls reflow instead of colliding at narrow widths',
+  );
   toggleLatestSwitch(stage, true);
   await settled();
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
