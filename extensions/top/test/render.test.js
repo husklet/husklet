@@ -184,6 +184,14 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   const splitter = stage.frames
     .flatMap((frame) => frame.patches)
     .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.deepEqual(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
+      .at(-1)?.SetProp.value,
+    { Number: 176 },
+    'the default leaves daily-driver content room at the 520px launch width',
+  );
   assert.ok(
     stage.surface.dispatch({
       trigger: 'Change',
