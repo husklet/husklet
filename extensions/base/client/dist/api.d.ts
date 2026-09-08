@@ -931,6 +931,8 @@ export interface WorkspaceApi {
         execStreaming(id: string, generation: number, options: {
             command: string[];
             environment?: [string, string][];
+            /** Credential keys resolved by the host directly into process environment variables. */
+            credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
             pageLimit?: number;
@@ -946,6 +948,8 @@ export interface WorkspaceApi {
         execText(id: string, generation: number, options: {
             command: string[];
             environment?: [string, string][];
+            /** Credential keys resolved by the host directly into process environment variables. */
+            credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
             maxBytes: number;

@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL, PaneChange,
-    PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
+    codec, Authority, ChannelId, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox,
+    PaneChange, PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -443,6 +443,13 @@ impl Conversation {
             match self.wire.receive_step() {
                 Ok(frame) => {
                     partial_since = None;
+                    // A control close ends this connection generation. Bytes may
+                    // already be buffered behind it in the same socket read, but
+                    // they belong to a peer that has surrendered its authority
+                    // and must never reach either services or the GUI queue.
+                    if frame.kind == Kind::Close && frame.channel == ChannelId::CONTROL {
+                        return Ok(());
+                    }
                     self.exchange(&frame, services)?;
                 }
                 Err(Transit::Pending) => {
@@ -1227,8 +1234,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL,
-        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, codec,
+        codec, Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind,
+        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -4011,6 +4018,49 @@ mod tests {
         assert!(queue.is_empty(), "collecting empties the queue");
         drop(wire);
         let _ = served.join().expect("joined");
+    }
+
+    #[test]
+    fn a_coalesced_control_close_revokes_later_interface_frames() {
+        let queue = Queue::new();
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = host(Duration::from_secs(5), queue.clone(), Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let before = codec::request(&Request::InterfaceRenderAt {
+            slot: String::new(),
+            frame: hl_gui::Frame::new(1),
+        })
+        .expect("first render frame")
+        .encode()
+        .expect("first render bytes");
+        let close = Frame::control(Kind::Close, Vec::new()).encode().expect("close bytes");
+        let after = codec::request(&Request::InterfaceRenderAt {
+            slot: String::new(),
+            frame: hl_gui::Frame::new(2),
+        })
+        .expect("stale render frame")
+        .encode()
+        .expect("stale render bytes");
+        let mut coalesced = Vec::with_capacity(before.len() + close.len() + after.len());
+        coalesced.extend_from_slice(&before);
+        coalesced.extend_from_slice(&close);
+        coalesced.extend_from_slice(&after);
+        let mut peer = wire.into_stream();
+        peer.write_all(&coalesced)
+            .expect("one kernel write carries render, close, and stale render");
+        peer.shutdown(std::net::Shutdown::Write)
+            .expect("the complete coalesced stream has been sent");
+
+        assert_eq!(served.join().expect("joined"), Ok(()));
+        let collected = queue.collect();
+        assert_eq!(collected.frames.len(), 1, "only pre-close GUI work is published");
+        assert_eq!(collected.frames[0].frame.sequence, 1);
+        assert!(
+            ledger.reached().is_empty(),
+            "interface rendering reaches no workspace authority"
+        );
     }
 
     #[test]

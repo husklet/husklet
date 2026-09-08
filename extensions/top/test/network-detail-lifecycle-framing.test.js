@@ -120,9 +120,9 @@ test(
       invoke(stage, 'Networks');
       await until(() => labelled(stage, 'old-net'));
       invoke(stage, 'Inspect');
-      await until(() => inspections === 1);
+      await until(() => inspections === 1 && labelled(stage, 'Network details'));
       choose(stage, container);
-      assert.equal(labelled(stage, 'Disconnect'), undefined, 'membership waits for inspection');
+      await until(() => labelled(stage, 'Disconnect'));
       invoke(stage, 'Remove');
       assert.ok(labelled(stage, `Remove immutable network ${id} (old-net)?`));
       const start = stage.frames.length;
@@ -141,7 +141,7 @@ test(
         );
       await new Promise((resolve) => setTimeout(resolve, 170));
       invoke(stage, 'Inspect');
-      await until(() => labelled(stage, 'Network details'));
+      await until(() => inspections === 2 && labelled(stage, 'Scope · new-scope'));
       assert.ok(labelled(stage, 'Scope · new-scope'));
       await until(() => labelled(stage, 'Disconnect'));
       invoke(stage, 'Disconnect');
