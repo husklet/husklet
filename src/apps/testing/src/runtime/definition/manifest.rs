@@ -83,6 +83,9 @@ pub(super) struct RuntimeSpecification {
     /// Mechanical contract for the ELF artifact produced by this case.
     pub(super) elf: Option<elf::Expectation>,
     pub(super) artifact: Option<Artifact>,
+    /// Absolute executable already present in the image. No artifact or writable layer is staged.
+    #[serde(rename = "image-executable")]
+    pub(super) image_executable: Option<String>,
     #[serde(default)]
     pub(super) targets: BTreeSet<Target>,
     pub(super) status: Status,

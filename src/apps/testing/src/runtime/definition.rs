@@ -47,8 +47,8 @@ pub struct Workload {
     pub(crate) guest_elf: Vec<GuestElf>,
     pub(crate) working_directory: Option<String>,
     pub destination: String,
-    pub(in crate::runtime) source: ManifestPath,
-    pub(crate) output: String,
+    pub(in crate::runtime) source: Option<ManifestPath>,
+    pub(crate) output: Option<String>,
     elf: Option<elf::Expectation>,
     pub(crate) flags: Vec<String>,
     build_compiler: Option<Commands>,
@@ -171,14 +171,44 @@ impl App {
                 if case.expect.signal.is_some_and(|signal| !(1..=64).contains(&signal)) {
                     return Err(format!("{} has an out-of-range expected signal", case.id).into());
                 }
+                let image_executable = case.image_executable;
                 let (source, output, build_compiler, build_arguments, build_environment, flags, inputs, destination) =
-                    document
-                        .build
-                        .resolve(case.build, case.artifact, document.artifact.as_ref())?;
-                let inputs = input::validate(directory, &source, inputs)?;
-                safe_output(&output)?;
+                    if let Some(executable) = image_executable {
+                        if case.build.is_some() || case.artifact.is_some() {
+                            return Err(format!("{} combines image-executable with build/artifact", case.id).into());
+                        }
+                        std::path::Path::new(&executable).safe_absolute()?;
+                        (
+                            None,
+                            None,
+                            None,
+                            Vec::new(),
+                            BTreeMap::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            executable,
+                        )
+                    } else {
+                        let (source, output, compiler, arguments, environment, flags, inputs, destination) = document
+                            .build
+                            .resolve(case.build, case.artifact, document.artifact.as_ref())?;
+                        let inputs = input::validate(directory, &source, inputs)?;
+                        safe_output(&output)?;
+                        (
+                            Some(source),
+                            Some(output),
+                            compiler,
+                            arguments,
+                            environment,
+                            flags,
+                            inputs,
+                            destination,
+                        )
+                    };
                 std::path::Path::new(&destination).safe_absolute()?;
-                if !outputs.insert(output.clone()) || !destinations.insert(destination.clone()) {
+                if output.as_ref().is_some_and(|output| !outputs.insert(output.clone()))
+                    || !destinations.insert(destination.clone())
+                {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
                 if case.expect.stdout_empty == case.expect.stdout.is_some() {
@@ -249,19 +279,22 @@ impl App {
     }
 
     /// Each build owns a private directory, so concurrent runners of one case never share an artifact.
-    pub fn build(&self, case: &Workload, target: Target) -> Result<GuestBuild, Error> {
+    pub fn build(&self, case: &Workload, target: Target) -> Result<Option<GuestBuild>, Error> {
+        let (Some(output_name), Some(source_name)) = (&case.output, &case.source) else {
+            return Ok(None);
+        };
         let root = super::work_root::WorkRoot::open()?.builds(&self.name, target.name());
         fs::create_dir_all(&root).map_err(|error| format!("create build directory {}: {error}", root.display()))?;
         let directory = tempfile::Builder::new()
             .prefix("build-")
             .tempdir_in(&root)
             .map_err(|error| format!("create build directory in {}: {error}", root.display()))?;
-        let output = directory.path().join(&case.output);
+        let output = directory.path().join(output_name);
         let compiler = case.build_compiler.as_ref().map_or_else(
             || compatibility_compiler(target, self.compiler.for_target(target)),
             |commands| commands.for_target(target).to_owned(),
         );
-        let source = self.directory.join(case.source.native());
+        let source = self.directory.join(source_name.native());
         let capture = hl_process::Capture {
             stdout: directory.path().join("compiler.stdout"),
             stderr: directory.path().join("compiler.stderr"),
@@ -290,10 +323,10 @@ impl App {
         if let Some(expectation) = case.elf {
             elf::verify(&output, target, expectation)?;
         }
-        Ok(GuestBuild {
+        Ok(Some(GuestBuild {
             _directory: directory,
             path: output,
-        })
+        }))
     }
 
     pub fn oracle(&self, target: Target, update: bool, selected: Option<&str>) -> Result<(), Error> {
@@ -309,7 +342,9 @@ impl App {
                 println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                 continue;
             }
-            let artifact = self.build(case, target)?;
+            let artifact = self
+                .build(case, target)?
+                .ok_or("image-executable cases do not support an external oracle")?;
             let directory = tempfile::tempdir()?;
             let capture = hl_process::Capture {
                 stdout: directory.path().join("stdout"),
@@ -538,6 +573,26 @@ mod tests {
         assert!(app.cases[0].diagnostics.is_empty());
     }
 
+    #[test]
+    fn image_executable_is_an_explicit_artifact_free_launch() {
+        let row = "  - id: runtime/image-tool\n    image-executable: /usr/bin/tool\n    status: active\n    compat: { class: compatibility }\n    run: [--version]\n    expect: { exit: 0, stdout: golden/one.out }\n";
+        let app = category(row).unwrap();
+        let case = &app.cases[0];
+        assert_eq!(case.destination, "/usr/bin/tool");
+        assert!(case.source.is_none());
+        assert!(app.build(case, crate::suite::Target::Amd64).unwrap().is_none());
+
+        for invalid in [
+            row.replace("/usr/bin/tool", "usr/bin/tool"),
+            row.replace(
+                "    image-executable: /usr/bin/tool\n",
+                "    image-executable: /usr/bin/tool\n    artifact: { destination: /opt/tool }\n",
+            ),
+        ] {
+            assert!(category(&invalid).is_err(), "{invalid}");
+        }
+    }
+
     fn category(case_rows: &str) -> Result<App, super::Error> {
         let directory = tempfile::tempdir().unwrap();
         category_at(directory.path(), case_rows)
@@ -578,7 +633,7 @@ mod tests {
         .unwrap();
         assert_eq!(app.cases.len(), 2);
         assert_eq!(app.cases[0].destination, "/opt/one");
-        assert_eq!(app.cases[0].output, "one");
+        assert_eq!(app.cases[0].output.as_deref(), Some("one"));
     }
 
     #[test]
@@ -670,7 +725,11 @@ mod tests {
         .unwrap();
         let app = App::load(directory.path(), &definition).unwrap();
 
-        let build = || app.build(&app.cases[0], crate::suite::Target::Arm64).unwrap();
+        let build = || {
+            app.build(&app.cases[0], crate::suite::Target::Arm64)
+                .unwrap()
+                .unwrap()
+        };
         let (first, second) = std::thread::scope(|scope| {
             let peer = scope.spawn(build);
             (build(), peer.join().unwrap())
@@ -722,7 +781,10 @@ mod tests {
         .unwrap();
         let app = App::load(directory.path(), &definition).unwrap();
 
-        let artifact = app.build(&app.cases[0], crate::suite::Target::Arm64).unwrap();
+        let artifact = app
+            .build(&app.cases[0], crate::suite::Target::Arm64)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             fs::read_to_string(artifact.path()).unwrap(),
             "ordered environment=exact inherited=isolated\n"
@@ -835,7 +897,7 @@ mod tests {
         .unwrap();
 
         let app = App::load(directory.path(), &definition).unwrap();
-        assert_eq!(app.cases[0].source.name(), "main.c");
+        assert_eq!(app.cases[0].source.as_ref().unwrap().name(), "main.c");
         assert_eq!(app.cases[0].inputs[0].name(), "layout.ld");
         assert_eq!(app.cases[0].flags, ["-static"]);
     }
