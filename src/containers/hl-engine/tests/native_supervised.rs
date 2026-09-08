@@ -1407,6 +1407,7 @@ impl CheckpointSource for Checkpoints {
 struct NativeCheckpointStore {
     state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>)>,
     aborts: std::sync::atomic::AtomicUsize,
+    begins: std::sync::atomic::AtomicUsize,
 }
 
 struct EngineCleanup<'a>(Option<&'a Engine>);
@@ -1435,6 +1436,7 @@ impl CheckpointSink for NativeCheckpointStore {
         Ok(())
     }
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        self.begins.fetch_add(1, std::sync::atomic::Ordering::Release);
         self.state.lock().unwrap().1.clear();
         Ok(NonZeroU64::MIN)
     }
@@ -1490,14 +1492,33 @@ impl CheckpointSource for NativeCheckpointStore {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original() {
+    checkpoint_restores_a_fresh_process_after_terminating_the_original(true);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn auto_checkpoint_selects_native_for_capture_and_restore() {
+    checkpoint_restores_a_fresh_process_after_terminating_the_original(false);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn checkpoint_restores_a_fresh_process_after_terminating_the_original(explicit: bool) {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let output = Arc::new(Output::default());
     let store = Arc::new(NativeCheckpointStore::default());
     let mut plan = selected_plan(&executable);
+    if !explicit {
+        plan.options.unset("HL_NATIVE_SUPERVISED").unwrap();
+        plan.box_policy.network_mode = 2;
+        plan.box_policy.flags &= !(1 << 2);
+        plan.box_policy.network_namespace = None;
+    }
     plan.arguments.push(b"checkpoint-native-capture".to_vec());
     plan.arguments.push(b"1111111111111111".to_vec());
-    plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    if explicit {
+        plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    }
     let engine = Engine::with_checkpoint(
         HOST_ISA,
         plan,
@@ -1538,10 +1559,44 @@ fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original
     );
     engine.destroy().unwrap();
     engine_cleanup.disarm();
+    if !explicit {
+        let begins = store.begins.load(std::sync::atomic::Ordering::Acquire);
+        let mut mismatch_plan = selected_plan(&executable);
+        mismatch_plan.options.unset("HL_NATIVE_SUPERVISED").unwrap();
+        mismatch_plan.box_policy.network_mode = 2;
+        mismatch_plan.box_policy.flags &= !(1 << 2);
+        mismatch_plan.box_policy.network_namespace = None;
+        mismatch_plan.options.set("HL_TRANSLIT", "1", true).unwrap();
+        mismatch_plan.options.set("HL_RESTORE", "1", true).unwrap();
+        let mismatch = Engine::with_checkpoint(
+            HOST_ISA,
+            mismatch_plan,
+            StandardStreams::default(),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        mismatch.start().unwrap();
+        assert_eq!(mismatch.wait(), Err(hl_engine::engine::EngineError::Unsupported));
+        mismatch.destroy().unwrap();
+        assert_eq!(
+            store.begins.load(std::sync::atomic::Ordering::Acquire),
+            begins,
+            "a native image reached translated recovery storage"
+        );
+    }
     let mut restore_plan = selected_plan(&executable);
+    if !explicit {
+        restore_plan.options.unset("HL_NATIVE_SUPERVISED").unwrap();
+        restore_plan.box_policy.network_mode = 2;
+        restore_plan.box_policy.flags &= !(1 << 2);
+        restore_plan.box_policy.network_namespace = None;
+    }
     restore_plan.arguments.push(b"checkpoint-native-capture".to_vec());
     restore_plan.arguments.push(b"2222222222222222".to_vec());
-    restore_plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    if explicit {
+        restore_plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    }
     restore_plan.options.set("HL_RESTORE", "1", true).unwrap();
     let restored_output = Arc::new(Output::default());
     let restored = Engine::with_checkpoint(
