@@ -41,3 +41,8 @@ fn mapped_redispatch_consumes_refused_miss_at_the_exact_target() {
 fn teardown_finalizes_a_pending_fallthrough_miss() {
     assert_eq!(hl_native::x86_64_translit_displaced_test(254), 0);
 }
+
+#[test]
+fn dispatcher_commits_the_fast_redispatch_before_executing_b() {
+    assert_eq!(hl_native::x86_64_translit_displaced_test(255), 0);
+}
