@@ -132,7 +132,7 @@ async fn run_case_inner(
         retention.as_ref(),
         engine_measurement,
     )
-    .run(&mut fixture, artifact.path())
+    .run(&mut fixture, artifact.as_ref().map(super::definition::GuestBuild::path))
     .await;
     fixture.release()?;
     Ok(results)
@@ -327,7 +327,7 @@ impl<'a> CaseExecution<'a> {
         }
     }
 
-    async fn run(&self, fixture: &mut TestImage, artifact: &Path) -> Vec<CaseResult> {
+    async fn run(&self, fixture: &mut TestImage, artifact: Option<&Path>) -> Vec<CaseResult> {
         let Some(plan) = &self.case.soak else {
             let timeout = Duration::from_secs(self.case.timeout);
             return vec![self.staged_attempt(fixture, artifact, 1, 1, timeout, false).await];
@@ -364,19 +364,22 @@ impl<'a> CaseExecution<'a> {
     async fn staged_attempt(
         &self,
         fixture: &mut TestImage,
-        artifact: &Path,
+        artifact: Option<&Path>,
         ordinal: u16,
         repetitions: u16,
         timeout: Duration,
         refork: bool,
     ) -> CaseResult {
         let attempt = (repetitions > 1).then_some(ordinal);
-        let prepared = async {
+        let prepared: Result<(), Error> = async {
             if refork {
                 fixture.refork()?;
             }
-            stage(fixture, self.case, artifact, self.target).await?;
-            assert_overlay(fixture, self.case)
+            if let Some(artifact) = artifact {
+                stage(fixture, self.case, artifact, self.target).await?;
+                assert_overlay(fixture, self.case)?;
+            }
+            Ok(())
         }
         .await;
         if let Err(error) = prepared {
@@ -388,7 +391,7 @@ impl<'a> CaseExecution<'a> {
     async fn attempt(
         &self,
         fixture: &TestImage,
-        artifact: &Path,
+        artifact: Option<&Path>,
         ordinal: u16,
         repetitions: u16,
         timeout: Duration,
@@ -475,7 +478,7 @@ impl<'a> CaseExecution<'a> {
             .await
             .map_err(|error| error.to_string());
         let retained = if outcome.is_err() {
-            self.retention.and_then(|retention| {
+            self.retention.zip(artifact).and_then(|(retention, artifact)| {
                 retention
                     .retain(fixture, artifact, &self.case.id, self.target, ordinal, status)
                     .map_err(|error| eprintln!("failed to retain overlay for {}: {error}", self.case.id))

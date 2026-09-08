@@ -45,7 +45,7 @@ pub(super) async fn calculate(work: &[Work]) -> Result<String, Error> {
 struct FingerprintInput {
     key: WorkKey,
     directory: PathBuf,
-    source: ManifestPath,
+    source: Option<ManifestPath>,
     build_inputs: Vec<ManifestPath>,
     golden: Option<PathBuf>,
     environment: Vec<(Vec<u8>, Vec<u8>)>,
@@ -71,12 +71,14 @@ fn fingerprint_files(inputs: &[FingerprintInput]) -> Result<String, String> {
             hash_field(&mut digest, name)?;
             hash_field(&mut digest, value)?;
         }
-        hash_file(
-            &mut digest,
-            b"source",
-            input.source.name(),
-            &input.directory.join(input.source.native()),
-        )?;
+        if let Some(source) = &input.source {
+            hash_file(
+                &mut digest,
+                b"source",
+                source.name(),
+                &input.directory.join(source.native()),
+            )?;
+        }
         hash_build_inputs(&mut digest, &input.directory, &input.build_inputs)?;
         if let Some(golden) = &input.golden {
             let relative = golden
