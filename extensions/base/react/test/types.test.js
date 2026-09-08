@@ -110,7 +110,10 @@ test('host events type the pane chooser identity as well as subscribed snapshots
     /export type HostEvent = SnapshotEvent \| PaneSelection \| InterfaceEvent;/,
   );
   assert.doesNotMatch(clientDeclarations, /LegacyInterfaceEvent/);
-  assert.match(clientDeclarations, /onEvent\?: \(event: HostEvent, channel: number\) => void;/);
+  assert.match(
+    clientDeclarations,
+    /onEvent\?: \(event: HostEvent, channel: number\) => void \| Promise<void>;/,
+  );
   assert.match(clientDeclarations, /onRows\?: \(request: RowRequest, channel: number\) => void;/);
   assert.doesNotMatch(clientDeclarations, /onRows\?: \(request: unknown/);
   assert.doesNotMatch(

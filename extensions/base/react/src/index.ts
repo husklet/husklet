@@ -190,7 +190,9 @@ export function render(
   }
   if (!registry) throw new Error('render requires a session returned by connect');
   if (!registry.routesEvents) {
-    session.onEvent((payload) => deliver(session, payload));
+    session.onEvent((payload) => {
+      deliver(session, payload);
+    });
     registry.routesEvents = true;
   }
   if (
