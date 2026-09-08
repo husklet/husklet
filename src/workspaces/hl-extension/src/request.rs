@@ -443,9 +443,12 @@ pub enum Request {
     },
     StateRead,
     StateWrite {
+        observed: String,
         contents: Vec<u8>,
     },
-    StateClear,
+    StateClear {
+        observed: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -581,7 +584,7 @@ impl Request {
             | Self::FilesystemRemove { .. }
             | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
             Self::StateRead => Capability::StateRead,
-            Self::StateWrite { .. } | Self::StateClear => Capability::StateWrite,
+            Self::StateWrite { .. } | Self::StateClear { .. } => Capability::StateWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }

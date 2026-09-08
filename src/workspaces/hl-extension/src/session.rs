@@ -519,7 +519,7 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
-            Request::StateRead | Request::StateWrite { .. } | Request::StateClear => self.state(request, services),
+            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -1338,6 +1338,9 @@ impl Session {
         match request {
             Request::StateRead => {
                 let state = port.read()?;
+                exact_state_identity(&state.identity).map_err(|_| Failure::Failed {
+                    detail: "host returned an invalid extension state identity".into(),
+                })?;
                 if state.contents.len() > LIMIT {
                     return Err(Failure::Failed {
                         detail: "extension state exceeds the 1 MiB quota".into(),
@@ -1345,15 +1348,19 @@ impl Session {
                 }
                 Ok(Reply::State(state))
             }
-            Request::StateWrite { contents } => {
+            Request::StateWrite { observed, contents } => {
                 if contents.len() > LIMIT {
                     return Err(Failure::Conflict {
                         detail: "extension state exceeds the 1 MiB quota".into(),
                     });
                 }
-                port.write(contents).map(|()| Reply::Done).map_err(Failure::from)
+                exact_state_identity(observed)?;
+                port.write(observed, contents).map(Reply::Identity).map_err(Failure::from)
             }
-            Request::StateClear => port.clear().map(|()| Reply::Done).map_err(Failure::from),
+            Request::StateClear { observed } => {
+                exact_state_identity(observed)?;
+                port.clear(observed).map(|()| Reply::Done).map_err(Failure::from)
+            }
             _ => Err(Failure::Unsupported {
                 call: "extension state".into(),
             }),
@@ -1583,6 +1590,15 @@ fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
+    })
+}
+
+fn exact_state_identity(value: &str) -> Result<(), Failure> {
+    if value == "absent" {
+        return Ok(());
+    }
+    immutable_digest(value, "extension state").map_err(|_| Failure::Conflict {
+        detail: "extension state mutation requires the exact identity returned by state.read()".into(),
     })
 }
 

@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:6bb5e6013670d53f
+// Protocol artifact fnv1a64:5d67d4a95c1ea49d
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -340,7 +340,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_remove": "done",
   "filesystem_remove_observed": "done",
   "state_read": "state",
-  "state_write": "done",
+  "state_write": "identity",
   "state_clear": "done",
   "interface_open_tab": "identity",
   "interface_split": "identity",
@@ -2018,6 +2018,13 @@ const definitions = {
   },
   "ExtensionState": {
     "fields": [
+      {
+        "name": "identity",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
       {
         "name": "contents",
         "optional": false,
@@ -10238,6 +10245,13 @@ const roots = {
         "payload": {
           "fields": [
             {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "contents",
               "optional": false,
               "schema": {
@@ -10258,7 +10272,16 @@ const roots = {
       {
         "name": "state_clear",
         "payload": {
-          "kind": "unit"
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
         }
       },
       {

@@ -476,6 +476,7 @@ export interface FileRange {
   truncated: boolean;
 }
 export interface ExtensionState {
+  identity: string;
   contents: number[];
 }
 export type WorkspaceEvent =
@@ -1208,8 +1209,8 @@ export interface WorkspaceApi {
   };
   state: {
     read(): Promise<ExtensionState>;
-    write(contents: Iterable<number>): Promise<void>;
-    clear(): Promise<void>;
+    write(observed: string, contents: Iterable<number>): Promise<string>;
+    clear(observed: string): Promise<void>;
   };
   subscribe(topic: Topic): Promise<void>;
   unsubscribe(topic: Topic): Promise<void>;

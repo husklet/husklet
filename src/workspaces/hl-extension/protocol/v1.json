@@ -1710,6 +1710,13 @@
     "ExtensionState": {
       "fields": [
         {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "contents",
           "optional": false,
           "schema": {
@@ -7896,7 +7903,7 @@
       "request": "state_read"
     },
     {
-      "reply": "done",
+      "reply": "identity",
       "request": "state_write"
     },
     {
@@ -10913,6 +10920,13 @@
           "payload": {
             "fields": [
               {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "contents",
                 "optional": false,
                 "schema": {
@@ -10933,7 +10947,16 @@
         {
           "name": "state_clear",
           "payload": {
-            "kind": "unit"
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
           }
         },
         {
@@ -12139,7 +12162,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:a18107e89943acb4",
+  "source_fingerprint": "fnv1a64:ab390de6db2941be",
   "specification_version": 1,
   "topics": [
     {

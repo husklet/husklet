@@ -1,6 +1,5 @@
 //! Durable installed-extension inventory and lifecycle policy.
 
-use hl_extension::port::ExtensionStateStore as _;
 use hl_extension::port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionCatalogue, ExtensionCatalogueEntry, ExtensionStore, ExtensionSummary, HostError,
@@ -130,7 +129,7 @@ impl ExtensionStore for ExtensionManagement {
         self.changed(result)?;
         super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
             .map_err(|error| HostError::Failed(error.to_string()))?
-            .clear()
+            .purge()
     }
 
     fn acquisition_start(&self, reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
@@ -308,6 +307,7 @@ fn failure(error: super::Refusal) -> HostError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hl_extension::port::ExtensionStateStore as _;
 
     fn workspace(root: &std::path::Path) -> WorkspaceConfig {
         let mut workspace = WorkspaceConfig::new("test", "alpine", hl_ws::Arch::Amd64);
@@ -420,7 +420,7 @@ mod tests {
         let management = ExtensionManagement::new(&workspace);
         let name = ExtensionName::new("postgres").unwrap();
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
-        state.write(b"migration-checkpoint").unwrap();
+        state.write("absent", b"migration-checkpoint").unwrap();
 
         assert!(management
             .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
@@ -456,7 +456,7 @@ mod tests {
             .register(&manifest, &digest, &manifest.capabilities, 1)
             .unwrap();
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
-        state.write(b"remove-me").unwrap();
+        state.write("absent", b"remove-me").unwrap();
 
         management.remove(name.as_str(), &digest).unwrap();
         assert!(state.read().unwrap().contents.is_empty());

@@ -1344,23 +1344,24 @@ fn workspace_control_unavailable() -> HostError {
 /// One private, host-managed state blob owned by the authenticated extension.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionState {
+    pub identity: String,
     pub contents: Vec<u8>,
 }
 
 pub trait ExtensionStateStore {
     fn read(&self) -> Result<ExtensionState, HostError>;
-    fn write(&self, contents: &[u8]) -> Result<(), HostError>;
-    fn clear(&self) -> Result<(), HostError>;
+    fn write(&self, observed: &str, contents: &[u8]) -> Result<String, HostError>;
+    fn clear(&self, observed: &str) -> Result<(), HostError>;
 }
 
 impl<T: WorkspaceFiles + ?Sized> ExtensionStateStore for T {
     fn read(&self) -> Result<ExtensionState, HostError> {
         Err(HostError::Unsupported("extension state is unavailable".into()))
     }
-    fn write(&self, _contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
         Err(HostError::Unsupported("extension state is unavailable".into()))
     }
-    fn clear(&self) -> Result<(), HostError> {
+    fn clear(&self, _observed: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("extension state is unavailable".into()))
     }
 }

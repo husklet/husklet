@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use hl_extension::port::{ExtensionState, ExtensionStateStore, HostError};
+use sha2::Digest as _;
 
 const MAX_STATE_BYTES: usize = 1024 * 1024;
 static TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
@@ -14,6 +15,7 @@ static TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 pub struct StateBlob {
     directory: OwnedFd,
     name: CString,
+    lock_name: CString,
 }
 
 impl StateBlob {
@@ -23,17 +25,53 @@ impl StateBlob {
         let extensions = child_directory(&root, c"extensions")?;
         let directory = child_directory(&extensions, c"state")?;
         rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o700))?;
+        let lock_name = CString::new(format!(".{name}.state.lock")).expect("extension names are NUL-free");
         let name = CString::new(format!("{name}.state")).expect("extension names are NUL-free");
-        Ok(Self { directory, name })
+        Ok(Self {
+            directory,
+            name,
+            lock_name,
+        })
     }
 
     fn failure(error: impl std::fmt::Display) -> HostError {
         HostError::Failed(error.to_string())
     }
-}
 
-impl ExtensionStateStore for StateBlob {
-    fn read(&self) -> Result<ExtensionState, HostError> {
+    pub fn purge(&self) -> Result<(), HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        self.remove_unlocked()
+    }
+
+    fn remove_unlocked(&self) -> Result<(), HostError> {
+        match rustix::fs::unlinkat(&self.directory, &self.name, rustix::fs::AtFlags::empty()) {
+            Ok(()) => rustix::fs::fsync(&self.directory).map_err(Self::failure),
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Err(error) => Err(Self::failure(error)),
+        }
+    }
+
+    fn lock(&self) -> Result<std::fs::File, HostError> {
+        let descriptor = rustix::fs::openat(
+            &self.directory,
+            &self.lock_name,
+            rustix::fs::OFlags::RDWR
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map_err(Self::failure)?;
+        let status = rustix::fs::fstat(&descriptor).map_err(Self::failure)?;
+        if rustix::fs::FileType::from_raw_mode(status.st_mode) != rustix::fs::FileType::RegularFile {
+            return Err(HostError::Failed("extension state lock is not a regular file".into()));
+        }
+        rustix::fs::fchmod(&descriptor, rustix::fs::Mode::from_raw_mode(0o600)).map_err(Self::failure)?;
+        Ok(descriptor.into())
+    }
+
+    fn read_unlocked(&self) -> Result<ExtensionState, HostError> {
         let descriptor = match rustix::fs::openat(
             &self.directory,
             &self.name,
@@ -41,13 +79,17 @@ impl ExtensionStateStore for StateBlob {
             rustix::fs::Mode::empty(),
         ) {
             Ok(descriptor) => descriptor,
-            Err(rustix::io::Errno::NOENT) => return Ok(ExtensionState { contents: Vec::new() }),
+            Err(rustix::io::Errno::NOENT) => {
+                return Ok(ExtensionState {
+                    identity: "absent".into(),
+                    contents: Vec::new(),
+                });
+            }
             Err(error) => return Err(Self::failure(error)),
         };
         let status = rustix::fs::fstat(&descriptor).map_err(Self::failure)?;
         let size = status.st_size;
-        let kind = rustix::fs::FileType::from_raw_mode(status.st_mode);
-        if kind != rustix::fs::FileType::RegularFile {
+        if rustix::fs::FileType::from_raw_mode(status.st_mode) != rustix::fs::FileType::RegularFile {
             return Err(HostError::Failed("extension state is not a regular file".into()));
         }
         if size < 0 || size as u64 > MAX_STATE_BYTES as u64 {
@@ -61,12 +103,26 @@ impl ExtensionStateStore for StateBlob {
         if contents.len() > MAX_STATE_BYTES {
             return Err(HostError::Failed("extension state exceeds the 1 MiB quota".into()));
         }
-        Ok(ExtensionState { contents })
+        let identity = identity(&contents);
+        Ok(ExtensionState { identity, contents })
+    }
+}
+
+impl ExtensionStateStore for StateBlob {
+    fn read(&self) -> Result<ExtensionState, HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_shared(&lock).map_err(Self::failure)?;
+        self.read_unlocked()
     }
 
-    fn write(&self, contents: &[u8]) -> Result<(), HostError> {
+    fn write(&self, observed: &str, contents: &[u8]) -> Result<String, HostError> {
         if contents.len() > MAX_STATE_BYTES {
             return Err(HostError::Conflict("extension state is limited to 1 MiB".into()));
+        }
+        let lock = self.lock()?;
+        fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        if self.read_unlocked()?.identity != observed {
+            return Err(HostError::Conflict("extension state changed after it was read".into()));
         }
         match rustix::fs::statat(&self.directory, &self.name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
             Ok(status) if rustix::fs::FileType::from_raw_mode(status.st_mode) != rustix::fs::FileType::RegularFile => {
@@ -105,15 +161,17 @@ impl ExtensionStateStore for StateBlob {
         if published.is_err() {
             let _ = rustix::fs::unlinkat(&self.directory, &temporary, rustix::fs::AtFlags::empty());
         }
-        published.map_err(Self::failure)
+        published.map_err(Self::failure)?;
+        Ok(identity(contents))
     }
 
-    fn clear(&self) -> Result<(), HostError> {
-        match rustix::fs::unlinkat(&self.directory, &self.name, rustix::fs::AtFlags::empty()) {
-            Ok(()) => rustix::fs::fsync(&self.directory).map_err(Self::failure),
-            Err(rustix::io::Errno::NOENT) => Ok(()),
-            Err(error) => Err(Self::failure(error)),
+    fn clear(&self, observed: &str) -> Result<(), HostError> {
+        let lock = self.lock()?;
+        fs2::FileExt::lock_exclusive(&lock).map_err(Self::failure)?;
+        if self.read_unlocked()?.identity != observed {
+            return Err(HostError::Conflict("extension state changed after it was read".into()));
         }
+        self.remove_unlocked()
     }
 }
 
@@ -138,6 +196,18 @@ fn child_directory(parent: impl AsFd, name: &CStr) -> io::Result<OwnedFd> {
     open_directory(parent, name)
 }
 
+fn identity(contents: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = sha2::Sha256::digest(contents);
+    let mut identity = String::with_capacity(71);
+    identity.push_str("sha256:");
+    for byte in digest {
+        identity.push(HEX[usize::from(byte >> 4)] as char);
+        identity.push(HEX[usize::from(byte & 15)] as char);
+    }
+    identity
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt};
@@ -155,17 +225,18 @@ mod tests {
     fn state_is_private_durable_bounded_and_idempotently_clearable() {
         let root = tempfile::tempdir().unwrap();
         let state = blob(root.path(), "postgres");
-        assert_eq!(state.read().unwrap().contents, Vec::<u8>::new());
-        state.write(b"{\"schema\":2,\"cursor\":91}").unwrap();
+        let empty = state.read().unwrap();
+        assert_eq!(empty.contents, Vec::<u8>::new());
+        let identity = state.write(&empty.identity, b"{\"schema\":2,\"cursor\":91}").unwrap();
         drop(state);
 
         let reopened = blob(root.path(), "postgres");
         assert_eq!(reopened.read().unwrap().contents, b"{\"schema\":2,\"cursor\":91}");
         let path = root.path().join("extensions/state/postgres.state");
         assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
-        assert!(reopened.write(&vec![0; MAX_STATE_BYTES + 1]).is_err());
-        reopened.clear().unwrap();
-        reopened.clear().unwrap();
+        assert!(reopened.write(&identity, &vec![0; MAX_STATE_BYTES + 1]).is_err());
+        reopened.clear(&identity).unwrap();
+        reopened.clear("absent").unwrap();
         assert!(reopened.read().unwrap().contents.is_empty());
     }
 
@@ -174,17 +245,31 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let postgres = blob(root.path(), "postgres");
         let indexer = blob(root.path(), "indexer");
-        postgres.write(b"credential-reference").unwrap();
-        indexer.write(b"checkpoint").unwrap();
+        postgres.write("absent", b"credential-reference").unwrap();
+        indexer.write("absent", b"checkpoint").unwrap();
         assert_eq!(postgres.read().unwrap().contents, b"credential-reference");
         assert_eq!(indexer.read().unwrap().contents, b"checkpoint");
 
-        postgres.clear().unwrap();
+        let identity = postgres.read().unwrap().identity;
+        postgres.clear(&identity).unwrap();
         let outside = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(outside.path(), b"outside").unwrap();
         symlink(outside.path(), root.path().join("extensions/state/postgres.state")).unwrap();
         assert!(postgres.read().is_err());
-        assert!(postgres.write(b"replacement").is_err());
+        assert!(postgres.write("absent", b"replacement").is_err());
         assert_eq!(std::fs::read(outside.path()).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn concurrent_instances_reject_a_stale_checkpoint_without_losing_the_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let foreground = blob(root.path(), "indexer");
+        let background = blob(root.path(), "indexer");
+        let foreground_read = foreground.read().unwrap();
+        let background_read = background.read().unwrap();
+
+        background.write(&background_read.identity, b"cursor=200").unwrap();
+        assert!(foreground.write(&foreground_read.identity, b"cursor=100").is_err());
+        assert_eq!(foreground.read().unwrap().contents, b"cursor=200");
     }
 }

@@ -396,6 +396,13 @@ function exactStateBytes(input: Iterable<number>) {
   return values;
 }
 
+function exactStateIdentity(identity: string) {
+  if (identity === 'absent' || /^sha256:[0-9a-f]{64}$/.test(identity)) return identity;
+  throw new TypeError(
+    'extension state mutation requires the exact identity returned by state.read()',
+  );
+}
+
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
     throw new RangeError(
@@ -1399,8 +1406,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     },
     state: {
       read: async () => expect(await session.call('state_read', undefined), 'state'),
-      write: (contents) => done('state_write', { contents: exactStateBytes(contents) }),
-      clear: () => done('state_clear', undefined),
+      write: async (observed, contents) =>
+        expect(
+          await session.call('state_write', {
+            observed: exactStateIdentity(observed),
+            contents: exactStateBytes(contents),
+          }),
+          'identity',
+        ),
+      clear: (observed) => done('state_clear', { observed: exactStateIdentity(observed) }),
     },
     subscribe,
     unsubscribe,
