@@ -394,9 +394,10 @@ export class Session {
         }
         if (signal?.aborted)
             return Promise.reject(abortError(signal.reason));
-        const capability = name === 'event_subscribe' || name === 'event_unsubscribe'
-            ? TOPIC_CAPABILITIES.get(requiredObject(argument, 'subscription').topic)
-            : PROTOCOL_REQUEST_CAPABILITIES[name];
+        const topic = name === 'event_subscribe' || name === 'event_unsubscribe'
+            ? requiredObject(argument, 'subscription').topic
+            : undefined;
+        const capability = topic === undefined ? PROTOCOL_REQUEST_CAPABILITIES[name] : TOPIC_CAPABILITIES.get(topic);
         if (capability === undefined)
             return Promise.reject(new RangeError(`unclassified extension request ${name}`));
         if (!this.#granted.includes(capability)) {
@@ -412,7 +413,18 @@ export class Session {
         if (this.#backpressured)
             return Promise.reject(new Error('extension socket is applying write backpressure'));
         const payload = encodeRequest(name, argument);
-        return new Promise((resolve, reject) => {
+        const pending = this.#enqueueCall(name, topic, signal);
+        try {
+            this.#write({ channel: CALLS, kind: KIND.request, payload });
+        }
+        catch (error) {
+            pending.cancel(error);
+        }
+        return pending.promise;
+    }
+    #enqueueCall(name, topic, signal) {
+        let cancel;
+        const promise = new Promise((resolve, reject) => {
             const abort = signal
                 ? () => {
                     const error = abortError(signal.reason);
@@ -430,18 +442,19 @@ export class Session {
                 this.#finish(error);
                 this.#socket.destroy();
             }, this.#timeout);
-            this.#pending.push({ resolve, reject, timer, name, argument, signal, abort });
+            const record = { resolve, reject, timer, name, topic, signal, abort };
+            this.#pending.push(record);
             signal?.addEventListener('abort', abort, { once: true });
-            try {
-                this.#write({ channel: CALLS, kind: KIND.request, payload });
-            }
-            catch (error) {
+            cancel = (error) => {
                 clearTimeout(timer);
-                this.#pending.pop();
+                const index = this.#pending.indexOf(record);
+                if (index !== -1)
+                    this.#pending.splice(index, 1);
                 signal?.removeEventListener('abort', abort);
                 reject(error);
-            }
+            };
         });
+        return { promise, cancel };
     }
     /** Answers a row window the host asked for. */
     answer(channel, window) {
@@ -586,18 +599,18 @@ export class Session {
             if ((frame.flags & ERROR) !== 0) {
                 if (pending.name === 'event_subscribe') {
                     for (const [channel, topic] of this.#eventTopics)
-                        if (topic === pending.argument.topic)
+                        if (topic === pending.topic)
                             this.#eventTopics.delete(channel);
                 }
                 pending.reject(new ExtensionError(payload));
             }
             else {
                 if (pending.name === 'event_subscribe')
-                    this.#topics.add(pending.argument.topic);
+                    this.#topics.add(pending.topic);
                 if (pending.name === 'event_unsubscribe') {
-                    this.#topics.delete(pending.argument.topic);
+                    this.#topics.delete(pending.topic);
                     for (const [channel, topic] of this.#eventTopics)
-                        if (topic === pending.argument.topic)
+                        if (topic === pending.topic)
                             this.#eventTopics.delete(channel);
                 }
                 pending.resolve(payload);
@@ -610,7 +623,7 @@ export class Session {
             if (typeof payload?.snapshot === 'string') {
                 payload = validateSnapshot(payload);
                 const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
-                const pendingSubscription = this.#pending.some((pending) => pending.name === 'event_subscribe' && pending.argument.topic === topic);
+                const pendingSubscription = this.#pending.some((pending) => pending.name === 'event_subscribe' && pending.topic === topic);
                 if (!topic || (!this.#topics.has(topic) && !pendingSubscription))
                     throw new TypeError(`snapshot ${payload.snapshot} has no active subscription`);
                 const bound = this.#eventTopics.get(frame.channel);

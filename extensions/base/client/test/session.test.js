@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
+import { queryObjects } from 'node:v8';
 import {
   connect,
   ExecutionOperationError,
@@ -1754,6 +1755,45 @@ test('real socket write backpressure admits no further calls until drain', async
     assert.equal(client.listenerCount(event), count);
   host.destroy();
   await new Promise((resolve) => server.close(resolve));
+});
+
+test('a pending large Unix call retains correlation metadata but not its request argument', async () => {
+  class RetainedBytes extends Array {}
+  const server = net.createServer((socket) => {
+    socket.on('error', () => {});
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'retention', granted: ['state:write'] },
+      }),
+    );
+    socket.on('data', () => {});
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const connections = new Set();
+  server.on('connection', (socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+  });
+  try {
+    const session = await connect({ path: server.address(), timeout: 1_000 });
+    const issue = () => {
+      const contents = new RetainedBytes(256 * 1024).fill(255);
+      return session.call('state_write', { observed: 'absent', contents });
+    };
+    const pending = issue();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(queryObjects(RetainedBytes, { format: 'count' }), 0);
+    const rejected = assert.rejects(pending, /closed/);
+    await session.close();
+    await rejected;
+    assert.equal(queryObjects(RetainedBytes, { format: 'count' }), 0);
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('real Unix event credit waits for drain when its listener fills the write buffer', async () => {
