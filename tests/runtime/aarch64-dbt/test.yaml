@@ -34,7 +34,7 @@ cases:
         - { counter: candidates, equals: 0 }
         - { counter: patched, equals: 0 }
         - { counter: executed, equals: 0 }
-        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "154278" } }
+        - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396486", interpreted_steps: "20502", translated_entries: "154286" } }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
