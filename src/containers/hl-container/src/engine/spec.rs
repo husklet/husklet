@@ -423,6 +423,17 @@ impl Spec {
             "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL",
             launch.direct_call_pre_spill,
         )?;
+        Self::flag(
+            options,
+            "HL_A64_X86_JCC_LINK",
+            launch.a64_x86_jcc_link
+                && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+                && matches!(launch.guest, crate::Guest::Aarch64)
+                && matches!(
+                    launch.execution,
+                    crate::Execution::Auto | crate::Execution::Translit | crate::Execution::Translated { .. }
+                ),
+        )?;
         if let Some(directory) = &launch.translation_symbols {
             Self::set(options, "HL_TRANSLIT_SYMBOLIZE", b"1")?;
             Self::set(

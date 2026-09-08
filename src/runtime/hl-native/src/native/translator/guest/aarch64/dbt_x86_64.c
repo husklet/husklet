@@ -27,7 +27,13 @@ _Static_assert(offsetof(struct cpu, nzcv) == OFF_NZCV, "AArch64 x86 DBT nzcv off
 _Static_assert(R_SYSCALL == 1, "AArch64 x86 DBT syscall reason drifted");
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-extern uint64_t hl_a64_x86_dbt_enter(struct cpu *cpu, void *code) __attribute__((visibility("hidden")));
+struct hl_a64_x86_block_header;
+struct hl_a64_x86_run_result {
+    uint64_t retired_steps;
+    const struct hl_a64_x86_block_header *terminal;
+};
+extern struct hl_a64_x86_run_result hl_a64_x86_dbt_enter(struct cpu *cpu, void *code)
+    __attribute__((visibility("hidden")));
 extern void hl_a64_x86_dbt_return(void) __attribute__((visibility("hidden")));
 
 __asm__(".pushsection .text\n.p2align 4\n"
@@ -37,12 +43,16 @@ __asm__(".pushsection .text\n.p2align 4\n"
         "push %rbx\npush %rbp\npush %r12\npush %r13\npush %r14\npush %r15\n"
         "mov %rsp,280(%rdi)\n"
         "mov %rdi,%r15\n"
+        "xor %r12d,%r12d\n"
+        "xor %ebx,%ebx\n"
         "jmp *%rsi\n"
         ".size hl_a64_x86_dbt_enter,.-hl_a64_x86_dbt_enter\n"
         ".p2align 4\n"
         ".hidden hl_a64_x86_dbt_return\n"
         ".type hl_a64_x86_dbt_return,@function\n"
         "hl_a64_x86_dbt_return:\n"
+        "mov %r12,%rax\n"
+        "mov %r13,%rdx\n"
         "mov 280(%r15),%rsp\n"
         "pop %r15\npop %r14\npop %r13\npop %r12\npop %rbp\npop %rbx\n"
         "ret\n"
@@ -550,13 +560,30 @@ enum { HL_A64_X86_MAX_BLOCK_BYTES = 4096 };
 _Static_assert(HL_A64_X86_MAX_BLOCK_BYTES <= CACHE_EMIT_HEADROOM,
                "AArch64 x86 DBT block exceeds dispatcher cache admission");
 
+static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target);
+
 static void hl_a64_x86_emit_return(hl_x64_asm *assembler) {
-    /* r14 counts completed in-body backedges and is the return value used to
-     * reconcile dynamically retired guest instructions. */
-    hl_x64_u8(assembler, 0x4C); hl_x64_u8(assembler, 0x89); hl_x64_u8(assembler, 0xF0); /* mov %r14,%rax */
+    /* r12 carries exact retirement across directly linked blocks; r13 names
+     * the terminal block whose typed exit the C seam must publish. */
+    hl_x64_reg_mem_disp32(assembler, 0x89, 14, HL_A64_X86_CPU_REG, 288);
+    hl_x64_reg_mem_disp32(assembler, 0x89, 3, HL_A64_X86_CPU_REG, 296);
     hl_x64_mov_imm64(assembler, 1, (uintptr_t)hl_a64_x86_dbt_return);
     hl_x64_u8(assembler, 0xFF);
     hl_x64_u8(assembler, 0xE1); /* jmp *%rcx */
+}
+
+static void hl_a64_x86_emit_entry_accounting(hl_x64_asm *assembler,
+                                              const struct hl_a64_x86_block_header *header,
+                                              uint8_t **retired_immediate) {
+    /* lea header(%rip),%r13 -- position-independent across persisted arenas. */
+    hl_x64_u8(assembler, 0x4C); hl_x64_u8(assembler, 0x8D); hl_x64_u8(assembler, 0x2D);
+    uint8_t *relative = assembler->cursor;
+    hl_x64_u32(assembler, 0);
+    if (!assembler->overflow) hl_a64_x86_patch_rel32(relative, (const uint8_t *)header);
+    /* add $retired,%r12; patched before publication once the block closes. */
+    hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xC4);
+    *retired_immediate = assembler->cursor;
+    hl_x64_u8(assembler, 0);
 }
 
 static uint8_t *hl_a64_x86_emit_jcc32(hl_x64_asm *assembler, unsigned condition) {
@@ -574,7 +601,135 @@ static void hl_a64_x86_patch_rel32(uint8_t *displacement, const uint8_t *target)
     memcpy(displacement, &encoded, sizeof encoded);
 }
 
+struct hl_a64_x86_chain_site {
+    uint32_t *entry_displacement;
+    uint32_t *target_displacement;
+    uint64_t guest_target;
+};
+
+static _Atomic uint64_t g_x86_rel32_candidates;
+static _Atomic uint64_t g_x86_rel32_patched;
+static _Atomic uint64_t g_x86_rel32_executed;
+
+enum { HL_A64_X86_PENDING_CAP = 1 << 16, HL_A64_X86_PENDING_BUCKETS = 1 << 16 };
+struct hl_a64_x86_pending_chain {
+    struct hl_a64_x86_chain_site site;
+    int32_t next;
+};
+static struct hl_a64_x86_pending_chain g_a64_x86_pending[HL_A64_X86_PENDING_CAP];
+static int32_t g_a64_x86_pending_head[HL_A64_X86_PENDING_BUCKETS];
+static uint32_t g_a64_x86_pending_bucket_epoch[HL_A64_X86_PENDING_BUCKETS];
+static uint32_t g_a64_x86_pending_epoch = 1;
+static uint32_t g_a64_x86_pending_count;
+static _Atomic uint64_t g_x86_rel32_registered;
+static _Atomic uint64_t g_x86_rel32_dropped;
+static _Atomic uint64_t g_x86_rel32_reset_cache;
+static _Atomic uint64_t g_x86_rel32_reset_smc;
+static _Atomic uint64_t g_x86_rel32_reset_fork;
+static _Atomic uint64_t g_x86_rel32_reset_thread;
+
+static uint32_t hl_a64_x86_pending_bucket(uint64_t target) {
+    return (uint32_t)((target >> 2) & (HL_A64_X86_PENDING_BUCKETS - 1));
+}
+
+static void hl_a64_x86_pending_reset(unsigned reason) {
+    g_a64_x86_pending_count = 0;
+    if (++g_a64_x86_pending_epoch == 0) g_a64_x86_pending_epoch = 1;
+    if (hl_option_get("HL_A64_X86_JCC_LINK") == NULL) return;
+    _Atomic uint64_t *counter = reason == HL_PENDING_RESET_SMC ? &g_x86_rel32_reset_smc
+                              : reason == HL_PENDING_RESET_FORK ? &g_x86_rel32_reset_fork
+                                                               : &g_x86_rel32_reset_cache;
+    atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+    if (reason == HL_PENDING_RESET_FORK) hl_backend_tree_a64_x86_reset_fork();
+}
+
+static int hl_a64_x86_patch_known_chain(const struct hl_a64_x86_chain_site *site) {
+    uint8_t *entry = map_body(site->guest_target);
+    if (entry == NULL) return 0;
+    if (((const struct interp_block *)entry)->magic == INTERP_BLOCK_MAGIC) return 0;
+    if (entry < g_cache + sizeof(struct hl_a64_x86_block_header)) return 0;
+    const struct hl_a64_x86_block_header *target = (const struct hl_a64_x86_block_header *)entry - 1;
+    if (target->magic != HL_A64_X86_BLOCK_MAGIC || target->reserved > 1) return 0;
+    intptr_t relative = entry - (uint8_t *)(site->target_displacement + 1);
+    if (relative < INT32_MIN || relative > INT32_MAX) return 0;
+    uint32_t fallback = __atomic_load_n(site->entry_displacement, __ATOMIC_RELAXED);
+    __atomic_store_n(site->target_displacement, (uint32_t)(int32_t)relative, __ATOMIC_RELAXED);
+    if (!jit_publish_code(site->target_displacement, sizeof(uint32_t)))
+        return 0;
+    __atomic_store_n(site->entry_displacement, 0, __ATOMIC_RELEASE);
+    if (!jit_publish_code(site->entry_displacement, sizeof(uint32_t))) {
+        __atomic_store_n(site->entry_displacement, fallback, __ATOMIC_RELEASE);
+        (void)jit_publish_code(site->entry_displacement, sizeof(uint32_t));
+        return 0;
+    }
+    atomic_fetch_add_explicit(&g_x86_rel32_patched, 1, memory_order_relaxed);
+    return 1;
+}
+
+static void hl_a64_x86_pending_register(const struct hl_a64_x86_chain_site *site) {
+    atomic_fetch_add_explicit(&g_x86_rel32_candidates, 1, memory_order_relaxed);
+    if (hl_a64_x86_patch_known_chain(site)) return;
+    if (g_a64_x86_pending_count == HL_A64_X86_PENDING_CAP) {
+        atomic_fetch_add_explicit(&g_x86_rel32_dropped, 1, memory_order_relaxed);
+        return;
+    }
+    uint32_t bucket = hl_a64_x86_pending_bucket(site->guest_target);
+    int32_t head = g_a64_x86_pending_bucket_epoch[bucket] == g_a64_x86_pending_epoch
+                       ? g_a64_x86_pending_head[bucket]
+                       : -1;
+    uint32_t index = g_a64_x86_pending_count++;
+    g_a64_x86_pending[index].site = *site;
+    g_a64_x86_pending[index].next = head;
+    g_a64_x86_pending_bucket_epoch[bucket] = g_a64_x86_pending_epoch;
+    g_a64_x86_pending_head[bucket] = (int32_t)index;
+    atomic_fetch_add_explicit(&g_x86_rel32_registered, 1, memory_order_relaxed);
+}
+
+static void hl_a64_x86_pending_resolve(uint64_t guest_target) {
+    uint32_t bucket = hl_a64_x86_pending_bucket(guest_target);
+    if (g_a64_x86_pending_bucket_epoch[bucket] != g_a64_x86_pending_epoch) return;
+    for (int32_t index = g_a64_x86_pending_head[bucket]; index != -1;
+         index = g_a64_x86_pending[index].next) {
+        struct hl_a64_x86_chain_site *site = &g_a64_x86_pending[index].site;
+        if (site->entry_displacement != NULL && site->guest_target == guest_target &&
+            hl_a64_x86_patch_known_chain(site))
+            site->entry_displacement = NULL;
+    }
+}
+
 enum { HL_A64_X86_BACKEDGE_BUDGET = 8 };
+
+static void hl_a64_x86_emit_chain_site(hl_x64_asm *assembler, uint64_t guest_target,
+                                       struct hl_a64_x86_chain_site *site) {
+    /* Align both mutable words independently. An aligned 32-bit store is the
+     * only live-code mutation admitted by this experiment. */
+    while (((uintptr_t)assembler->cursor + 1u) & 3u) hl_x64_u8(assembler, 0x90);
+    hl_x64_u8(assembler, 0xE9);
+    site->entry_displacement = (uint32_t *)assembler->cursor;
+    hl_x64_u32(assembler, 0);
+    uint8_t *stub = assembler->cursor;
+    /* Bound direct crossings before returning to the dispatcher safepoint. */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xFB);
+    hl_x64_u8(assembler, HL_A64_X86_BACKEDGE_BUDGET - 1);
+    uint8_t *budget = hl_a64_x86_emit_jcc32(assembler, 3); /* JAE fallback */
+    hl_x64_u8(assembler, 0x48); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xC3); /* inc %rbx */
+    /* A linked successor skips its ordinary dispatcher entry. Publish the
+     * architectural PC here before any successor helper can observe it. */
+    hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_target);
+    while (((uintptr_t)assembler->cursor + 1u) & 3u) hl_x64_u8(assembler, 0x90);
+    hl_x64_u8(assembler, 0xE9);
+    site->target_displacement = (uint32_t *)assembler->cursor;
+    hl_x64_u32(assembler, 0);
+    uint8_t *fallback = assembler->cursor;
+    if (!assembler->overflow) {
+        hl_a64_x86_patch_rel32((uint8_t *)site->entry_displacement, fallback);
+        hl_a64_x86_patch_rel32(budget, fallback);
+        hl_a64_x86_patch_rel32((uint8_t *)site->target_displacement, fallback);
+    }
+    site->guest_target = guest_target;
+    (void)stub; /* entry displacement zero reaches this exact local stub after late patching. */
+}
+
 _Static_assert(HL_A64_X86_BACKEDGE_BUDGET == 8,
                "AArch64 x86 DBT poll budget must match dispatcher redispatch budget");
 enum { HL_A64_X86_MAX_BLOCK_INSNS = 64 };
@@ -595,7 +750,9 @@ static void *hl_a64_x86_interpreter_fallback(uint64_t guest_pc, unsigned cause,
 
 static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t instruction,
                                                  uint64_t cursor, uint64_t *target_out,
-                                                 uint8_t *direct_target) {
+                                                 uint8_t *direct_target, uint64_t direct_loop_steps,
+                                                 struct hl_a64_x86_chain_site sites[2],
+                                                 unsigned *site_count, int chain_enabled) {
     int64_t displacement;
     unsigned branch_condition;
     if ((instruction & 0xFF000010u) == 0x54000000u ||
@@ -638,6 +795,8 @@ static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t 
     }
 
     uint8_t *taken_patch = hl_a64_x86_emit_jcc32(assembler, branch_condition);
+    if (chain_enabled && direct_target == NULL)
+        hl_a64_x86_emit_chain_site(assembler, cursor + 4, &sites[(*site_count)++]);
     hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, cursor + 4);
     hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
     hl_a64_x86_emit_return(assembler);
@@ -653,6 +812,8 @@ static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t 
         hl_x64_u8(assembler, HL_A64_X86_BACKEDGE_BUDGET - 1); /* cmp $7,%r14 */
         uint8_t *budget_patch = hl_a64_x86_emit_jcc32(assembler, 3); /* JAE external exit */
         hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0xFF); hl_x64_u8(assembler, 0xC6); /* inc %r14 */
+        hl_x64_u8(assembler, 0x49); hl_x64_u8(assembler, 0x83); hl_x64_u8(assembler, 0xC4);
+        hl_x64_u8(assembler, (uint8_t)direct_loop_steps); /* add retired loop body,%r12 */
         hl_x64_u8(assembler, 0xE9);
         uint8_t *loop_patch = assembler->cursor;
         hl_x64_u32(assembler, 0);
@@ -660,6 +821,8 @@ static int hl_a64_x86_emit_conditional_terminal(hl_x64_asm *assembler, uint32_t 
         if (!assembler->overflow) hl_a64_x86_patch_rel32(budget_patch, assembler->cursor);
     }
     hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, *target_out);
+    if (chain_enabled && direct_target == NULL)
+        hl_a64_x86_emit_chain_site(assembler, *target_out, &sites[(*site_count)++]);
     hl_a64_x86_emit_cpu_u64(assembler, OFF_RSN, R_BRANCH);
     hl_a64_x86_emit_return(assembler);
     return 1;
@@ -735,6 +898,8 @@ static void *translate_block(uint64_t guest_pc) {
         .end = entry + HL_A64_X86_MAX_BLOCK_BYTES,
         .overflow = 0,
     };
+    uint8_t *retired_immediate = NULL;
+    hl_a64_x86_emit_entry_accounting(&assembler, header, &retired_immediate);
     uint64_t cursor = guest_pc;
     uint64_t source_end = guest_pc;
     int has_memory = 0;
@@ -742,6 +907,9 @@ static void *translate_block(uint64_t guest_pc) {
     uint32_t rejection_instruction = 0;
     uint8_t *host_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
     uint64_t guest_for_instruction[HL_A64_X86_MAX_BLOCK_INSNS] = {0};
+    struct hl_a64_x86_chain_site chain_sites[2] = {0};
+    unsigned chain_site_count = 0;
+    int chain_enabled = hl_option_get("HL_A64_X86_JCC_LINK") != NULL && !g_pcache && !g_threaded && !smc_seen();
     /* r14 is callee-saved by the entry trampoline and unused by the ALU
      * lowering. It counts only completed direct backedges. */
     hl_x64_u8(&assembler, 0x45); hl_x64_u8(&assembler, 0x31); hl_x64_u8(&assembler, 0xF6); /* xor %r14d,%r14d */
@@ -817,8 +985,9 @@ static void *translate_block(uint64_t guest_pc) {
                     direct_target_loop_steps = (uint64_t)count - index + 1;
                     break;
                 }
-        int conditional = hl_a64_x86_emit_conditional_terminal(&assembler, instruction, cursor,
-                                                                &conditional_target, direct_target);
+        int conditional = hl_a64_x86_emit_conditional_terminal(
+            &assembler, instruction, cursor, &conditional_target, direct_target,
+            direct_target_loop_steps, chain_sites, &chain_site_count, chain_enabled);
         if (conditional) {
             exit_kind = UINT64_MAX;
         } else if (hl_a64_x86_is_svc(instruction)) {
@@ -857,6 +1026,7 @@ static void *translate_block(uint64_t guest_pc) {
         header->branch_fallthrough = conditional ? cursor + 4 : 0;
         header->loop_steps = direct_target_loop_steps;
         header->reserved2 = 0;
+        if (retired_immediate != NULL) *retired_immediate = (uint8_t)header->retired_steps;
         g_cp = assembler.cursor;
         if (map_put(guest_pc, guest_pc, source_end, entry, entry) != MAP_PUT_OK) {
             static const char message[] = "AArch64 x86 DBT translation map is full";
@@ -868,6 +1038,9 @@ static void *translate_block(uint64_t guest_pc) {
         if (g_txln_active)
             for (uint64_t line = guest_pc >> 6; line <= (source_end - 1) >> 6; ++line)
                 txln_put(line);
+        hl_a64_x86_pending_resolve(guest_pc);
+        for (unsigned index = 0; index < chain_site_count; ++index)
+            hl_a64_x86_pending_register(&chain_sites[index]);
         return entry;
     }
 
@@ -881,6 +1054,28 @@ static inline void hl_a64_x86_record_translated_exit(unsigned kind) {
 #else
     hl_backend_tree_translated_exit_count(kind);
 #endif
+}
+
+/* Called by clone while the parent is still the only guest thread and is at a
+ * syscall boundary. Drop experimental direct links before a peer can enter. */
+static int hl_a64_x86_flush_for_thread_start(void) {
+    if (hl_option_get("HL_A64_X86_JCC_LINK") == NULL || g_pcache) return 1;
+    if (!jit_wprot(0)) return 0;
+    jit_cache_rewind_in_place();
+    map_clear();
+    pend_reset();
+    hl_a64_x86_pending_reset(HL_PENDING_RESET_CACHE);
+    atomic_fetch_add_explicit(&g_x86_rel32_reset_thread, 1, memory_order_relaxed);
+    memset(g_ibtc, 0, sizeof g_ibtc);
+#ifdef PCACHE_FLUSH_HOOK
+    PCACHE_FLUSH_HOOK;
+#endif
+    return jit_wprot(1);
+}
+
+static void hl_a64_x86_cache_rewind_in_place(void) {
+    jit_cache_rewind_in_place();
+    hl_a64_x86_pending_reset(HL_PENDING_RESET_CACHE);
 }
 
 static void run_block(struct cpu *cpu, void *code) {
@@ -913,31 +1108,36 @@ static void run_block(struct cpu *cpu, void *code) {
          * the whole translated entry lets the existing memory access seam
          * abandon a faulting transfer without partially committing it. */
         int has_memory = header->reserved != 0;
-        if (has_memory && sigsetjmp(g_interp_marker_jmp, 0) != 0) {
+        int chain_fault_pad = hl_option_get("HL_A64_X86_JCC_LINK") != NULL;
+        if ((has_memory || chain_fault_pad) && sigsetjmp(g_interp_marker_jmp, 0) != 0) {
             g_interp_access_active = 0;
             g_interp_marker_armed = 0;
             g_interp_marker_cpu = NULL;
             hl_backend_tree_reason(cpu->reason);
             return;
         }
-        if (has_memory) {
+        if (has_memory || chain_fault_pad) {
             g_interp_marker_cpu = cpu;
             g_interp_marker_armed = 1;
         }
-        uint64_t repetitions = hl_a64_x86_dbt_enter(cpu, code);
-        if (has_memory) {
+        struct hl_a64_x86_run_result result = hl_a64_x86_dbt_enter(cpu, code);
+        if (has_memory || chain_fault_pad) {
             g_interp_access_active = 0;
             g_interp_marker_armed = 0;
             g_interp_marker_cpu = NULL;
         }
-        if (repetitions >= HL_A64_X86_BACKEDGE_BUDGET ||
-            (header->loop_steps == 0 && repetitions != 0)) {
+        uint64_t repetitions = cpu->host_save[0];
+        uint64_t linked = cpu->host_save[1];
+        atomic_fetch_add_explicit(&g_x86_rel32_executed, linked, memory_order_relaxed);
+        if (repetitions >= HL_A64_X86_BACKEDGE_BUDGET || linked >= HL_A64_X86_BACKEDGE_BUDGET ||
+            result.terminal == NULL || result.terminal->magic != HL_A64_X86_BLOCK_MAGIC) {
             static const char message[] = "AArch64 x86 DBT returned invalid backedge accounting";
             (void)jit_fail(HL_STATUS_CORRUPT, message, sizeof message - 1u);
             cpu->reason = R_BRANCH;
             return;
         }
-        hl_backend_tree_run_begin(1, header->retired_steps + repetitions * header->loop_steps);
+        header = result.terminal;
+        hl_backend_tree_run_begin(1, result.retired_steps);
         unsigned exit_kind = (unsigned)header->exit_kind;
         if (header->exit_kind == UINT64_MAX) {
             if (cpu->pc == header->branch_target)

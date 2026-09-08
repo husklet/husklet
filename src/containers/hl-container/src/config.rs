@@ -114,6 +114,7 @@ pub struct Config {
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<TranslationCache>,
     pub(crate) direct_call_pre_spill: bool,
+    pub(crate) a64_x86_jcc_link: bool,
 }
 
 impl Config {
@@ -128,6 +129,9 @@ impl Config {
             // Same-ISA translated calls use the proven pre-spill guard by default. The
             // explicit setter remains the rollback switch; pcache keeps its own path.
             direct_call_pre_spill: true,
+            // AArch64 guests on x86 may directly link validated conditional successors.
+            // Keep an explicit service-level escape hatch for corpus isolation and rollback.
+            a64_x86_jcc_link: true,
         }
     }
 
@@ -166,6 +170,12 @@ impl Config {
     }
 
     #[must_use]
+    pub fn a64_x86_jcc_link(mut self, enabled: bool) -> Self {
+        self.a64_x86_jcc_link = enabled;
+        self
+    }
+
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -182,6 +192,12 @@ mod tests {
         assert!(default.direct_call_pre_spill);
         assert!(!Config::new("/state").direct_call_pre_spill(false).direct_call_pre_spill);
         assert!(Config::new("/state").direct_call_pre_spill(true).direct_call_pre_spill);
+    }
+
+    #[test]
+    fn aarch64_x86_conditional_links_default_on_with_an_explicit_rollback() {
+        assert!(Config::new("/state").a64_x86_jcc_link);
+        assert!(!Config::new("/state").a64_x86_jcc_link(false).a64_x86_jcc_link);
     }
 
     #[test]
