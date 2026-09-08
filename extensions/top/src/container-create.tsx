@@ -8,10 +8,13 @@ import {
   Column,
   Entry,
   Expander,
+  FormControl,
+  FormLabel,
   Heading,
   Row,
   Spinner,
   Text,
+  TextArea,
   type ContainerCreateSpec,
   type WorkspaceApi,
 } from '@husklet/react';
@@ -131,7 +134,13 @@ function parseLabels(text: string): [string, string][] | undefined {
     return undefined;
   }
 
-  const value = parseJson(text, 'Labels must be valid JSON pairs, such as [["role","worker"]].');
+  const value = text.split('\n').map((line) => {
+    const separator = line.indexOf('=');
+    if (separator < 1) {
+      throw new Error('Each label must use name=value on its own line.');
+    }
+    return [line.slice(0, separator).trim(), line.slice(separator + 1)] as [string, string];
+  });
   const valid =
     Array.isArray(value) &&
     value.length <= 128 &&
@@ -442,15 +451,19 @@ export function ContainerCreate({
                 enabled={editable}
                 onChange={(event) => update('user', event.value)}
               />
-              <Entry
-                value={draft.labels}
-                placeholder={'Labels JSON (optional)'}
-                enabled={editable}
-                onChange={(event) => update('labels', event.value)}
-              />
+              <FormControl gap={1}>
+                <FormLabel label="Labels (optional)" />
+                <TextArea
+                  value={draft.labels}
+                  tooltip={'Labels, one name=value per line (optional)'}
+                  height={{ step: 5 }}
+                  enabled={editable}
+                  onChange={(event) => update('labels', event.value)}
+                />
+              </FormControl>
             </Row>
             <Text
-              label={'Labels use JSON [name, value] pairs, for example [["role","worker"]].'}
+              label={'Labels use one name=value pair per line, for example role=worker.'}
               color={'text-dim'}
               wrap={true}
             />

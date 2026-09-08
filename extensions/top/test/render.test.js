@@ -2984,7 +2984,7 @@ test('container rename validates locally, retries failure, and preserves immutab
   assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
 });
 
-test('container creation groups its compact form and explains raw JSON before an error', () => {
+test('container creation groups its compact form and uses a human label editor', () => {
   const stage = host();
   const frame = stage.render(
     h(Containers, {
@@ -3009,7 +3009,7 @@ test('container creation groups its compact form and explains raw JSON before an
     'Identity and image',
     'Process',
     'Resources and connectivity',
-    'Labels use JSON [name, value] pairs, for example [["role","worker"]].',
+    'Labels use one name=value pair per line, for example role=worker.',
     'Entrypoint and command use JSON argv arrays; environment uses JSON [name, value] pairs.',
     'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.',
   ])
@@ -3018,13 +3018,12 @@ test('container creation groups its compact form and explains raw JSON before an
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
   assert.deepEqual(
-    placeholders.slice(0, 15),
+    placeholders.slice(0, 14),
     [
       'Image reference',
       'Container name',
       'Hostname (optional)',
       'Run as user (optional)',
-      'Labels JSON (optional)',
       'Entrypoint argv JSON (optional)',
       'Command argv JSON (optional)',
       'Environment pairs JSON (optional)',
@@ -3037,6 +3036,11 @@ test('container creation groups its compact form and explains raw JSON before an
       'Published ports JSON (optional)',
     ],
     'visual grouping preserves a predictable keyboard traversal order',
+  );
+  assert.ok(labelled(stage, 'Labels (optional)'));
+  assert.equal(
+    latestPropertyForTag(stage, 'TextArea', 'Tooltip')?.Text,
+    'Labels, one name=value per line (optional)',
   );
   const wrappingRows = frame.patches.filter(
     (patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true,
@@ -3271,7 +3275,7 @@ test('container creation accepts only bounded named-volume mounts and retains th
     '[{"source":"/host","target":"/guest"}]',
   ]) {
     change(stage, placeholder, invalid);
-    assert.ok(labelled(stage, error));
+    assert.ok(labelled(stage, error), `invalid label set was accepted: ${invalid.slice(0, 80)}`);
     assert.equal(isEnabled(stage, 'Create and start'), false);
   }
   change(
@@ -3499,38 +3503,38 @@ test('container creation validates bounded labels and retains them until success
   stage.render(h(Containers, { api: controlled, resource }));
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'labelled');
-  const placeholder = 'Labels JSON (optional)';
+  const placeholder = 'Labels, one name=value per line (optional)';
   const error =
     'Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.';
+  changeByTooltip(stage, placeholder, 'missing-separator');
+  assert.ok(labelled(stage, 'Each label must use name=value on its own line.'));
   for (const invalid of [
-    '{"role":"worker"}',
-    '[["","worker"]]',
-    '[["role","worker"],["role","other"]]',
-    JSON.stringify([[`k${'é'.repeat(128)}`, 'value']]),
-    JSON.stringify([['key', 'é'.repeat(2049)]]),
-    JSON.stringify(Array.from({ length: 129 }, (_, index) => [`key-${index}`, 'value'])),
+    'role=worker\nrole=other',
+    `${`k${'é'.repeat(128)}`}=value`,
+    `key=${'é'.repeat(2049)}`,
+    Array.from({ length: 129 }, (_, index) => `key-${index}=value`).join('\n'),
   ]) {
-    change(stage, placeholder, invalid);
+    changeByTooltip(stage, placeholder, invalid);
     assert.ok(labelled(stage, error));
     assert.equal(isEnabled(stage, 'Create and start'), false);
   }
-  change(
+  changeByTooltip(
     stage,
     placeholder,
-    JSON.stringify(Array.from({ length: 128 }, (_, index) => [`key-${index}`, 'value'])),
+    Array.from({ length: 128 }, (_, index) => `key-${index}=value`).join('\n'),
   );
   assert.equal(
     isEnabled(stage, 'Create and start'),
     true,
     'the exact 128-label boundary is accepted',
   );
-  const requested = '[["role","worker"],["com.example/tier","backend"],["empty",""]]';
-  change(stage, placeholder, requested);
+  const requested = 'role=worker\ncom.example/tier=backend\nempty=';
+  changeByTooltip(stage, placeholder, requested);
   invoke(stage, 'Create and start');
   await settled();
   await settled();
   assert.ok(labelled(stage, 'label persistence temporarily unavailable'));
-  assert.equal(fieldValue(stage, placeholder), requested);
+  assert.equal(fieldValueByTooltip(stage, placeholder), requested);
   invoke(stage, 'Create and start');
   await settled();
   await settled();
@@ -3549,7 +3553,7 @@ test('container creation validates bounded labels and retains them until success
     ['start', 'labelled-container', 0],
     ['reload'],
   ]);
-  assert.equal(fieldValue(stage, placeholder), '');
+  assert.equal(fieldValueByTooltip(stage, placeholder), '');
 });
 
 test('container creation validates entrypoint argv and retains it until success', async () => {
@@ -4894,6 +4898,18 @@ function change(stage, placeholder, value) {
   );
 }
 
+function changeByTooltip(stage, tooltip, value) {
+  const node = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
+    .at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${tooltip} field is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
+    `${tooltip} changes`,
+  );
+}
+
 function submit(stage, placeholder) {
   const node = stage.frames
     .flatMap((frame) => frame.patches)
@@ -4991,6 +5007,16 @@ function fieldValue(stage, placeholder) {
     .filter(
       (patch) => 'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Value',
     )
+    .at(-1)?.SetProp.value?.Text;
+}
+
+function fieldValueByTooltip(stage, tooltip) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const node = patches
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
+    .at(-1)?.SetProp.id;
+  return patches
+    .filter((patch) => patch.SetProp?.id === node && patch.SetProp?.prop === 'Value')
     .at(-1)?.SetProp.value?.Text;
 }
 

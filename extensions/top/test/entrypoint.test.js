@@ -651,8 +651,8 @@ test(
           kind: KIND.event,
           payload: changeInvocation(
             requests,
-            'Labels JSON (optional)',
-            '[["role","worker"],["tier","backend"]]',
+            'Labels, one name=value per line (optional)',
+            'role=worker\ntier=backend',
           ),
         }),
       );
@@ -1379,7 +1379,9 @@ function changeInvocation(requests, placeholder, value) {
   const active = activeNodes(patches);
   const node = patches
     .filter(
-      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+      (patch) =>
+        (patch.SetProp?.prop === 'Placeholder' || patch.SetProp?.prop === 'Tooltip') &&
+        patch.SetProp.value?.Text === placeholder,
     )
     .toReversed()
     .find((patch) => active(patch.SetProp.id))?.SetProp.id;
