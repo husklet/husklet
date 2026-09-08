@@ -281,7 +281,7 @@ fn aarch64_x86_stage_one_keeps_pc_sp_width_and_branch_invariants() {
         "header->loop_steps = direct_target_loop_steps",
         "hl_backend_tree_run_begin(1, result.retired_steps)",
         "repetitions >= HL_A64_X86_BACKEDGE_BUDGET",
-        "header->loop_steps == 0 && repetitions != 0",
+        "repetitions >= HL_A64_X86_BACKEDGE_BUDGET || linked >= HL_A64_X86_BACKEDGE_BUDGET",
         "cmp $7,%r14",
         "mov %r14,%rax",
     ] {
