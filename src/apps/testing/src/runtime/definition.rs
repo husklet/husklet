@@ -174,7 +174,11 @@ impl App {
                 let image_executable = case.image_executable;
                 let (source, output, build_compiler, build_arguments, build_environment, flags, inputs, destination) =
                     if let Some(executable) = image_executable {
-                        if case.build.is_some() || case.artifact.is_some() {
+                        if case.build.is_some()
+                            || case.artifact.is_some()
+                            || document.artifact.is_some()
+                            || document.build.has_default()
+                        {
                             return Err(format!("{} combines image-executable with build/artifact", case.id).into());
                         }
                         std::path::Path::new(&executable).safe_absolute()?;
@@ -591,6 +595,21 @@ mod tests {
         ] {
             assert!(category(&invalid).is_err(), "{invalid}");
         }
+        let inherited = row.replace(
+            "    image-executable: /usr/bin/tool\n",
+            "    image-executable: /usr/bin/tool\n",
+        );
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        fs::create_dir(directory.path().join("golden")).unwrap();
+        fs::write(directory.path().join("golden/one.out"), []).unwrap();
+        let definition = directory.path().join("test.yaml");
+        fs::write(
+            &definition,
+            format!("targets: [amd64]\nimage: alpine\nexecution: {{}}\nartifact: {{ destination: /opt/default }}\nbuild:\n  source: one.c\n  output: one\n  compiler: {{ arm64: cc, amd64: cc }}\n  flags: []\ncases:\n{inherited}"),
+        )
+        .unwrap();
+        assert!(App::load(directory.path(), &definition).is_err());
     }
 
     fn category(case_rows: &str) -> Result<App, super::Error> {

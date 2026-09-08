@@ -296,6 +296,10 @@ pub(super) fn stderr_patterns(patterns: Vec<String>) -> Result<Vec<String>, Erro
 }
 
 impl Build {
+    pub(super) const fn has_default(&self) -> bool {
+        self.source.is_some() || self.output.is_some()
+    }
+
     pub(super) fn resolve(
         &self,
         case: Option<CaseBuild>,
