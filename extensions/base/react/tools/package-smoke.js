@@ -610,6 +610,19 @@ try {
   );
   assert.match(dockerfile, /npm install --global --ignore-scripts/);
   assert.match(dockerfile, /npm root --global/);
+  for (const tooling of [
+    'eslint',
+    '@eslint',
+    'typescript-eslint',
+    'eslint-plugin-react-hooks',
+    'eslint-config-prettier',
+    'prettier',
+  ]) {
+    assert(
+      dockerfile.includes(`node_modules/${tooling}`),
+      `base image does not expose globally installed ${tooling} to author configuration`,
+    );
+  }
   assert(
     dockerfile.includes(
       'sed -i "s/^version = .*/version = \\"${HUSKLET_REACT_VERSION}\\"/" react/examples/starter/extension.toml',
@@ -762,6 +775,89 @@ try {
     ],
     { cwd: imageRuntime, stdio: 'pipe' },
   );
+
+  // Model `/app` with packages installed globally and linked into its root
+  // module tree. A nested extension source must resolve both SDK and authoring
+  // tools without an npm registry or its own node_modules.
+  const toolingPrefix = path.join(scratch, 'global-prefix');
+  execFileSync(
+    'npm',
+    [
+      'install',
+      '--prefix',
+      toolingPrefix,
+      '--offline',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      'typescript@5.9.2',
+      'vite@7.3.6',
+      '@types/node@22.20.1',
+      '@types/react@18.3.3',
+      'eslint@10.10.0',
+      '@eslint/js@10.0.1',
+      'typescript-eslint@8.69.0',
+      'eslint-plugin-react-hooks@7.1.1',
+      'eslint-config-prettier@10.1.8',
+      'prettier@3.9.6',
+    ],
+    { stdio: 'pipe' },
+  );
+  const globalModules = path.join(toolingPrefix, 'node_modules');
+  for (const tooling of [
+    'typescript',
+    'vite',
+    'eslint',
+    '@eslint',
+    'typescript-eslint',
+    'eslint-plugin-react-hooks',
+    'eslint-config-prettier',
+    'prettier',
+    '@types',
+  ]) {
+    const destination = path.join(imageRuntime, 'node_modules', tooling);
+    fs.rmSync(destination, { recursive: true, force: true });
+    fs.symlinkSync(path.join(globalModules, tooling), destination, 'dir');
+  }
+  const author = path.join(imageRuntime, 'author');
+  fs.mkdirSync(author);
+  fs.writeFileSync(
+    path.join(author, 'index.html'),
+    '<div id="root"></div><script type="module" src="/main.tsx"></script>\n',
+  );
+  fs.writeFileSync(
+    path.join(author, 'main.tsx'),
+    'import React from "react";\nimport { Button } from "@husklet/react";\nexport const App = () => <Button>Offline</Button>;\nvoid React;\n',
+  );
+  fs.writeFileSync(
+    path.join(author, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'Bundler',
+        jsx: 'react-jsx',
+      },
+      include: ['main.tsx'],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(author, 'eslint.config.js'),
+    "import tseslint from 'typescript-eslint';\nimport prettier from 'eslint-config-prettier';\nexport default [...tseslint.configs.recommended, prettier];\n",
+  );
+  for (const [binary, arguments_] of [
+    ['tsc', ['--noEmit']],
+    ['vite', ['build', '--ssr', 'main.tsx']],
+    ['eslint', ['main.tsx']],
+    ['prettier', ['--check', 'main.tsx']],
+  ]) {
+    execFileSync(path.join(globalModules, '.bin', binary), arguments_, {
+      cwd: author,
+      env: { ...process.env, npm_config_offline: 'true' },
+      stdio: 'pipe',
+    });
+  }
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
