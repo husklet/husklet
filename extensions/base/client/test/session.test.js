@@ -2627,6 +2627,102 @@ test('a real Unix reply on an uncorrelated channel fails the ordered session clo
   }
 });
 
+test('a row-shaped event cannot consume the ordered call channel or survive reconnect', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-reserved-call-channel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const returned = [];
+  let generation = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    generation += 1;
+    const current = generation;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        returned.push([current, frame]);
+        if (frame.kind !== KIND.request) continue;
+        if (current === 1) {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.event,
+              payload: {
+                id: 4,
+                source: 7,
+                version: 2,
+                range: { start: 0, count: 1 },
+                sort: null,
+                filter: null,
+                slot: 'surface-2',
+              },
+            }),
+          );
+        } else {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'reconnected', image: 'alpine', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: `generation-${current}`, granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  let first;
+  let second;
+  const rows = [];
+  try {
+    first = await connect({
+      path: socketPath,
+      timeout: 200,
+      onRows: (request, channel) => {
+        rows.push(request);
+        first.answer(channel, {
+          source: request.source,
+          version: request.version,
+          range: request.range,
+          rows: [],
+        });
+      },
+    });
+    const pending = first.call('workspace_info');
+    await assert.rejects(pending, /non-response frame on the ordered call channel/);
+    assert.deepEqual(rows, [], 'reserved-channel bytes never reach a GUI row provider');
+    assert.equal(
+      returned.some(
+        ([connection, frame]) =>
+          connection === 1 && frame.channel === 2 && frame.kind === KIND.response,
+      ),
+      false,
+      'the extension emits no counterfeit ordered response',
+    );
+
+    second = await connect({ path: socketPath, timeout: 200 });
+    assert.equal((await workspace(second).info()).name, 'reconnected');
+    assert.equal(generation, 2, 'the listener accepts one clean successor generation');
+  } finally {
+    await first?.close();
+    await second?.close();
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a real Unix response without a pending ordered call closes the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-unsolicited-response-'));
   const socketPath = path.join(directory, 'host.sock');

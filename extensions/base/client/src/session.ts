@@ -624,6 +624,8 @@ export class Session {
       throw new Error('coalesced flag is only valid on events');
     if (!this.#welcomed && frame.channel !== CONTROL)
       throw new Error('extension host sent a non-control frame before the greeting');
+    if (this.#welcomed && frame.channel === CALLS && frame.kind !== KIND.response)
+      throw new Error('extension host sent a non-response frame on the ordered call channel');
     if (frame.kind === KIND.ping) {
       if (!this.#welcomed) throw new Error('host ping arrived before the greeting');
       this.#write({ channel: frame.channel, kind: KIND.pong, payload: frame.payload });
