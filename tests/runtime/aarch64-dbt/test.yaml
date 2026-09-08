@@ -73,6 +73,17 @@ cases:
       diagnostics:
         - { record: "[diag] backend-tree", count: 1, fields: { crossings: "125002", translated_steps: "4000011", interpreted_steps: "0", translated_entries: "125002", translations: "4" } }
         - { record: "[diag] backend-shape-detail", count: 1, fields: { translated_entries: "125002", t_cond_taken: "124999", t_cond_not_taken: "2", t_syscall: "1", stitch_jmp: "0", stitch_cond_fall: "0", e_jmp_chained: "0", e_jt_chained: "0" } }
+  - id: runtime/aarch64-dbt/add-extended
+    status: active
+    compat: { class: smoke }
+    build: { source: source/add_extended.c, output: add-extended, flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/add-extended }
+    run: []
+    expect:
+      exit: 42
+      stdout_empty: true
+      diagnostics:
+        - { record: "[diag] backend-tree", count: 1, fields: { interpreted_steps: "0" } }
   - id: runtime/aarch64-dbt/indirect-control
     status: active
     compat: { class: smoke }

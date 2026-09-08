@@ -201,6 +201,46 @@ static void hl_a64_x86_emit_zero_extend32(hl_x64_asm *assembler, int host_regist
     hl_x64_u8(assembler, (uint8_t)(0xC0 | ((host_register & 7) << 3) | (host_register & 7)));
 }
 
+static void hl_a64_x86_emit_shift(hl_x64_asm *assembler, int host_register, unsigned operation,
+                                  unsigned amount, unsigned sf);
+
+static void hl_a64_x86_emit_extend(hl_x64_asm *assembler, int host_register, unsigned option) {
+    switch (option) {
+    case 0: hl_x64_and_imm32(assembler, host_register, UINT8_MAX); break;  /* UXTB */
+    case 1: hl_x64_and_imm32(assembler, host_register, UINT16_MAX); break; /* UXTH */
+    case 2: hl_a64_x86_emit_zero_extend32(assembler, host_register); break; /* UXTW */
+    case 3: break; /* UXTX */
+    case 4: /* SXTB */
+    case 5: /* SXTH */
+        hl_x64_u8(assembler, (uint8_t)(0x48 | (host_register >= 8 ? 5 : 0)));
+        hl_x64_u8(assembler, 0x0F);
+        hl_x64_u8(assembler, (uint8_t)(option == 4 ? 0xBE : 0xBF));
+        hl_x64_u8(assembler, (uint8_t)(0xC0 | ((host_register & 7) << 3) | (host_register & 7)));
+        break;
+    case 6: hl_a64_x86_emit_sign_extend32(assembler, host_register); break; /* SXTW */
+    default: break; /* SXTX */
+    }
+}
+
+/* ADD (extended register), including SP operands. The same-ISA backend emits
+ * this as one AArch64 instruction; cross-ISA keeps the equivalent body to a
+ * load, one extension, optional shift, add and store without an interpreter
+ * boundary. Guest NZCV is canonical memory and deliberately remains untouched. */
+static int hl_a64_x86_emit_add_extended(hl_x64_asm *assembler, uint32_t instruction) {
+    if ((instruction & 0x7FE00000u) != 0x0B200000u) return 0; /* ADD, no flags, extended */
+    unsigned sf = instruction >> 31;
+    unsigned option = (instruction >> 13) & 7u;
+    unsigned shift = (instruction >> 10) & 7u;
+    if (shift > 4u) return 0;
+    hl_a64_x86_load_gpr(assembler, 1, (instruction >> 16) & 31u, 0); /* Rm or ZR */
+    hl_a64_x86_emit_extend(assembler, 1, option);
+    hl_a64_x86_emit_shift(assembler, 1, 4, shift, sf);
+    hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 1); /* Rn or SP */
+    hl_a64_x86_emit_binary(assembler, 0x01, sf);
+    hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 1); /* Rd or SP */
+    return 1;
+}
+
 static void hl_a64_x86_emit_high_multiply(hl_x64_asm *assembler, int source, int is_signed) {
     hl_x64_u8(assembler, (uint8_t)(0x48 | (source >= 8 ? 1 : 0)));
     hl_x64_u8(assembler, 0xF7);
@@ -714,6 +754,7 @@ static void *translate_block(uint64_t guest_pc) {
         if (hl_a64_x86_emit_pc_relative(&assembler, instruction, cursor)) continue;
         if (hl_a64_x86_emit_add_sub_immediate(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_stage_two_alu(&assembler, instruction)) continue;
+        if (hl_a64_x86_emit_add_extended(&assembler, instruction)) continue;
         if (hl_a64_x86_emit_three_source(&assembler, instruction)) continue;
         if (hl_a64_x86_is_scalar_single_memory(instruction)) {
             hl_a64_x86_emit_scalar_single_memory(&assembler, instruction, cursor);

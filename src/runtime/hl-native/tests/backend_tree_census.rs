@@ -395,6 +395,41 @@ fn aarch64_x86_stage_two_benchmark_stays_inside_the_bounded_generated_body() {
 }
 
 #[test]
+fn aarch64_x86_add_extended_covers_every_extension_and_sp_contract() {
+    let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "static int hl_a64_x86_emit_add_extended",
+        "(instruction & 0x7FE00000u) != 0x0B200000u",
+        "if (shift > 4u) return 0;",
+        "case 0: hl_x64_and_imm32(assembler, host_register, UINT8_MAX); break;",
+        "case 6: hl_a64_x86_emit_sign_extend32(assembler, host_register); break;",
+        "hl_a64_x86_load_gpr(assembler, 0, (instruction >> 5) & 31u, 1);",
+        "hl_a64_x86_store_gpr(assembler, 0, instruction & 31u, 1);",
+        "if (hl_a64_x86_emit_add_extended(&assembler, instruction)) continue;",
+    ] {
+        assert!(source.contains(contract), "missing ADD-extended contract {contract}");
+    }
+    let fixture = include_str!("../../../../tests/runtime/aarch64-dbt/source/add_extended.c");
+    for instruction in [
+        "add x3,x2,w1,uxtb",
+        "add x4,x2,w1,uxth #4",
+        "add x5,x2,w1,uxtw #3",
+        "add x6,x2,x1,uxtx",
+        "add x7,x2,w1,sxtb",
+        "add x8,x2,w1,sxth #4",
+        "add x9,x2,w1,sxtw",
+        "add x10,x2,x1,sxtx #1",
+        "add w11,w2,w1,uxtb #4",
+        "add w12,w2,w1,sxth",
+        "add x13,sp,wzr,uxtw #4",
+        "add sp,x20,wzr,uxtw",
+        "b.ne 99f",
+    ] {
+        assert!(fixture.contains(instruction), "fixture omitted {instruction}");
+    }
+}
+
+#[test]
 fn aarch64_x86_three_source_lowering_covers_the_complete_allocated_family() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [
