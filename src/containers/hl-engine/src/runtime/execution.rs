@@ -468,8 +468,9 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
     }
 }
 
-fn native_request(options: &crate::options::Options) -> NativeSupervisedRequest {
-    match options.get_bytes("HL_NATIVE_SUPERVISED") {
+fn native_request(plan: &crate::launcher::plan::RuntimePlan) -> NativeSupervisedRequest {
+    match plan.options.get_bytes("HL_NATIVE_SUPERVISED") {
+        None if translated_backend_control(plan).is_some() => NativeSupervisedRequest::Off,
         None => NativeSupervisedRequest::Auto,
         Some(b"0" | b"off") => NativeSupervisedRequest::Off,
         Some(_) => NativeSupervisedRequest::On,
@@ -836,12 +837,30 @@ mod native_eligibility_tests {
 
     #[test]
     fn request_is_a_real_tri_state() {
-        let mut options = crate::options::Options::default();
-        assert_eq!(native_request(&options), NativeSupervisedRequest::Auto);
-        options.set("HL_NATIVE_SUPERVISED", "0", true).unwrap();
-        assert_eq!(native_request(&options), NativeSupervisedRequest::Off);
-        options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
-        assert_eq!(native_request(&options), NativeSupervisedRequest::On);
+        let mut request = plan();
+        assert_eq!(native_request(&request), NativeSupervisedRequest::Auto);
+        request.options.set("HL_NATIVE_SUPERVISED", "0", true).unwrap();
+        assert_eq!(native_request(&request), NativeSupervisedRequest::Off);
+        request.options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+        assert_eq!(native_request(&request), NativeSupervisedRequest::On);
+        request.options.unset("HL_NATIVE_SUPERVISED").unwrap();
+        request.options.set("HL_TRANSLIT", "1", true).unwrap();
+        assert_eq!(native_request(&request), NativeSupervisedRequest::Off);
+        let probes = std::cell::Cell::new(0);
+        assert_eq!(
+            native_eligibility_for_request(
+                native_request(&request),
+                crate::activation::GuestIsa::X86_64,
+                &request,
+                NativeCheckpointIntent::None,
+                || {
+                    probes.set(probes.get() + 1);
+                    host()
+                },
+            ),
+            Err(NativeSupervisedRefusal::Host)
+        );
+        assert_eq!(probes.get(), 0, "forced translation probed native eligibility");
         assert_eq!(native_selection(NativeSupervisedRequest::Auto, Ok(())), Ok(true));
         assert_eq!(
             native_selection(NativeSupervisedRequest::Auto, Err(NativeSupervisedRefusal::Network)),
@@ -1379,7 +1398,7 @@ impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
-        let requested = native_request(&request.plan.options);
+        let requested = native_request(request.plan);
         let checkpoint = native_checkpoint_intent(
             request.services.checkpoint_sink.is_some(),
             request.services.checkpoint_source.is_some(),
