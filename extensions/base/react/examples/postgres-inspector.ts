@@ -5,6 +5,7 @@ import {
   CardContent,
   Column,
   DataTable,
+  ExecutionOperationError,
   Heading,
   Row,
   Text,
@@ -77,43 +78,43 @@ try {
   const credential = new TextDecoder().decode(Uint8Array.from(credentialBytes)).trimEnd();
 
   const executeCsv = async (statement: string, signal?: AbortSignal): Promise<string[][]> => {
-    const executionId = await host.containers.exec(container.id, container.generation, {
-      // Exact argv: query whitespace and metacharacters never become shell syntax.
-      command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
-      environment: [['PGPASSWORD', credential]],
-    });
+    let executionId: string | undefined;
     let stdout = '';
     let stderr = '';
     const stdoutDecoder = new TextDecoder();
     const stderrDecoder = new TextDecoder();
     try {
-      for await (const page of host.containers.executionOutputPages(executionId, { signal })) {
-        for (const entry of page.entries) {
-          if (entry.stream === 'stdout') {
-            stdout += stdoutDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
-          } else {
-            stderr += stderrDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
+      const result = await host.containers.execStreaming(
+        container.id,
+        container.generation,
+        {
+          // Exact argv: query whitespace and metacharacters never become shell syntax.
+          command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
+          environment: [['PGPASSWORD', credential]],
+          signal,
+        },
+        (page) => {
+          for (const entry of page.entries) {
+            if (entry.stream === 'stdout') {
+              stdout += stdoutDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
+            } else {
+              stderr += stderrDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
+            }
           }
-        }
-      }
+        },
+      );
+      executionId = result.executionId;
       stdout += stdoutDecoder.decode();
       stderr += stderrDecoder.decode();
-      const finished = await host.containers.execution(executionId);
+      const finished = result.execution;
       if (finished.exit_code !== 0)
         throw new Error(stderr.trim() || `psql exited ${finished.exit_code}`);
       return csv(stdout);
+    } catch (error) {
+      if (error instanceof ExecutionOperationError) executionId = error.executionId;
+      throw error;
     } finally {
-      if (signal?.aborted) {
-        await host.containers
-          .cancelExecution(executionId, {
-            signal: 'SIGTERM',
-            timeoutMs: 1_000,
-          })
-          .catch(() => {});
-        await host.containers.removeExecution(executionId).catch(() => {});
-      } else {
-        await host.containers.removeExecution(executionId);
-      }
+      if (executionId) await host.containers.removeExecution(executionId).catch(() => {});
     }
   };
 

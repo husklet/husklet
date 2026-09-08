@@ -923,6 +923,49 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new ExecutionOperationError(executionId, phase, cause, execution);
         }
       },
+      execStreaming: async (
+        id,
+        generation,
+        {
+          command,
+          environment = [],
+          user,
+          workingDirectory,
+          pageLimit = 16,
+          pollIntervalMs = 25,
+          signal,
+          cancelSignal = 'SIGTERM',
+          cancelTimeoutMs = 1_000,
+        },
+        onPage,
+      ) => {
+        if (typeof onPage !== 'function')
+          throw new TypeError('streaming execution requires an output callback');
+        const executionId = await api.containers.exec(id, generation, {
+          command,
+          environment,
+          user,
+          workingDirectory,
+        });
+        let phase = 'output';
+        try {
+          for await (const page of api.containers.executionOutputPages(executionId, {
+            limit: pageLimit,
+            pollIntervalMs,
+            signal,
+          })) {
+            await onPage(page);
+          }
+          phase = 'inspect';
+          const execution = await api.containers.execution(executionId);
+          return { executionId, execution };
+        } catch (cause) {
+          await api.containers
+            .cancelExecution(executionId, { signal: cancelSignal, timeoutMs: cancelTimeoutMs })
+            .catch(() => {});
+          throw new ExecutionOperationError(executionId, phase, cause);
+        }
+      },
       attachTerminal: (id, command) =>
         session
           .call('container_attach_terminal', {
@@ -3464,6 +3507,7 @@ export const protocolCoverage = Object.freeze({
       'kill',
       'exec',
       'execAndWait',
+      'execStreaming',
       'attachTerminal',
     ],
     images: [

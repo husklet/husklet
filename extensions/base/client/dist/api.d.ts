@@ -646,7 +646,7 @@ export declare class ExtensionError extends Error {
 }
 export declare class ExecutionOperationError extends Error {
     readonly executionId: string;
-    readonly phase: 'wait' | 'logs';
+    readonly phase: 'wait' | 'logs' | 'output' | 'inspect';
     readonly cause: unknown;
     /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
     readonly execution?: ExecutionSummary;
@@ -907,6 +907,24 @@ export interface WorkspaceApi {
         }): Promise<{
             execution: ExecutionSummary;
             output: ContainerOutput;
+        }>;
+        /**
+         * Execute and deliver bounded live output pages with callback backpressure.
+         * Abort or callback failure cancels the owned execution; its record is never auto-removed.
+         */
+        execStreaming(id: string, generation: number, options: {
+            command: string[];
+            environment?: [string, string][];
+            user?: string;
+            workingDirectory?: string;
+            pageLimit?: number;
+            pollIntervalMs?: number;
+            signal?: AbortSignal;
+            cancelSignal?: string;
+            cancelTimeoutMs?: number;
+        }, onPage: (page: ExecutionOutputPage) => void | Promise<void>): Promise<{
+            executionId: string;
+            execution: ExecutionSummary;
         }>;
         signalExecution(id: string, signal: string): Promise<void>;
         /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */

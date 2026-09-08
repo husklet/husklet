@@ -1144,6 +1144,40 @@ test('image pull completes through start and status without cancelling', async (
   assert.deepEqual(calls, ['image_pull_start', 'image_pull_status']);
 });
 
+test('streaming execution applies callback backpressure and cancels callback failure', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const pages = [
+    { entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [97] }], next: 1, more: true, eof: false, gap: false },
+    { entries: [{ sequence: 2, timestamp_ms: 2, stream: 'stderr', bytes: [98] }], next: 2, more: false, eof: true, gap: false },
+  ];
+  const calls = [];
+  api.containers.exec = async () => 'e'.repeat(32);
+  api.containers.executionOutputPages = async function* () { yield* pages; };
+  api.containers.execution = async (id) => ({ id, running: false, exit_code: 0, pid: null });
+  api.containers.cancelExecution = async (...arguments_) => { calls.push(['cancel', ...arguments_]); };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'] },
+      async (page) => {
+        calls.push(['page', page.next]);
+        await Promise.resolve();
+        if (page.next === 2) throw new Error('consumer refused output');
+      },
+    ),
+    (error) => error.name === 'ExecutionOperationError' && error.executionId === 'e'.repeat(32) && error.phase === 'output',
+  );
+  assert.deepEqual(calls, [
+    ['page', 1],
+    ['page', 2],
+    ['cancel', 'e'.repeat(32), { signal: 'SIGTERM', timeoutMs: 1_000 }],
+  ]);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('image pull preserves host failure when best-effort cancellation also fails', async () => {
   const calls = [];
   const api = workspace({
