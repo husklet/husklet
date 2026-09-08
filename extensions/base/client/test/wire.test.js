@@ -25,7 +25,7 @@ test('a frame survives the codec unchanged', () => {
   assert.equal(read.flags, FLAG_END);
 });
 
-test('idle readers stay small and release a near-limit frame fragmented over Unix', async () => {
+test('idle readers stay small when Unix closes after a fragmented near-limit frame and partial header', async () => {
   const readers = Array.from({ length: 64 }, () => new Reader());
   assert.equal(
     readers.reduce((total, reader) => total + reader.capacity, 0),
@@ -34,11 +34,12 @@ test('idle readers stay small and release a near-limit frame fragmented over Uni
 
   const payload = Buffer.alloc(PAYLOAD_LIMIT - 1, 0x61);
   const encoded = encode({ channel: 0, kind: KIND.ping, payload });
+  const wireBytes = Buffer.concat([encoded, Buffer.of(4)]);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-large-frame-'));
   const socketPath = path.join(directory, 'wire.sock');
   const server = net.createServer(async (socket) => {
-    for (let offset = 0; offset < encoded.length; offset += 257) {
-      if (!socket.write(encoded.subarray(offset, offset + 257))) await once(socket, 'drain');
+    for (let offset = 0; offset < wireBytes.length; offset += 257) {
+      if (!socket.write(wireBytes.subarray(offset, offset + 257))) await once(socket, 'drain');
     }
     socket.end();
   });
@@ -52,11 +53,11 @@ test('idle readers stay small and release a near-limit frame fragmented over Uni
       assert(reader.capacity <= HEADER + PAYLOAD_LIMIT);
     });
     await once(socket, 'end');
-    reader.finish();
     assert.equal(frames.length, 1);
     assert.deepEqual(frames[0].payload, payload);
-    assert.equal(reader.buffered, 0);
+    assert.equal(reader.buffered, 1);
     assert.equal(reader.capacity, HEADER);
+    assert.throws(() => reader.finish(), /unfinished frame \(1 bytes buffered\)/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
@@ -73,6 +74,19 @@ test('frames split across chunks are reassembled', () => {
   assert.deepEqual(reader.take(bytes.subarray(0, 5)), []);
   const [read] = reader.take(bytes.subarray(5));
   assert.deepEqual(read.payload, { sequence: 1, patches: [] });
+});
+
+test('a trailing partial frame cannot retain a completed near-limit allocation', () => {
+  const reader = new Reader();
+  const large = encode({ channel: CONTROL, kind: KIND.ping, payload: Buffer.alloc(PAYLOAD_LIMIT - 1) });
+  const next = encode({ channel: CONTROL, kind: KIND.ping, payload: Buffer.from('next') });
+
+  const [frame] = reader.take(Buffer.concat([large, next.subarray(0, 1)]));
+
+  assert.equal(frame.payload.length, PAYLOAD_LIMIT - 1);
+  assert.equal(reader.buffered, 1);
+  assert.equal(reader.capacity, HEADER);
+  assert.throws(() => reader.finish(), /unfinished frame \(1 bytes buffered\)/);
 });
 
 test('header violations are rejected before a declared body is buffered', () => {
