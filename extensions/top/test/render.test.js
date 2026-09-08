@@ -2201,11 +2201,10 @@ test('terminal management exposes exact pin state and acts through immutable tab
   assert.ok(labelled(stage, '1 terminal pane'));
   assert.ok(labelled(stage, 'Pane 1 · Terminal'));
   assert.equal(
-    ancestorProperty(stage, 'Switch to Build', 'Row', 'Wrap')?.Flag,
+    ancestorProperty(stage, 'Open tab', 'Row', 'Wrap')?.Flag,
     true,
     'terminal actions reflow instead of leaving the narrow pane',
   );
-  assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify')?.Align, 'Start');
   assert.ok(
     ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Width'),
@@ -2215,9 +2214,50 @@ test('terminal management exposes exact pin state and acts through immutable tab
   await settled();
   await settled();
   assert.deepEqual(calls, [['pin', 'p7', true], ['reload']]);
-  invoke(stage, 'Switch to Build');
+  invoke(stage, 'Open tab');
   await settled();
   assert.deepEqual(calls.at(-1), ['focus', 's4']);
+});
+
+test('a disappeared pane is reported as a stale layout instead of a raw protocol error', async () => {
+  const resource = {
+    data: [
+      {
+        id: 'tab-1',
+        title: 'Shell',
+        pinned: false,
+        panes: [{ slot: 'shell', occupant: 'terminal', provider: null }],
+      },
+    ],
+    loading: false,
+    error: null,
+    reload: async () => {},
+  };
+  const stage = host();
+  stage.render(
+    h(Terminals, {
+      api: {
+        terminal: {
+          toText: async () => {
+            throw new Error('pane does not exist: shell');
+          },
+          pinTab: async () => {},
+          focus: async () => {},
+        },
+      },
+      resource,
+    }),
+  );
+  invoke(stage, 'View pane 1');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'This pane is no longer available. Refresh terminal tabs to see the current layout.',
+    ),
+  );
+  assert.equal(labelled(stage, 'pane does not exist: shell'), undefined);
 });
 
 test('terminal management reads every pane as text and writes against the inspected terminal revision', async () => {
@@ -2280,13 +2320,13 @@ test('terminal management reads every pane as text and writes against the inspec
   await settled();
   assert.deepEqual(calls, [['read', 'pane-1']]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready');
-  change(stage, 'Send a line to this terminal', 'printf hello');
-  invoke(stage, 'Send line');
+  change(stage, 'Type a line', 'printf hello');
+  invoke(stage, 'Send');
   await settled();
   await settled();
   assert.deepEqual(calls[1], ['write', 'pane-1', 7, 11, 'printf hello\n', { lines: 200 }]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready\nhello');
-  assert.equal(fieldValue(stage, 'Send a line to this terminal'), '');
+  assert.equal(fieldValue(stage, 'Type a line'), '');
   invoke(stage, 'View pane 2');
   await settled();
   await settled();
@@ -2341,10 +2381,10 @@ test('terminal input stays unavailable without a host-issued revision cursor', a
   assert.ok(
     labelled(
       stage,
-      'This host did not provide a writable pane revision; refresh before sending input.',
+      'Input is unavailable until this pane provides a writable revision. Refresh the pane to try again.',
     ),
   );
-  assert.equal(isEnabled(stage, 'Send line'), false);
+  assert.equal(isEnabled(stage, 'Send'), false);
   assert.deepEqual(
     calls,
     [],
@@ -2403,18 +2443,18 @@ test('terminal pane layout mutations use the inspected generation and revision',
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  invoke(stage, 'Split beside');
+  invoke(stage, 'Split right');
   await settled();
   await settled();
-  invoke(stage, 'Split below');
+  invoke(stage, 'Split down');
   await settled();
   await settled();
-  change(stage, 'Pane share % (5–95)', '60');
-  invoke(stage, 'Set pane share');
+  change(stage, 'Size % (5–95)', '60');
+  invoke(stage, 'Apply size');
   await settled();
   await settled();
-  change(stage, 'New pane title', 'Build logs');
-  invoke(stage, 'Rename pane');
+  change(stage, 'Pane title', 'Build logs');
+  invoke(stage, 'Rename');
   await settled();
   await settled();
   invoke(stage, 'Close pane');
@@ -2424,7 +2464,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
     false,
     'opening close confirmation has no authority',
   );
-  invoke(stage, 'Confirm close pane');
+  invoke(stage, 'Confirm close');
   await settled();
   await settled();
   assert.deepEqual(
@@ -2438,7 +2478,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
     ],
   );
   assert.equal(
-    fieldValue(stage, 'New pane title'),
+    fieldValue(stage, 'Pane title'),
     '',
     'a proven close clears stale pane editing state',
   );
@@ -2484,7 +2524,7 @@ test('an unobserved terminal mutation keeps the inspected pane and reports uncer
   await settled();
   await settled();
   invoke(stage, 'Close pane');
-  invoke(stage, 'Confirm close pane');
+  invoke(stage, 'Confirm close');
   await settled();
   await settled();
   assert.ok(
@@ -2569,12 +2609,12 @@ test('terminal management opens tabs and spawns exact argv through observed oper
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', '["make","test"]');
-  invoke(stage, 'Spawn command');
+  change(stage, 'Run a command, e.g. make test', 'make test');
+  invoke(stage, 'Run');
   await settled();
   await settled();
-  change(stage, 'Columns (1–1000)', '120');
-  change(stage, 'Rows (1–1000)', '40');
+  change(stage, 'Columns', '120');
+  change(stage, 'Rows', '40');
   invoke(stage, 'Resize grid');
   await settled();
   await settled();
@@ -2585,10 +2625,10 @@ test('terminal management opens tabs and spawns exact argv through observed oper
     ['resize', 'pane-1', 7, 12, 120, 40, { lines: 200 }],
   ]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ make test\nok');
-  assert.equal(fieldValue(stage, 'Command argv, e.g. ["sh","-lc","make test"]'), '');
+  assert.equal(fieldValue(stage, 'Run a command, e.g. make test'), '');
 });
 
-test('terminal command validation cannot send shell-like text as ambiguous argv', async () => {
+test('terminal command input preserves quoted arguments and rejects unfinished syntax', async () => {
   const calls = [];
   const terminal = {
     toText: async () => ({
@@ -2602,7 +2642,19 @@ test('terminal command validation cannot send shell-like text as ambiguous argv'
         truncated: false,
       },
     }),
-    spawnAndWait: async (...args) => calls.push(args),
+    spawnAndWait: async (...args) => {
+      calls.push(args);
+      return {
+        changed: true,
+        after: {
+          slot: args[0],
+          generation: 7,
+          revision: 12,
+          lines: ['$ ready'],
+          truncated: false,
+        },
+      };
+    },
     pinTab: async () => {},
     focus: async () => {},
   };
@@ -2624,23 +2676,17 @@ test('terminal command validation cannot send shell-like text as ambiguous argv'
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', 'rm -rf build');
-  invoke(stage, 'Spawn command');
+  change(stage, 'Run a command, e.g. make test', 'printf "hello world"');
+  invoke(stage, 'Run');
   await settled();
   await settled();
-  assert.deepEqual(calls, []);
-  assert.ok(labelled(stage, 'Command must be a JSON array of argument strings.'));
-  change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', JSON.stringify(Array(65).fill('x')));
-  invoke(stage, 'Spawn command');
+  assert.deepEqual(calls[0]?.slice(0, 4), ['pane-1', 7, 11, ['printf', 'hello world']]);
+  change(stage, 'Run a command, e.g. make test', 'printf "unfinished');
+  invoke(stage, 'Run');
   await settled();
   await settled();
-  assert.deepEqual(calls, []);
-  assert.ok(
-    labelled(
-      stage,
-      'Command must contain 1–64 NUL-free arguments, with a non-empty program, at most 4096 UTF-8 bytes each and 32768 bytes total.',
-    ),
-  );
+  assert.equal(calls.length, 1);
+  assert.ok(labelled(stage, 'Command has an unfinished quote or escape.'));
 });
 
 test('terminal management switches an inspected pane to an enabled exact provider', async () => {
@@ -2704,7 +2750,7 @@ test('terminal management switches an inspected pane to an enabled exact provide
       value: 'storybook/catalogue',
     }),
   );
-  invoke(stage, 'Switch pane content');
+  invoke(stage, 'Change content');
   await settled();
   await settled();
   assert.deepEqual(calls, [
@@ -2772,11 +2818,11 @@ test('terminal management re-inspects semantic authority and confirms destructiv
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  change(stage, 'Semantic node ID', '42');
-  invoke(stage, 'Run semantic action');
+  change(stage, 'Node number', '42');
+  invoke(stage, 'Run action');
   await settled();
   assert.deepEqual(calls, [], 'opening destructive semantic confirmation has no socket authority');
-  invoke(stage, 'Confirm semantic action');
+  invoke(stage, 'Confirm action');
   await settled();
   await settled();
   assert.deepEqual(calls, [['pane-ui', { node: 42, action: 'invoke', value: null }]]);

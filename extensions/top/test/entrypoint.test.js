@@ -1349,7 +1349,7 @@ test(
         pinned: true,
       });
       peer.write(
-        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Switch to Build') }),
+        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Open tab') }),
       );
       await until(() => calls.includes('terminal_focus_pane'));
       assert.deepEqual(requests.find((request) => request.call === 'terminal_focus_pane').with, {

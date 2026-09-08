@@ -93,6 +93,25 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
         truncated: false,
       }),
     },
+    terminal: {
+      ...api.terminal,
+      toText: async (slot, options) =>
+        !unavailable && slot === 'shell'
+          ? {
+              kind: 'terminal' as const,
+              text: '$ npm test\n123 tests passed\n$',
+              snapshot: {
+                slot,
+                generation: 7,
+                revision: 11,
+                columns: 100,
+                rows: 30,
+                lines: ['$ npm test', '123 tests passed', '$'],
+                truncated: false,
+              },
+            }
+          : api.terminal.toText(slot, options),
+    },
     extensions: unavailable
       ? {
           ...api.extensions,
