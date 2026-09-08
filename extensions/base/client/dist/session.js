@@ -154,6 +154,7 @@ function safeUnsigned(value, label) {
 export function validateRowRequest(value) {
     const request = requiredObject(value, 'row request');
     const range = requiredObject(request.range, 'row request range');
+    const bytes = (text) => new TextEncoder().encode(text).byteLength;
     safeUnsigned(request.id, 'row request id');
     safeUnsigned(request.source, 'row request source');
     safeUnsigned(request.version, 'row request version');
@@ -162,20 +163,27 @@ export function validateRowRequest(value) {
         throw new RangeError('row request range count must be between 1 and 128');
     }
     if (request.slot !== undefined &&
-        (typeof request.slot !== 'string' || request.slot.length === 0)) {
-        throw new TypeError('row request slot must be a nonempty string');
+        (typeof request.slot !== 'string' ||
+            request.slot.length === 0 ||
+            bytes(request.slot) > 256 ||
+            request.slot.includes('\0'))) {
+        throw new TypeError('row request slot must be a nonempty NUL-free string of at most 256 bytes');
     }
     if (request.filter !== null &&
         request.filter !== undefined &&
-        typeof request.filter !== 'string') {
-        throw new TypeError('row request filter must be a string or null');
+        (typeof request.filter !== 'string' ||
+            bytes(request.filter) > 4096 ||
+            request.filter.includes('\0'))) {
+        throw new TypeError('row request filter must be a NUL-free string of at most 4096 bytes or null');
     }
     if (request.sort !== null && request.sort !== undefined) {
         const sort = requiredObject(request.sort, 'row request sort');
         if (typeof sort.column !== 'string' ||
             sort.column.length === 0 ||
+            bytes(sort.column) > 128 ||
+            sort.column.includes('\0') ||
             typeof sort.descending !== 'boolean') {
-            throw new TypeError('row request sort must name a column and boolean direction');
+            throw new TypeError('row request sort must name a NUL-free column of at most 128 bytes and boolean direction');
         }
     }
     return request;
