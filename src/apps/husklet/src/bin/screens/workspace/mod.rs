@@ -62,6 +62,11 @@ impl View {
         let pages = gtk::Stack::new();
         pages.set_hexpand(true);
         pages.set_vexpand(true);
+        // Hidden extension pages must not impose their natural width on the
+        // page currently being resized. The Paned allocates the visible page;
+        // measuring every dormant page makes GtkStack warn during transitions.
+        pages.set_hhomogeneous(false);
+        pages.set_vhomogeneous(false);
         pages.set_transition_type(gtk::StackTransitionType::None);
         let items: Rc<RefCell<Vec<gtk::Button>>> = Rc::new(RefCell::new(Vec::new()));
         let pending_selection = Rc::new(RefCell::new(None));
@@ -295,6 +300,8 @@ mod semantic_tests {
                 (Page::Extensions, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
                 (Page::Workspace, gtk::Box::new(gtk::Orientation::Vertical, 0).upcast()),
             ]);
+            assert!(!view.pages.is_hhomogeneous());
+            assert!(!view.pages.is_vhomogeneous());
             let first = view.semantic_snapshot();
             assert_eq!(first.root.role, "navigation");
             assert_eq!(first.root.children.len(), 2);
