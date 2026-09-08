@@ -18,6 +18,7 @@ const execution = new Set([
   'executionOutput',
   'waitExecution',
   'signalExecution',
+  'cancelExecution',
   'removeExecution',
 ]);
 const semantic = new Set(['semantics', 'act']);

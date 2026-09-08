@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles,
-    WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
+    NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceConfiguration,
+    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -428,6 +428,7 @@ impl Session {
             | Request::ContainerRename { .. }
             | Request::ContainerKill { .. }
             | Request::ExecutionKill { .. }
+            | Request::ExecutionCancel { .. }
             | Request::ExecutionRemove { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList
@@ -712,6 +713,18 @@ impl Session {
                 bounded_signal(signal)?;
                 self.resolve_execution(id, services.containers)?;
                 port.execution_kill(id, signal)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ExecutionCancel { id, signal, timeout_ms } => {
+                bounded_signal(signal)?;
+                if !(1..=30_000).contains(timeout_ms) {
+                    return Err(Failure::Conflict {
+                        detail: "execution cancellation timeout_ms must be between 1 and 30000".into(),
+                    });
+                }
+                self.resolve_execution(id, services.containers)?;
+                port.execution_cancel(id, signal, *timeout_ms)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }

@@ -14,6 +14,57 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix execution cancellation is one bounded ordered operation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-cancel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'c'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        socket.write(
+          encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'done' } }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:control'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    assert.throws(
+      () => containers.cancelExecution(executionId, { timeoutMs: 0 }),
+      /cancellation timeout/,
+    );
+    assert.equal(requests.length, 0, 'invalid cancellation is rejected before framing');
+    await containers.cancelExecution(executionId, { signal: 'SIGINT', timeoutMs: 750 });
+    assert.deepEqual(requests, [
+      {
+        call: 'execution_cancel',
+        with: { id: executionId, signal: 'SIGINT', timeout_ms: 750 },
+      },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem iterators page recursively, stream stable chunks, and cancel locally', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-iterator-'));
   const socketPath = path.join(directory, 'host.sock');

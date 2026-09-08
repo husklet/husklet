@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
+use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -77,6 +77,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("execution_output", "execution_output"),
     ("execution_wait", "execution"),
     ("execution_kill", "done"),
+    ("execution_cancel", "done"),
     ("execution_remove", "done"),
     ("container_create", "identity"),
     ("container_start", "done"),
@@ -184,7 +185,7 @@ fn request_capability(request: &str) -> Capability {
         | "execution_wait" => Capability::ContainerRead,
         "container_create" | "container_start" | "container_stop" | "container_remove" | "container_pause"
         | "container_unpause" | "container_restart" | "container_rename" | "container_kill" | "container_exec"
-        | "execution_kill" | "execution_remove" => Capability::ContainerControl,
+        | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerControl,
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
         "image_pull" | "image_pull_start" | "image_pull_status" | "image_pull_cancel" | "image_remove"

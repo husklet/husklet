@@ -817,6 +817,8 @@ export interface WorkspaceApi {
       },
     ): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     signalExecution(id: string, signal: string): Promise<void>;
+    /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */
+    cancelExecution(id: string, options?: { signal?: string; timeoutMs?: number }): Promise<void>;
     /** Arm and verify the exact execution cursor before signaling, then await its requested transition. */
     signalExecutionAndWait(
       id: string,

@@ -1006,6 +1006,14 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Signals one execution and waits until it has stopped, as one indivisible
+    /// host operation so an ordered client is never stranded behind its wait.
+    fn execution_cancel(&self, _id: &str, _signal: &str, _timeout_ms: u32) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "atomic execution cancellation is unsupported by this host".into(),
+        ))
+    }
+
     /// Removes one stopped execution record selected by its complete immutable
     /// execution identity, and its captured output.
     fn execution_remove(&self, _id: &str) -> Result<(), HostError> {

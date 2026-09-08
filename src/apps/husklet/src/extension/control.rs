@@ -1,6 +1,7 @@
 //! Changing container state on behalf of an extension.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use hl_client::model::{CreateContainer, DockerMount, EndpointConfig, EndpointsConfig, ExecConfig, ExecStart,
     ExposedPorts, HostConfig, NetworkingConfig, PortBinding, PortBindings};
@@ -170,6 +171,20 @@ impl ContainerControl for ContainerLifecycle {
         self.bridge
             .wait(client.executions().signal(id, signal))
             .map_err(|error| failure(&error))
+    }
+
+    fn execution_cancel(&self, id: &str, signal: &str, timeout_ms: u32) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge
+            .wait(client.executions().signal(id, signal))
+            .map_err(|error| failure(&error))?;
+        self.bridge
+            .wait(async {
+                tokio::time::timeout(Duration::from_millis(u64::from(timeout_ms)), client.executions().wait(id)).await
+            })
+            .map_err(|_| HostError::Conflict(format!("execution {id} did not stop within {timeout_ms}ms")))?
+            .map_err(|error| failure(&error))?;
+        Ok(())
     }
 
     fn execution_remove(&self, id: &str) -> Result<(), HostError> {

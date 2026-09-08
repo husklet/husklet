@@ -100,6 +100,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.executionOutput(...)` — `execution_output`, requires `containers:read`.
 - `host.containers.waitExecution(...)` — `execution_wait`, requires `containers:read`.
 - `host.containers.signalExecution(...)` — `execution_kill`, requires `containers:control`.
+- `host.containers.cancelExecution(...)` — `execution_cancel`, requires `containers:control`.
 - `host.containers.removeExecution(...)` — `execution_remove`, requires `containers:control`.
 - `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.
 - `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:control`.

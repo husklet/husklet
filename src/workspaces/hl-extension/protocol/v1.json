@@ -7030,6 +7030,10 @@
     },
     {
       "capability": "containers:control",
+      "request": "execution_cancel"
+    },
+    {
+      "capability": "containers:control",
       "request": "execution_remove"
     },
     {
@@ -7469,6 +7473,10 @@
     {
       "reply": "done",
       "request": "execution_kill"
+    },
+    {
+      "reply": "done",
+      "request": "execution_cancel"
     },
     {
       "reply": "done",
@@ -8981,6 +8989,39 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_cancel",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "signal",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "timeout_ms",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -11885,7 +11926,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:1858ed5fb4b2d9bc",
+  "source_fingerprint": "fnv1a64:2f5f79a17bea2090",
   "specification_version": 1,
   "topics": [
     {
