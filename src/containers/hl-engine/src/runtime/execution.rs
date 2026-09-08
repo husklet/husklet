@@ -911,6 +911,67 @@ mod native_eligibility_tests {
         assert_eq!(forced_translator.options.get("HL_TRANSLIT"), Some("1"));
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn production_factory_selects_native_auto_and_translates_only_after_refusal() {
+        let services = crate::composition::RuntimeServices {
+            checkpoint_sink: None,
+            checkpoint_source: None,
+            checkpoint_channel: None,
+            streams: crate::composition::StandardStreams::default(),
+        };
+        let construct = |plan: &crate::launcher::plan::RuntimePlan| {
+            ProductionFactory.construct(crate::composition::RuntimeConstruction {
+                isa: crate::activation::GuestIsa::X86_64,
+                plan,
+                services: &services,
+            })
+        };
+        let mut eligible = plan();
+        eligible.rootfs = Some(b"/".to_vec());
+        eligible.executable_host = Some(b"/bin/true".to_vec());
+        eligible.arguments = vec![b"/bin/true".to_vec()];
+        let native = construct(&eligible).unwrap();
+        assert!(native.native_supervised);
+        assert_eq!(native.plan.options.get("HL_TRANSLIT"), None);
+
+        let mut refused = eligible.clone();
+        refused.box_policy.volumes = Some(b"ro:/guest:/host".to_vec());
+        let translated = construct(&refused).unwrap();
+        assert!(!translated.native_supervised);
+        assert_eq!(translated.plan.options.get("HL_TRANSLIT"), Some("1"));
+
+        let mut forced_translator = eligible.clone();
+        forced_translator
+            .options
+            .set("HL_NATIVE_SUPERVISED", "off", true)
+            .unwrap();
+        forced_translator.options.set("HL_TRANSLIT", "1", true).unwrap();
+        let translated = construct(&forced_translator).unwrap();
+        assert!(!translated.native_supervised);
+        assert_eq!(translated.plan.options.get("HL_TRANSLIT"), Some("1"));
+
+        let mut forced_interpreter = eligible.clone();
+        forced_interpreter
+            .options
+            .set("HL_NATIVE_SUPERVISED", "off", true)
+            .unwrap();
+        let interpreted = construct(&forced_interpreter).unwrap();
+        assert!(!interpreted.native_supervised);
+        assert_eq!(interpreted.plan.options.get("HL_TRANSLIT"), None);
+
+        let mut forced_native = eligible;
+        forced_native.options.set("HL_SANDBOX", "1", true).unwrap();
+        forced_native.options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
+        let Err(error) = construct(&forced_native) else {
+            panic!("explicit native accepted an unsupported sandbox plan");
+        };
+        assert_eq!(
+            error,
+            CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Sandbox)
+        );
+    }
+
     #[test]
     fn explicit_on_accepts_only_sentry_only_in_an_isolated_network() {
         let mut sentry = plan();
