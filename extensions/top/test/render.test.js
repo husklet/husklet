@@ -145,6 +145,21 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     10,
     'every destination exposes its selected state to keyboard and assistive users',
   );
+  const icons = [
+    'Overview',
+    'Workspace',
+    'Extensions',
+    'Containers',
+    'Processes',
+    'Executions',
+    'Images',
+    'Volumes',
+    'Networks',
+    'Terminals',
+  ].map(
+    (label) => taggedProperty(stageFromFrame(frame), label, 'NavigationMenuItem', 'Icon')?.Text,
+  );
+  assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
 });

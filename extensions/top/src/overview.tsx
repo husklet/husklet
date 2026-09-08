@@ -89,10 +89,15 @@ export function Navigation({
 
 function navigationIcon(section: Section): string {
   if (section === 'overview') return 'view-grid-symbolic';
+  if (section === 'workspace') return 'document-open-symbolic';
+  if (section === 'extensions') return 'list-add-symbolic';
+  if (section === 'containers') return 'view-list-symbolic';
+  if (section === 'processes') return 'edit-find-symbolic';
+  if (section === 'executions') return 'system-run-symbolic';
   if (section === 'images') return 'drive-harddisk-symbolic';
   if (section === 'volumes') return 'folder-symbolic';
   if (section === 'networks') return 'network-workgroup-symbolic';
-  return 'system-run-symbolic';
+  return 'view-more-symbolic';
 }
 
 export function Overview({
