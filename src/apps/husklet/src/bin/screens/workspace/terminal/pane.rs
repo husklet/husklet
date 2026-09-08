@@ -1169,6 +1169,10 @@ mod focus_ownership_tests {
             let entry = entries.iter().find(|entry| entry.name == tab).unwrap();
             assert!(entry.pinned);
             assert!(!entry.close.as_ref().unwrap().is_visible());
+            assert!(!tw.tabs.is_homogeneous());
+            assert!(!entry.button.hexpands());
+            assert_eq!(entry.button.width_request(), 132);
+            assert_eq!(entry.title.max_width_chars(), 24);
             drop(entries);
             Page::new(&tw, &tab).close();
             assert!(tw.entries.borrow().iter().any(|entry| entry.name == tab));
