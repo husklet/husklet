@@ -2680,7 +2680,8 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
   assert.ok(
     labelled(stage, 'Initial processes only; PIDs identify this snapshot and may be reused.'),
   );
-  assert.ok(labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
+  assert.ok(labelled(stage, 'Observed Nov 14, 2023, 22:13 UTC'));
+  assert.ok(!labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
   assert.ok(labelled(stage, 'The host process snapshot was truncated at its safety limit.'));
   assert.ok(labelled(stage, '/usr/bin/server'));
   assert.ok(!labelled(stage, 'Signal'), 'snapshot PID rows never acquire a control action');
