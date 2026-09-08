@@ -1,4 +1,9 @@
 import assert from 'node:assert/strict';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { once } from 'node:events';
 import test from 'node:test';
 
 import { CONTROL, FLAG_END, HEADER, KIND, PAYLOAD_LIMIT, Reader, encode } from '../dist/wire.js';
@@ -18,6 +23,44 @@ test('a frame survives the codec unchanged', () => {
   assert.equal(read.channel, 1);
   assert.equal(read.kind, KIND.request);
   assert.equal(read.flags, FLAG_END);
+});
+
+test('idle readers stay small and release a near-limit frame fragmented over Unix', async () => {
+  const readers = Array.from({ length: 64 }, () => new Reader());
+  assert.equal(
+    readers.reduce((total, reader) => total + reader.capacity, 0),
+    64 * HEADER,
+  );
+
+  const payload = Buffer.alloc(PAYLOAD_LIMIT - 1, 0x61);
+  const encoded = encode({ channel: 0, kind: KIND.ping, payload });
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-large-frame-'));
+  const socketPath = path.join(directory, 'wire.sock');
+  const server = net.createServer(async (socket) => {
+    for (let offset = 0; offset < encoded.length; offset += 257) {
+      if (!socket.write(encoded.subarray(offset, offset + 257))) await once(socket, 'drain');
+    }
+    socket.end();
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const reader = readers[0];
+  const frames = [];
+  try {
+    const socket = net.createConnection(socketPath);
+    socket.on('data', (chunk) => {
+      frames.push(...reader.take(chunk));
+      assert(reader.capacity <= HEADER + PAYLOAD_LIMIT);
+    });
+    await once(socket, 'end');
+    reader.finish();
+    assert.equal(frames.length, 1);
+    assert.deepEqual(frames[0].payload, payload);
+    assert.equal(reader.buffered, 0);
+    assert.equal(reader.capacity, HEADER);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('frames split across chunks are reassembled', () => {

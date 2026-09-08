@@ -22,7 +22,8 @@ if (
 const chunkBytes = Math.max(1, Math.min(configuration.chunkBytes ?? 64 * 1024, 512 * 1024));
 const session = await connect({ path: configuration.path, pendingLimit: 8, timeout: 5_000 });
 try {
-  const files = workspace(session).files;
+  const host = workspace(session);
+  const files = host.files;
   const inventory = await files.inventory();
   if (!inventory.complete) throw new Error('filesystem change retention gap requires a rescan');
   let discovered = false;
@@ -55,8 +56,35 @@ try {
       }),
     ),
   );
+  type Checkpoint = {
+    version: 1;
+    documents: Record<string, { identity: string | null; digest: string }>;
+  };
+  const checkpoint = {
+    decode(value: unknown): Checkpoint {
+      if (value === undefined) return { version: 1, documents: {} };
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        (value as { version?: unknown }).version === 1 &&
+        typeof (value as { documents?: unknown }).documents === 'object'
+      )
+        return value as Checkpoint;
+      throw new TypeError('unsupported embeddings checkpoint schema');
+    },
+    encode(value: Checkpoint) {
+      return value;
+    },
+  };
+  const state = await host.state.updateJson(checkpoint, (current) => ({
+    ...current,
+    documents: {
+      ...current.documents,
+      [configuration.document]: { identity: observed, digest },
+    },
+  }));
   process.stdout.write(
-    `${JSON.stringify({ bytes: bytes.length, documentIdentity: observed, indexIdentity: nextIdentity, digest })}\n`,
+    `${JSON.stringify({ bytes: bytes.length, documentIdentity: observed, indexIdentity: nextIdentity, stateIdentity: state.identity, digest })}\n`,
   );
 } finally {
   await session.close();

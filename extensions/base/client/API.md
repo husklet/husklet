@@ -168,6 +168,8 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.read(...)` — `state_read`, requires `state:read`.
 - `host.state.write(...)` — `state_write`, requires `state:write`.
 - `host.state.clear(...)` — `state_clear`, requires `state:write`.
+- `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
+- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
 
 ## Images
 

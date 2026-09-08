@@ -550,7 +550,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
                       <CardContent gap={1}>
                         <Text label={entry.description} color="text-dim" wrap />
-                        <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                        <Text
+                          label={`Image · ${entry.reference}`}
+                          color="text-dim"
+                          tooltip={entry.reference}
+                          wrap
+                        />
                         <Badge
                           label={compatibility.label}
                           tone={

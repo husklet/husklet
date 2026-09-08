@@ -33,6 +33,71 @@ test('row requests reject unsafe or unbounded database windows', () => {
   assert.throws(() => validateRowRequest({ ...request, filter: 'active\0drop' }), /NUL-free/);
 });
 
+test('JSON state codecs migrate, retry CAS conflicts, and remain bounded before framing', async () => {
+  const calls = [];
+  let reads = 0;
+  let writes = 0;
+  const api = workspace({
+    granted: ['state:read', 'state:write'],
+    async call(name, payload) {
+      calls.push([name, payload]);
+      if (name === 'state_read') {
+        reads += 1;
+        const value = reads === 1 ? undefined : { version: 1, schemas: ['public'] };
+        return {
+          reply: 'state',
+          with: {
+            identity: reads === 1 ? 'absent' : `sha256:${'b'.repeat(64)}`,
+            contents: value === undefined ? [] : [...new TextEncoder().encode(JSON.stringify(value))],
+          },
+        };
+      }
+      writes += 1;
+      if (writes === 1)
+        throw new ExtensionError({ error: 'conflict', detail: 'extension state changed after it was read' });
+      return { reply: 'identity', with: `sha256:${'c'.repeat(64)}` };
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
+  const codec = {
+    decode(value) {
+      if (value === undefined) return { version: 2, schemas: [], refreshes: 0 };
+      if (value?.version === 1) return { version: 2, schemas: value.schemas, refreshes: 0 };
+      if (value?.version === 2) return value;
+      throw new TypeError('unsupported state schema');
+    },
+    encode(value) {
+      return value;
+    },
+  };
+  let updates = 0;
+  const result = await api.state.updateJson(codec, (current) => {
+    updates += 1;
+    return { ...current, refreshes: current.refreshes + 1 };
+  });
+  assert.deepEqual(result, {
+    identity: `sha256:${'c'.repeat(64)}`,
+    value: { version: 2, schemas: ['public'], refreshes: 1 },
+  });
+  assert.equal(updates, 2, 'the pure update is rerun against fresh state after a CAS conflict');
+  const writesOnWire = calls.filter(([name]) => name === 'state_write');
+  assert.equal(writesOnWire[0][1].observed, 'absent');
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(Uint8Array.from(writesOnWire[1][1].contents))),
+    result.value,
+  );
+
+  const beforeInvalid = calls.length;
+  assert.throws(
+    () => api.state.writeJson('absent', { data: 'x'.repeat(1024 * 1024) }, codec),
+    /1 MiB/,
+  );
+  assert.equal(calls.length, beforeInvalid, 'oversized JSON is rejected before framing');
+  await assert.rejects(api.state.updateJson(codec, (value) => value, { attempts: 0 }), /1 through 16/);
+});
+
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
   const calls = [];
   let publish;

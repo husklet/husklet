@@ -203,6 +203,10 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   assert.ok(labelled(stage, 'Discover'));
   assert.ok(labelled(stage, 'Component playground'));
+  assert.ok(
+    labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
+    'discovery names the exact OCI input that review will inspect',
+  );
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);

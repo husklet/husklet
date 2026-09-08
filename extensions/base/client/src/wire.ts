@@ -29,6 +29,7 @@ const KNOWN_FLAGS = 0b0000_0111;
 const KINDS = new Set(Object.values(KIND));
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const CAPACITY = HEADER + PAYLOAD_LIMIT;
+const INITIAL_CAPACITY = HEADER;
 const JSON_DEPTH_LIMIT = 128;
 
 function validateJson(value) {
@@ -84,12 +85,17 @@ export function encode({ channel = CONTROL, kind, payload, flags = FLAG_END }) {
  * several arrive together; both are ordinary and neither is an error.
  */
 export class Reader {
-  #held = Buffer.allocUnsafe(CAPACITY);
+  #held = Buffer.allocUnsafe(INITIAL_CAPACITY);
   #length = 0;
 
   /** Bytes retained for the incomplete frame at the front of the stream. */
   get buffered() {
     return this.#length;
+  }
+
+  /** Allocated framing storage, exposed so the per-session bound is testable. */
+  get capacity() {
+    return this.#held.length;
   }
 
   /** Adds bytes and returns every frame they completed. */
@@ -101,6 +107,7 @@ export class Reader {
       const room = CAPACITY - this.#length;
       if (room === 0) throw new Error(`frame exceeds the ${PAYLOAD_LIMIT} byte payload limit`);
       const part = chunk.subarray(offset, offset + room);
+      this.#reserve(this.#length + part.length);
       Buffer.from(part.buffer, part.byteOffset, part.byteLength).copy(this.#held, this.#length);
       this.#length += part.length;
       offset += part.length;
@@ -111,6 +118,15 @@ export class Reader {
       }
     }
     return frames;
+  }
+
+  #reserve(required) {
+    if (required <= this.#held.length) return;
+    let capacity = this.#held.length;
+    while (capacity < required) capacity = Math.min(CAPACITY, capacity * 2);
+    const grown = Buffer.allocUnsafe(capacity);
+    this.#held.copy(grown, 0, 0, this.#length);
+    this.#held = grown;
   }
 
   #next() {
@@ -145,6 +161,9 @@ export class Reader {
     };
     this.#held.copyWithin(0, total, this.#length);
     this.#length -= total;
+    if (this.#length === 0 && this.#held.length > INITIAL_CAPACITY) {
+      this.#held = Buffer.allocUnsafe(INITIAL_CAPACITY);
+    }
     return frame;
   }
 
