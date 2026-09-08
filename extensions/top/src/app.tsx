@@ -111,7 +111,8 @@ export function Top({
   const [section, setSection] = useState<Section>(initialSection);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
   const persistedSidebarWidth = useRef<number | null>(null);
-  const preferencesReady = useRef(false);
+  const sidebarWasResized = useRef(false);
+  const [preferencesReady, setPreferencesReady] = useState(false);
   useEffect(() => {
     if (!api.preferences) return undefined;
     let live = true;
@@ -121,20 +122,21 @@ export function Top({
         const entry = preferences.entries.find(([key]) => key === SIDEBAR_WIDTH_KEY)?.[1];
         const width = entry?.kind === 'number' ? boundedSidebarWidth(entry.value) : null;
         if (!live) return;
-        if (width !== null) setSidebarWidth(width);
+        if (width !== null && !sidebarWasResized.current) setSidebarWidth(width);
         persistedSidebarWidth.current = width ?? SIDEBAR_WIDTH_DEFAULT;
-        preferencesReady.current = true;
+        setPreferencesReady(true);
       })
       .catch(() => {
-        // Preferences are cosmetic; the default remains usable when persistence is unavailable.
+        if (!live) return;
+        persistedSidebarWidth.current = SIDEBAR_WIDTH_DEFAULT;
+        setPreferencesReady(true);
       });
     return () => {
       live = false;
     };
   }, [api]);
   useEffect(() => {
-    if (!preferencesReady.current || sidebarWidth === persistedSidebarWidth.current)
-      return undefined;
+    if (!preferencesReady || sidebarWidth === persistedSidebarWidth.current) return undefined;
     const timer = setTimeout(() => {
       void persistSidebarWidth(api, sidebarWidth)
         .then(() => {
@@ -145,7 +147,7 @@ export function Top({
         });
     }, SIDEBAR_SAVE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [api, sidebarWidth]);
+  }, [api, preferencesReady, sidebarWidth]);
   const [requestedExecution, setRequestedExecution] = useState('');
   const containers = useResource(api.containers.list, initial.containers);
   const images = useResource(api.images.list, initial.images);
@@ -276,7 +278,10 @@ export function Top({
       position={sidebarWidth}
       onChange={(event) => {
         const position = boundedSidebarWidth(Number(event.value));
-        if (position !== null) setSidebarWidth(position);
+        if (position !== null) {
+          sidebarWasResized.current = true;
+          setSidebarWidth(position);
+        }
       }}
     >
       <Row width={{ minimum: { chars: 21 }, maximum: { chars: 42 } }} height="fill">

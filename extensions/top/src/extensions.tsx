@@ -210,7 +210,7 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
       <Column gap={1}>
         <Text label="Effective for this installed image digest" color="text-dim" />
         {capabilities.map((capability) => (
-          <Text key={capability} label={`${capabilityLabel(capability)} · ${capability}`} wrap />
+          <Text key={capability} label={capabilityLabel(capability)} wrap />
         ))}
         {containerSelectors.map((selector, index) => (
           <Text
@@ -716,60 +716,67 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     tone="neutral"
                   />
                 )}
-                {availableCatalogue.map((entry) => {
-                  const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
-                  return (
-                    <Card key={entry.id} grow={false} width="fill" variant="filled">
-                      <CardHeader
-                        label={entry.title}
-                        detail={`${entry.publisher} · Version ${entry.version}`}
-                        align="start"
-                        width="fill"
-                      />
-                      <CardContent gap={1}>
-                        <Text label={entry.description} color="text-dim" wrap />
-                        <Row gap={1} wrap>
-                          <Badge label={`Version ${entry.version}`} tone="neutral" />
-                          <Badge
-                            label={compatibility.label}
-                            tone={
-                              compatibility.compatible === false
-                                ? 'danger'
-                                : compatibility.compatible === true
-                                  ? 'positive'
-                                  : 'neutral'
-                            }
+                {availableCatalogue.length > 0 && (
+                  <Row gap={1} width="fill" wrap>
+                    {availableCatalogue.map((entry) => {
+                      const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
+                      return (
+                        <Card key={entry.id} grow={false} width="fill" variant="filled">
+                          <CardHeader
+                            label={entry.title}
+                            detail={`${entry.publisher} · Version ${entry.version}`}
+                            align="start"
+                            width="fill"
                           />
-                        </Row>
-                        <Row>
-                          <Button
-                            label={`Review ${entry.title} installation`}
-                            variant="filled"
-                            tone="accent"
-                            enabled={!busy && compatibility.compatible !== false}
-                            onInvoke={() => inspect(entry.reference)}
-                          />
-                        </Row>
-                        <Expander label="Technical details" expanded={false}>
-                          <Column gap={1}>
-                            <Text
-                              label={`Image · ${entry.reference}`}
-                              color="text-dim"
-                              tooltip={entry.reference}
-                              wrap
-                            />
-                            <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
-                            <Text
-                              label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
-                              color="text-dim"
-                              wrap
-                            />
-                          </Column>
-                        </Expander>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                          <CardContent gap={1}>
+                            <Text label={entry.description} color="text-dim" wrap />
+                            <Row gap={1} wrap>
+                              <Badge
+                                label={
+                                  compatibility.compatible === true
+                                    ? 'Compatible with this workspace'
+                                    : compatibility.label
+                                }
+                                tone={
+                                  compatibility.compatible === false
+                                    ? 'danger'
+                                    : compatibility.compatible === true
+                                      ? 'positive'
+                                      : 'neutral'
+                                }
+                              />
+                            </Row>
+                            <Row>
+                              <Button
+                                label={`Review ${entry.title} installation`}
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy && compatibility.compatible !== false}
+                                onInvoke={() => inspect(entry.reference)}
+                              />
+                            </Row>
+                            <Expander label="Technical details" expanded={false}>
+                              <Column gap={1}>
+                                <Text
+                                  label={`Image · ${entry.reference}`}
+                                  color="text-dim"
+                                  tooltip={entry.reference}
+                                  wrap
+                                />
+                                <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
+                                <Text
+                                  label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
+                                  color="text-dim"
+                                  wrap
+                                />
+                              </Column>
+                            </Expander>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </Row>
+                )}
                 {catalogue && !catalogue.complete && (
                   <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
                 )}
@@ -791,6 +798,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   <CardContent>
                     <Row gap={1} width="fill" wrap>
                       <Entry
+                        grow
                         value={reference}
                         placeholder="registry.example/extension:version"
                         tooltip={
@@ -811,7 +819,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                     </Row>
                     <Text
-                      label="Paste a full image reference · Enter to inspect. The acquired manifest is authoritative for compatibility and permissions."
+                      label="Paste an OCI image reference. You’ll review compatibility and requested access before installation."
                       color="text-dim"
                       wrap
                     />
@@ -887,7 +895,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         {acquisition.candidate.requested.map((capability) => (
                           <FormControlLabel
                             key={capability}
-                            label={`${capabilityLabel(capability)} (${capability})`}
+                            label={capabilityLabel(capability)}
+                            tooltip={capability}
                             gap={2}
                           >
                             <Switch

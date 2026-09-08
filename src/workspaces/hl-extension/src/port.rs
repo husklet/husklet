@@ -691,6 +691,15 @@ pub struct FileRange {
     pub truncated: bool,
 }
 
+/// One bounded member of an atomic-authority batch read request.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FileRangeRequest {
+    pub path: RelativePath,
+    pub offset: u64,
+    pub limit: usize,
+    pub observed: Option<String>,
+}
+
 /// A bounded, complete-or-explicitly-truncated view of every declared filesystem root.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct FileInventory {

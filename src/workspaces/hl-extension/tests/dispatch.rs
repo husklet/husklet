@@ -9,10 +9,11 @@ use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
-    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary,
-    FileInventory, FileRange, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant,
-    PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, PreferenceValue, ProcessList, SemanticActionKind,
-    SemanticNode, TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionCredential, ExtensionState,
+    ExtensionStateStore, ExtensionStore, ExtensionSummary, FileInventory, FileRange, FileRangeRequest, GridSize, HostError, ImageDetails,
+    ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText,
+    PreferenceValue, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface, TerminalTopology,
+    WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -593,11 +594,9 @@ fn pane_semantic_read_and_control_are_separately_granted() {
         session(&[Capability::PaneSemanticRead], &[]).dispatch(&read, &services(&host)),
         Ok(Reply::Semantics(_))
     ));
-    assert!(
-        session(&[Capability::PaneSemanticRead], &[])
+    assert!(session(&[Capability::PaneSemanticRead], &[])
             .dispatch(&action, &services(&host))
-            .is_err()
-    );
+        .is_err());
     session(&[Capability::PaneSemanticControl], &[])
         .dispatch(&action, &services(&host))
         .expect("controlled");
@@ -610,11 +609,9 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 #[test]
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
-    assert!(
-        session(&[], &[])
+    assert!(session(&[], &[])
             .dispatch(&Request::PaneList, &services(&host))
-            .is_err()
-    );
+        .is_err());
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
         .expect("pane observation grants bounded discovery");
@@ -968,6 +965,36 @@ fn services(host: &Host) -> Services<'_> {
         state: host,
         notifications: host,
     }
+}
+
+struct CredentialPort {
+    read: Cell<bool>,
+}
+
+impl ExtensionStateStore for CredentialPort {
+    fn read(&self) -> Result<ExtensionState, HostError> {
+        unreachable!()
+    }
+    fn write(&self, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
+        unreachable!()
+    }
+    fn clear(&self, _observed: &str) -> Result<(), HostError> {
+        unreachable!()
+    }
+    fn credential(&self, key: &str) -> Result<ExtensionCredential, HostError> {
+        self.read.set(true);
+        assert_eq!(key, "postgres.password");
+        Ok(ExtensionCredential {
+            revision: 1,
+            value: Some(b"sentinel-password".to_vec()),
+        })
+    }
+}
+
+fn services_with_state<'a>(host: &'a Host, state: &'a dyn ExtensionStateStore) -> Services<'a> {
+    let mut services = services(host);
+    services.state = state;
+    services
 }
 
 fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
@@ -1539,6 +1566,14 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemRead,
         ),
         (
+            Request::FilesystemReadRanges {
+                ranges: vec![FileRangeRequest {
+                    path: path("logs/app.log"), offset: 0, limit: 8, observed: None,
+                }],
+            },
+            Capability::FilesystemRead,
+        ),
+        (
             Request::FilesystemStat {
                 path: path("logs/app.log"),
             },
@@ -1646,9 +1681,39 @@ fn all_calls() -> Vec<(Request, Capability)> {
             },
             Capability::PreferenceWrite,
         ),
-        (Request::CredentialRead { key: "postgres.password".into() }, Capability::CredentialRead),
-        (Request::CredentialSet { observed: 0, key: "postgres.password".into(), value: vec![0, 255] }, Capability::CredentialWrite),
-        (Request::CredentialRemove { observed: 0, key: "postgres.password".into() }, Capability::CredentialWrite),
+        (
+            Request::CredentialRead {
+                key: "postgres.password".into(),
+            },
+            Capability::CredentialRead,
+        ),
+        (
+            Request::CredentialSet {
+                observed: 0,
+                key: "postgres.password".into(),
+                value: vec![0, 255],
+            },
+            Capability::CredentialWrite,
+        ),
+        (
+            Request::CredentialRemove {
+                observed: 0,
+                key: "postgres.password".into(),
+            },
+            Capability::CredentialWrite,
+        ),
+        (
+            Request::ContainerExecCredential {
+                id: "a".repeat(64),
+                generation: 1,
+                command: vec!["psql".into()],
+                environment: Vec::new(),
+                credentials: vec![("PGPASSWORD".into(), "postgres.password".into())],
+                user: None,
+                working_directory: None,
+            },
+            Capability::ContainerExecute,
+        ),
     ]);
     requests.extend([
         (
@@ -1756,7 +1821,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::TerminalFocusPane { slot: "s1".into() },
-            Capability::TerminalLayoutControl,
+            Capability::TerminalFocus,
         ),
         (
             Request::TerminalFocusPaneObserved {
@@ -1764,7 +1829,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 generation: 0,
                 revision: 1,
             },
-            Capability::TerminalLayoutControl,
+            Capability::TerminalFocus,
         ),
         (
             Request::TerminalRetitlePaneObserved {
@@ -1975,34 +2040,28 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
 fn extension_acquisition_identifiers_are_bounded_before_the_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionInstall], &[]);
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::ExtensionAcquisitionStart {
                     reference: "x".repeat(513)
                 },
                 &services(&host)
             )
-            .is_err()
-    );
-    assert!(
-        session
+        .is_err());
+    assert!(session
             .dispatch(
                 &Request::ExtensionAcquisitionStart {
                     reference: "bad reference".into()
                 },
                 &services(&host)
             )
-            .is_err()
-    );
-    assert!(
-        session
+        .is_err());
+    assert!(session
             .dispatch(
                 &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
                 &services(&host)
             )
-            .is_err()
-    );
+        .is_err());
     assert!(matches!(
         session.dispatch(
             &Request::ExtensionInstall {
@@ -2203,6 +2262,21 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
         Ok(Reply::Done)
     );
     assert_eq!(host.ledger.reached(), ["terminal.retitle"]);
+}
+
+#[test]
+fn terminal_focus_grant_cannot_mutate_layout() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalFocus], &[]);
+    assert!(session
+        .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
+        .is_ok());
+    assert!(host.ledger.reached().is_empty());
+    assert!(matches!(
+        session.dispatch(&Request::TerminalClosePane { slot: "s1".into() }, &services(&host)),
+        Err(Failure::Denied { capability, .. }) if capability == "terminals:layout-control"
+    ));
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]
@@ -3033,8 +3107,7 @@ fn holding_read_never_permits_the_matching_write() {
     let host = Host::new();
     let mut session = session(&[Capability::FilesystemRead, Capability::ContainerRead], &["logs"]);
 
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::FilesystemWrite {
                     path: path("logs/app.log"),
@@ -3042,10 +3115,8 @@ fn holding_read_never_permits_the_matching_write() {
                 },
                 &services(&host)
             )
-            .is_err()
-    );
-    assert!(
-        session
+        .is_err());
+    assert!(session
             .dispatch(
                 &Request::ContainerStop {
                     id: "c1".into(),
@@ -3053,10 +3124,8 @@ fn holding_read_never_permits_the_matching_write() {
                 },
                 &services(&host)
             )
-            .is_err()
-    );
-    assert!(
-        session
+        .is_err());
+    assert!(session
             .dispatch(
                 &Request::ContainerKill {
                     id: "c1".into(),
@@ -3065,10 +3134,8 @@ fn holding_read_never_permits_the_matching_write() {
                 },
                 &services(&host),
             )
-            .is_err()
-    );
-    assert!(
-        session
+        .is_err());
+    assert!(session
             .dispatch(
                 &Request::ContainerExec {
                     environment: Vec::new(),
@@ -3080,8 +3147,7 @@ fn holding_read_never_permits_the_matching_write() {
                 },
                 &services(&host),
             )
-            .is_err()
-    );
+        .is_err());
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -3110,18 +3176,15 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     assert_eq!(host.ledger.reached(), ["files.inventory"]);
     host.ledger.clear();
 
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::FilesystemRead {
                     path: path("src/lib.rs")
                 },
                 &services(&host)
             )
-            .is_ok()
-    );
-    assert!(
-        session
+        .is_ok());
+    assert!(session
             .dispatch(
                 &Request::FilesystemWrite {
                     path: path("workspace.toml"),
@@ -3129,8 +3192,7 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
                 },
                 &services(&host)
             )
-            .is_ok()
-    );
+        .is_ok());
     host.ledger.clear();
     assert!(matches!(
         session.dispatch(
@@ -3158,6 +3220,28 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
 }
 
 #[test]
+fn filesystem_range_batch_confines_every_member_before_any_host_read() {
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").unwrap(),
+        Grant::new([Capability::FilesystemRead]),
+        vec![path("src")],
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![hl_extension::FilesystemSelector::Subtree { subtree: path("src") }],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemReadRanges {
+        ranges: vec![
+            FileRangeRequest { path: path("src/lib.rs"), offset: 0, limit: 8, observed: None },
+            FileRangeRequest { path: path("secrets.env"), offset: 0, limit: 8, observed: None },
+        ],
+    };
+    assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
 fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
     let host = Host::new();
     let file = path("settings.json");
@@ -3171,8 +3255,7 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
         ..hl_extension::FilesystemGrant::default()
     });
 
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::FilesystemWrite {
                     path: file.clone(),
@@ -3180,8 +3263,7 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
                 },
                 &services(&host),
             )
-            .is_ok()
-    );
+        .is_ok());
     host.ledger.clear();
 
     for request in [
@@ -3288,8 +3370,7 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
 fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::ExecutionWait {
                     id: "e".repeat(32),
@@ -3297,8 +3378,7 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
                 },
                 &services(&host)
             )
-            .is_err()
-    );
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
@@ -3348,8 +3428,7 @@ fn execution_reads_refuse_names_and_prefixes_before_inventory_authority() {
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(
-        session
+    assert!(session
             .dispatch(
                 &Request::ExecutionLogs {
                     id: "e".repeat(32),
@@ -3358,8 +3437,7 @@ fn execution_logs_require_a_stream_before_calling_host() {
                 },
                 &services(&host)
             )
-            .is_err()
-    );
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
@@ -3579,6 +3657,35 @@ fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
 }
 
 #[test]
+fn credential_execution_requires_both_grants_and_resolves_only_inside_the_host() {
+    let request = Request::ContainerExecCredential {
+        id: "a".repeat(64),
+        generation: 0,
+        command: vec!["psql".into()],
+        environment: Vec::new(),
+        credentials: vec![("PGPASSWORD".into(), "postgres.password".into())],
+        user: None,
+        working_directory: None,
+    };
+    let host = Host::new();
+    let state = CredentialPort { read: Cell::new(false) };
+    let mut missing = session(&[Capability::ContainerExecute], &[]);
+    assert!(
+        matches!(missing.dispatch(&request, &services_with_state(&host, &state)),
+        Err(Failure::Denied { capability, .. }) if capability == "credentials:read")
+    );
+    assert!(!state.read.get());
+    assert!(host.ledger.reached().is_empty());
+
+    let mut granted = session(&[Capability::ContainerExecute, Capability::CredentialRead], &[]);
+    assert!(
+        matches!(granted.dispatch(&request, &services_with_state(&host, &state)), Ok(Reply::Identity(id)) if id == "e1")
+    );
+    assert!(state.read.get());
+    assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
+}
+
+#[test]
 fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     let host = Host::new();
     let mut read = session(&[Capability::VolumeRead, Capability::NetworkRead], &[]);
@@ -3750,11 +3857,9 @@ fn a_topic_cannot_be_followed_without_its_namespace_capability() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
 
-    assert!(
-        session
+    assert!(session
             .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
-            .is_err()
-    );
+        .is_err());
     assert!(!session.may_emit(Topic::Terminal));
 }
 

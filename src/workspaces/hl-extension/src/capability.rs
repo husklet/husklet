@@ -65,7 +65,10 @@ pub enum Capability {
     /// Injecting bytes into an existing terminal pane.
     #[serde(rename = "terminals:input")]
     TerminalInput,
-    /// Creating, removing, focusing, or rearranging terminal panes and tabs.
+    /// Moves keyboard focus to an existing pane without changing layout.
+    #[serde(rename = "terminals:focus")]
+    TerminalFocus,
+    /// Creating, removing, or rearranging terminal panes and tabs.
     #[serde(rename = "terminals:layout-control")]
     TerminalLayoutControl,
     /// Replacing the process running in an existing terminal pane.
@@ -151,6 +154,7 @@ impl Capability {
             Self::NetworkWrite => "networks:write",
             Self::TerminalRead => "terminals:read",
             Self::TerminalInput => "terminals:input",
+            Self::TerminalFocus => "terminals:focus",
             Self::TerminalLayoutControl => "terminals:layout-control",
             Self::TerminalProcessControl => "terminals:process-control",
             Self::TerminalOutput => "terminals:output",
@@ -193,6 +197,7 @@ impl Capability {
                 | Self::VolumeWrite
                 | Self::NetworkWrite
                 | Self::TerminalInput
+                | Self::TerminalFocus
                 | Self::TerminalLayoutControl
                 | Self::TerminalProcessControl
                 | Self::PaneSemanticControl
@@ -245,6 +250,7 @@ impl Capability {
         Self::NetworkWrite,
         Self::TerminalRead,
         Self::TerminalInput,
+        Self::TerminalFocus,
         Self::TerminalLayoutControl,
         Self::TerminalProcessControl,
         Self::TerminalOutput,

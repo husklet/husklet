@@ -329,6 +329,65 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   );
 });
 
+test('a developer drag wins over a late stored sidebar width and is persisted', async () => {
+  let resolveRead;
+  let reads = 0;
+  const writes = [];
+  const preferences = {
+    read: () => {
+      reads += 1;
+      if (reads > 1) return Promise.resolve({ revision: 7, entries: [] });
+      return new Promise((resolve) => {
+        resolveRead = resolve;
+      });
+    },
+    set: async (observed, key, value) => {
+      writes.push([observed, key, value]);
+      return observed + 1;
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Top, {
+      api: { ...api, preferences },
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  await settled();
+  const splitter = stage.frames
+    .flatMap((frame) => frame.patches)
+    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: splitter,
+      id: `${splitter}:Change`,
+      value: 240,
+    }),
+  );
+  resolveRead({
+    revision: 7,
+    entries: [['sidebar.width', { kind: 'number', value: 300 }]],
+  });
+  await settled();
+  await new Promise((resolve) => setTimeout(resolve, SIDEBAR_SAVE_DELAY_MS + 25));
+  await settled();
+
+  const positions = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position');
+  assert.deepEqual(positions.at(-1).SetProp.value, { Number: 240 });
+  assert.deepEqual(writes, [[7, 'sidebar.width', { kind: 'number', value: 240 }]]);
+});
+
 test('Top owns workspace settings and extension management in the same tab', async () => {
   const managed = {
     ...api,
@@ -432,6 +491,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'discovery names the exact OCI input that review will inspect',
   );
   assert.ok(labelled(stage, 'Install from an OCI image'));
+  assert.ok(
+    labelled(
+      stage,
+      'Paste an OCI image reference. You’ll review compatibility and requested access before installation.',
+    ),
+  );
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
   assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
@@ -441,12 +506,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
     { Length: 'Fill' },
     'extension sections use the full page width without separating related content',
   );
-  assert.ok(labelled(stage, 'Version 2.0.0'));
+  assert.equal(
+    taggedProperty(stage, 'Component playground', 'CardHeader', 'Detail')?.Text,
+    'Husklet · Version 2.0.0',
+  );
+  assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
   assert.ok(labelled(stage, 'Technical details'));
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 5), [
     'Row',
     'CardContent',
     'Card',
+    'Row',
+    'Column',
   ]);
   assert.equal(
     ancestorProperty(stage, 'Component playground', 'Card', 'Justify'),
@@ -1097,7 +1168,10 @@ test('extension inspection keeps invalid and failed references recoverable with 
       'All access is off. Expand exact grants and enable only what this extension needs.',
     ),
   );
-  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.deepEqual(property(stage, 'View containers and processes', 'Tooltip'), {
+    Text: 'containers:read',
+  });
   assert.deepEqual(latestSwitchValues(stage), [false]);
 });
 
@@ -1454,13 +1528,18 @@ test('extension image entry submits from the keyboard and consent explains reque
     { Length: { Chars: 24 } },
     'the OCI reference keeps a compact minimum while its tooltip preserves the exact value',
   );
+  assert.deepEqual(
+    placeholderProperty(stage, 'registry.example/extension:version', 'Grow'),
+    { Number: 1 },
+    'the OCI reference grows into available page width instead of leaving a dead form row',
+  );
   change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
   submit(stage, 'registry.example/extension:version');
   await settled();
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
-  assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
-  assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.ok(labelled(stage, 'Read terminal text'));
   assert.ok(labelled(stage, 'Requested access'));
   assert.ok(labelled(stage, 'Product · 2'));
   assert.ok(labelled(stage, 'No access selected · 2 requested'));
@@ -1478,8 +1557,13 @@ test('extension image entry submits from the keyboard and consent explains reque
     'each capability requires its own consent gesture',
   );
   assert.ok(
-    labelled(stage, 'View containers and processes (containers:read)'),
-    'exact authority remains visible beside plain language',
+    labelled(stage, 'View containers and processes'),
+    'plain-language authority remains visible in the compact review',
+  );
+  assert.deepEqual(
+    property(stage, 'View containers and processes', 'Tooltip'),
+    { Text: 'containers:read' },
+    'the exact wire authority remains inspectable without cluttering the label',
   );
 
   toggleSwitch(stage, 0, true);
@@ -1763,7 +1847,8 @@ test('installed extensions distinguish durable exact-file and subtree authority'
     ),
   );
   assert.ok(labelled(stage, 'Effective for this installed image digest'));
-  assert.ok(labelled(stage, 'View containers and processes · containers:read'));
+  assert.ok(labelled(stage, 'View containers and processes'));
+  assert.equal(labelled(stage, 'View containers and processes · containers:read'), undefined);
   assert.ok(labelled(stage, 'Container · exact name database'));
   assert.ok(labelled(stage, `Container · exact ID ${'c'.repeat(64)}`));
   assert.ok(labelled(stage, 'Containers · create new containers'));

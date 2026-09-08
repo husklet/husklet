@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
-    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
-    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
+    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
+    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -133,7 +133,9 @@ const CREDENTIAL_VALUE_BYTES: usize = 64 * 1024;
 fn validate_credential_key(key: &str) -> Result<(), Failure> {
     if key.is_empty()
         || key.len() > PREFERENCE_KEY_BYTES
-        || !key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         return Err(Failure::Conflict {
             detail: "credential keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'".into(),
@@ -532,6 +534,12 @@ impl Session {
     pub fn dispatch(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let capability = request.capability();
         match request {
+            Request::FilesystemReadRanges { ranges } => {
+                self.peer.authority().permit(capability)?;
+                for range in ranges {
+                    self.permit_filesystem_path(capability, FilesystemAccess::Read, &range.path)?;
+                }
+            }
             Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
                 self.permit_filesystem_path(capability, FilesystemAccess::Rename, from)?;
                 self.permit_filesystem_path(capability, FilesystemAccess::Rename, to)?;
@@ -596,7 +604,11 @@ impl Session {
                     .peer
                     .authority()
                     .port(Capability::ContainerAttach, services.terminal)?;
-                Ok(Reply::Identity(port.attach_container(&target.id, target.generation, command)?))
+                Ok(Reply::Identity(port.attach_container(
+                    &target.id,
+                    target.generation,
+                    command,
+                )?))
             }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
@@ -610,7 +622,8 @@ impl Session {
             | Request::ExecutionKill { .. }
             | Request::ExecutionCancel { .. }
             | Request::ExecutionRemove { .. }
-            | Request::ContainerExec { .. } => self.control(request, services),
+            | Request::ContainerExec { .. }
+            | Request::ContainerExecCredential { .. } => self.control(request, services),
             Request::ImageList
             | Request::ImagePullStart { .. }
             | Request::ImagePullStatus { .. }
@@ -689,6 +702,7 @@ impl Session {
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
             | Request::FilesystemReadRange { .. }
+            | Request::FilesystemReadRanges { .. }
             | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
             | Request::FilesystemWriteObserved { .. }
@@ -950,6 +964,49 @@ impl Session {
                     *generation,
                     command,
                     environment,
+                    user.as_deref(),
+                    working_directory.as_deref(),
+                )?))
+            }
+            Request::ContainerExecCredential {
+                id,
+                generation,
+                command,
+                environment,
+                credentials,
+                user,
+                working_directory,
+            } => {
+                if credentials.len() > 64 {
+                    return Err(Failure::Conflict {
+                        detail: "credential environment is limited to 64 entries".into(),
+                    });
+                }
+                let credentials_port = self.peer.authority().port(Capability::CredentialRead, services.state)?;
+                let target = self.resolve_mutation_container(id, services.containers)?;
+                let mut shape = environment.clone();
+                for (variable, key) in credentials {
+                    validate_credential_key(key)?;
+                    shape.push((variable.clone(), crate::ExecEnvironmentValue::new("")));
+                }
+                validate_exec_environment(&shape)?;
+                let mut resolved = environment.clone();
+                for (variable, key) in credentials {
+                    let value = credentials_port.credential(key)?.value.ok_or_else(|| Failure::Absent {
+                        detail: format!("credential {key} is absent"),
+                    })?;
+                    let value = String::from_utf8(value).map_err(|_| Failure::Conflict {
+                        detail: format!("credential {key} is not UTF-8 and cannot be an environment value"),
+                    })?;
+                    resolved.push((variable.clone(), crate::ExecEnvironmentValue::new(value)));
+                }
+                validate_exec_environment(&resolved)?;
+                Ok(Reply::Identity(port.execute(
+                    id,
+                    &target.id,
+                    *generation,
+                    command,
+                    &resolved,
                     user.as_deref(),
                     working_directory.as_deref(),
                 )?))
@@ -1564,6 +1621,34 @@ impl Session {
                     observed.as_deref(),
                 )?))
             }
+            Request::FilesystemReadRanges { ranges } => {
+                if ranges.is_empty()
+                    || ranges.len() > 64
+                    || ranges.iter().any(|range| {
+                        range.limit == 0
+                            || range.limit > 64 * 1024
+                            || range.observed.as_ref().is_some_and(|value| value.len() > 256)
+                    })
+                    || ranges.iter().map(|range| range.limit).sum::<usize>() > 64 * 1024
+                {
+                    return Err(Failure::Failed {
+                        detail: "filesystem range batch exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                let values = ranges
+                    .iter()
+                    .map(|range| {
+                        port.read_range(
+                            &range.path,
+                            range.offset,
+                            range.limit,
+                            range.observed.as_deref(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Reply::FileRanges(values))
+            }
             Request::FilesystemStat { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entry(port.stat(path)?))
@@ -1713,21 +1798,33 @@ impl Session {
             Request::CredentialRead { key } => {
                 validate_credential_key(key)?;
                 let credential = port.credential(key)?;
-                if credential.value.as_ref().is_some_and(|value| value.len() > CREDENTIAL_VALUE_BYTES) {
-                    return Err(Failure::Failed { detail: "host returned an oversized credential".into() });
+                if credential
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value.len() > CREDENTIAL_VALUE_BYTES)
+                {
+                    return Err(Failure::Failed {
+                        detail: "host returned an oversized credential".into(),
+                    });
                 }
                 Ok(Reply::Credential(credential))
             }
             Request::CredentialSet { observed, key, value } => {
                 validate_credential_key(key)?;
                 if value.len() > CREDENTIAL_VALUE_BYTES {
-                    return Err(Failure::Conflict { detail: "credentials are limited to 64 KiB".into() });
+                    return Err(Failure::Conflict {
+                        detail: "credentials are limited to 64 KiB".into(),
+                    });
                 }
-                port.credential_set(*observed, key, value).map(Reply::Revision).map_err(Failure::from)
+                port.credential_set(*observed, key, value)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
             }
             Request::CredentialRemove { observed, key } => {
                 validate_credential_key(key)?;
-                port.credential_remove(*observed, key).map(Reply::Revision).map_err(Failure::from)
+                port.credential_remove(*observed, key)
+                    .map(Reply::Revision)
+                    .map_err(Failure::from)
             }
             _ => Err(Failure::Unsupported {
                 call: "extension state".into(),

@@ -672,7 +672,7 @@ export interface ConnectOptions {
   pendingLimit?: number;
   timeout?: number;
   connectTimeout?: number;
-  onRows?: (request: RowRequest, channel: number) => void;
+  onRows?: (request: RowRequest, channel: number) => void | Promise<void>;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: HostEvent, channel: number) => void | Promise<void>;
   onEventError?: (error: unknown) => void;
@@ -1048,6 +1048,18 @@ export interface WorkspaceApi {
         workingDirectory?: string;
       },
     ): Promise<string>;
+    /** Execute while resolving named environment values inside the host credential boundary. */
+    execWithCredentials(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        credentials: [environment: string, key: string][];
+        user?: string;
+        workingDirectory?: string;
+      },
+    ): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;
   };
   images: {
@@ -1352,6 +1364,10 @@ export interface WorkspaceApi {
       limit?: number,
       observed?: string | null,
     ): Promise<FileRange>;
+    /** Reads up to 64 confined ranges with one 64 KiB aggregate host round trip. */
+    readRanges(
+      ranges: Array<{ path: string; offset?: number; limit?: number; observed?: string | null }>,
+    ): Promise<FileRange[]>;
     /** Reads a stable file identity as consumer-driven bounded chunks until EOF. */
     readChunks(
       path: string,

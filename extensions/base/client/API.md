@@ -96,6 +96,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.rename(...)` — `container_rename`, requires `containers:lifecycle`.
 - `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
 - `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
+- `host.containers.execWithCredentials(...)` — `container_exec_credential`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
 - Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.
 
@@ -132,8 +133,8 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.resizeGridObserved(...)` — `terminal_resize_grid_observed`, requires `terminals:layout-control`.
 - `host.terminal.close(...)` — `terminal_close_pane`, requires `terminals:layout-control`.
 - `host.terminal.closeObserved(...)` — `terminal_close_pane_observed`, requires `terminals:layout-control`.
-- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:layout-control`.
-- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:layout-control`.
+- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:focus`.
+- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:focus`.
 - `host.terminal.retitle(...)` — `terminal_retitle_pane`, requires `terminals:layout-control`.
 - `host.terminal.retitleObserved(...)` — `terminal_retitle_pane_observed`, requires `terminals:layout-control`.
 - `host.terminal.ratio(...)` — `terminal_ratio`, requires `terminals:layout-control`.
@@ -149,7 +150,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
-- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
+- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and the least-privilege `terminals:focus` grant, which cannot close or rearrange panes.
 - `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.
 - `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.
 - `host.terminal.writeObservedAndWaitForText(...)` — writes against an inspected terminal cursor, then returns either terminal text or bounded semantic XML when the slot is replaced by a surface; requires `panes:observe`, `terminals:output`, `terminals:input`, and semantic-read authority for a surface replacement.
@@ -166,6 +167,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.listPage(...)` — `filesystem_list_page`, requires `filesystem:read`.
 - `host.files.read(...)` — `filesystem_read`, requires `filesystem:read`.
 - `host.files.readRange(...)` — `filesystem_read_range`, requires `filesystem:read`.
+- `host.files.readRanges(...)` — `filesystem_read_ranges`, requires `filesystem:read`.
 - `host.files.stat(...)` — `filesystem_stat`, requires `filesystem:read`.
 - `host.files.write(...)` — `filesystem_write`, requires `filesystem:write`.
 - `host.files.writeObserved(...)` — `filesystem_write_observed`, requires `filesystem:write`.
@@ -176,6 +178,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.remove(...)` — `filesystem_remove`, requires `filesystem:write`.
 - `host.files.removeObserved(...)` — `filesystem_remove_observed`, requires `filesystem:write`.
 - `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.
+- `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.
 
 ## Private extension state
 
@@ -185,6 +188,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
 - `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
 - `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.
+- `host.containers.execWithCredentials(...)` — executes with environment values resolved by exact credential key inside the host; requires both `containers:execute` and `credentials:read`, and never returns credential bytes to JavaScript.
 
 ## Extension preferences
 

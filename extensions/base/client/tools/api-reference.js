@@ -89,7 +89,7 @@ groups
     '- `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
     '- `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.',
     '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
-    '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
+    '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and the least-privilege `terminals:focus` grant, which cannot close or rearrange panes.',
     '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
     '- `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
     '- `host.terminal.writeObservedAndWaitForText(...)` — writes against an inspected terminal cursor, then returns either terminal text or bounded semantic XML when the slot is replaced by a surface; requires `panes:observe`, `terminals:output`, `terminals:input`, and semantic-read authority for a surface replacement.',
@@ -104,11 +104,13 @@ groups
     '- `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.',
     '- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.',
     '- `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.',
+    '- `host.containers.execWithCredentials(...)` — executes with environment values resolved by exact credential key inside the host; requires both `containers:execute` and `credentials:read`, and never returns credential bytes to JavaScript.',
   );
 groups
   .get('Files')
   .push(
     '- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.',
+    '- `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.',
   );
 groups
   .get('Extension preferences')

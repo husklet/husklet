@@ -226,6 +226,18 @@ pub enum Request {
         user: Option<String>,
         working_directory: Option<String>,
     },
+    /// Executes with named environment values resolved from this extension's
+    /// host-protected credential store. Requires both container execution and
+    /// credential read authority.
+    ContainerExecCredential {
+        id: String,
+        generation: u64,
+        command: Vec<String>,
+        environment: Vec<(String, ExecEnvironmentValue)>,
+        credentials: Vec<(String, String)>,
+        user: Option<String>,
+        working_directory: Option<String>,
+    },
     ContainerAttachTerminal {
         id: String,
         command: Vec<String>,
@@ -412,6 +424,10 @@ pub enum Request {
         limit: usize,
         observed: Option<String>,
     },
+    /// Reads several confined file ranges in one bounded host round trip.
+    FilesystemReadRanges {
+        ranges: Vec<crate::port::FileRangeRequest>,
+    },
     FilesystemStat {
         path: RelativePath,
     },
@@ -466,9 +482,18 @@ pub enum Request {
         observed: u64,
         key: String,
     },
-    CredentialRead { key: String },
-    CredentialSet { observed: u64, key: String, value: Vec<u8> },
-    CredentialRemove { observed: u64, key: String },
+    CredentialRead {
+        key: String,
+    },
+    CredentialSet {
+        observed: u64,
+        key: String,
+        value: Vec<u8>,
+    },
+    CredentialRemove {
+        observed: u64,
+        key: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -546,7 +571,8 @@ impl Request {
             Self::ExecutionKill { .. }
             | Self::ExecutionCancel { .. }
             | Self::ExecutionRemove { .. }
-            | Self::ContainerExec { .. } => Capability::ContainerExecute,
+            | Self::ContainerExec { .. }
+            | Self::ContainerExecCredential { .. } => Capability::ContainerExecute,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {
@@ -564,6 +590,7 @@ impl Request {
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalWritePane { .. } => Capability::TerminalInput,
+            Self::TerminalFocusPane { .. } | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
             Self::TerminalSpawn { .. } | Self::TerminalSpawnObserved { .. } => Capability::TerminalProcessControl,
             Self::TerminalOpenTab { .. }
             | Self::TerminalPinTab { .. }
@@ -573,8 +600,6 @@ impl Request {
             | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
             | Self::TerminalClosePaneObserved { .. }
-            | Self::TerminalFocusPane { .. }
-            | Self::TerminalFocusPaneObserved { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRetitlePaneObserved { .. }
             | Self::TerminalRatio { .. }
@@ -594,6 +619,7 @@ impl Request {
             | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
             | Self::FilesystemReadRange { .. }
+            | Self::FilesystemReadRanges { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. }
             | Self::FilesystemWriteObserved { .. }
@@ -763,6 +789,7 @@ pub enum Reply {
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),
+    FileRanges(Vec<crate::port::FileRange>),
     State(crate::port::ExtensionState),
     Preferences(crate::port::ExtensionPreferences),
     Credential(crate::port::ExtensionCredential),
@@ -931,7 +958,6 @@ mod tests {
                 generation: 2,
                 revision: 3,
             },
-            Request::TerminalFocusPane { slot: "1".into() },
             Request::TerminalRetitlePane {
                 slot: "1".into(),
                 title: "Build logs".into(),
@@ -949,6 +975,10 @@ mod tests {
         ] {
             assert_eq!(request.capability(), Capability::TerminalLayoutControl, "{request:?}");
         }
+        assert_eq!(
+            Request::TerminalFocusPane { slot: "1".into() }.capability(),
+            Capability::TerminalFocus
+        );
         assert_eq!(
             Request::InterfaceSplit {
                 slot: "1".into(),

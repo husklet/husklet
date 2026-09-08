@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
+use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -89,6 +89,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("container_rename", "done"),
     ("container_kill", "done"),
     ("container_exec", "identity"),
+    ("container_exec_credential", "identity"),
     ("container_attach_terminal", "identity"),
     ("image_list", "images"),
     ("image_pull_start", "image_pull_job"),
@@ -138,6 +139,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("filesystem_list_page", "directory_page"),
     ("filesystem_read", "contents"),
     ("filesystem_read_range", "file_range"),
+    ("filesystem_read_ranges", "file_ranges"),
     ("filesystem_stat", "entry"),
     ("filesystem_write", "done"),
     ("filesystem_write_observed", "identity"),
@@ -196,7 +198,9 @@ fn request_capability(request: &str) -> Capability {
         "container_start" | "container_stop" | "container_pause" | "container_unpause" | "container_restart"
         | "container_rename" | "container_kill" => Capability::ContainerLifecycle,
         "container_remove" => Capability::ContainerRemove,
-        "container_exec" | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerExecute,
+        "container_exec" | "container_exec_credential" | "execution_kill" | "execution_cancel" | "execution_remove" => {
+            Capability::ContainerExecute
+        }
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
         "image_pull_start" | "image_pull_status" | "image_pull_cancel" => Capability::ImagePull,
@@ -221,12 +225,11 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_resize_grid_observed"
         | "terminal_close_pane"
         | "terminal_close_pane_observed"
-        | "terminal_focus_pane"
-        | "terminal_focus_pane_observed"
         | "terminal_retitle_pane"
         | "terminal_retitle_pane_observed"
         | "terminal_ratio"
         | "terminal_ratio_observed" => Capability::TerminalLayoutControl,
+        "terminal_focus_pane" | "terminal_focus_pane_observed" => Capability::TerminalFocus,
         "terminal_switch_occupant" | "terminal_switch_occupant_observed" => Capability::TerminalProcessControl,
         "filesystem_inventory"
         | "filesystem_changes"
@@ -234,6 +237,7 @@ fn request_capability(request: &str) -> Capability {
         | "filesystem_list_page"
         | "filesystem_read"
         | "filesystem_read_range"
+        | "filesystem_read_ranges"
         | "filesystem_stat" => Capability::FilesystemRead,
         "filesystem_write"
         | "filesystem_write_observed"

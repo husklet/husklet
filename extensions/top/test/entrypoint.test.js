@@ -60,6 +60,7 @@ test(
               'networks:write',
               'terminals:read',
               'terminals:input',
+              'terminals:focus',
               'terminals:layout-control',
               'terminals:process-control',
               'interface:render',

@@ -122,6 +122,11 @@
     {
       "executes": false,
       "mutates": true,
+      "wire": "terminals:focus"
+    },
+    {
+      "executes": false,
+      "mutates": true,
       "wire": "terminals:layout-control"
     },
     {
@@ -405,6 +410,12 @@
         },
         {
           "name": "terminals:input",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:focus",
           "payload": {
             "kind": "unit"
           }
@@ -2326,6 +2337,52 @@
           "optional": false,
           "schema": {
             "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "FileRangeRequest": {
+      "fields": [
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "offset",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "limit",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "observed",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
           }
         }
       ],
@@ -7943,6 +8000,10 @@
       "request": "container_exec"
     },
     {
+      "capability": "containers:execute",
+      "request": "container_exec_credential"
+    },
+    {
       "capability": "containers:attach",
       "request": "container_attach_terminal"
     },
@@ -8083,11 +8144,11 @@
       "request": "terminal_close_pane_observed"
     },
     {
-      "capability": "terminals:layout-control",
+      "capability": "terminals:focus",
       "request": "terminal_focus_pane"
     },
     {
-      "capability": "terminals:layout-control",
+      "capability": "terminals:focus",
       "request": "terminal_focus_pane_observed"
     },
     {
@@ -8137,6 +8198,10 @@
     {
       "capability": "filesystem:read",
       "request": "filesystem_read_range"
+    },
+    {
+      "capability": "filesystem:read",
+      "request": "filesystem_read_ranges"
     },
     {
       "capability": "filesystem:read",
@@ -8430,6 +8495,10 @@
     },
     {
       "reply": "identity",
+      "request": "container_exec_credential"
+    },
+    {
+      "reply": "identity",
       "request": "container_attach_terminal"
     },
     {
@@ -8623,6 +8692,10 @@
     {
       "reply": "file_range",
       "request": "filesystem_read_range"
+    },
+    {
+      "reply": "file_ranges",
+      "request": "filesystem_read_ranges"
     },
     {
       "reply": "entry",
@@ -9231,6 +9304,19 @@
             "of": {
               "kind": "ref",
               "name": "FileRange"
+            }
+          }
+        },
+        {
+          "name": "file_ranges",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "FileRange"
+              }
             }
           }
         },
@@ -10383,6 +10469,99 @@
                       {
                         "kind": "ref",
                         "name": "ExecEnvironmentValue"
+                      }
+                    ],
+                    "kind": "tuple"
+                  }
+                }
+              },
+              {
+                "name": "user",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "working_directory",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_exec_credential",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "environment",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "items": [
+                      {
+                        "kind": "string"
+                      },
+                      {
+                        "kind": "ref",
+                        "name": "ExecEnvironmentValue"
+                      }
+                    ],
+                    "kind": "tuple"
+                  }
+                }
+              },
+              {
+                "name": "credentials",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "items": [
+                      {
+                        "kind": "string"
+                      },
+                      {
+                        "kind": "string"
                       }
                     ],
                     "kind": "tuple"
@@ -11571,6 +11750,25 @@
                   "kind": "optional",
                   "of": {
                     "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "filesystem_read_ranges",
+          "payload": {
+            "fields": [
+              {
+                "name": "ranges",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "FileRangeRequest"
                   }
                 }
               }
@@ -13201,7 +13399,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:16f481e1aab505b8",
+  "source_fingerprint": "fnv1a64:4777de4a2403601e",
   "specification_version": 1,
   "topics": [
     {

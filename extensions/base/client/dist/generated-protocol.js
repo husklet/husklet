@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:f04992d02b839097
+// Protocol artifact fnv1a64:c9a458f2731d89a2
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -121,6 +121,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": true,
     "mutates": true,
     "wire": "terminals:input"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "terminals:focus"
   },
   {
     "executes": false,
@@ -341,6 +346,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "container_rename": "done",
   "container_kill": "done",
   "container_exec": "identity",
+  "container_exec_credential": "identity",
   "container_attach_terminal": "identity",
   "image_list": "images",
   "image_pull_start": "image_pull_job",
@@ -390,6 +396,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
   "filesystem_read_range": "file_range",
+  "filesystem_read_ranges": "file_ranges",
   "filesystem_stat": "entry",
   "filesystem_write": "done",
   "filesystem_write_observed": "identity",
@@ -464,6 +471,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "container_rename": "containers:lifecycle",
   "container_kill": "containers:lifecycle",
   "container_exec": "containers:execute",
+  "container_exec_credential": "containers:execute",
   "container_attach_terminal": "containers:attach",
   "image_list": "images:read",
   "image_pull_start": "images:pull",
@@ -499,8 +507,8 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_resize_grid_observed": "terminals:layout-control",
   "terminal_close_pane": "terminals:layout-control",
   "terminal_close_pane_observed": "terminals:layout-control",
-  "terminal_focus_pane": "terminals:layout-control",
-  "terminal_focus_pane_observed": "terminals:layout-control",
+  "terminal_focus_pane": "terminals:focus",
+  "terminal_focus_pane_observed": "terminals:focus",
   "terminal_retitle_pane": "terminals:layout-control",
   "terminal_retitle_pane_observed": "terminals:layout-control",
   "terminal_ratio": "terminals:layout-control",
@@ -513,6 +521,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
   "filesystem_read_range": "filesystem:read",
+  "filesystem_read_ranges": "filesystem:read",
   "filesystem_stat": "filesystem:read",
   "filesystem_write": "filesystem:write",
   "filesystem_write_observed": "filesystem:write",
@@ -726,6 +735,12 @@ const definitions = {
       },
       {
         "name": "terminals:input",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminals:focus",
         "payload": {
           "kind": "unit"
         }
@@ -2647,6 +2662,52 @@ const definitions = {
         "optional": false,
         "schema": {
           "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileRangeRequest": {
+    "fields": [
+      {
+        "name": "path",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "RelativePath"
+        }
+      },
+      {
+        "name": "offset",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "limit",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "observed",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "string"
+          }
         }
       }
     ],
@@ -8524,6 +8585,19 @@ const roots = {
         }
       },
       {
+        "name": "file_ranges",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "FileRange"
+            }
+          }
+        }
+      },
+      {
         "name": "state",
         "payload": {
           "kind": "newtype",
@@ -9672,6 +9746,99 @@ const roots = {
                     {
                       "kind": "ref",
                       "name": "ExecEnvironmentValue"
+                    }
+                  ],
+                  "kind": "tuple"
+                }
+              }
+            },
+            {
+              "name": "user",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "working_directory",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "container_exec_credential",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "command",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "environment",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "items": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "ExecEnvironmentValue"
+                    }
+                  ],
+                  "kind": "tuple"
+                }
+              }
+            },
+            {
+              "name": "credentials",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "items": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "string"
                     }
                   ],
                   "kind": "tuple"
@@ -10860,6 +11027,25 @@ const roots = {
                 "kind": "optional",
                 "of": {
                   "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_read_ranges",
+        "payload": {
+          "fields": [
+            {
+              "name": "ranges",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "kind": "ref",
+                  "name": "FileRangeRequest"
                 }
               }
             }
