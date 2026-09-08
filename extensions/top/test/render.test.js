@@ -1756,7 +1756,12 @@ test('installed extensions distinguish durable exact-file and subtree authority'
   );
   await settled();
 
-  assert.ok(labelled(stage, 'Granted access · 1 product · 3 container · 2 file · 2 environment'));
+  assert.ok(
+    labelled(
+      stage,
+      'Granted access · 1 permission · 3 container rules · 2 file rules · 2 environment rules',
+    ),
+  );
   assert.ok(labelled(stage, 'Effective for this installed image digest'));
   assert.ok(labelled(stage, 'View containers and processes · containers:read'));
   assert.ok(labelled(stage, 'Container · exact name database'));

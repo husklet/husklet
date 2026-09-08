@@ -196,12 +196,12 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
     filesystemCount +
     environmentCount;
   const summary = [
-    capabilities.length ? `${capabilities.length} product` : '',
-    containerCount ? `${containerCount} container` : '',
-    networkCount ? `${networkCount} network` : '',
-    volumeCount ? `${volumeCount} volume` : '',
-    filesystemCount ? `${filesystemCount} file` : '',
-    environmentCount ? `${environmentCount} environment` : '',
+    capabilities.length ? countLabel(capabilities.length, 'permission') : '',
+    containerCount ? countLabel(containerCount, 'container rule') : '',
+    networkCount ? countLabel(networkCount, 'network rule') : '',
+    volumeCount ? countLabel(volumeCount, 'volume rule') : '',
+    filesystemCount ? countLabel(filesystemCount, 'file rule') : '',
+    environmentCount ? countLabel(environmentCount, 'environment rule') : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -265,6 +265,10 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
       </Column>
     </Expander>
   );
+}
+
+function countLabel(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
 function RequestedPermissionSummary({ groups }: { groups: { label: string; count: number }[] }) {
