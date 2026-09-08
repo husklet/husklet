@@ -1496,6 +1496,7 @@ fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original
     let store = Arc::new(NativeCheckpointStore::default());
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"checkpoint-native-capture".to_vec());
+    plan.arguments.push(b"1111111111111111".to_vec());
     plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     let engine = Engine::with_checkpoint(
         HOST_ISA,
@@ -1539,12 +1540,14 @@ fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original
     engine_cleanup.disarm();
     let mut restore_plan = selected_plan(&executable);
     restore_plan.arguments.push(b"checkpoint-native-capture".to_vec());
+    restore_plan.arguments.push(b"2222222222222222".to_vec());
     restore_plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     restore_plan.options.set("HL_RESTORE", "1", true).unwrap();
+    let restored_output = Arc::new(Output::default());
     let restored = Engine::with_checkpoint(
         HOST_ISA,
         restore_plan,
-        StandardStreams::default(),
+        StandardStreams::default().with_output(restored_output.clone()),
         store.clone(),
         store.clone(),
     )
@@ -1565,10 +1568,12 @@ fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original
         "native recovery transaction did not settle"
     );
     let restore_elapsed = restore_started.elapsed();
-    let restored_exit = restored.wait();
-    assert!(
-        restored_exit.is_ok(),
-        "restored native process did not resume to its captured exit: {restored_exit:?}"
+    let restored_exit = restored.wait().expect("restored native process result");
+    assert_eq!(restored_exit.guest_status, 0, "restored native guest status");
+    assert_eq!(
+        restored_output.stdout.lock().unwrap().as_slice(),
+        b"native-restored:1111111111111111\n",
+        "fresh process retained replacement memory instead of the captured image"
     );
     restored.destroy().unwrap();
     restored_cleanup.disarm();

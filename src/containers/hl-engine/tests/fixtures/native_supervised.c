@@ -33,7 +33,7 @@
 
 static void *thread_return(void *argument) { return argument; }
 static void checkpoint_alarm(int signal) { (void)signal; }
-static volatile sig_atomic_t checkpoint_identity;
+static volatile unsigned long long checkpoint_identity;
 static void *checkpoint_thread(void *argument) {
     const char *release = argument;
     while (access(release, F_OK) != 0) usleep(1000);
@@ -147,12 +147,14 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "checkpoint-native-capture")) {
-        checkpoint_identity = getpid();
+        if (argc < 3) return 80;
+        checkpoint_identity = strtoull(argv[2], NULL, 10);
         signal(SIGALRM, checkpoint_alarm);
         alarm(2);
         if (write(STDOUT_FILENO, "native-capture-ready\n", 21) != 21) return 79;
         pause();
-        return checkpoint_identity == getpid() ? 81 : 0;
+        dprintf(STDOUT_FILENO, "native-restored:%llu\n", checkpoint_identity);
+        return 0;
     }
     if (argc > 4 && (!strcmp(argv[1], "checkpoint-phase1") ||
                      !strcmp(argv[1], "checkpoint-descendant") ||
