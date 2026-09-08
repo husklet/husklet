@@ -5609,6 +5609,15 @@ HL_API int hl_x86_64_translit_displaced_test(uint32_t scenario) {
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
     }
+    if (scenario >= 247 && scenario <= 252) {
+        pid_t child = fork();
+        if (child < 0) return 98;
+        if (child == 0) _exit(translit_direct_call_ibtc_fixture_test(scenario - 121));
+        int status = 0;
+        if (waitpid(child, &status, 0) != child) return 99;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        return WIFSIGNALED(status) ? 144 + WTERMSIG(status) : 99;
+    }
     if (scenario == 221) {
         pid_t child = fork();
         if (child < 0) return 98;
@@ -10919,6 +10928,52 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
     }
     struct interp_block *target_block = translit_jcc_ibtc_test_build(context, target);
     if (target_block == NULL || target_block->host_entry_off == 0) goto done_call_ibtc;
+
+    if (scenario >= 126 && scenario <= 131) {
+        static const uint32_t miss_kinds[] = {
+            TL_JCC_IBTC_MISS,
+            TL_DIRECT_JMP_IBTC_MISS,
+            TL_RET_IBTC_MISS,
+            TL_INDIRECT_IBTC_MISS,
+            TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_FETCH,
+            TL_JCC_IBTC_MISS,
+        };
+        const uint64_t next = target + 0x40;
+        const size_t next_offset = (size_t)(next - source);
+        guest_bytes[next_offset] = 0xb8;
+        guest_bytes[next_offset + 1] = 44;
+        memset(guest_bytes + next_offset + 2, 0, 3);
+        guest_bytes[next_offset + 5] = 0x0f;
+        guest_bytes[next_offset + 6] = 0x0b;
+        struct interp_block *next_block = translit_jcc_ibtc_test_build(context, next);
+        if (next_block == NULL || next_block->host_entry_off == 0) {
+            result = 208;
+            goto done_call_ibtc;
+        }
+        ibtc_publish(&g_ibtc[ibtc_index(target)], 0, NULL);
+        ibtc_publish(&g_ibtc[ibtc_index(next)], 0, NULL);
+        cpu.rip = target;
+        cpu.jcc_ibtc_miss = miss_kinds[scenario - 126];
+
+        /* A mapped A->B redispatch must consume B's typed miss before B executes.
+           Otherwise B->C reaches the ordinary loop with the stale marker and
+           publishes C under the wrong branch family (or simulates a RET there). */
+        translit_jcc_ibtc_fast_redispatch(&cpu, target_block);
+        ibtc_ent target_entry = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
+        if (cpu.jcc_ibtc_miss != 0 || target_entry.target != target || target_entry.body == NULL) {
+            result = 210 + (int)(scenario - 126);
+            goto done_call_ibtc;
+        }
+
+        /* Model B's forced dispatcher return.  The signal case changes RIP to
+           the handler immediately before this seam; neither path may carry A's
+           marker past the exact B descriptor above. */
+        cpu.rip = next;
+        translit_jcc_ibtc_fill(&cpu, next_block, scenario == 131);
+        ibtc_ent next_entry = ibtc_snapshot(&g_ibtc[ibtc_index(next)]);
+        result = cpu.jcc_ibtc_miss == 0 && next_entry.target == 0 ? 0 : 220 + (int)(scenario - 126);
+        goto done_call_ibtc;
+    }
 
     if (scenario == 125) {
         const uint64_t collision_target = target + ((uint64_t)IBTC_N << 2);
