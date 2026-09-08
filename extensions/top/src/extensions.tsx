@@ -55,6 +55,15 @@ function emptyFilesystemGrant(): Required<FilesystemGrant> {
   return { read: [], write: [], create: [], delete: [], rename: [] };
 }
 
+function isInstalledCandidateUnchanged(
+  candidate: ExtensionAcquisitionStatus['candidate'],
+): boolean {
+  return Boolean(
+    candidate?.installed_image_digest &&
+    candidate.installed_image_digest === candidate.image_digest,
+  );
+}
+
 function filesystemRoots(grant: FilesystemGrant, verb: FilesystemVerb): FilesystemSelector[] {
   return grant[verb] ?? [];
 }
@@ -377,8 +386,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       // eslint-disable-next-line react-hooks/purity
       const deadline = Date.now() + 30_000;
       while (true) {
-        setAcquisition(status);
-        if (status.candidate) {
+        if (!isInstalledCandidateUnchanged(status.candidate)) setAcquisition(status);
+        if (status.candidate && !isInstalledCandidateUnchanged(status.candidate)) {
           const key = `${status.job}:${status.candidate.image_digest}`;
           if (candidateKey.current !== key) {
             candidateKey.current = key;
@@ -407,6 +416,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         });
         if (changed.changed) status = changed.status;
       }
+      if (isInstalledCandidateUnchanged(status.candidate)) {
+        setAcquisition(null);
+        setNotice({
+          label: `${status.candidate?.name ?? wanted} is up to date. The reviewed image already matches the installed image; access was not changed.`,
+          uncertain: false,
+        });
+      }
       if (
         !['ready', 'failed', 'cancelled'].includes(status.state) &&
         cancelledJob.current !== started.job
@@ -421,7 +437,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     }
   };
   const publish = async () => {
-    if (!acquisition?.candidate || acquisition.state !== 'ready' || busy) return;
+    if (
+      !acquisition?.candidate ||
+      acquisition.state !== 'ready' ||
+      isInstalledCandidateUnchanged(acquisition.candidate) ||
+      busy
+    )
+      return;
     const updating = Boolean(acquisition.candidate.installed_image_digest);
     setBusy(updating ? 'update' : 'install');
     setError('');
@@ -1078,6 +1100,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       <Row gap={1} wrap>
                         {update && (
                           <Button
+                            key="review-update"
                             label="Review update"
                             enabled={!busy && updateCompatibility?.compatible !== false}
                             onInvoke={() => inspect(update.reference)}
@@ -1085,18 +1108,21 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         )}
                         {extension.name === 'top' ? null : extension.status.startsWith('fault:') ? (
                           <Button
+                            key="lifecycle"
                             label="Retry"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'retry')}
                           />
                         ) : extension.enabled ? (
                           <Button
+                            key="lifecycle"
                             label="Disable"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'disable')}
                           />
                         ) : (
                           <Button
+                            key="lifecycle"
                             label="Enable"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'enable')}
@@ -1104,6 +1130,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         )}
                         {extension.name !== 'top' && (
                           <ConfirmAction
+                            key="remove"
                             label="Remove"
                             confirmLabel={`Remove ${extension.name}`}
                             question={`Remove ${extension.name} from this workspace?`}

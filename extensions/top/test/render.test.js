@@ -549,6 +549,63 @@ test('an installed catalogue extension exposes its update review without retypin
   assert.ok(labelled(stage, 'Update with selected access'));
 });
 
+test('reviewing an unchanged installed digest is an explicit no-op', async () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  let updates = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: digest,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+          startAcquisition: async () => ({ job: 'unchanged-update' }),
+          acquisition: async () => ({
+            job: 'unchanged-update',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            revision: 2,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '1.0.0',
+              image_digest: digest,
+              installed_image_digest: digest,
+              requested: ['containers:read'],
+            },
+            error: null,
+          }),
+          updateAndWait: async () => {
+            updates += 1;
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Review update');
+  await settled();
+  await settled();
+
+  assert.ok(
+    labelled(
+      stage,
+      'storybook is up to date. The reviewed image already matches the installed image; access was not changed.',
+    ),
+  );
+  assert.equal(labelled(stage, 'Update with selected access'), undefined);
+  assert.equal(updates, 0);
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
