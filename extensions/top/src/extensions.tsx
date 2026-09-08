@@ -8,6 +8,7 @@ import {
   Column,
   ConfirmAction,
   Entry,
+  Expander,
   FormControlLabel,
   Heading,
   InlineMessage,
@@ -125,25 +126,70 @@ function FilesystemConsent({
   );
 }
 
-function InstalledFilesystemAccess({ grant }: { grant?: FilesystemGrant }) {
-  if (!grant || filesystemGrantCount(grant) === 0) return null;
+function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary }) {
+  const capabilities = extension.granted ?? [];
+  const containerSelectors = extension.containers?.selectors ?? [];
+  const containerCount = containerSelectors.length + Number(extension.containers?.create ?? false);
+  const filesystemCount = extension.filesystem ? filesystemGrantCount(extension.filesystem) : 0;
+  const environmentRead = extension.workspace_environment?.read ?? [];
+  const environmentWrite = extension.workspace_environment?.write ?? [];
+  const environmentCount = environmentRead.length + environmentWrite.length;
+  const total = capabilities.length + containerCount + filesystemCount + environmentCount;
+  const summary = [
+    capabilities.length ? `${capabilities.length} product` : '',
+    containerCount ? `${containerCount} container` : '',
+    filesystemCount ? `${filesystemCount} file` : '',
+    environmentCount ? `${environmentCount} environment` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <Column gap={1}>
-      <Text
-        label={`Workspace file access · ${filesystemGrantCount(grant)} grants`}
-        color="text-dim"
-      />
-      {FILESYSTEM_VERBS.flatMap(({ key, label }) =>
-        filesystemRoots(grant, key).map((selector) => (
+    <Expander label={`Granted access · ${total ? summary : 'None'}`}>
+      <Column gap={1}>
+        <Text label="Effective for this installed image digest" color="text-dim" />
+        {capabilities.map((capability) => (
+          <Text key={capability} label={`${capabilityLabel(capability)} · ${capability}`} wrap />
+        ))}
+        {containerSelectors.map((selector, index) => (
           <Text
-            key={`${key}:${filesystemSelectorKey(selector)}`}
-            label={filesystemConsentLabel(selector, label)}
-            color="text-dim"
+            key={`container:${index}`}
+            label={
+              'all' in selector
+                ? 'Containers · all containers'
+                : 'id' in selector
+                  ? `Container · exact ID ${selector.id}`
+                  : `Container · exact name ${selector.name}`
+            }
             wrap
           />
-        )),
-      )}
-    </Column>
+        ))}
+        {extension.containers?.create ? <Text label="Containers · create new containers" /> : null}
+        {extension.filesystem
+          ? FILESYSTEM_VERBS.flatMap(({ key, label }) =>
+              filesystemRoots(extension.filesystem!, key).map((selector) => (
+                <Text
+                  key={`${key}:${filesystemSelectorKey(selector)}`}
+                  label={filesystemConsentLabel(selector, label)}
+                  wrap
+                />
+              )),
+            )
+          : null}
+        {(['read', 'write'] as const).flatMap((verb) =>
+          (extension.workspace_environment?.[verb] ?? []).map((selector, index) => (
+            <Text
+              key={`${verb}:${index}`}
+              label={
+                'all' in selector
+                  ? `Environment · ${verb} all names`
+                  : `Environment · ${verb} ${selector.name} in workspace ${selector.workspace}`
+              }
+              wrap
+            />
+          )),
+        )}
+      </Column>
+    </Expander>
   );
 }
 
@@ -797,7 +843,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         tooltip={extension.image_digest}
                       />
                       <ExtensionFault extension={extension} />
-                      <InstalledFilesystemAccess grant={extension.filesystem} />
+                      <InstalledPermissionSummary extension={extension} />
                       <LifecycleFeedback
                         extensionName={extension.name}
                         pending={pendingLifecycle}

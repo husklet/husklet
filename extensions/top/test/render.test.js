@@ -1075,12 +1075,21 @@ test('installed extensions distinguish durable exact-file and subtree authority'
               version: '1.0.0',
               enabled: true,
               status: 'duty',
+              granted: ['containers:read'],
+              containers: {
+                selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }],
+                create: true,
+              },
               filesystem: {
                 read: [{ subtree: 'documents' }],
                 write: [{ exact: 'settings/index.json' }],
                 create: [],
                 delete: [],
                 rename: [],
+              },
+              workspace_environment: {
+                read: [{ workspace: 'daily', name: 'REGISTRY_USER' }],
+                write: [{ all: true }],
               },
             },
           ],
@@ -1091,9 +1100,16 @@ test('installed extensions distinguish durable exact-file and subtree authority'
   );
   await settled();
 
-  assert.ok(labelled(stage, 'Workspace file access · 2 grants'));
+  assert.ok(labelled(stage, 'Granted access · 1 product · 3 container · 2 file · 2 environment'));
+  assert.ok(labelled(stage, 'Effective for this installed image digest'));
+  assert.ok(labelled(stage, 'View containers and processes · containers:read'));
+  assert.ok(labelled(stage, 'Container · exact name database'));
+  assert.ok(labelled(stage, `Container · exact ID ${'c'.repeat(64)}`));
+  assert.ok(labelled(stage, 'Containers · create new containers'));
   assert.ok(labelled(stage, 'View contents folder · documents/ and everything inside'));
   assert.ok(labelled(stage, 'Modify existing contents file · settings/index.json'));
+  assert.ok(labelled(stage, 'Environment · read REGISTRY_USER in workspace daily'));
+  assert.ok(labelled(stage, 'Environment · write all names'));
   assert.equal(
     labelled(stage, 'Modify existing contents folder · settings/ and everything inside'),
     undefined,
