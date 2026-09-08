@@ -1240,6 +1240,15 @@ test('overview never presents stale inventory counts as current during loading o
   );
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
   assert.ok(labelled(stage, 'No reported faults'));
+  assert.equal(
+    ancestorProperty(stage, 'Containers', 'Column', 'Grow')?.Number,
+    0,
+    'the summary matrix does not absorb unused page width',
+  );
+  assert.ok(
+    ancestorProperty(stage, 'Containers', 'Column', 'Width'),
+    'the non-growing matrix has an explicit readable width bound',
+  );
 });
 
 test('overview refreshes every authoritative inventory in one action', async () => {

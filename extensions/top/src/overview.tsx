@@ -138,27 +138,49 @@ export function Overview({
             onInvoke={refreshAll}
           />
         </Row>
-        <Row gap={2} wrap width={{ chars: 72 }}>
-          <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
-          <Summary
-            title="Processes"
-            value={
-              containers.loading
-                ? '…'
-                : containers.error
-                  ? 'Unavailable'
-                  : String(runningContainers)
-            }
-            detail="running containers available to snapshot"
-            onOpen={() => onOpen('processes')}
-          />
-          <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
-          <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
-          <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
-          <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
-          <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
-          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
-        </Row>
+        <Column grow={false} width={{ minimum: { chars: 54 }, maximum: { chars: 70 } }} gap={2}>
+          <Row gap={2}>
+            <Summary
+              title="Containers"
+              {...containersSummary}
+              onOpen={() => onOpen('containers')}
+            />
+            <Summary
+              title="Processes"
+              value={
+                containers.loading
+                  ? '…'
+                  : containers.error
+                    ? 'Unavailable'
+                    : String(runningContainers)
+              }
+              detail="running containers available to snapshot"
+              onOpen={() => onOpen('processes')}
+            />
+            <Summary
+              title="Executions"
+              {...executionsSummary}
+              onOpen={() => onOpen('executions')}
+            />
+          </Row>
+          <Row gap={2}>
+            <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
+            <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
+            <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
+          </Row>
+          <Row gap={2}>
+            <Summary
+              title="Terminal tabs"
+              {...terminalsSummary}
+              onOpen={() => onOpen('terminals')}
+            />
+            <Summary
+              title="Extensions"
+              {...extensionsSummary}
+              onOpen={() => onOpen('extensions')}
+            />
+          </Row>
+        </Column>
         <ErrorText
           error={
             containers.error ??
