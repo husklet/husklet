@@ -358,7 +358,11 @@ fn activate(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
 /// editable too, and connecting both would report the same keystroke twice —
 /// once as the number it now stands at and once as the text showing it.
 fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) || color(widget, node, slot, reports) {
+    if splitter(widget, node, slot, reports) {
+        return;
+    }
+    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) || color(widget, node, slot, reports)
+    {
         return;
     }
     entry(widget, node, slot, reports);
@@ -366,8 +370,27 @@ fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     scale(widget, node, slot, reports);
 }
 
+fn splitter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    let Some(paned) = widget.downcast_ref::<gtk::Paned>() else {
+        return false;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    paned.connect_position_notify(move |paned| {
+        let Some(id) = slot.id() else { return };
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::Number(f64::from(paned.position())),
+        });
+    });
+    true
+}
+
 fn color(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
-    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else { return false };
+    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else {
+        return false;
+    };
     let reports = reports.clone();
     let slot = slot.clone();
     picker.connect_rgba_notify(move |picker| {

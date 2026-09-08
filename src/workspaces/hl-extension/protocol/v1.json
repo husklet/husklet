@@ -5664,6 +5664,18 @@
           }
         },
         {
+          "name": "NavigationMenu",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "NavigationMenuItem",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "BottomNavigation",
           "payload": {
             "kind": "unit"

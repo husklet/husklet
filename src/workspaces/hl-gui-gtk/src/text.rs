@@ -45,7 +45,7 @@ fn mark(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
         label.set_text(content);
         return true;
     }
-    if tag == Tag::ListItemButton {
+    if matches!(tag, Tag::ListItemButton | Tag::NavigationMenuItem) {
         if let (Some(button), Some(label)) = (widget.downcast_ref::<gtk::Button>(), slot::caption(widget)) {
             label.set_text(content);
             button.update_property(&[gtk::accessible::Property::Label(content)]);

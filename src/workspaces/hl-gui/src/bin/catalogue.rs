@@ -381,6 +381,8 @@ fn family(tag: Tag) -> &'static str {
         | Tag::StepIcon
         | Tag::NavigationRail
         | Tag::NavigationRailItem
+        | Tag::NavigationMenu
+        | Tag::NavigationMenuItem
         | Tag::BottomNavigation
         | Tag::BottomNavigationAction
         | Tag::Accordion

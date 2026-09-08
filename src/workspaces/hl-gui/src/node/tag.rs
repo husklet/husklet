@@ -172,7 +172,7 @@ catalogue! {
     Row: children, props[Gap, Orientation, Wrap], triggers[],
     Grid: children, props[Gap, Columns], triggers[],
     Scroll: children, props[], triggers[Scroll],
-    Splitter: children, props[Orientation, Position], triggers[],
+    Splitter: children, props[Orientation, Position], triggers[Change],
     Stack: children, props[], triggers[],
     Overlay: children, props[], triggers[],
     Container: children, props[Gap], triggers[Drag, Drop],
@@ -305,6 +305,8 @@ catalogue! {
     StepIcon: leaf, props[Icon, Tone], triggers[],
     NavigationRail: children, props[Gap], triggers[],
     NavigationRailItem: leaf, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke],
+    NavigationMenu: children, props[Gap], triggers[],
+    NavigationMenuItem: leaf, props[Label, Icon, Selected, Enabled, Variant, Tone], triggers[Invoke, Focus],
     BottomNavigation: children, props[Gap], triggers[],
     BottomNavigationAction: leaf, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke],
     Accordion: children, props[Label, Expanded], triggers[Expand],
@@ -360,7 +362,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {
@@ -445,5 +447,9 @@ mod tests {
             ]
         );
         assert!(Tag::Text.triggers().is_empty(), "a label reports nothing");
+        assert!(Tag::NavigationMenu.accepts_children());
+        assert!(Tag::NavigationMenuItem.accepts(Prop::Selected));
+        assert_eq!(Tag::NavigationMenuItem.triggers(), &[Trigger::Invoke, Trigger::Focus]);
+        assert_eq!(Tag::Splitter.triggers(), &[Trigger::Change]);
     }
 }

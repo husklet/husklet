@@ -139,6 +139,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::StepConnector
         | Tag::NavigationRail
         | Tag::NavigationRailItem
+        | Tag::NavigationMenu
+        | Tag::NavigationMenuItem
         | Tag::BottomNavigation
         | Tag::BottomNavigationAction
         | Tag::Accordion

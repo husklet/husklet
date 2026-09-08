@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:e646bdb5f0fad5fb
+// Protocol artifact fnv1a64:3d81243190607c8b
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -5966,6 +5966,18 @@ const definitions = {
       },
       {
         "name": "NavigationRailItem",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "NavigationMenu",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "NavigationMenuItem",
         "payload": {
           "kind": "unit"
         }
