@@ -2581,9 +2581,12 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
     assert_eq!(
         host.ledger.reached(),
         [
+            "networks.inspect",
             "networks.remove",
+            "networks.inspect",
             "containers.list",
             "networks.connect",
+            "networks.inspect",
             "containers.list",
             "networks.disconnect"
         ]
@@ -2615,7 +2618,10 @@ fn network_endpoint_alias_boundaries_are_enforced_before_control_authority() {
     let mut aliases = (0..64).map(|index| format!("alias-{index}")).collect::<Vec<_>>();
     aliases[0] = "x".repeat(253);
     session.dispatch(&request(aliases), &services(&host)).unwrap();
-    assert_eq!(host.ledger.reached(), ["containers.list", "networks.connect"]);
+    assert_eq!(
+        host.ledger.reached(),
+        ["networks.inspect", "containers.list", "networks.connect"]
+    );
 }
 
 #[test]

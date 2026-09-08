@@ -850,9 +850,9 @@ impl Session {
             } => {
                 validate_endpoint_aliases(aliases)?;
                 let reference = immutable_reference(reference, &[32], "network")?;
+                immutable_identity(container, &[32, 64], "container")?;
                 let network = port.inspect(reference)?;
                 self.permit_network(&network, capability)?;
-                immutable_identity(container, &[32, 64], "container")?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.connect_with_aliases(reference, &target.id, aliases)
                     .map(|()| Reply::Done)
@@ -860,9 +860,9 @@ impl Session {
             }
             Request::NetworkDisconnect { reference, container } => {
                 let reference = immutable_reference(reference, &[32], "network")?;
+                immutable_identity(container, &[32, 64], "container")?;
                 let network = port.inspect(reference)?;
                 self.permit_network(&network, capability)?;
-                immutable_identity(container, &[32, 64], "container")?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.disconnect(reference, &target.id)
                     .map(|()| Reply::Done)
