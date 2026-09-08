@@ -52,6 +52,12 @@ fn mark(widget: &gtk::Widget, tag: Tag, value: &PropValue) -> bool {
             return true;
         }
     }
+    if tag == Tag::IconButton {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            button.update_property(&[gtk::accessible::Property::Label(content)]);
+            return true;
+        }
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.set_label(content);
         return true;

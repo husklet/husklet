@@ -165,10 +165,27 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     an_unchanged_description_never_reaches_the_toolkit();
     a_keyed_reorder_moves_widgets_rather_than_rebuilding_them();
     a_described_handler_is_wired_to_the_real_signal();
+    an_icon_button_keeps_its_icon_when_accessibly_labelled();
     a_rebound_handler_reports_the_new_identity();
     a_select_follows_its_stable_value();
     rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {
+    let mut session = Session::new();
+    session.render(
+        &Element::icon_button("edit-clear-symbolic", EventId::new("reset"))
+            .label("Reset foreground"),
+    );
+
+    let button = session
+        .tagged(Tag::IconButton)
+        .expect("the icon button is reachable")
+        .downcast::<gtk::Button>()
+        .expect("an icon button is a button");
+    assert_eq!(button.icon_name().as_deref(), Some("edit-clear-symbolic"));
+    assert_eq!(button.label(), None, "the accessible label must not replace the icon");
 }
 
 fn a_select_follows_its_stable_value() {
