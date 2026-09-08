@@ -177,6 +177,24 @@ function abortError(reason) {
   return error;
 }
 
+function abortReason(signal) {
+  try {
+    return signal.reason;
+  } catch (error) {
+    return error;
+  }
+}
+
+function removeAbortListener(signal, listener) {
+  if (!signal || !listener) return;
+  try {
+    signal.removeEventListener('abort', listener);
+  } catch {
+    // AbortSignal-like objects are accepted across runtimes. Their cleanup
+    // hooks must not be able to interrupt the session's fail-closed boundary.
+  }
+}
+
 function safeUnsigned(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${label} must be a nonnegative safe integer`);
@@ -285,10 +303,7 @@ export class Session {
   #onRows;
   #onEventError;
   #onClose;
-  #events = new Map<
-    (event: HostEvent, channel: number) => void | Promise<void>,
-    symbol
-  >();
+  #events = new Map<(event: HostEvent, channel: number) => void | Promise<void>, symbol>();
   #topics = new Set();
   #eventTopics = new Map();
   #pending = [];
@@ -485,20 +500,27 @@ export class Session {
       return Promise.reject(new Error('extension socket is applying write backpressure'));
     const payload = encodeRequest(name, argument);
     const pending = this.#enqueueCall(name, topic, signal);
+    if (!pending.registered) return pending.promise;
     try {
       this.#write({ channel: CALLS, kind: KIND.request, payload });
     } catch (error) {
       pending.cancel(error);
+      // A transport exception cannot prove that none of the ordered frame was
+      // accepted. Retaining later FIFO entries would make their correlation
+      // depend on unknowable peer state.
+      this.#finish(error);
+      this.#socket.destroy();
     }
     return pending.promise;
   }
 
   #enqueueCall(name, topic, signal) {
     let cancel;
+    let registered = true;
     const promise = new Promise((resolve, reject) => {
       const abort = signal
         ? () => {
-            const error = abortError(signal.reason);
+            const error = abortError(abortReason(signal));
             // Calls share one ordered channel without request identifiers. Once a
             // frame is written, retaining the session could bind its late reply to
             // the next caller, so cancellation is deliberately fail-closed.
@@ -515,16 +537,21 @@ export class Session {
       }, this.#timeout);
       const record = { resolve, reject, timer, name, topic, signal, abort };
       this.#pending.push(record);
-      signal?.addEventListener('abort', abort, { once: true });
       cancel = (error) => {
         clearTimeout(timer);
         const index = this.#pending.indexOf(record);
         if (index !== -1) this.#pending.splice(index, 1);
-        signal?.removeEventListener('abort', abort);
+        removeAbortListener(signal, abort);
         reject(error);
       };
+      try {
+        signal?.addEventListener('abort', abort, { once: true });
+      } catch (error) {
+        registered = false;
+        cancel(error);
+      }
     });
-    return { promise, cancel };
+    return { promise, cancel, registered };
   }
 
   /** Answers a row window the host asked for. */
@@ -674,7 +701,7 @@ export class Session {
           : validateReplyFor(pending.name, frame.payload);
       this.#pending.shift();
       clearTimeout(pending.timer);
-      pending.signal?.removeEventListener('abort', pending.abort);
+      removeAbortListener(pending.signal, pending.abort);
       if ((frame.flags & ERROR) !== 0) {
         if (pending.name === 'event_subscribe') {
           for (const [channel, topic] of this.#eventTopics)
@@ -784,7 +811,7 @@ export class Session {
     this.#rejectReady(error);
     for (const pending of this.#pending.splice(0)) {
       clearTimeout(pending.timer);
-      pending.signal?.removeEventListener('abort', pending.abort);
+      removeAbortListener(pending.signal, pending.abort);
       pending.reject(error);
     }
     for (const pending of this.#pings.values()) {

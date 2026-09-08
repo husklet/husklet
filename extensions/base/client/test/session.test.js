@@ -1771,6 +1771,111 @@ test('AbortSignal writes nothing before a call and closes ordered Unix calls aft
   }
 });
 
+test('throwing AbortSignal cleanup cannot strand ordered Unix calls before a trickled late reply', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-abort-cleanup-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let observedTwo;
+  const twoCalls = new Promise((resolve) => {
+    observedTwo = resolve;
+  });
+  let peerClosed;
+  const closed = new Promise((resolve) => {
+    peerClosed = resolve;
+  });
+  const late = encode({
+    channel: 2,
+    kind: KIND.response,
+    payload: {
+      reply: 'workspace',
+      with: { name: 'late', image: 'alpine', architecture: 'amd64' },
+    },
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('error', () => {});
+    socket.on('close', () => {
+      connections.delete(socket);
+      peerClosed();
+    });
+    const reader = new Reader();
+    let calls = 0;
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2 || frame.kind !== KIND.request) continue;
+        calls += 1;
+        if (calls === 2) observedTwo();
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'abort_cleanup',
+          granted: ['workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+
+  class ThrowingCleanupSignal {
+    aborted = false;
+    reason;
+    listener;
+
+    addEventListener(_name, listener) {
+      this.listener = listener;
+    }
+
+    removeEventListener() {
+      throw new Error('hostile AbortSignal cleanup');
+    }
+
+    abort(reason) {
+      this.aborted = true;
+      this.reason = reason;
+      this.listener();
+    }
+  }
+
+  try {
+    const replies = [];
+    const session = await connect({
+      path: socketPath,
+      timeout: 1_000,
+      onReply: (reply) => replies.push(reply),
+    });
+    const signal = new ThrowingCleanupSignal();
+    const first = session.call('workspace_info', undefined, { signal });
+    const second = session.call('workspace_list');
+    await twoCalls;
+
+    assert.doesNotThrow(() => signal.abort('cancel the first ordered slot'));
+    const firstRejected = assert.rejects(first, { name: 'AbortError' });
+    const secondRejected = assert.rejects(second, { name: 'AbortError' });
+    const peer = [...connections][0];
+    peer.write(late.subarray(0, 7));
+    setImmediate(() => peer.write(late.subarray(7)));
+
+    await Promise.all([firstRejected, secondRejected]);
+    await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('cancelled ordered socket stayed open')), 200),
+      ),
+    ]);
+    assert.deepEqual(replies, [], 'the late abandoned reply has no live caller or GUI callback');
+    assert.match((await session.closed).message, /aborted/);
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix control frames ping both directions and close every pending operation', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-control-'));
   const socketPath = path.join(directory, 'host.sock');
