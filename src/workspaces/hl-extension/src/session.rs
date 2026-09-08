@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceConfiguration,
-    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
+    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
+    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -33,6 +33,7 @@ pub struct Services<'a> {
     pub networks: &'a dyn NetworkStore,
     pub terminal: &'a dyn TerminalSurface,
     pub files: &'a dyn WorkspaceFiles,
+    pub state: &'a dyn ExtensionStateStore,
     pub notifications: &'a dyn NotificationSink,
 }
 
@@ -518,6 +519,7 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
+            Request::StateRead | Request::StateWrite { .. } | Request::StateClear { .. } => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -1329,6 +1331,42 @@ impl Session {
         }
     }
 
+    fn state(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        const LIMIT: usize = 1024 * 1024;
+        let capability = request.capability();
+        let port = self.peer.authority().port(capability, services.state)?;
+        match request {
+            Request::StateRead => {
+                let state = port.read()?;
+                exact_state_identity(&state.identity).map_err(|_| Failure::Failed {
+                    detail: "host returned an invalid extension state identity".into(),
+                })?;
+                if state.contents.len() > LIMIT {
+                    return Err(Failure::Failed {
+                        detail: "extension state exceeds the 1 MiB quota".into(),
+                    });
+                }
+                Ok(Reply::State(state))
+            }
+            Request::StateWrite { observed, contents } => {
+                if contents.len() > LIMIT {
+                    return Err(Failure::Conflict {
+                        detail: "extension state exceeds the 1 MiB quota".into(),
+                    });
+                }
+                exact_state_identity(observed)?;
+                port.write(observed, contents).map(Reply::Identity).map_err(Failure::from)
+            }
+            Request::StateClear { observed } => {
+                exact_state_identity(observed)?;
+                port.clear(observed).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            _ => Err(Failure::Unsupported {
+                call: "extension state".into(),
+            }),
+        }
+    }
+
     /// Accepts an interface description for the session's own tab.
     ///
     /// The frame is handed to the surface the host owns; an extension that has
@@ -1552,6 +1590,15 @@ fn immutable_digest(value: &str, noun: &str) -> Result<(), Failure> {
     }
     Err(Failure::Conflict {
         detail: format!("{noun} removal requires the complete immutable sha256 digest returned by inventory"),
+    })
+}
+
+fn exact_state_identity(value: &str) -> Result<(), Failure> {
+    if value == "absent" {
+        return Ok(());
+    }
+    immutable_digest(value, "extension state").map_err(|_| Failure::Conflict {
+        detail: "extension state mutation requires the exact identity returned by state.read()".into(),
     })
 }
 

@@ -14,6 +14,166 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix watcher accepts the host initial snapshot before subscribe acknowledgement', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-initial-snapshot-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        if (frame.payload.call === 'event_subscribe') {
+          socket.write(
+            encode({
+              channel: 101,
+              kind: KIND.event,
+              payload: { snapshot: 'containers', of: [] },
+            }),
+          );
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'container_list') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'containers', with: [] },
+            }),
+          );
+        } else if (frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const seen = [];
+    const stop = await host.watchContainers((containers) => seen.push(containers));
+    assert.deepEqual(seen, [[]]);
+    assert.deepEqual(await host.containers.list(), []);
+    await stop();
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix private state preserves bytes and independent read/write authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-state-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const payload =
+          frame.payload.call === 'state_read'
+          ? { reply: 'state', with: { identity: 'absent', contents: [0, 17, 255] } }
+            : { error: 'refused', capability: 'state:write' };
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            flags: payload.error ? 3 : 1,
+            payload,
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'state-fixture', granted: ['state:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const api = workspace(session);
+    assert.deepEqual(await api.state.read(), { identity: 'absent', contents: [0, 17, 255] });
+    await assert.rejects(api.state.write('absent', [1, 2]), /state:write/);
+    assert.deepEqual(requests, [{ call: 'state_read' }]);
+    await assert.rejects(api.state.write('absent', new Uint8Array(1024 * 1024 + 1)), /1 MiB/);
+    await assert.rejects(api.state.write('latest', [1]), /exact identity/);
+    assert.equal(requests.length, 1, 'denied, malformed, and oversized writes never reach socket framing');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix private state exposes a stale-writer conflict instead of losing an update', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-state-cas-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let identity = 'absent';
+  let contents = [];
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        let payload;
+        if (frame.payload.call === 'state_read') {
+          payload = { reply: 'state', with: { identity, contents } };
+        } else if (frame.payload.with.observed !== identity) {
+          payload = { error: 'conflict', detail: 'extension state changed after it was read' };
+        } else {
+          contents = frame.payload.with.contents;
+          identity = `sha256:${'a'.repeat(64)}`;
+          payload = { reply: 'identity', with: identity };
+        }
+        socket.write(encode({
+          channel: frame.channel, kind: KIND.response, flags: payload.error ? 3 : 1, payload,
+        }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'state-cas-fixture', granted: ['state:read', 'state:write'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const api = workspace(session);
+    const foreground = await api.state.read();
+    const background = await api.state.read();
+    assert.equal(await api.state.write(background.identity, [2]), `sha256:${'a'.repeat(64)}`);
+    await assert.rejects(api.state.write(foreground.identity, [1]), /changed after it was read/);
+    assert.deepEqual(await api.state.read(), { identity: `sha256:${'a'.repeat(64)}`, contents: [2] });
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix catalogue carries bounded compatibility hints', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-catalogue-compat-'));
   const socketPath = path.join(directory, 'host.sock');

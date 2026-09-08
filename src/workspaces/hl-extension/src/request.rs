@@ -441,6 +441,14 @@ pub enum Request {
         path: RelativePath,
         observed: String,
     },
+    StateRead,
+    StateWrite {
+        observed: String,
+        contents: Vec<u8>,
+    },
+    StateClear {
+        observed: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -575,6 +583,8 @@ impl Request {
             | Self::FilesystemRenameObserved { .. }
             | Self::FilesystemRemove { .. }
             | Self::FilesystemRemoveObserved { .. } => Capability::FilesystemWrite,
+            Self::StateRead => Capability::StateRead,
+            Self::StateWrite { .. } | Self::StateClear { .. } => Capability::StateWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -728,6 +738,7 @@ pub enum Reply {
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),
+    State(crate::port::ExtensionState),
     Identity(String),
     Done,
 }

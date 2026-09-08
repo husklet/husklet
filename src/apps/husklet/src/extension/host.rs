@@ -1309,6 +1309,7 @@ tab_title = "Sample"
                 networks: &ports,
                 terminal: &ports,
                 files: &ports,
+                state: &ports,
                 notifications: &ports,
             };
             conversation.serve(&services).map_err(|fault| fault.to_string())
@@ -1452,6 +1453,7 @@ tab_title = "Sample"
                 networks: &ports,
                 terminal: &ports,
                 files: &ports,
+                state: &ports,
                 notifications: &ports,
             };
             conversation.serve(&services).map_err(|fault| fault.to_string())

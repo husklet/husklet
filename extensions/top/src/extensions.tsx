@@ -551,10 +551,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       <CardContent gap={1}>
                         <Text label={entry.description} color="text-dim" wrap />
                         <Text label={`Source ${entry.source}`} color="text-dim" wrap />
-                        <Text
+                        <Badge
                           label={compatibility.label}
-                          color={compatibility.compatible === false ? 'warning' : 'text-dim'}
-                          wrap
+                          tone={
+                            compatibility.compatible === false
+                              ? 'danger'
+                              : compatibility.compatible === true
+                                ? 'positive'
+                                : 'neutral'
+                          }
                         />
                         <Row>
                           <Button
@@ -607,6 +612,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       tooltip={
                         reference || 'Paste a full OCI image reference; press Enter to inspect'
                       }
+                      width={{ chars: 40 }}
                       onChange={(event: Change) =>
                         setReference(String(event.value ?? '').slice(0, 512))
                       }
@@ -618,7 +624,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       onInvoke={() => inspect()}
                     />
                   </Row>
-                  <Text label="Paste a full image reference · Enter to inspect" color="text-dim" />
+                  <Text
+                    label="Paste a full image reference · Enter to inspect. The acquired manifest is authoritative for compatibility and permissions."
+                    color="text-dim"
+                    wrap
+                  />
                 </CardContent>
               )}
               {acquisition?.candidate && (

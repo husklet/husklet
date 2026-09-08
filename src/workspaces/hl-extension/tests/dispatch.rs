@@ -947,6 +947,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        state: host,
         notifications: host,
     }
 }
@@ -1577,6 +1578,22 @@ fn calls() -> Vec<(Request, Capability)> {
 /// is proven before any authority-bearing port is reached.
 fn all_calls() -> Vec<(Request, Capability)> {
     let mut requests = calls();
+    requests.extend([
+        (Request::StateRead, Capability::StateRead),
+        (
+            Request::StateWrite {
+                observed: "absent".into(),
+                contents: vec![0, 17, 255],
+            },
+            Capability::StateWrite,
+        ),
+        (
+            Request::StateClear {
+                observed: "absent".into(),
+            },
+            Capability::StateWrite,
+        ),
+    ]);
     requests.extend([
         (
             Request::ContainerAttachTerminal {

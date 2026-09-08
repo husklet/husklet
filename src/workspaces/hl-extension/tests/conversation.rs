@@ -402,6 +402,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        state: host,
         notifications: host,
     }
 }

@@ -167,66 +167,75 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
       : view.records.length === 0
         ? 'empty'
         : 'ready';
+  const createControl = (
+    <ContainerCreate
+      api={api}
+      blocked={busy !== ''}
+      label={state === 'empty' ? 'Create first container' : undefined}
+      prominent={state === 'empty'}
+      onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
+      reload={resource.reload}
+    />
+  );
   return (
     <Page
       title={'Containers'}
       subtitle={'Create and manage containers; inspect lifecycle, logs, and execution.'}
       action={<Toolbar loading={resource.loading} onRefresh={resource.reload} />}
     >
-      <ContainerCreate
-        api={api}
-        blocked={busy !== ''}
-        label={state === 'empty' ? 'Create first container' : undefined}
-        prominent={state === 'empty'}
-        onBusyChange={(creating) => setBusy(creating ? 'create' : '')}
-        reload={resource.reload}
-      />
+      {state === 'empty' ? null : createControl}
       {notice ? <Text label={notice.label} color={notice.tone} wrap /> : null}
-      <ResourceState
-        state={state}
-        loadingLabel={'Reading containers…'}
-        emptyLabel={'No containers'}
-        emptyDetail={'Open “Create first container” above to add it here.'}
-        error={boundedMessage(resource.error)}
-        retryLabel={'Retry containers'}
-        onRetry={resource.reload}
-      >
-        {view.records.map((item) => (
-          <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
-            <CardHeader label={item.name || shortId(item.id)} detail={item.image} />
-            <CardContent gap={2}>
-              <Row gap={2} align={'center'}>
-                <Badge label={item.state} tone={stateTone(item.state)} />
-                <Text label={shortId(item.id)} color={'text-dim'} />
-              </Row>
-              <ContainerRename
-                api={api}
-                container={item}
-                reload={resource.reload}
-                blocked={busy !== ''}
-              />
-            </CardContent>
-            <CardActions gap={1}>
-              <Button
-                label={selected === item.id ? 'Hide details' : 'Details'}
-                onInvoke={() => toggleDetails(item)}
-              />
-              {containerActions(item, busy, act, remove)}
-            </CardActions>
-            {selected === item.id ? (
-              <ContainerDetail
-                api={api}
-                container={item}
-                act={act}
-                inspection={inspection}
-                onRetry={() => inspect(item)}
-                onOpenExecution={onOpenExecution}
-              />
-            ) : null}
-          </Card>
-        ))}
-        <Omitted count={view.omitted} />
-      </ResourceState>
+      {state === 'empty' ? (
+        <Column gap={1} align="center" pad={{ top: 3 }}>
+          <Heading label="No containers" scale="caption" />
+          <Text label="Create a container to start a service or open a shell." color="text-dim" />
+          {createControl}
+        </Column>
+      ) : (
+        <ResourceState
+          state={state}
+          loadingLabel={'Reading containers…'}
+          error={boundedMessage(resource.error)}
+          retryLabel={'Retry containers'}
+          onRetry={resource.reload}
+        >
+          {view.records.map((item) => (
+            <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
+              <CardHeader label={item.name || shortId(item.id)} detail={item.image} />
+              <CardContent gap={2}>
+                <Row gap={2} align={'center'}>
+                  <Badge label={item.state} tone={stateTone(item.state)} />
+                  <Text label={shortId(item.id)} color={'text-dim'} />
+                </Row>
+                <ContainerRename
+                  api={api}
+                  container={item}
+                  reload={resource.reload}
+                  blocked={busy !== ''}
+                />
+              </CardContent>
+              <CardActions gap={1}>
+                <Button
+                  label={selected === item.id ? 'Hide details' : 'Details'}
+                  onInvoke={() => toggleDetails(item)}
+                />
+                {containerActions(item, busy, act, remove)}
+              </CardActions>
+              {selected === item.id ? (
+                <ContainerDetail
+                  api={api}
+                  container={item}
+                  act={act}
+                  inspection={inspection}
+                  onRetry={() => inspect(item)}
+                  onOpenExecution={onOpenExecution}
+                />
+              ) : null}
+            </Card>
+          ))}
+          <Omitted count={view.omitted} />
+        </ResourceState>
+      )}
     </Page>
   );
 }

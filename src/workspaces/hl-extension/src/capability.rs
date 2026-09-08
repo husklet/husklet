@@ -74,6 +74,12 @@ pub enum Capability {
     FilesystemRead,
     #[serde(rename = "filesystem:write")]
     FilesystemWrite,
+    /// Reads only this extension's private host-managed state blob.
+    #[serde(rename = "state:read")]
+    StateRead,
+    /// Replaces or clears only this extension's private host-managed state blob.
+    #[serde(rename = "state:write")]
+    StateWrite,
     #[serde(rename = "interface:render")]
     Interface,
     /// Publishes bounded user-visible notifications outside an extension surface.
@@ -111,6 +117,8 @@ impl Capability {
             Self::ExtensionInstall => "extensions:install",
             Self::FilesystemRead => "filesystem:read",
             Self::FilesystemWrite => "filesystem:write",
+            Self::StateRead => "state:read",
+            Self::StateWrite => "state:write",
             Self::Interface => "interface:render",
             Self::NotificationPublish => "notifications:publish",
         }
@@ -134,6 +142,7 @@ impl Capability {
                 | Self::ExtensionControl
                 | Self::ExtensionInstall
                 | Self::FilesystemWrite
+                | Self::StateWrite
                 | Self::NotificationPublish
         )
     }
@@ -175,6 +184,8 @@ impl Capability {
         Self::ExtensionInstall,
         Self::FilesystemRead,
         Self::FilesystemWrite,
+        Self::StateRead,
+        Self::StateWrite,
         Self::Interface,
         Self::NotificationPublish,
     ];

@@ -28,6 +28,7 @@ const groups = new Map([
   ['Processes and executions', []],
   ['Terminal and panes', []],
   ['Files', []],
+  ['Private extension state', []],
   ['Images', []],
   ['Networks', []],
   ['Volumes', []],
@@ -51,6 +52,7 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             containers: 'Containers',
             terminal: 'Terminal and panes',
             files: 'Files',
+            state: 'Private extension state',
             images: 'Images',
             networks: 'Networks',
             volumes: 'Volumes',
@@ -158,7 +160,7 @@ wrong caller.
 
 | Extension shape | Current fit | Relevant API and remaining constraint |
 | --- | --- | --- |
-| Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing. |
+| Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing, and private bounded state stores its checkpoint. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
@@ -166,6 +168,7 @@ wrong caller.
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
 | Extension catalogue/manager | Partial | Discovery can be rendered from a catalogue owned by the manager extension; acquisition/install/update/enable/disable/remove are complete. The host does not define or trust a global catalogue service. |
+| Extension configuration/state | Strong | One authenticated extension-owned blob (1 MiB maximum) survives restart/update and is cleared on successful uninstall. It is private state, not an encrypted secret vault. |
 
 Capabilities use \`group:verb\` wire names. Filesystem authority is additionally
 confined by exact consented roots, including a single file. Container authority is

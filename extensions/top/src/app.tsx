@@ -4,6 +4,7 @@ import {
   Separator,
   type ContainerSummary,
   type ExecutionSummary,
+  type ExtensionSummary,
   type HostEvent,
   type ImageSummary,
   type NetworkSummary,
@@ -60,6 +61,7 @@ type TopProps = {
     volumes: VolumeSummary[];
     networks: NetworkSummary[];
     terminals: TabSummary[];
+    extensions: ExtensionSummary[];
   }>;
   initialSection?: Section;
 };
@@ -81,6 +83,7 @@ export function Top({
   const volumes = useResource(api.volumes.list, initial.volumes);
   const networks = useResource(api.networks.list, initial.networks);
   const terminals = useResource(api.terminal?.tabs ?? (async () => []), initial.terminals);
+  const extensions = useResource(api.extensions.list, initial.extensions);
   const [executionsTruncated, setExecutionsTruncated] = useState(false);
   const listExecutions = useCallback(async () => {
     const listing = await api.containers.executions();
@@ -155,6 +158,7 @@ export function Top({
         volumes={volumes}
         networks={networks}
         terminals={terminals}
+        extensions={extensions}
         onOpen={setSection}
       />
     ) : section === 'workspace' ? (

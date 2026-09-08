@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:0a2924cf56dfd1b3
+// Protocol artifact fnv1a64:4f9790fd0b6685e7
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -141,6 +141,16 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": true,
     "wire": "filesystem:write"
+  },
+  {
+    "executes": false,
+    "mutates": false,
+    "wire": "state:read"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "state:write"
   },
   {
     "executes": false,
@@ -329,6 +339,9 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_rename_observed": "identity",
   "filesystem_remove": "done",
   "filesystem_remove_observed": "done",
+  "state_read": "state",
+  "state_write": "identity",
+  "state_clear": "done",
   "interface_open_tab": "identity",
   "interface_split": "identity",
   "interface_withdraw": "done",
@@ -443,6 +456,9 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_rename_observed": "filesystem:write",
   "filesystem_remove": "filesystem:write",
   "filesystem_remove_observed": "filesystem:write",
+  "state_read": "state:read",
+  "state_write": "state:write",
+  "state_clear": "state:write",
   "interface_open_tab": "interface:render",
   "interface_split": "interface:render",
   "interface_withdraw": "interface:render",
@@ -662,6 +678,18 @@ const definitions = {
       },
       {
         "name": "filesystem:write",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "state:read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "state:write",
         "payload": {
           "kind": "unit"
         }
@@ -1987,6 +2015,33 @@ const definitions = {
   "ExtensionName": {
     "kind": "ref",
     "name": "PeerName"
+  },
+  "ExtensionState": {
+    "fields": [
+      {
+        "name": "identity",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "contents",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "bits": 8,
+            "kind": "integer",
+            "maximum": 255,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
   },
   "ExtensionSummary": {
     "fields": [
@@ -7709,6 +7764,16 @@ const roots = {
         }
       },
       {
+        "name": "state",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ExtensionState"
+          }
+        }
+      },
+      {
         "name": "identity",
         "payload": {
           "kind": "newtype",
@@ -10158,6 +10223,56 @@ const roots = {
                 "name": "RelativePath"
               }
             },
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "state_read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "state_write",
+        "payload": {
+          "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "contents",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "state_clear",
+        "payload": {
+          "fields": [
             {
               "name": "observed",
               "optional": false,

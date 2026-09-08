@@ -147,6 +147,9 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("filesystem_rename_observed", "identity"),
     ("filesystem_remove", "done"),
     ("filesystem_remove_observed", "done"),
+    ("state_read", "state"),
+    ("state_write", "identity"),
+    ("state_clear", "done"),
     ("interface_open_tab", "identity"),
     ("interface_split", "identity"),
     ("interface_withdraw", "done"),
@@ -233,6 +236,8 @@ fn request_capability(request: &str) -> Capability {
         | "filesystem_rename_observed"
         | "filesystem_remove"
         | "filesystem_remove_observed" => Capability::FilesystemWrite,
+        "state_read" => Capability::StateRead,
+        "state_write" | "state_clear" => Capability::StateWrite,
         "interface_open_tab"
         | "interface_split"
         | "interface_withdraw"

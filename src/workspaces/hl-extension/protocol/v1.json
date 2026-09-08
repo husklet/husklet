@@ -142,6 +142,16 @@
     {
       "executes": false,
       "mutates": false,
+      "wire": "state:read"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "state:write"
+    },
+    {
+      "executes": false,
+      "mutates": false,
       "wire": "interface:render"
     },
     {
@@ -359,6 +369,18 @@
         },
         {
           "name": "filesystem:write",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "state:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "state:write",
           "payload": {
             "kind": "unit"
           }
@@ -1684,6 +1706,33 @@
     "ExtensionName": {
       "kind": "ref",
       "name": "PeerName"
+    },
+    "ExtensionState": {
+      "fields": [
+        {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "contents",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "bits": 8,
+              "kind": "integer",
+              "maximum": 255,
+              "minimum": 0,
+              "signed": false
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
     },
     "ExtensionSummary": {
       "fields": [
@@ -6971,7 +7020,7 @@
       }
     ],
     "payload": "json",
-    "payload_limit_bytes": 1048576
+    "payload_limit_bytes": 5242880
   },
   "protocol_version": 1,
   "request_to_capability": [
@@ -7386,6 +7435,18 @@
     {
       "capability": "filesystem:write",
       "request": "filesystem_remove_observed"
+    },
+    {
+      "capability": "state:read",
+      "request": "state_read"
+    },
+    {
+      "capability": "state:write",
+      "request": "state_write"
+    },
+    {
+      "capability": "state:write",
+      "request": "state_clear"
     },
     {
       "capability": "interface:render",
@@ -7836,6 +7897,18 @@
     {
       "reply": "done",
       "request": "filesystem_remove_observed"
+    },
+    {
+      "reply": "state",
+      "request": "state_read"
+    },
+    {
+      "reply": "identity",
+      "request": "state_write"
+    },
+    {
+      "reply": "done",
+      "request": "state_clear"
     },
     {
       "reply": "identity",
@@ -8362,6 +8435,16 @@
             "of": {
               "kind": "ref",
               "name": "FileRange"
+            }
+          }
+        },
+        {
+          "name": "state",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ExtensionState"
             }
           }
         },
@@ -10827,6 +10910,56 @@
           }
         },
         {
+          "name": "state_read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "state_write",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "state_clear",
+          "payload": {
+            "fields": [
+              {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "interface_open_tab",
           "payload": {
             "fields": [
@@ -12029,7 +12162,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:9097cdcbacc5b799",
+  "source_fingerprint": "fnv1a64:ab390de6db2941be",
   "specification_version": 1,
   "topics": [
     {
