@@ -1504,7 +1504,10 @@ fn valid_profile_line(line: &str) -> bool {
             && fields.split_whitespace().any(|field| field == "reconcile=1")
     });
     let a64_x86_jcc_link = fields.strip_prefix("a64-x86-jcc-link ").is_some_and(|fields| {
-        ["candidates", "registered", "dropped", "patched", "executed"]
+        [
+            "candidates", "registered", "dropped", "patched", "executed", "reset_cache", "reset_smc",
+            "reset_fork", "reset_thread",
+        ]
             .iter()
             .all(|wanted| {
                 fields.split_whitespace().any(|field| {
@@ -1657,7 +1660,7 @@ mod tests {
 
     #[test]
     fn aarch64_x86_chain_receipt_reaches_worker_counter_assertions() {
-        let captured = "[prof] a64-x86-jcc-link candidates=7 registered=6 dropped=0 patched=5 executed=99\n";
+        let captured = "[prof] a64-x86-jcc-link candidates=7 registered=6 dropped=0 patched=5 executed=99 reset_cache=1 reset_smc=2 reset_fork=3 reset_thread=4\n";
         let mut forwarded = Vec::new();
         forward_profile(captured, &mut forwarded).unwrap();
         assert_eq!(forwarded, captured.as_bytes());

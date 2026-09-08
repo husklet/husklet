@@ -2194,6 +2194,12 @@ static void pend_reset(void) {
     if (++g_pend_epoch == 0) g_pend_epoch = 1; // skip 0 so zero-init buckets never alias a live epoch
 }
 
+enum hl_pending_reset_reason {
+    HL_PENDING_RESET_CACHE = 1,
+    HL_PENDING_RESET_SMC = 2,
+    HL_PENDING_RESET_FORK = 3,
+};
+
 static void add_pend3(uint32_t *slot, uint64_t target, int is_bl, int fwd) {
     if (g_npend < PEND_CAP) {
         int32_t i = g_npend++;
@@ -3378,7 +3384,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
     if (!retain_generations) memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
 #ifdef G_PENDING_RESET
-    G_PENDING_RESET();
+    G_PENDING_RESET(HL_PENDING_RESET_CACHE);
 #endif
     return 1;
 }
@@ -3438,7 +3444,7 @@ static void smc_inplace_drop(void) {
     memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
 #ifdef G_PENDING_RESET
-    G_PENDING_RESET();
+    G_PENDING_RESET(HL_PENDING_RESET_SMC);
 #endif
     txpg_clear();
 }
@@ -3683,7 +3689,7 @@ static int jit_after_fork(void) {
         ibtc_clear_lazy();
         pend_reset();
 #ifdef G_PENDING_RESET
-        G_PENDING_RESET();
+        G_PENDING_RESET(HL_PENDING_RESET_FORK);
 #endif
     }
     HL_LOGF(&g_jit_log, HL_LOG_TAG_PROCESS, "fork cache preserve=%d rw=%p rx=%p", preserve, (void *)g_cache,

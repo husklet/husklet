@@ -88,9 +88,9 @@ static void aarch64_soft_filter_refresh(struct cpu *);
 #define G_THREAD_START_FLUSH() 1
 #endif
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-static void hl_a64_x86_pending_reset(void);
+static void hl_a64_x86_pending_reset(unsigned reason);
 #define G_CACHE_REWIND() hl_a64_x86_cache_rewind_in_place()
-#define G_PENDING_RESET() hl_a64_x86_pending_reset()
+#define G_PENDING_RESET(reason) hl_a64_x86_pending_reset(reason)
 #else
 #define G_CACHE_REWIND() jit_cache_rewind_in_place()
 #endif

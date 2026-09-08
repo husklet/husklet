@@ -19,6 +19,8 @@ cases:
         - { counter: candidates, greater-than: 0 }
         - { counter: patched, greater-than: 0 }
         - { counter: executed, greater-than: 0 }
+        - { counter: reset_fork, greater-than: 0 }
+        - { counter: reset_thread, greater-than: 0 }
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396454", interpreted_steps: "20506", translated_entries: "73043" } }
   - id: runtime/aarch64-dbt/conditional-chain-lifecycle-off
     status: active
@@ -34,6 +36,8 @@ cases:
         - { counter: candidates, equals: 0 }
         - { counter: patched, equals: 0 }
         - { counter: executed, equals: 0 }
+        - { counter: reset_fork, equals: 0 }
+        - { counter: reset_thread, equals: 0 }
         - { record: "[diag] backend-tree", count: 1, fields: { translated_steps: "396486", interpreted_steps: "20502", translated_entries: "154286" } }
   - id: runtime/aarch64-dbt/address-branch
     status: active
@@ -142,4 +146,10 @@ cases:
     build: { source: source/smc_targeted.c, output: smc-targeted, flags: [-static, -no-pie, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/smc-targeted }
     run: []
-    expect: { exit: 0, stdout: golden/smc_targeted.out }
+    expect:
+      exit: 0
+      stdout: golden/smc_targeted.out
+      diagnostics:
+        - { counter: patched, greater-than: 0 }
+        - { counter: executed, greater-than: 0 }
+        - { counter: reset_smc, greater-than: 0 }

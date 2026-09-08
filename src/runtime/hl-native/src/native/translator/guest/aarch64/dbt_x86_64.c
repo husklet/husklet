@@ -623,14 +623,23 @@ static uint32_t g_a64_x86_pending_epoch = 1;
 static uint32_t g_a64_x86_pending_count;
 static _Atomic uint64_t g_x86_rel32_registered;
 static _Atomic uint64_t g_x86_rel32_dropped;
+static _Atomic uint64_t g_x86_rel32_reset_cache;
+static _Atomic uint64_t g_x86_rel32_reset_smc;
+static _Atomic uint64_t g_x86_rel32_reset_fork;
+static _Atomic uint64_t g_x86_rel32_reset_thread;
 
 static uint32_t hl_a64_x86_pending_bucket(uint64_t target) {
     return (uint32_t)((target >> 2) & (HL_A64_X86_PENDING_BUCKETS - 1));
 }
 
-static void hl_a64_x86_pending_reset(void) {
+static void hl_a64_x86_pending_reset(unsigned reason) {
     g_a64_x86_pending_count = 0;
     if (++g_a64_x86_pending_epoch == 0) g_a64_x86_pending_epoch = 1;
+    if (hl_option_get("HL_A64_X86_JCC_LINK") == NULL) return;
+    _Atomic uint64_t *counter = reason == HL_PENDING_RESET_SMC ? &g_x86_rel32_reset_smc
+                              : reason == HL_PENDING_RESET_FORK ? &g_x86_rel32_reset_fork
+                                                               : &g_x86_rel32_reset_cache;
+    atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
 
 static int hl_a64_x86_patch_known_chain(const struct hl_a64_x86_chain_site *site) {
@@ -1054,7 +1063,8 @@ static int hl_a64_x86_flush_for_thread_start(void) {
     jit_cache_rewind_in_place();
     map_clear();
     pend_reset();
-    hl_a64_x86_pending_reset();
+    hl_a64_x86_pending_reset(HL_PENDING_RESET_CACHE);
+    atomic_fetch_add_explicit(&g_x86_rel32_reset_thread, 1, memory_order_relaxed);
     memset(g_ibtc, 0, sizeof g_ibtc);
 #ifdef PCACHE_FLUSH_HOOK
     PCACHE_FLUSH_HOOK;
@@ -1064,7 +1074,7 @@ static int hl_a64_x86_flush_for_thread_start(void) {
 
 static void hl_a64_x86_cache_rewind_in_place(void) {
     jit_cache_rewind_in_place();
-    hl_a64_x86_pending_reset();
+    hl_a64_x86_pending_reset(HL_PENDING_RESET_CACHE);
 }
 
 static void run_block(struct cpu *cpu, void *code) {

@@ -565,12 +565,16 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
 static int translit_report(char *out, size_t size) {
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
     return snprintf(out, size,
-                    "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu\n",
+                    "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu reset_cache=%llu reset_smc=%llu reset_fork=%llu reset_thread=%llu\n",
                     (unsigned long long)g_x86_rel32_candidates,
                     (unsigned long long)g_x86_rel32_registered,
                     (unsigned long long)g_x86_rel32_dropped,
                     (unsigned long long)g_x86_rel32_patched,
-                    (unsigned long long)g_x86_rel32_executed);
+                    (unsigned long long)g_x86_rel32_executed,
+                    (unsigned long long)g_x86_rel32_reset_cache,
+                    (unsigned long long)g_x86_rel32_reset_smc,
+                    (unsigned long long)g_x86_rel32_reset_fork,
+                    (unsigned long long)g_x86_rel32_reset_thread);
 #else
     return snprintf(out, size, "[prof] translit: absent, aarch64 guest\n");
 #endif
@@ -580,12 +584,16 @@ static int translit_report(char *out, size_t size) {
 static int translit_unsupported_report(char *out, size_t size) {
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
     int written = snprintf(out, size,
-                           "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu\n",
+                           "[prof] a64-x86-jcc-link candidates=%llu registered=%llu dropped=%llu patched=%llu executed=%llu reset_cache=%llu reset_smc=%llu reset_fork=%llu reset_thread=%llu\n",
                            (unsigned long long)g_x86_rel32_candidates,
                            (unsigned long long)g_x86_rel32_registered,
                            (unsigned long long)g_x86_rel32_dropped,
                            (unsigned long long)g_x86_rel32_patched,
-                           (unsigned long long)g_x86_rel32_executed);
+                           (unsigned long long)g_x86_rel32_executed,
+                           (unsigned long long)g_x86_rel32_reset_cache,
+                           (unsigned long long)g_x86_rel32_reset_smc,
+                           (unsigned long long)g_x86_rel32_reset_fork,
+                           (unsigned long long)g_x86_rel32_reset_thread);
     return written > 0 && (size_t)written < size ? written : 0;
 #else
     (void)out;
