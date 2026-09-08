@@ -10,13 +10,14 @@
     "top"
   ],
   "scripts": {
+    "build:sdk": "npm run build --workspace @husklet/client --workspace @husklet/react",
     "build:extensions": "npm run build --workspace @husklet/top --workspace @husklet/storybook",
     "format:extensions": "npm run format --workspace @husklet/top --workspace @husklet/storybook",
     "format:check:extensions": "npm run format:check --workspace @husklet/top --workspace @husklet/storybook",
     "lint:extensions": "npm run lint --workspace @husklet/top --workspace @husklet/storybook",
     "test:extensions": "npm run lint:extensions && npm run format:check:extensions && npm test --workspace @husklet/top --workspace @husklet/storybook",
     "lint:sdk": "npm run lint --workspace @husklet/client --workspace @husklet/react && eslint 'base/tools/npm/*.js' --max-warnings 0",
-    "test:sdk": "npm run lint:sdk && npm test --workspace @husklet/client --workspace @husklet/react",
+    "test:sdk": "npm run lint:sdk && npm run build:sdk && npm test --workspace @husklet/client --workspace @husklet/react",
     "test": "npm run test:sdk && npm run test:extensions",
     "prepublish:check": "node base/tools/npm/prepublish-check.js",
     "postpublish:check": "node base/tools/npm/postpublish-check.js"
