@@ -1077,7 +1077,11 @@ fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
         ExtensionName::new("networks").unwrap(),
         Grant::new([Capability::NetworkWrite]),
         Vec::new(),
-    ));
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::Id { id: "b".repeat(64) }],
+        create: false,
+    });
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
     let legacy: Request = serde_json::from_str(&format!(
@@ -1103,6 +1107,46 @@ fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
             assert_eq!(*host.network_aliases.borrow(), aliases);
         }
     }
+}
+
+#[test]
+fn network_write_cannot_cross_an_ungranted_container_scope_over_a_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("networks").unwrap(),
+        Grant::new([Capability::NetworkWrite]),
+        Vec::new(),
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::Id { id: "c".repeat(64) }],
+        create: false,
+    });
+    let request = Request::NetworkConnect {
+        reference: "a".repeat(32),
+        container: "b".repeat(64),
+        aliases: vec!["database".into()],
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+
+    sender.send(&codec::request(&request).expect("request")).expect("sent");
+    let decoded = codec::read_request(&receiver.receive().expect("request frame")).expect("decoded");
+    let failure = session
+        .dispatch(&decoded, &services(&host))
+        .expect_err("a different container selector cannot be exceeded");
+    receiver
+        .send(&codec::failure(&failure).expect("failure frame"))
+        .expect("failure sent");
+
+    assert!(matches!(
+        codec::read_failure(&sender.receive().expect("failure reply")),
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::NetworkWrite.as_str()
+    ));
+    assert!(
+        host.network_aliases.borrow().is_empty(),
+        "the network adapter was not reached across the consent boundary"
+    );
 }
 
 #[test]

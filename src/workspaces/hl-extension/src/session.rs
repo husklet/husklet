@@ -250,6 +250,15 @@ impl Session {
         id: &str,
         port: &dyn ContainerInventory,
     ) -> Result<crate::port::ContainerSummary, Failure> {
+        self.resolve_container_for(id, port, Capability::ContainerRead)
+    }
+
+    fn resolve_container_for(
+        &self,
+        id: &str,
+        port: &dyn ContainerInventory,
+        capability: Capability,
+    ) -> Result<crate::port::ContainerSummary, Failure> {
         if let Some(container) = port
             .list()?
             .into_iter()
@@ -274,7 +283,7 @@ impl Session {
             });
         }
         Err(Failure::Denied {
-            capability: Capability::ContainerRead.as_str().into(),
+            capability: capability.as_str().into(),
             detail: "container is outside the extension's consented resource scope".into(),
         })
     }
@@ -784,21 +793,21 @@ impl Session {
                 aliases,
             } => {
                 validate_endpoint_aliases(aliases)?;
-                port.connect_with_aliases(
-                    immutable_reference(reference, &[32], "network")?,
-                    immutable_reference(container, &[32, 64], "container")?,
-                    aliases,
-                )
-                .map(|()| Reply::Done)
-                .map_err(Failure::from)
+                let reference = immutable_reference(reference, &[32], "network")?;
+                immutable_identity(container, &[32, 64], "container")?;
+                let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
+                port.connect_with_aliases(reference, &target.id, aliases)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
             }
-            Request::NetworkDisconnect { reference, container } => port
-                .disconnect(
-                    immutable_reference(reference, &[32], "network")?,
-                    immutable_reference(container, &[32, 64], "container")?,
-                )
-                .map(|()| Reply::Done)
-                .map_err(Failure::from),
+            Request::NetworkDisconnect { reference, container } => {
+                let reference = immutable_reference(reference, &[32], "network")?;
+                immutable_identity(container, &[32, 64], "container")?;
+                let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
+                port.disconnect(reference, &target.id)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             _ => unreachable!(),
         }
     }

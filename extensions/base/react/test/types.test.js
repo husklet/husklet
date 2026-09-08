@@ -71,8 +71,11 @@ test('a render handle exposes the addressed multi-surface lifecycle', () => {
   assert.match(handle, /close\(\): Promise<void>;/);
   assert.match(
     declarations,
-    /rows\?: \(request: RowRequest\) => readonly DataRow\[\] \| Promise<readonly DataRow\[\]>;/,
+    /rows\?: RowProvider;/,
   );
+  assert.match(declarations, /export interface RowProviderContext \{[\s\S]*?signal: AbortSignal;/);
+  assert.match(declarations, /ROW_PROVIDER_CONCURRENCY: 4;/);
+  assert.match(declarations, /ROW_PROVIDER_QUEUE_LIMIT: 32;/);
   assert.match(
     declarations,
     /split\?: \{ slot: string; division: 'beside' \| 'below' \}/,

@@ -174,16 +174,60 @@ test('row provider rejection is reported and the surface still closes cleanly', 
 
 test('closing a surface discards its in-flight row provider result', async () => {
   const stage = await host(); const session = await connect({ path: stage.socket });
-  let release; const pending = new Promise((resolve) => { release = resolve; });
-  const surface = render(h(DataTable, { source: 3, schema: [] }), session, { rows: () => pending });
+  let release; let signal; const pending = new Promise((resolve) => { release = resolve; });
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, {
+    rows: (_request, context) => { signal = context.signal; return pending; },
+  });
   await surface.ready;
   await stage.push({ id: 1, source: 3, version: 1, range: { start: 0, count: 128 },
     sort: null, filter: null, slot: surface.slot });
+  await until(() => signal !== undefined);
   await surface.close();
+  assert.equal(signal.aborted, true, 'closing cooperatively cancels database/file work');
   release([{ key: 0, cells: [] }]);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(stage.calls.some((call) => call.call === 'source_resize_at'), false);
   await session.close(); stage.close();
+});
+
+test('row providers bound concurrent work under a rapid million-row scroll', async () => {
+  const stage = await host(); const session = await connect({ path: stage.socket });
+  const signals = [];
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, {
+    rows: (_request, { signal }) => {
+      signals.push(signal);
+      return new Promise(() => {});
+    },
+  });
+  await surface.ready;
+  for (let id = 1; id <= 40; id += 1) {
+    await stage.push({ id, source: 3, version: 1, range: { start: id * 128, count: 128 },
+      sort: null, filter: null, slot: surface.slot });
+  }
+  await until(() => signals.length === 4);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(signals.length, 4, 'only the documented concurrency reaches extension code');
+  await surface.close();
+  assert.equal(signals.every((signal) => signal.aborted), true);
+  await session.close(); stage.close();
+});
+
+test('a newer request cancels obsolete work for the same row window', async () => {
+  const stage = await host(); const session = await connect({ path: stage.socket });
+  const seen = [];
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, {
+    rows: (request, { signal }) => { seen.push({ request, signal }); return new Promise(() => {}); },
+  });
+  await surface.ready;
+  const request = { source: 3, version: 1, range: { start: 999_936, count: 128 },
+    sort: null, filter: null, slot: surface.slot };
+  await stage.push({ ...request, id: 1 });
+  await until(() => seen.length === 1);
+  await stage.push({ ...request, id: 2 });
+  await until(() => seen.length === 2);
+  assert.equal(seen[0].signal.aborted, true);
+  assert.equal(seen[1].signal.aborted, false);
+  await surface.close(); await session.close(); stage.close();
 });
 
 test('a slotless event never guesses between multiple surfaces', async () => {
