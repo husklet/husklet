@@ -479,7 +479,9 @@ impl Session {
                     .peer
                     .authority()
                     .port(Capability::PaneSemanticRead, services.terminal)?;
-                Ok(Reply::Semantics(port.semantics(slot)?))
+                let tree = port.semantics(slot)?;
+                validate_semantic_tree(slot, &tree)?;
+                Ok(Reply::Semantics(tree))
             }
             Request::PaneSemanticAction { slot, action } => {
                 if action
@@ -1542,6 +1544,54 @@ fn validate_pane_title(title: &str) -> Result<(), Failure> {
     Err(Failure::Conflict {
         detail: "pane title must be nonblank and contain at most 256 UTF-8 bytes without control characters".into(),
     })
+}
+
+fn validate_semantic_tree(requested_slot: &str, tree: &crate::port::PaneSemanticTree) -> Result<(), Failure> {
+    use crate::port::{SEMANTIC_DEPTH_LIMIT, SEMANTIC_NODE_LIMIT, SEMANTIC_TEXT_LIMIT};
+
+    if tree.slot != requested_slot {
+        return Err(Failure::Conflict {
+            detail: "pane semantic reply does not match the requested slot".into(),
+        });
+    }
+    let mut nodes = Vec::from([(&tree.root, 0usize)]);
+    let mut identities = std::collections::BTreeSet::new();
+    let mut count = 0usize;
+    while let Some((node, depth)) = nodes.pop() {
+        count += 1;
+        if count > SEMANTIC_NODE_LIMIT || depth > SEMANTIC_DEPTH_LIMIT {
+            return Err(Failure::Conflict {
+                detail: "pane semantic reply exceeds its bounded shape".into(),
+            });
+        }
+        if !identities.insert(node.id) {
+            return Err(Failure::Conflict {
+                detail: "pane semantic reply contains duplicate node identities".into(),
+            });
+        }
+        if node.role.is_empty()
+            || node.role.len() > SEMANTIC_TEXT_LIMIT
+            || node.label.as_ref().is_some_and(|text| text.len() > SEMANTIC_TEXT_LIMIT)
+            || node.value.as_ref().is_some_and(|text| text.len() > SEMANTIC_TEXT_LIMIT)
+            || node.actions.len() > 6
+        {
+            return Err(Failure::Conflict {
+                detail: "pane semantic reply contains an invalid node".into(),
+            });
+        }
+        if node
+            .actions
+            .iter()
+            .enumerate()
+            .any(|(at, action)| node.actions[..at].contains(action))
+        {
+            return Err(Failure::Conflict {
+                detail: "pane semantic reply contains duplicate node actions".into(),
+            });
+        }
+        nodes.extend(node.children.iter().map(|child| (child, depth + 1)));
+    }
+    Ok(())
 }
 
 fn validate_terminal_command(command: &[String]) -> Result<(), Failure> {
