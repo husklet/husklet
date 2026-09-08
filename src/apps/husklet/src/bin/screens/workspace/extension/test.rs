@@ -114,6 +114,7 @@ fn provider_authority_waits_for_a_valid_frame() {
 fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
         provider_authority_waits_for_a_valid_frame();
+        startup_is_visible_until_the_first_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
         an_empty_wire_slot_addresses_the_overview_surface();
         an_identical_frame_changes_nothing();
@@ -149,6 +150,30 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
+}
+
+fn startup_is_visible_until_the_first_valid_frame() {
+    let mut fixture = Fixture::new();
+    assert!(visible_labels(&fixture)
+        .iter()
+        .any(|label| label == "Starting extension…"));
+
+    fixture.describe(&panel("Ready"));
+    fixture.page.tick();
+
+    assert!(!visible_labels(&fixture)
+        .iter()
+        .any(|label| label == "Starting extension…"));
+}
+
+fn visible_labels(fixture: &Fixture) -> Vec<String> {
+    fixture
+        .widgets()
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .filter(|label| label.is_visible())
+        .map(|label| label.text().to_string())
+        .collect()
 }
 
 fn an_empty_wire_slot_addresses_the_overview_surface() {

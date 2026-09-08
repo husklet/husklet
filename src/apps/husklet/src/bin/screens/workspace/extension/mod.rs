@@ -46,6 +46,10 @@ pub struct Interface {
     /// and the caller hold the widget itself.
     page: glib::WeakRef<gtk::Box>,
     surface: Surface,
+    /// Native progress shown before the sidecar produces its first valid frame.
+    /// This exists outside the extension surface so cold container startup can
+    /// never leave an apparently dead, entirely blank application window.
+    loading: gtk::Box,
     tree: Tree,
     panes: HashMap<String, PaneInterface>,
     banner: Banner,
@@ -98,16 +102,38 @@ impl Interface {
         faulted: Rc<dyn Fn(u32)>,
         ready: Rc<dyn Fn()>,
     ) -> (gtk::Box, Self) {
+        Self::with_lifecycle_label(deliveries, sink, faulted, ready, "Starting extension…")
+    }
+
+    #[must_use]
+    pub fn with_lifecycle_label(
+        deliveries: Deliveries,
+        sink: Rc<dyn Sink>,
+        faulted: Rc<dyn Fn(u32)>,
+        ready: Rc<dyn Fn()>,
+        loading_label: &str,
+    ) -> (gtk::Box, Self) {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.set_hexpand(true);
         widget.set_vexpand(true);
         let banner = Banner::new(sink.clone());
         widget.append(banner.widget());
+        let loading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        loading.set_margin_top(16);
+        loading.set_margin_start(16);
+        let spinner = gtk::Spinner::new();
+        spinner.set_spinning(true);
+        loading.append(&spinner);
+        let label = gtk::Label::new(Some(loading_label));
+        label.set_xalign(0.0);
+        loading.append(&label);
+        widget.append(&loading);
         let surface = Surface::new();
         widget.append(surface.widget());
         let interface = Self {
             page: widget.downgrade(),
             surface,
+            loading,
             tree: Tree::new(),
             panes: HashMap::new(),
             banner,
@@ -377,6 +403,7 @@ impl Interface {
             Delivery::SourceAt { slot, mutation } => self.feed_at(&slot, &mutation),
             Delivery::Loss(reason) => {
                 self.recovery_pending.set(false);
+                self.loading.set_visible(false);
                 self.banner.show(&reason);
             }
             Delivery::Fault { restarts } => (self.faulted)(restarts),
@@ -398,6 +425,7 @@ impl Interface {
             Ok(()) => {
                 (self.ready)();
                 self.recovery_pending.set(false);
+                self.loading.set_visible(false);
                 self.banner.hide();
             }
             Err(fault) => self.banner.show(&fault),
