@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:5eb6ebc9deec5f9f
+// Protocol artifact fnv1a64:d4c9f1f6dc3cbef3
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -161,6 +161,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": true,
     "wire": "extensions:control"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "extensions:remove"
   },
   {
     "executes": false,
@@ -417,7 +422,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_enable": "extensions:control",
   "extension_disable": "extensions:control",
   "extension_retry": "extensions:control",
-  "extension_remove": "extensions:control",
+  "extension_remove": "extensions:remove",
   "extension_acquisition_start": "extensions:install",
   "extension_acquisition_status": "extensions:install",
   "extension_acquisition_cancel": "extensions:install",
@@ -753,6 +758,12 @@ const definitions = {
       },
       {
         "name": "extensions:control",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "extensions:remove",
         "payload": {
           "kind": "unit"
         }

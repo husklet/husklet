@@ -1475,32 +1475,34 @@ test('extension retry wait arms before authority and requires exact durable duty
   const digest = `sha256:${'d'.repeat(64)}`;
   const pending = api.extensions.retryAndWait('manager', digest, { timeoutMs: 1_000 });
   assert.equal((await next()).payload.call, 'event_subscribe');
+  const duty = {
+    name: 'manager', image_digest: digest, version: '1', status: 'duty', enabled: true,
+    pane_providers: [],
+  };
+  // A watcher's initial state predates restart authority and cannot prove that
+  // an already-running extension was actually retried.
+  stage.host.write(encode({
+    channel: 26, kind: KIND.event,
+    payload: { snapshot: 'extensions', of: [duty] },
+  }));
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
-  assert.deepEqual((await next()).payload, {
+  const first = await next();
+  const second = await next();
+  const mutation = [first, second].find(({ payload }) => payload?.call === 'extension_retry');
+  assert.deepEqual(mutation.payload, {
     call: 'extension_retry',
     with: { name: 'manager', image_digest: digest },
   });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  assert.equal(await Promise.race([pending.then(() => true), new Promise((resolve) => setImmediate(() => resolve(false)))]), false);
   stage.host.write(
     encode({
       channel: 26,
       kind: KIND.event,
-      payload: {
-        snapshot: 'extensions',
-        of: [
-          {
-            name: 'manager',
-            image_digest: digest,
-            version: '1',
-            status: 'duty',
-            enabled: true,
-            pane_providers: [],
-          },
-        ],
-      },
+      payload: { snapshot: 'extensions', of: [duty] },
     }),
   );
   assert.equal((await next()).kind, KIND.credit);
-  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const result = await pending;

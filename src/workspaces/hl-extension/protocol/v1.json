@@ -162,6 +162,11 @@
     {
       "executes": false,
       "mutates": true,
+      "wire": "extensions:remove"
+    },
+    {
+      "executes": false,
+      "mutates": true,
       "wire": "extensions:install"
     },
     {
@@ -438,6 +443,12 @@
         },
         {
           "name": "extensions:control",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "extensions:remove",
           "payload": {
             "kind": "unit"
           }
@@ -7742,7 +7753,7 @@
       "request": "extension_retry"
     },
     {
-      "capability": "extensions:control",
+      "capability": "extensions:remove",
       "request": "extension_remove"
     },
     {
@@ -13001,7 +13012,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:fc35dae9f3046a9c",
+  "source_fingerprint": "fnv1a64:fc0dfb6e3069ab40",
   "specification_version": 1,
   "topics": [
     {

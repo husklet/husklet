@@ -513,10 +513,10 @@ impl Request {
             | Self::WorkspaceRestart { .. } => Capability::WorkspaceControl,
             Self::WorkspaceEnvironmentPatch { .. } => Capability::WorkspaceEnvironmentWrite,
             Self::ExtensionList | Self::ExtensionCatalogue | Self::ExtensionInspect { .. } => Capability::ExtensionRead,
-            Self::ExtensionEnable { .. }
-            | Self::ExtensionDisable { .. }
-            | Self::ExtensionRetry { .. }
-            | Self::ExtensionRemove { .. } => Capability::ExtensionControl,
+            Self::ExtensionEnable { .. } | Self::ExtensionDisable { .. } | Self::ExtensionRetry { .. } => {
+                Capability::ExtensionControl
+            }
+            Self::ExtensionRemove { .. } => Capability::ExtensionRemove,
             Self::ExtensionAcquisitionStart { .. }
             | Self::ExtensionAcquisitionStatus { .. }
             | Self::ExtensionAcquisitionCancel { .. }

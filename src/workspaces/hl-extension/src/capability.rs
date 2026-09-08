@@ -87,9 +87,12 @@ pub enum Capability {
     /// Reading installed extension identity and lifecycle status.
     #[serde(rename = "extensions:read")]
     ExtensionRead,
-    /// Enabling, disabling, or removing installed extension records.
+    /// Enabling, disabling, or retrying installed extension records.
     #[serde(rename = "extensions:control")]
     ExtensionControl,
+    /// Permanently removing an installed extension record and its grant.
+    #[serde(rename = "extensions:remove")]
+    ExtensionRemove,
     /// Acquiring and consent-committing extension images.
     #[serde(rename = "extensions:install")]
     ExtensionInstall,
@@ -150,6 +153,7 @@ impl Capability {
             Self::PaneSemanticControl => "panes:semantic-control",
             Self::ExtensionRead => "extensions:read",
             Self::ExtensionControl => "extensions:control",
+            Self::ExtensionRemove => "extensions:remove",
             Self::ExtensionInstall => "extensions:install",
             Self::FilesystemRead => "filesystem:read",
             Self::FilesystemWrite => "filesystem:write",
@@ -185,6 +189,7 @@ impl Capability {
                 | Self::TerminalProcessControl
                 | Self::PaneSemanticControl
                 | Self::ExtensionControl
+                | Self::ExtensionRemove
                 | Self::ExtensionInstall
                 | Self::FilesystemWrite
                 | Self::StateWrite
@@ -239,6 +244,7 @@ impl Capability {
         Self::PaneSemanticControl,
         Self::ExtensionRead,
         Self::ExtensionControl,
+        Self::ExtensionRemove,
         Self::ExtensionInstall,
         Self::FilesystemRead,
         Self::FilesystemWrite,

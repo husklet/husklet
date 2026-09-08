@@ -173,9 +173,8 @@ fn request_capability(request: &str) -> Capability {
         | "workspace_restart" => Capability::WorkspaceControl,
         "workspace_environment_patch" => Capability::WorkspaceEnvironmentWrite,
         "extension_list" | "extension_catalogue" | "extension_inspect" => Capability::ExtensionRead,
-        "extension_enable" | "extension_disable" | "extension_retry" | "extension_remove" => {
-            Capability::ExtensionControl
-        }
+        "extension_enable" | "extension_disable" | "extension_retry" => Capability::ExtensionControl,
+        "extension_remove" => Capability::ExtensionRemove,
         "extension_acquisition_start"
         | "extension_acquisition_status"
         | "extension_acquisition_cancel"

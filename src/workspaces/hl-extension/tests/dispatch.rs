@@ -1192,7 +1192,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 name: "sample".into(),
                 image_digest: format!("sha256:{}", "a".repeat(64)),
             },
-            Capability::ExtensionControl,
+            Capability::ExtensionRemove,
         ),
         (
             Request::ExtensionAcquisitionStart {
@@ -2021,7 +2021,7 @@ fn extension_acquisition_cancellation_preserves_the_observed_revision() {
 #[test]
 fn extension_controls_refuse_partial_digests_before_host_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::ExtensionControl], &[]);
+    let mut session = session(&[Capability::ExtensionControl, Capability::ExtensionRemove], &[]);
     for request in [
         Request::ExtensionEnable {
             name: "sample".into(),

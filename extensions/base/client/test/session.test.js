@@ -1251,7 +1251,7 @@ test('real Unix extension remove arms inventory before authority and observes ab
         payload: {
           protocol: 1,
           peer: 'remove-wait',
-          granted: ['extensions:read', 'extensions:control'],
+          granted: ['extensions:read', 'extensions:remove'],
         },
       }),
     );

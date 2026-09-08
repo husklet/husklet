@@ -2436,8 +2436,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension enable wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (current && current.image_digest !== digest) {
                     reject(new Error(`extension ${name} was replaced while enabling`));
@@ -2450,6 +2453,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.enable(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2472,8 +2476,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension disable wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current)
                     reject(new Error(`extension ${name} disappeared while disabling`));
@@ -2486,6 +2493,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.disable(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2508,8 +2516,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension retry wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current)
                     reject(new Error(`extension ${name} disappeared while retrying`));
@@ -2522,6 +2533,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.retry(name, digest);
             const extension = await Promise.race([
                 inventory,
@@ -2544,8 +2556,11 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError('extension remove wait timeout must be between 1 and 30000ms');
         }
         let observed;
+        let authorityIssued = false;
         const inventory = new Promise((resolve) => {
             observed = (extensions) => {
+                if (!authorityIssued)
+                    return;
                 const current = extensions.find((extension) => extension.name === name);
                 if (!current || current.image_digest !== digest)
                     resolve(current ?? null);
@@ -2554,6 +2569,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
+            authorityIssued = true;
             await api.extensions.remove(name, digest);
             const replacement = await Promise.race([
                 inventory,

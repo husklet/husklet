@@ -110,6 +110,7 @@ export type ExtensionCapability =
   | 'panes:semantic-control'
   | 'extensions:read'
   | 'extensions:control'
+  | 'extensions:remove'
   | 'extensions:install'
   | 'filesystem:read'
   | 'filesystem:write'
