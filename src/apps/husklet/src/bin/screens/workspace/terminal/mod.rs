@@ -520,14 +520,20 @@ impl Window {
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-        // Full-width tab strip: a homogeneous box so tabs are EXACTLY equal width (100/50/33/25…) and fill
-        // the entire width. No `+` button — new tabs come from ⌘T — so nothing eats into the tab widths.
+        // Tabs keep a compact natural width. The rail scrolls once they no longer fit,
+        // rather than shrinking every title or turning a few tabs into huge menu tiles.
         let tabbar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         tabbar.add_css_class("tabbar");
         let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        tabs.set_homogeneous(true);
-        tabs.set_hexpand(true);
-        tabbar.append(&tabs);
+        tabs.set_homogeneous(false);
+        let tab_scroll = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .child(&tabs)
+            .build();
+        tab_scroll.add_css_class("tabrail");
+        tabbar.append(&tab_scroll);
 
         let stack = gtk::Stack::new();
         stack.add_css_class("pages");
@@ -937,7 +943,7 @@ pub(crate) use surface::*;
 
 #[cfg(test)]
 mod shortcut_tests {
-    use super::{editable_captures, Shortcut};
+    use super::{Shortcut, editable_captures};
     use gtk::gdk;
 
     #[cfg(target_os = "macos")]

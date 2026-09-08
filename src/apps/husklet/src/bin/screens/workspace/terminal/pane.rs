@@ -634,7 +634,8 @@ impl<'a> Tabs<'a> {
 
         let bx = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         bx.add_css_class("tab");
-        bx.set_hexpand(true);
+        bx.set_hexpand(false);
+        bx.set_size_request(132, -1);
         let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         inner.set_hexpand(true);
         inner.set_halign(gtk::Align::Center);
@@ -645,6 +646,7 @@ impl<'a> Tabs<'a> {
         }
         let lbl = gtk::Label::new(Some(title));
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        lbl.set_max_width_chars(24);
         inner.append(&lbl);
         bx.append(&inner);
         let mut close = None;

@@ -95,7 +95,8 @@ entry.err {{ border-color:#ff6b6b; box-shadow:0 0 0 2px rgba(255,90,90,.22); }}
 
 /* ---- terminal window ---- */
 .tabbar {{ background-color:{BG1}; box-shadow: inset 0 -1px 0 0 {LINE_S}; min-height:34px; }}
-.tab {{ background-color:{BG1}; color:{DIM}; box-shadow: inset -1px 0 0 0 {LINE_S}; padding:0 10px; }}
+.tabrail {{ background:transparent; }}
+.tab {{ background-color:{BG1}; color:{DIM}; box-shadow: inset -1px 0 0 0 {LINE_S}; padding:0 9px; }}
 .tab:hover {{ background-color:{BG3}; color:{TXT}; }}
 .tab.on {{ background-color:{BG2}; color:{TXT}; box-shadow: inset -1px 0 0 0 {LINE_S}, inset 0 -2px 0 0 {ACCENT}; }}
 .tab label {{ font-size:12px; font-weight:500; }}
