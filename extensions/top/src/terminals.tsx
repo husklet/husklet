@@ -462,7 +462,6 @@ export function Terminals({
         {view.records.map((tab, tabIndex) => (
           <Card
             key={tab.id}
-            justify="start"
             width="fill"
             variant={tab.pinned ? 'filled' : 'outline'}
           >
@@ -483,7 +482,7 @@ export function Terminals({
                 wrap
               />
               {tab.panes.map((pane, paneIndex) => (
-                <Row key={pane.slot} gap={1} align="center" wrap>
+                <Row key={pane.slot} gap={1} align="center" width="fill" wrap>
                   <Text
                     label={`Pane ${paneIndex + 1} · ${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
                     color="text-dim"
@@ -519,6 +518,7 @@ export function Terminals({
                       <Column gap={1}>
                         {readable.kind === 'terminal' ? (
                           <LogView
+                            grow={false}
                             value={
                               readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
                               'This terminal has no visible output.'
@@ -547,7 +547,7 @@ export function Terminals({
                             <Entry
                               value={input}
                               placeholder="Type a line"
-                              grow
+                              width="fill"
                               enabled={Boolean(cursor)}
                               onChange={(event) => setInput(String(event.value ?? ''))}
                               onSubmit={() => {
@@ -573,7 +573,7 @@ export function Terminals({
                             <Entry
                               value={command}
                               placeholder="Run a command, e.g. make test"
-                              grow
+                              width="fill"
                               enabled={busy === '' && Boolean(cursor)}
                               onChange={(event) => setCommand(String(event.value ?? ''))}
                               onSubmit={() => {
@@ -632,6 +632,7 @@ export function Terminals({
                           <Column gap={1}>
                             <Text label="Accessible interface structure" color="text-dim" />
                             <LogView
+                              grow={false}
                               value={
                                 readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
                                 'No accessible structure was reported.'
@@ -662,7 +663,7 @@ export function Terminals({
                               <Entry
                                 value={semanticValue}
                                 placeholder="Value (optional)"
-                                grow
+                                width="fill"
                                 enabled={busy === ''}
                                 onChange={(event) => setSemanticValue(String(event.value ?? ''))}
                               />
@@ -736,7 +737,7 @@ export function Terminals({
                           <Entry
                             value={title}
                             placeholder="Pane title"
-                            grow
+                            width="fill"
                             enabled={busy === '' && Boolean(cursor)}
                             onChange={(event) => setTitle(String(event.value ?? ''))}
                             onSubmit={() => {

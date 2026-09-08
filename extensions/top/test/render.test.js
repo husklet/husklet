@@ -462,12 +462,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'No changes'), 'discard restores an explicit clean state');
   assert.ok(
     ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
-    'the settings editor retains a readable width instead of stretching with the window',
+    'the settings editor shares the available page width',
   );
   assert.equal(
-    ancestorProperty(stage, 'Storage directory', 'Card', 'Justify')?.Align,
-    'Start',
-    'cross-axis alignment lets the settings width govern native layout',
+    ancestorProperty(stage, 'Storage directory', 'Card', 'Justify'),
+    undefined,
+    'settings do not override fill width with a conflicting cross-axis alignment',
   );
   expand(stage, 'Environment variables');
   await settled();
@@ -2205,10 +2205,14 @@ test('terminal management exposes exact pin state and acts through immutable tab
     true,
     'terminal actions reflow instead of leaving the narrow pane',
   );
-  assert.equal(ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify')?.Align, 'Start');
+  assert.equal(
+    ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify'),
+    undefined,
+    'terminal cards do not override fill width with a conflicting cross-axis alignment',
+  );
   assert.ok(
     ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Width'),
-    'terminal inventory cards retain a compact readable bound',
+    'terminal inventory cards share the available page width',
   );
   invoke(stage, 'Pin tab');
   await settled();
@@ -2320,6 +2324,17 @@ test('terminal management reads every pane as text and writes against the inspec
   await settled();
   assert.deepEqual(calls, [['read', 'pane-1']]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready');
+  assert.equal(
+    latestPropertyForTag(stage, 'LogView', 'Grow')?.Number,
+    0,
+    'the transcript keeps a compact viewport instead of consuming the full window height',
+  );
+  assert.ok(placeholderProperty(stage, 'Type a line', 'Width'));
+  assert.equal(
+    placeholderProperty(stage, 'Type a line', 'Grow'),
+    undefined,
+    'single-line input expands horizontally without requesting vertical growth',
+  );
   change(stage, 'Type a line', 'printf hello');
   invoke(stage, 'Send');
   await settled();

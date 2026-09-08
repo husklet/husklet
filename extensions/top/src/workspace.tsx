@@ -174,7 +174,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   return (
     <Scroll grow width="fill" height="fill">
       <Column pad={2} gap={2}>
-        <Card grow={false} justify="start" width="fill" variant="outline">
+        <Card grow={false} width="fill" variant="outline">
           <CardContent gap={2}>
             <Heading label="Workspace" scale="title" />
             <Text
