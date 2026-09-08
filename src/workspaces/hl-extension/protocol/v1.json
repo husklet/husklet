@@ -7288,6 +7288,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_inventory"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_list"
     },
     {
@@ -7731,6 +7735,10 @@
     {
       "reply": "done",
       "request": "terminal_switch_occupant_observed"
+    },
+    {
+      "reply": "file_inventory",
+      "request": "filesystem_inventory"
     },
     {
       "reply": "entries",
@@ -8240,6 +8248,16 @@
             "of": {
               "kind": "ref",
               "name": "PaneSemanticTree"
+            }
+          }
+        },
+        {
+          "name": "file_inventory",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "FileInventory"
             }
           }
         },
@@ -10407,6 +10425,12 @@
           }
         },
         {
+          "name": "filesystem_inventory",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "filesystem_list",
           "payload": {
             "fields": [
@@ -11960,7 +11984,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:0587e299ab5c9d72",
+  "source_fingerprint": "fnv1a64:e677849f946266ce",
   "specification_version": 1,
   "topics": [
     {

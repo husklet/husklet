@@ -150,39 +150,24 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
   assert.match(run.result.after, /healthy/);
 });
 
-test('embeddings indexer watches, recursively discovers, streams, and CAS-updates', async () => {
+test('embeddings indexer reconciles, recursively discovers, streams, and CAS-updates', async () => {
   const document = new TextEncoder().encode('alpha beta gamma');
   const run = await scenario(
     'embeddings-indexer.ts',
     { root: 'src', document: 'src/a.md', index: '.husklet/index.json', chunkBytes: 6 },
     (socket, frame) => {
       const { call } = frame.payload;
-      if (call === 'event_subscribe') {
-        respond(socket, frame, { reply: 'done' });
-        setImmediate(() =>
-          socket.write(
-            encode({
-              channel: 41,
-              kind: KIND.event,
-              payload: {
-                snapshot: 'filesystem',
-                of: {
-                  entries: [
-                    {
-                      path: 'src/a.md',
-                      directory: false,
-                      size: document.length,
-                      identity: 'doc-v1',
-                    },
-                  ],
-                  complete: true,
-                  coalesced: 0,
-                },
-              },
-            }),
-          ),
-        );
-      } else if (call === 'event_unsubscribe') respond(socket, frame, { reply: 'done' });
+      if (call === 'filesystem_inventory')
+        respond(socket, frame, {
+          reply: 'file_inventory',
+          with: {
+            entries: [
+              { path: 'src/a.md', directory: false, size: document.length, identity: 'doc-v1' },
+            ],
+            complete: true,
+            coalesced: 0,
+          },
+        });
       else if (call === 'filesystem_list_page')
         respond(socket, frame, {
           reply: 'directory_page',

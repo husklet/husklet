@@ -14,6 +14,59 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix filesystem inventory can reconcile immediately after reconnect', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-inventory-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'file_inventory',
+              with: {
+                entries: [{ path: 'src/index.ts', directory: false, size: 17, identity: 'sha256:abc' }],
+                complete: false,
+                coalesced: 9,
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['filesystem:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const inventory = await workspace(session).files.inventory();
+    assert.deepEqual(requests, [{ call: 'filesystem_inventory' }]);
+    assert.equal(inventory.complete, false);
+    assert.equal(inventory.coalesced, 9);
+    assert.equal(inventory.entries[0].identity, 'sha256:abc');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execution cancellation is one bounded ordered operation', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-cancel-'));
   const socketPath = path.join(directory, 'host.sock');

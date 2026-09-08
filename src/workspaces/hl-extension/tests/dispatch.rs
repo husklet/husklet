@@ -9,7 +9,8 @@ use std::cell::{Cell, RefCell};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
-    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary, FileRange,
+    ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary,
+    FileInventory, FileRange,
     GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
     PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode, TabSummary,
     TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
@@ -713,6 +714,23 @@ impl hl_extension::port::WorkspaceControl for Host {
 }
 
 impl WorkspaceFiles for Host {
+    fn inventory(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<FileInventory, HostError> {
+        self.ledger.note("files.inventory");
+        Ok(FileInventory {
+            entries: vec![Entry {
+                path: match &roots[0] {
+                    hl_extension::FilesystemSelector::Exact { exact } => exact.clone(),
+                    hl_extension::FilesystemSelector::Subtree { subtree } => subtree.clone(),
+                },
+                directory: true,
+                size: 0,
+                identity: None,
+            }],
+            complete: true,
+            coalesced: 0,
+        })
+    }
+
     fn list(&self, path: &RelativePath) -> Result<Vec<Entry>, HostError> {
         self.ledger.note("files.list");
         Ok(vec![Entry {
@@ -2781,6 +2799,14 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
         }],
         ..hl_extension::FilesystemGrant::default()
     });
+
+    assert!(matches!(
+        session.dispatch(&Request::FilesystemInventory, &services(&host)),
+        Ok(Reply::FileInventory(FileInventory { entries, complete: true, .. }))
+            if entries[0].path.as_str() == "src"
+    ));
+    assert_eq!(host.ledger.reached(), ["files.inventory"]);
+    host.ledger.clear();
 
     assert!(session
         .dispatch(

@@ -860,6 +860,7 @@ export function workspace(session, { signal } = {}) {
             },
         },
         files: {
+            inventory: async () => expect(await session.call('filesystem_inventory'), 'file_inventory'),
             list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
             listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
                 if ((after === null) !== (observed === null)) {
@@ -2685,6 +2686,7 @@ export const protocolCoverage = Object.freeze({
             'switchOccupantObserved',
         ],
         files: [
+            'inventory',
             'list',
             'listPage',
             'walk',

@@ -1,4 +1,4 @@
-import { connect, workspace, type FileInventory } from '@husklet/client';
+import { connect, workspace } from '@husklet/client';
 declare const process: { argv: string[]; stdout: { write(value: string): void } };
 
 type Configuration = {
@@ -9,7 +9,12 @@ type Configuration = {
   chunkBytes?: number;
 };
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration | null;
-if (!configuration?.path || !configuration.root || !configuration.document || !configuration.index) {
+if (
+  !configuration?.path ||
+  !configuration.root ||
+  !configuration.document ||
+  !configuration.index
+) {
   throw new TypeError(
     'usage: embeddings-indexer.ts JSON(path, root, document, index, chunkBytes?)',
   );
@@ -18,13 +23,7 @@ const chunkBytes = Math.max(1, Math.min(configuration.chunkBytes ?? 64 * 1024, 5
 const session = await connect({ path: configuration.path, pendingLimit: 8, timeout: 5_000 });
 try {
   const files = workspace(session).files;
-  let acceptInventory!: (inventory: FileInventory) => void;
-  const initial = new Promise<FileInventory>((resolve) => {
-    acceptInventory = resolve;
-  });
-  const dispose = await workspace(session).watchFilesystem(acceptInventory);
-  const inventory = await initial;
-  await dispose();
+  const inventory = await files.inventory();
   if (!inventory.complete) throw new Error('filesystem change retention gap requires a rescan');
   let discovered = false;
   for await (const entry of files.walk(configuration.root)) {
