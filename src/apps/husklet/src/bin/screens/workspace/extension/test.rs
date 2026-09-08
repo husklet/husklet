@@ -120,6 +120,7 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         an_identical_frame_changes_nothing();
         a_burst_beyond_the_tick_bound_stays_queued();
         a_stopped_extension_keeps_its_widgets_and_says_so();
+        a_long_fault_is_bounded_wrapped_and_accessible();
         a_structured_fault_reaches_lifecycle_on_the_toolkit_tick();
         a_rendered_button_reaches_the_sink();
         retained_pane_actions_keep_their_slot();
@@ -174,6 +175,42 @@ fn visible_labels(fixture: &Fixture) -> Vec<String> {
         .filter(|label| label.is_visible())
         .map(|label| label.text().to_string())
         .collect()
+}
+
+fn a_long_fault_is_bounded_wrapped_and_accessible() {
+    let fixture = Fixture::new();
+    let diagnostic = format!("registry refused image sha256:{}", "a".repeat(4_096));
+    fixture.page.banner().show(&diagnostic);
+
+    let banner = fixture.page.banner().widget();
+    assert_eq!(banner.accessible_role(), gtk::AccessibleRole::Alert);
+    let labels: Vec<gtk::Label> = descendants(&banner.clone().upcast())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .collect();
+    let title = labels
+        .iter()
+        .find(|label| label.text().as_str() == "Extension unavailable")
+        .expect("the fault has a stable heading");
+    assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
+    let detail = labels
+        .iter()
+        .find(|label| label.has_css_class("hl-extension-banner-detail"))
+        .expect("the fault has diagnostic detail");
+    assert!(detail.wraps());
+    assert_eq!(detail.wrap_mode(), gtk::pango::WrapMode::WordChar);
+    assert!(detail.text().ends_with('…'));
+    assert!(detail.text().chars().count() <= hl_extension::port::SEMANTIC_TEXT_LIMIT);
+
+    let (minimum, _, _, _) = banner.measure(gtk::Orientation::Horizontal, -1);
+    assert!(minimum <= 160, "an unbroken diagnostic forced a {minimum}px minimum width");
+
+    let semantics = fixture.page.semantics("pane-1").expect("fault semantics");
+    let fault = &semantics.root.children[0];
+    assert_eq!(fault.role, "alert");
+    assert_eq!(fault.label.as_deref(), Some("Extension unavailable"));
+    assert_eq!(fault.value.as_deref(), Some(detail.text().as_str()));
+    assert_eq!(fault.actions, [hl_extension::SemanticActionKind::Invoke]);
 }
 
 fn an_empty_wire_slot_addresses_the_overview_surface() {
@@ -887,7 +924,7 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .root
         .children
         .iter()
-        .find(|node| node.label.as_deref() == Some("Extension stopped"))
+        .find(|node| node.label.as_deref() == Some("Extension unavailable"))
         .expect("the visible fault has a semantic projection");
     assert!(
         fault

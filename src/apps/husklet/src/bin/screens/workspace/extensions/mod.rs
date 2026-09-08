@@ -224,6 +224,7 @@ mod tests {
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
         }
     }
 

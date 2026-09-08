@@ -115,6 +115,11 @@ stack.pages {{ background-color:{BG2}; }}
 .dsi.on {{ background-color:{BG3}; color:{TXT}; }}
 .dbadge {{ font-family:'SF Mono',ui-monospace,monospace; font-size:10px; color:{FAINT}; }}
 .dmain {{ padding:16px 18px; }}
+.hl-extension-banner {{ background-color:rgba(255,107,107,.08); border:1px solid rgba(255,107,107,.38); border-radius:9px; margin:10px 12px 8px; padding:10px 12px; }}
+.hl-extension-banner-title {{ color:#ff9a9a; font-size:12px; font-weight:650; }}
+.hl-extension-banner-detail {{ color:{DIM}; font-family:'SF Mono',ui-monospace,monospace; font-size:10.5px; }}
+.hl-extension-retry {{ color:{TXT}; background-color:{BG2}; border:1px solid {CONTROL_LINE}; border-radius:6px; padding:4px 10px; min-height:0; font-size:11.5px; font-weight:600; }}
+.hl-extension-retry:hover {{ background-color:{BG3}; border-color:{DIM}; }}
 .dashtitle {{ font-size:16px; font-weight:700; letter-spacing:-.01em; }}
 .workspace-settings {{ background-color:{BG2}; }}
 .settings-identity, .settings-card {{ background-color:{BG1}; border:1px solid {CONTROL_LINE}; border-radius:11px; padding:16px; }}

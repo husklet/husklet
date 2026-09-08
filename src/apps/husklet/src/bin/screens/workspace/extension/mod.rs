@@ -181,7 +181,7 @@ impl Interface {
                 SemanticNode {
                     id: FAULT_NODE,
                     role: "alert".into(),
-                    label: Some("Extension stopped".into()),
+                    label: Some(self.banner.title()),
                     value: Some(
                         self.banner
                             .text()
