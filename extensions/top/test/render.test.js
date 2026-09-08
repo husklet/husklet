@@ -506,7 +506,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
     { Length: 'Fill' },
     'extension sections use the full page width without separating related content',
   );
-  assert.ok(labelled(stage, 'Version 2.0.0'));
+  assert.equal(
+    taggedProperty(stage, 'Component playground', 'CardHeader', 'Detail')?.Text,
+    'Husklet · Version 2.0.0',
+  );
+  assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
   assert.ok(labelled(stage, 'Technical details'));
   assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 5), [
     'Row',

@@ -731,9 +731,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
                             <Row gap={1} wrap>
-                              <Badge label={`Version ${entry.version}`} tone="neutral" />
                               <Badge
-                                label={compatibility.label}
+                                label={
+                                  compatibility.compatible === true
+                                    ? 'Compatible with this workspace'
+                                    : compatibility.label
+                                }
                                 tone={
                                   compatibility.compatible === false
                                     ? 'danger'
