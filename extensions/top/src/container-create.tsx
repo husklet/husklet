@@ -428,7 +428,7 @@ function parseLabels(text: string): [string, string][] | undefined {
   return value;
 }
 
-function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] | undefined {
+export function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] | undefined {
   if (!text) {
     return undefined;
   }
@@ -458,7 +458,7 @@ function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] 
   return value;
 }
 
-function parseEnvironment(text: string): [string, string][] | undefined {
+export function parseEnvironment(text: string): [string, string][] | undefined {
   if (!text) {
     return undefined;
   }
@@ -533,60 +533,8 @@ export function containerCreateOptions(
   const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
   const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
   const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
-  const mountsText = draft.mounts.trim();
-  let mounts;
-  if (mountsText) {
-    try {
-      mounts = JSON.parse(mountsText);
-    } catch {
-      throw new Error(
-        'Mounts must be valid JSON, such as [{"volume":"cache","target":"/cache","read_only":true}].',
-      );
-    }
-    const allowed = new Set(['volume', 'target', 'read_only']);
-    if (
-      !Array.isArray(mounts) ||
-      mounts.length > 64 ||
-      mounts.some((mount) => !isValidVolumeMount(mount, allowed)) ||
-      new Set(mounts.map((mount) => mount.target)).size !== mounts.length
-    ) {
-      throw new Error(
-        'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.',
-      );
-    }
-    mounts = (mounts as VolumeMount[]).map(({ volume, target, read_only = false }) => ({
-      volume,
-      target,
-      read_only,
-    }));
-  }
-  const portsText = draft.ports.trim();
-  let ports;
-  if (portsText) {
-    try {
-      ports = JSON.parse(portsText);
-    } catch {
-      throw new Error(
-        'Ports must be valid JSON, such as [{"container":8080,"host":18080,"protocol":"tcp"}].',
-      );
-    }
-    const allowed = new Set(['container', 'host', 'protocol']);
-    if (
-      !Array.isArray(ports) ||
-      ports.length > 64 ||
-      ports.some((port) => !isValidPublishedPort(port, allowed)) ||
-      new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length
-    ) {
-      throw new Error(
-        'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.',
-      );
-    }
-    ports = (ports as PublishedPort[]).map(({ container, host = null, protocol }) => ({
-      container,
-      host,
-      protocol,
-    }));
-  }
+  const mounts = parseMounts(draft.mounts.trim());
+  const ports = parsePorts(draft.ports.trim());
   return {
     ...(hostname ? { hostname } : {}),
     ...(entrypoint ? { entrypoint } : {}),
@@ -602,6 +550,62 @@ export function containerCreateOptions(
     ...(mounts ? { mounts } : {}),
     ...(ports ? { ports } : {}),
   };
+}
+
+export function parseMounts(mountsText: string): VolumeMount[] | undefined {
+  if (!mountsText) return undefined;
+  let mounts;
+  {
+    try {
+      mounts = JSON.parse(mountsText);
+    } catch {
+      throw new Error('Mount configuration could not be decoded.');
+    }
+    const allowed = new Set(['volume', 'target', 'read_only']);
+    if (
+      !Array.isArray(mounts) ||
+      mounts.length > 64 ||
+      mounts.some((mount) => !isValidVolumeMount(mount, allowed)) ||
+      new Set(mounts.map((mount) => mount.target)).size !== mounts.length
+    ) {
+      throw new Error(
+        'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.',
+      );
+    }
+    return (mounts as VolumeMount[]).map(({ volume, target, read_only = false }) => ({
+      volume,
+      target,
+      read_only,
+    }));
+  }
+}
+
+export function parsePorts(portsText: string): PublishedPort[] | undefined {
+  if (!portsText) return undefined;
+  let ports;
+  {
+    try {
+      ports = JSON.parse(portsText);
+    } catch {
+      throw new Error('Port configuration could not be decoded.');
+    }
+    const allowed = new Set(['container', 'host', 'protocol']);
+    if (
+      !Array.isArray(ports) ||
+      ports.length > 64 ||
+      ports.some((port) => !isValidPublishedPort(port, allowed)) ||
+      new Set(ports.map((port) => `${port.container}/${port.protocol}`)).size !== ports.length
+    ) {
+      throw new Error(
+        'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.',
+      );
+    }
+    return (ports as PublishedPort[]).map(({ container, host = null, protocol }) => ({
+      container,
+      host,
+      protocol,
+    }));
+  }
 }
 
 function optionalDecimalLimit(value: string, label: string, maximum: number): number | null {
@@ -764,28 +768,6 @@ export function ContainerCreate({
                 onChange={(event) => update('workingDirectory', event.value)}
               />
             </Row>
-            <Expander label="Advanced raw process configuration">
-              <Column gap={1}>
-                <Entry
-                  value={draft.entrypoint}
-                  placeholder={'Entrypoint argv JSON (optional)'}
-                  enabled={editable}
-                  onChange={(event) => update('entrypoint', event.value)}
-                />
-                <Entry
-                  value={draft.command}
-                  placeholder={'Command argv JSON (optional)'}
-                  enabled={editable}
-                  onChange={(event) => update('command', event.value)}
-                />
-                <Entry
-                  value={draft.environment}
-                  placeholder={'Environment pairs JSON (optional)'}
-                  enabled={editable}
-                  onChange={(event) => update('environment', event.value)}
-                />
-              </Column>
-            </Expander>
             <Expander label="Advanced resources and networking">
               <Column gap={1}>
                 <Heading label={'Resources and connectivity'} scale={'body'} />
@@ -823,20 +805,6 @@ export function ContainerCreate({
                     value={draft.ports}
                     enabled={editable}
                     onChange={(value) => update('ports', value)}
-                  />
-                  <Entry
-                    value={draft.mounts}
-                    placeholder={'Named volume mounts JSON (optional)'}
-                    visible={false}
-                    enabled={editable}
-                    onChange={(event) => update('mounts', event.value)}
-                  />
-                  <Entry
-                    value={draft.ports}
-                    placeholder={'Published ports JSON (optional)'}
-                    visible={false}
-                    enabled={editable}
-                    onChange={(event) => update('ports', event.value)}
                   />
                 </Row>
                 <Text

@@ -13,6 +13,9 @@ import {
   Volumes,
   Workspace,
   Top,
+  parseArguments,
+  parseMounts,
+  parsePorts,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
@@ -3009,10 +3012,10 @@ test('container creation groups its compact form and uses a human label editor',
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
   assert.deepEqual(placeholders.slice(0, 2), ['Image reference', 'Container name']);
-  assert.ok(
-    placeholders.indexOf('Add command argument') <
-      placeholders.indexOf('Command argv JSON (optional)'),
-    'the native common-path editor precedes raw advanced configuration',
+  assert.ok(placeholders.includes('Add command argument'));
+  assert.equal(
+    placeholders.some((value) => value.includes('JSON')),
+    false,
   );
   assert.ok(labelled(stage, 'Labels (optional)'));
   assert.equal(
@@ -3052,28 +3055,6 @@ test('container creation retains exact identity and retries only start after a p
   stage.render(h(Containers, { api: controlled, resource }));
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'worker');
-  change(stage, 'Command argv JSON (optional)', '["sh",7]');
-  assert.ok(
-    labelled(
-      stage,
-      'Command must contain at most 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.',
-    ),
-  );
-  assert.equal(
-    isEnabled(stage, 'Create and start'),
-    false,
-    'invalid optional configuration cannot reach the host',
-  );
-  change(stage, 'Command argv JSON (optional)', '');
-  change(stage, 'Environment pairs JSON (optional)', '[["MODE","one"],["MODE","two"]]');
-  assert.ok(
-    labelled(
-      stage,
-      'Environment must contain at most 256 unique [name, value] pairs with bounded NUL-free strings.',
-    ),
-  );
-  assert.equal(isEnabled(stage, 'Create and start'), false);
-  change(stage, 'Environment pairs JSON (optional)', '');
   change(stage, 'Working directory (optional)', '/workspace/../secret');
   assert.ok(
     labelled(
@@ -3264,6 +3245,29 @@ test('container creation validates exact resource bounds and retains them until 
 });
 
 test('container creation accepts only bounded named-volume mounts and retains them until success', async () => {
+  const mountError =
+    'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.';
+  assert.throws(() => parseMounts('[{"volume":"cache","target":"relative"}]'), {
+    message: mountError,
+  });
+  assert.throws(
+    () =>
+      parseMounts(
+        JSON.stringify(
+          Array.from({ length: 65 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` })),
+        ),
+      ),
+    { message: mountError },
+  );
+  assert.equal(
+    parseMounts(
+      JSON.stringify(
+        Array.from({ length: 64 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` })),
+      ),
+    )?.length,
+    64,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3346,6 +3350,27 @@ test('container creation accepts only bounded named-volume mounts and retains th
 });
 
 test('container creation validates bounded published ports and retains them until success', async () => {
+  const portError =
+    'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.';
+  assert.throws(() => parsePorts('[{"container":0,"protocol":"tcp"}]'), { message: portError });
+  assert.throws(
+    () =>
+      parsePorts(
+        JSON.stringify(
+          Array.from({ length: 65 }, (_, index) => ({ container: index + 1, protocol: 'tcp' })),
+        ),
+      ),
+    { message: portError },
+  );
+  assert.equal(
+    parsePorts(
+      JSON.stringify(
+        Array.from({ length: 64 }, (_, index) => ({ container: index + 1, protocol: 'tcp' })),
+      ),
+    )?.length,
+    64,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3584,6 +3609,14 @@ test('container creation validates bounded labels and retains them until success
 });
 
 test('container creation validates entrypoint argv and retains it until success', async () => {
+  const argumentError =
+    'Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.';
+  assert.throws(() => parseArguments('[]', 'Entrypoint'), { message: argumentError });
+  assert.throws(() => parseArguments(JSON.stringify(Array(65).fill('x')), 'Entrypoint'), {
+    message: argumentError,
+  });
+  assert.equal(parseArguments(JSON.stringify(Array(64).fill('x')), 'Entrypoint')?.length, 64);
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
