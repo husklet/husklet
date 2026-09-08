@@ -1270,12 +1270,12 @@ test(
           (request) =>
             request.call === 'interface_render_at' &&
             request.with.frame.patches.some(
-              (patch) => patch.SetProp?.value?.Text === 's4 · terminal',
+              (patch) => patch.SetProp?.value?.Text === 'Pane 1 · Terminal',
             ),
         ),
       );
       peer.write(
-        encode({ channel: 46, kind: KIND.event, payload: invocation(requests, 'Pin Build') }),
+        encode({ channel: 46, kind: KIND.event, payload: invocation(requests, 'Pin tab') }),
       );
       await until(() => calls.includes('terminal_pin_tab'));
       assert.deepEqual(requests.find((request) => request.call === 'terminal_pin_tab').with, {
@@ -1283,7 +1283,7 @@ test(
         pinned: true,
       });
       peer.write(
-        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Focus Build') }),
+        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Switch to Build') }),
       );
       await until(() => calls.includes('terminal_focus_pane'));
       assert.deepEqual(requests.find((request) => request.call === 'terminal_focus_pane').with, {

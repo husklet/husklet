@@ -419,7 +419,7 @@ export function Terminals({
   return (
     <Page
       title="Terminal tabs"
-      subtitle="Read terminal output or semantic UI text, send revision-bound input, focus panes, and pin tabs."
+      subtitle="View pane contents, send input, switch tabs, and keep important tabs pinned."
     >
       <Row gap={1} wrap>
         <Entry
@@ -434,7 +434,7 @@ export function Terminals({
           }}
         />
         <Button
-          label={busy === 'open-tab' ? 'Opening…' : 'Open tab'}
+          label={busy === 'open-tab' ? 'Creating…' : 'Create terminal tab'}
           enabled={busy === '' && newTabTitle.trim().length > 0}
           onInvoke={() => {
             void openTab();
@@ -460,7 +460,7 @@ export function Terminals({
         retryLabel="Retry terminal tabs"
         onRetry={resource.reload}
       >
-        {view.records.map((tab) => (
+        {view.records.map((tab, tabIndex) => (
           <Card
             key={tab.id}
             grow={false}
@@ -468,7 +468,7 @@ export function Terminals({
             width={TERMINAL_CARD_WIDTH}
             variant={tab.pinned ? 'filled' : 'outline'}
           >
-            <CardHeader label={tab.title} detail={tab.id} />
+            <CardHeader label={tab.title} detail={`Tab ${tabIndex + 1}`} />
             <CardContent gap={1}>
               <Row gap={1} align="center">
                 <Badge
@@ -480,14 +480,14 @@ export function Terminals({
                   color="text-dim"
                 />
               </Row>
-              {tab.panes.map((pane) => (
+              {tab.panes.map((pane, paneIndex) => (
                 <Row key={pane.slot} gap={1} align="center">
                   <Text
-                    label={`${pane.slot} · ${pane.occupant}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
+                    label={`Pane ${paneIndex + 1} · ${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
                     color="text-dim"
                   />
                   <Button
-                    label={`${selected === pane.slot ? 'Refresh' : 'Inspect'} ${pane.slot}`}
+                    label={`${selected === pane.slot ? 'Refresh' : 'View'} Pane ${paneIndex + 1}`}
                     enabled={busy === ''}
                     variant="ghost"
                     onInvoke={() => {
@@ -501,8 +501,8 @@ export function Terminals({
                   <CardHeader
                     label={
                       readable.kind === 'terminal'
-                        ? `Terminal ${selected}`
-                        : `Interface ${selected}`
+                        ? `Terminal · ${paneDisplayName(resource.data, selected)}`
+                        : `Interface · ${paneDisplayName(resource.data, selected)}`
                     }
                     detail={
                       readable.kind === 'terminal'
@@ -720,14 +720,14 @@ export function Terminals({
             <CardActions gap={1}>
               {busy === tab.id ? <Spinner /> : null}
               <Button
-                label={`${tab.pinned ? 'Unpin' : 'Pin'} ${tab.title}`}
+                label={tab.pinned ? 'Unpin tab' : 'Pin tab'}
                 enabled={busy === ''}
                 onInvoke={() => {
                   void pin(tab);
                 }}
               />
               <Button
-                label={`Focus ${tab.title}`}
+                label={`Switch to ${tab.title}`}
                 enabled={busy === '' && Boolean(tab.panes[0])}
                 onInvoke={() => {
                   void focus(tab);
@@ -740,6 +740,14 @@ export function Terminals({
       </ResourceState>
     </Page>
   );
+}
+
+function paneDisplayName(tabs: TabSummary[] | undefined, slot: string) {
+  for (const tab of tabs ?? []) {
+    const index = tab.panes.findIndex((pane) => pane.slot === slot);
+    if (index >= 0) return `Pane ${index + 1}`;
+  }
+  return 'Selected pane';
 }
 
 function paneCursor(snapshot: Pick<PaneText, 'generation' | 'revision'>): TerminalCursor | null {
