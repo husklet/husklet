@@ -3047,6 +3047,7 @@ static translit_jcc_ibtc_site_ranges translit_emit_direct_jmp_ibtc(hl_x64_asm *a
 typedef struct {
     uint8_t *load_end;
     uint8_t *marker_end;
+    uint8_t *probe_end;
     uint8_t *rip_end;
     uint8_t *rax_end;
     uint8_t *rsp_end;
@@ -3092,6 +3093,65 @@ static translit_ret_sim_ranges translit_emit_ret_exit(hl_x64_asm *a, uint32_t po
         hl_x64_store_gs_imm32(a, TL_RET_IBTC_MISS, OFF_JCC_IBTC_MISS);
     ranges.marker_end = a->cursor;
     return ranges;
+}
+
+/* RET's target is dynamic, but its global IBTC pair has the same generation and invalidation
+   authority as the constant-edge probes.  Compute the slot entirely in XMM scratch: scalar shifts
+   would overwrite the guest flags which RET must preserve.  A hit jumps straight to the cached body;
+   a miss or pending interrupt selects the existing helper without adding another cache or publisher. */
+static void translit_emit_ret_inline_ibtc(hl_x64_asm *a, translit_ret_sim_ranges *ranges) {
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_RIP);
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX); // expected target
+    hl_x64_movdqa_xmm(a, 2, 1);
+    hl_x64_psrlq(a, 2, 2);
+    hl_x64_mov_imm64(a, HL_X64_RAX, IBTC_N - 1);
+    hl_x64_movq_reg_to_xmm(a, 3, HL_X64_RAX);
+    hl_x64_pand(a, 2, 3);
+    hl_x64_psllq(a, 2, 4);                    // byte offset of the 16-byte pair
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_IBTC);
+    hl_x64_movq_reg_to_xmm(a, 3, HL_X64_RAX);
+    hl_x64_paddq(a, 2, 3);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 2);
+    hl_x64_load_xmm_aligned_disp32(a, 0, HL_X64_RAX, 0);
+    hl_x64_movdqa_xmm(a, 2, 0);
+    hl_x64_psrldq(a, 2, 8);                   // candidate body
+    hl_x64_pcmpeqd(a, 0, 1);
+    hl_x64_pshufd(a, 3, 0, 0x00);
+    hl_x64_pshufd(a, 0, 0, 0x55);
+    hl_x64_pand(a, 0, 3);                     // key equality mask
+    hl_x64_pxor(a, 5, 5);
+    hl_x64_pcmpeqd(a, 5, 2);
+    hl_x64_pshufd(a, 4, 5, 0x00);
+    hl_x64_pshufd(a, 5, 5, 0x55);
+    hl_x64_pand(a, 5, 4);                     // all ones only for a null body
+    hl_x64_pandn(a, 5, 0);                    // matching key and non-null body
+    hl_x64_movdqa_xmm(a, 0, 5);
+    hl_x64_load_gs(a, HL_X64_RAX, OFF_IRQ);
+    hl_x64_movq_reg_to_xmm(a, 4, HL_X64_RAX);
+    hl_x64_pxor(a, 5, 5);
+    hl_x64_pcmpeqd(a, 4, 5);
+    hl_x64_pshufd(a, 3, 4, 0x00);
+    hl_x64_pshufd(a, 4, 4, 0x55);
+    hl_x64_pand(a, 4, 3);
+    hl_x64_pand(a, 0, 4);                     // hit only while irq == 0
+
+    hl_x64_movdqa_xmm(a, 3, 0);
+    hl_x64_mov_imm64(a, HL_X64_RAX, TL_RET_IBTC_MISS);
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
+    hl_x64_pandn(a, 0, 1);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 0);
+    hl_x64_store_gs(a, HL_X64_RAX, OFF_JCC_IBTC_MISS);
+    hl_x64_movdqa_xmm(a, 0, 3);
+    translit_helper_lea(a, HL_X64_RAX, translit_jcc_ibtc_stub_entry, 0);
+    hl_x64_movq_reg_to_xmm(a, 1, HL_X64_RAX);
+    hl_x64_pandn(a, 0, 1);                    // miss/IRQ helper
+    hl_x64_pand(a, 2, 3);                     // hit body
+    hl_x64_por(a, 2, 0);
+    hl_x64_movq_xmm_to_reg(a, HL_X64_RAX, 2);
+    hl_x64_store_gs(a, HL_X64_RAX, TL_MM_ENTRY);
+    hl_x64_load_gs(a, HL_X64_RAX, R_OFF(HL_X64_RAX));
+    ranges->probe_end = a->cursor;
+    hl_x64_jmp_gs_indirect(a, TL_MM_ENTRY);
 }
 
 // Runs at the existing post-map dispatcher seam. Under threads the caller still holds g_jit_lock; the
@@ -6592,7 +6652,7 @@ static void *translit_build(hl_x86_hot_context *context, struct interp_block *bl
             translit_shape_exit(a, HL_BACKEND_SHAPE_T_RETURN, (unsigned)direct_jmp_stitched,
                                 (unsigned)jcc_fall_stitched, source_page_delta);
             if (translit_jcc_ibtc_stub_entry != NULL)
-                translit_helper_jmp(a, translit_jcc_ibtc_stub_entry, 0);
+                translit_emit_ret_inline_ibtc(a, &ret_site);
             else
                 translit_emit_exit_preset(a, R_BRANCH);
             break;
@@ -9911,6 +9971,8 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
                          (uint8_t *)target_block + target_block->host_entry_off);
         if (scenario == 124) ibtc_publish(&g_ibtc[ibtc_index(target)], target, NULL);
         ibtc_publish(&translit_ret_ibtc[ibtc_index(target)], target + 4, (void *)(uintptr_t)1);
+        uint64_t helper_entries_before =
+            atomic_load_explicit(&translit_profile_helper_slow_paths, memory_order_relaxed);
         *stack = target;
         cpu = (struct cpu){.rip = source, .ibtc_base = (uint64_t)g_ibtc};
         for (unsigned reg = 0; reg < 16; ++reg) cpu.r[reg] = UINT64_C(0x8877000000000000) + reg;
@@ -9948,7 +10010,9 @@ static int translit_ret_ibtc_fixture_test(unsigned scenario) {
         }
         return architecture_exact && cpu.r[0] == 42 && cpu.r[4] == expected_rsp && cpu.jcc_ibtc_miss == 0 &&
                        atomic_load_explicit(&translit_ret_fast_ibtc_counters[TL_RET_FAST_IBTC_HIT],
-                                            memory_order_relaxed) == 1
+                                            memory_order_relaxed) == 0 &&
+                       atomic_load_explicit(&translit_profile_helper_slow_paths,
+                                            memory_order_relaxed) == helper_entries_before
                    ? 0
                    : 124;
     }

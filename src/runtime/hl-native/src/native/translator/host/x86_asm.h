@@ -129,6 +129,22 @@ static inline void hl_x64_psrldq(hl_x64_asm *a, int xmm, uint8_t bytes) {
     hl_x64_u8(a, bytes);
 }
 
+static inline void hl_x64_psrlq(hl_x64_asm *a, int xmm, uint8_t bits) {
+    hl_x64_u8(a, 0x66);
+    if (xmm >= 8) hl_x64_u8(a, 0x41);
+    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x73);
+    hl_x64_u8(a, (uint8_t)(0xd0 | (xmm & 7))); // mod=11 /2
+    hl_x64_u8(a, bits);
+}
+
+static inline void hl_x64_psllq(hl_x64_asm *a, int xmm, uint8_t bits) {
+    hl_x64_u8(a, 0x66);
+    if (xmm >= 8) hl_x64_u8(a, 0x41);
+    hl_x64_u8(a, 0x0f); hl_x64_u8(a, 0x73);
+    hl_x64_u8(a, (uint8_t)(0xf0 | (xmm & 7))); // mod=11 /6
+    hl_x64_u8(a, bits);
+}
+
 static inline void hl_x64_xmm_reg_op(hl_x64_asm *a, uint8_t prefix, uint8_t opcode,
                                      int destination, int source) {
     if (prefix != 0) hl_x64_u8(a, prefix);
@@ -160,6 +176,10 @@ static inline void hl_x64_por(hl_x64_asm *a, int destination, int source) {
 
 static inline void hl_x64_pxor(hl_x64_asm *a, int destination, int source) {
     hl_x64_xmm_reg_op(a, 0x66, 0xef, destination, source);
+}
+
+static inline void hl_x64_paddq(hl_x64_asm *a, int destination, int source) {
+    hl_x64_xmm_reg_op(a, 0x66, 0xd4, destination, source);
 }
 
 static inline void hl_x64_pshufd(hl_x64_asm *a, int destination, int source, uint8_t order) {
