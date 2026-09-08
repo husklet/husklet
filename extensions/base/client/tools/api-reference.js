@@ -125,6 +125,7 @@ groups
   .push(
     '- `host.containers.execAndWait(id, options)` — prevalidates bounded execution/output options, executes by immutable container ID, waits, then fetches bounded logs; failures retain the execution ID, and log-phase failures retain the authoritative completed summary, in `ExecutionOperationError`; records are never auto-removed.',
     '- `host.containers.execStreaming(id, generation, options, onPage)` — executes by immutable container ID, delivers bounded output pages with callback backpressure, cancels on abort or callback failure, and returns the execution ID and completed summary without auto-removing the record.',
+    '- `host.containers.execText(id, generation, options)` — executes and incrementally decodes stdout/stderr under a required aggregate `maxBytes` bound; overflow cancels the owned execution and preserves its ID in `ExecutionOperationError`.',
     '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:execute`.',
   );
 
