@@ -27,6 +27,7 @@ import {
   endpointAliases,
   immutableContainerId,
   resourceReference,
+  shortId,
 } from './model.js';
 import type { Resource } from './overview.js';
 
@@ -493,7 +494,11 @@ function NetworkSummaryDetail({ network }: { network: NetworkSummary }) {
         <Badge label={`Scope · ${network.scope}`} />
         <Badge label={network.kind === 'builtin' ? 'Built-in' : 'Custom'} />
       </Row>
-      <Text label={`Immutable network ID · ${network.id}`} color="text-dim" wrap />
+      <Text
+        label={`Immutable network ID · ${shortId(network.id)}`}
+        color="text-dim"
+        tooltip={network.id}
+      />
       <Heading label={`Connected containers · ${containers.length}`} scale="caption" />
       {!endpoints ? (
         <InlineMessage
@@ -504,7 +509,7 @@ function NetworkSummaryDetail({ network }: { network: NetworkSummary }) {
         <EmptyState label="No connected containers" detail="This network has no endpoints." />
       ) : (
         containers.map((container) => (
-          <Text key={container} label={`Container · ${container}`} wrap />
+          <Text key={container} label={`Container · ${shortId(container)}`} tooltip={container} />
         ))
       )}
       {endpoints?.truncated ? (

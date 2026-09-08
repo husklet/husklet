@@ -3321,6 +3321,8 @@ test('volume and network panels render bounded real inventories and controls', (
 
 test('network inspection exposes loading, retry, empty and domain-specific details', async () => {
   let attempts = 0;
+  const networkId = 'b'.repeat(32);
+  const containerId = 'a'.repeat(64);
   const controlled = {
     networks: {
       ...api.networks,
@@ -3328,18 +3330,18 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
         return {
-          id: 'n1',
+          id: networkId,
           name: 'private',
           driver: 'bridge',
           scope: 'local',
           kind: 'custom',
-          endpoints: { containers: ['a'.repeat(64)], truncated: false },
+          endpoints: { containers: [containerId], truncated: false },
         };
       },
     },
   };
   const resource = {
-    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    data: [{ id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -3358,7 +3360,19 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
   assert.ok(labelled(stage, 'Driver · bridge'));
   assert.ok(labelled(stage, 'Scope · local'));
   assert.ok(labelled(stage, 'Connected containers · 1'));
-  assert.ok(labelled(stage, `Container · ${'a'.repeat(64)}`));
+  assert.ok(labelled(stage, `Immutable network ID · ${'b'.repeat(12)}`));
+  assert.deepEqual(property(stage, `Immutable network ID · ${'b'.repeat(12)}`, 'Tooltip'), {
+    Text: networkId,
+  });
+  assert.ok(labelled(stage, `Container · ${'a'.repeat(12)}`));
+  assert.deepEqual(property(stage, `Container · ${'a'.repeat(12)}`, 'Tooltip'), {
+    Text: containerId,
+  });
+  assert.equal(
+    labelled(stage, `Container · ${containerId}`),
+    undefined,
+    'exact endpoint identity stays inspectable without becoming a narrow text wall',
+  );
   assert.equal(labelled(stage, '$.id'), undefined, 'host source paths never enter the product UI');
 
   const empty = host();
