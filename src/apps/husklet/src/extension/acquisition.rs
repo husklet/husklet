@@ -1,10 +1,10 @@
 //! Bounded, asynchronous image acquisition awaiting explicit user consent.
 
 use std::collections::BTreeMap;
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 
-use hl_extension::port::HostError;
 use hl_extension::Grant;
+use hl_extension::port::HostError;
 
 use super::management_events::ExtensionEvents;
 use super::{Acquisition, Cancellation, Candidate, Roster};
@@ -791,9 +791,11 @@ mod tests {
             }
         });
         assert!(service.start("").is_err());
-        assert!(service
-            .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
-            .is_err());
+        assert!(
+            service
+                .start(&"x".repeat(ExtensionAcquisitions::REFERENCE_LIMIT + 1))
+                .is_err()
+        );
         let jobs: Vec<_> = (0..ExtensionAcquisitions::ACTIVE_LIMIT)
             .map(|index| service.start(&format!("sample:{index}")).unwrap())
             .collect();

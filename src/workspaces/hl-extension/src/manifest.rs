@@ -615,11 +615,7 @@ impl Resources {
         if value == 0 {
             return ceiling;
         }
-        if value > ceiling {
-            ceiling
-        } else {
-            value
-        }
+        if value > ceiling { ceiling } else { value }
     }
 }
 
@@ -906,10 +902,12 @@ mod tests {
     use super::{
         ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
     };
-    use crate::{RelativePath, PROTOCOL};
+    use crate::{PROTOCOL, RelativePath};
 
     fn document(extra: &str) -> String {
-        format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}")
+        format!(
+            "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"containers:read\"]\n{extra}"
+        )
     }
 
     #[test]
@@ -1016,7 +1014,9 @@ mod tests {
         assert_eq!(narrowed.remove, vec![reference]);
 
         for invalid in ["alpine:3.20", "registry-1.docker.io/library/alpine:3.20 "] {
-            let manifest = format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"images:read\"]\n[images]\nread = [{{ reference = \"{invalid}\" }}]\n");
+            let manifest = format!(
+                "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"images:read\"]\n[images]\nread = [{{ reference = \"{invalid}\" }}]\n"
+            );
             assert!(Manifest::parse(&manifest, PROTOCOL).is_err(), "accepted {invalid:?}");
         }
     }

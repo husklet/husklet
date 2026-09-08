@@ -19,8 +19,8 @@ use hl_extension::port::{
     WorkspaceState,
 };
 use hl_extension::{
-    codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
-    Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
+    Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, PROTOCOL, RelativePath, Reply, Request,
+    Services, Session, Transit, Welcome, WorkspaceInfo, codec,
 };
 use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,

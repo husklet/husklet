@@ -591,9 +591,11 @@ fn pane_semantic_read_and_control_are_separately_granted() {
         session(&[Capability::PaneSemanticRead], &[]).dispatch(&read, &services(&host)),
         Ok(Reply::Semantics(_))
     ));
-    assert!(session(&[Capability::PaneSemanticRead], &[])
-        .dispatch(&action, &services(&host))
-        .is_err());
+    assert!(
+        session(&[Capability::PaneSemanticRead], &[])
+            .dispatch(&action, &services(&host))
+            .is_err()
+    );
     session(&[Capability::PaneSemanticControl], &[])
         .dispatch(&action, &services(&host))
         .expect("controlled");
@@ -606,9 +608,11 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 #[test]
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
-    assert!(session(&[], &[])
-        .dispatch(&Request::PaneList, &services(&host))
-        .is_err());
+    assert!(
+        session(&[], &[])
+            .dispatch(&Request::PaneList, &services(&host))
+            .is_err()
+    );
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
         .expect("pane observation grants bounded discovery");
@@ -1945,28 +1949,34 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
 fn extension_acquisition_identifiers_are_bounded_before_the_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionInstall], &[]);
-    assert!(session
-        .dispatch(
-            &Request::ExtensionAcquisitionStart {
-                reference: "x".repeat(513)
-            },
-            &services(&host)
-        )
-        .is_err());
-    assert!(session
-        .dispatch(
-            &Request::ExtensionAcquisitionStart {
-                reference: "bad reference".into()
-            },
-            &services(&host)
-        )
-        .is_err());
-    assert!(session
-        .dispatch(
-            &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
-            &services(&host)
-        )
-        .is_err());
+    assert!(
+        session
+            .dispatch(
+                &Request::ExtensionAcquisitionStart {
+                    reference: "x".repeat(513)
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::ExtensionAcquisitionStart {
+                    reference: "bad reference".into()
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
+                &services(&host)
+            )
+            .is_err()
+    );
     assert!(matches!(
         session.dispatch(
             &Request::ExtensionInstall {
@@ -2997,47 +3007,55 @@ fn holding_read_never_permits_the_matching_write() {
     let host = Host::new();
     let mut session = session(&[Capability::FilesystemRead, Capability::ContainerRead], &["logs"]);
 
-    assert!(session
-        .dispatch(
-            &Request::FilesystemWrite {
-                path: path("logs/app.log"),
-                contents: b"x".to_vec()
-            },
-            &services(&host)
-        )
-        .is_err());
-    assert!(session
-        .dispatch(
-            &Request::ContainerStop {
-                id: "c1".into(),
-                generation: 4,
-            },
-            &services(&host)
-        )
-        .is_err());
-    assert!(session
-        .dispatch(
-            &Request::ContainerKill {
-                id: "c1".into(),
-                generation: 4,
-                signal: "SIGKILL".into(),
-            },
-            &services(&host),
-        )
-        .is_err());
-    assert!(session
-        .dispatch(
-            &Request::ContainerExec {
-                environment: Vec::new(),
-                id: "c1".into(),
-                generation: 4,
-                command: vec!["sh".into()],
-                user: None,
-                working_directory: None,
-            },
-            &services(&host),
-        )
-        .is_err());
+    assert!(
+        session
+            .dispatch(
+                &Request::FilesystemWrite {
+                    path: path("logs/app.log"),
+                    contents: b"x".to_vec()
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::ContainerStop {
+                    id: "c1".into(),
+                    generation: 4,
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::ContainerKill {
+                    id: "c1".into(),
+                    generation: 4,
+                    signal: "SIGKILL".into(),
+                },
+                &services(&host),
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::ContainerExec {
+                    environment: Vec::new(),
+                    id: "c1".into(),
+                    generation: 4,
+                    command: vec!["sh".into()],
+                    user: None,
+                    working_directory: None,
+                },
+                &services(&host),
+            )
+            .is_err()
+    );
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -3066,23 +3084,27 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     assert_eq!(host.ledger.reached(), ["files.inventory"]);
     host.ledger.clear();
 
-    assert!(session
-        .dispatch(
-            &Request::FilesystemRead {
-                path: path("src/lib.rs")
-            },
-            &services(&host)
-        )
-        .is_ok());
-    assert!(session
-        .dispatch(
-            &Request::FilesystemWrite {
-                path: path("workspace.toml"),
-                contents: b"x".to_vec()
-            },
-            &services(&host)
-        )
-        .is_ok());
+    assert!(
+        session
+            .dispatch(
+                &Request::FilesystemRead {
+                    path: path("src/lib.rs")
+                },
+                &services(&host)
+            )
+            .is_ok()
+    );
+    assert!(
+        session
+            .dispatch(
+                &Request::FilesystemWrite {
+                    path: path("workspace.toml"),
+                    contents: b"x".to_vec()
+                },
+                &services(&host)
+            )
+            .is_ok()
+    );
     host.ledger.clear();
     assert!(matches!(
         session.dispatch(
@@ -3123,15 +3145,17 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
         ..hl_extension::FilesystemGrant::default()
     });
 
-    assert!(session
-        .dispatch(
-            &Request::FilesystemWrite {
-                path: file.clone(),
-                contents: b"{}".to_vec(),
-            },
-            &services(&host),
-        )
-        .is_ok());
+    assert!(
+        session
+            .dispatch(
+                &Request::FilesystemWrite {
+                    path: file.clone(),
+                    contents: b"{}".to_vec(),
+                },
+                &services(&host),
+            )
+            .is_ok()
+    );
     host.ledger.clear();
 
     for request in [
@@ -3238,15 +3262,17 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
 fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session
-        .dispatch(
-            &Request::ExecutionWait {
-                id: "e".repeat(32),
-                timeout_ms: 30_001
-            },
-            &services(&host)
-        )
-        .is_err());
+    assert!(
+        session
+            .dispatch(
+                &Request::ExecutionWait {
+                    id: "e".repeat(32),
+                    timeout_ms: 30_001
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
@@ -3296,16 +3322,18 @@ fn execution_reads_refuse_names_and_prefixes_before_inventory_authority() {
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(session
-        .dispatch(
-            &Request::ExecutionLogs {
-                id: "e".repeat(32),
-                stdout: false,
-                stderr: false
-            },
-            &services(&host)
-        )
-        .is_err());
+    assert!(
+        session
+            .dispatch(
+                &Request::ExecutionLogs {
+                    id: "e".repeat(32),
+                    stdout: false,
+                    stderr: false
+                },
+                &services(&host)
+            )
+            .is_err()
+    );
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
@@ -3696,9 +3724,11 @@ fn a_topic_cannot_be_followed_without_its_namespace_capability() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
 
-    assert!(session
-        .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
-        .is_err());
+    assert!(
+        session
+            .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
+            .is_err()
+    );
     assert!(!session.may_emit(Topic::Terminal));
 }
 

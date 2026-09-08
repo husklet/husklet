@@ -647,8 +647,7 @@ impl Summary {
         }
     }
 
-    pub const EXECUTION_NOTICE: &'static str =
-        "This extension can run programs inside this workspace. It is isolated from the rest of \
+    pub const EXECUTION_NOTICE: &'static str = "This extension can run programs inside this workspace. It is isolated from the rest of \
          your machine by the workspace, not from the workspace itself.";
 }
 
@@ -815,9 +814,11 @@ mod tests {
             .install(&manifest, "sha256:a", &manifest.capabilities, 10)
             .expect("installed");
 
-        assert!(installation
-            .install(&manifest, "sha256:b", &manifest.capabilities, 20)
-            .is_err());
+        assert!(
+            installation
+                .install(&manifest, "sha256:b", &manifest.capabilities, 20)
+                .is_err()
+        );
     }
 
     #[test]

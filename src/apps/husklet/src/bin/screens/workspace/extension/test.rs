@@ -156,16 +156,20 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
 
 fn startup_is_visible_until_the_first_valid_frame() {
     let mut fixture = Fixture::new();
-    assert!(visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
 
     fixture.describe(&panel("Ready"));
     fixture.page.tick();
 
-    assert!(!visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        !visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
 }
 
 fn a_new_generation_restarts_at_frame_one_without_a_sequence_fault() {
@@ -238,7 +242,10 @@ fn a_long_fault_is_bounded_wrapped_and_accessible() {
     assert!(detail.text().chars().count() <= hl_extension::port::SEMANTIC_TEXT_LIMIT);
 
     let (minimum, _, _, _) = banner.measure(gtk::Orientation::Horizontal, -1);
-    assert!(minimum <= 160, "an unbroken diagnostic forced a {minimum}px minimum width");
+    assert!(
+        minimum <= 160,
+        "an unbroken diagnostic forced a {minimum}px minimum width"
+    );
 
     let semantics = fixture.page.semantics("pane-1").expect("fault semantics");
     let fault = &semantics.root.children[0];
@@ -260,7 +267,10 @@ fn an_empty_wire_slot_addresses_the_overview_surface() {
         .expect("the page is listening");
 
     assert_eq!(fixture.page.tick(), 1);
-    assert!(fixture.tagged(Tag::Button).is_some(), "the primary wire slot reached the overview");
+    assert!(
+        fixture.tagged(Tag::Button).is_some(),
+        "the primary wire slot reached the overview"
+    );
 }
 
 fn network_waterfall_projects_exact_structured_semantics() {

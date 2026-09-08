@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
+use hl_extension::RelativePath;
 use hl_extension::port::{
     DirectoryPage, Entry, FileChange, FileChangeKind, FileChangePage, FileInventory, FileRange, HostError,
     WorkspaceFiles,
 };
-use hl_extension::RelativePath;
 use notify::{RecursiveMode, Watcher as _};
 
 /// The workspace file port, rooted at one directory.
@@ -1247,22 +1247,30 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(25));
         let alpha_page = files.changes_since(&alpha, 0, 32).unwrap();
         let beta_page = files.changes_since(&beta, 0, 32).unwrap();
-        assert!(alpha_page
-            .changes
-            .iter()
-            .any(|change| change.path.as_str() == "alpha/transient"));
-        assert!(beta_page
-            .changes
-            .iter()
-            .any(|change| change.path.as_str() == "beta/transient"));
-        assert!(alpha_page
-            .changes
-            .iter()
-            .all(|change| !change.path.as_str().starts_with("beta/")));
-        assert!(beta_page
-            .changes
-            .iter()
-            .all(|change| !change.path.as_str().starts_with("alpha/")));
+        assert!(
+            alpha_page
+                .changes
+                .iter()
+                .any(|change| change.path.as_str() == "alpha/transient")
+        );
+        assert!(
+            beta_page
+                .changes
+                .iter()
+                .any(|change| change.path.as_str() == "beta/transient")
+        );
+        assert!(
+            alpha_page
+                .changes
+                .iter()
+                .all(|change| !change.path.as_str().starts_with("beta/"))
+        );
+        assert!(
+            beta_page
+                .changes
+                .iter()
+                .all(|change| !change.path.as_str().starts_with("alpha/"))
+        );
     }
 
     #[test]
@@ -1451,10 +1459,12 @@ mod tests {
         let whole = files
             .inventory(&[subtree("source"), subtree("private")])
             .expect("declared-root inventory");
-        assert!(whole
-            .entries
-            .iter()
-            .any(|entry| entry.path.to_string() == "private/key"));
+        assert!(
+            whole
+                .entries
+                .iter()
+                .any(|entry| entry.path.to_string() == "private/key")
+        );
         for index in 0..260 {
             std::fs::write(root.join("source").join(format!("extra-{index}")), b"x").expect("extra file");
         }
@@ -1549,15 +1559,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&target).expect("old contents"), b"old bytes");
-        assert!(std::fs::read_dir(temporary.path())
-            .expect("directory listing")
-            .all(|entry| {
-                !entry
-                    .expect("entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".husklet-write-")
-            }));
+        assert!(
+            std::fs::read_dir(temporary.path())
+                .expect("directory listing")
+                .all(|entry| {
+                    !entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".husklet-write-")
+                })
+        );
     }
 
     #[test]
@@ -1675,10 +1687,12 @@ mod tests {
         .expect("atomic publication");
 
         assert_eq!(std::fs::read(&target).expect("published contents"), b"new bytes");
-        assert!(!std::fs::symlink_metadata(&target)
-            .expect("published metadata")
-            .file_type()
-            .is_symlink());
+        assert!(
+            !std::fs::symlink_metadata(&target)
+                .expect("published metadata")
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(std::fs::read(&outside).expect("outside contents"), b"outside bytes");
     }
 
@@ -1736,10 +1750,12 @@ mod tests {
 
         assert_eq!(std::fs::read(&outside).expect("outside"), b"outside");
         assert!(!root.join("remove-link").exists());
-        assert!(std::fs::symlink_metadata(root.join("renamed-link"))
-            .expect("renamed link")
-            .file_type()
-            .is_symlink());
+        assert!(
+            std::fs::symlink_metadata(root.join("renamed-link"))
+                .expect("renamed link")
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, CreateExecution, DockerMount, HostConfig
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -527,8 +527,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec,
-        GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+        GENERATION_LABEL, Image, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, Sidecar,
+        SidecarSpec, ensure_transaction, removal_target, replacement_target, stop_target,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 

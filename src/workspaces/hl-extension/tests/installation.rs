@@ -2,8 +2,8 @@
 //! property under test throughout is that a grant only ever narrows on its own.
 
 use hl_extension::{
-    Capability, Disposition, ExtensionName, Grant, Installation, Manifest, Record, Stage, Summary, UpdateFailure,
-    PROTOCOL,
+    Capability, Disposition, ExtensionName, Grant, Installation, Manifest, PROTOCOL, Record, Stage, Summary,
+    UpdateFailure,
 };
 
 fn name() -> ExtensionName {

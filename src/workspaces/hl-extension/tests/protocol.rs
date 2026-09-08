@@ -3,7 +3,7 @@
 
 use hl_extension::{
     Activation, Capability, ChannelId, Compatibility, ExtensionName, Flags, Frame, Grant, Hello, Invalid, Kind, Limits,
-    Malformed, Manifest, PaneSelection, RelativePath, Resources, Welcome, PROTOCOL,
+    Malformed, Manifest, PROTOCOL, PaneSelection, RelativePath, Resources, Welcome,
 };
 
 #[test]

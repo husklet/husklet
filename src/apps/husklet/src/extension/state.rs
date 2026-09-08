@@ -184,7 +184,7 @@ fn parse(key: &Key, bytes: &[u8]) -> Result<Record, Fault> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fault, Records, PREFIX};
+    use super::{Fault, PREFIX, Records};
     use hl_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
     use hl_ws::storage::{Directory, Key, Storage as _};
 

@@ -9,9 +9,9 @@ use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
+use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
-use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -456,9 +456,11 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(management
-            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert!(events.drain().is_none());
     }
 
@@ -471,9 +473,11 @@ mod tests {
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
         state.write("absent", b"migration-checkpoint").unwrap();
 
-        assert!(management
-            .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
-            .is_err());
+        assert!(
+            management
+                .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
+                .is_err()
+        );
         assert_eq!(state.read().unwrap().contents, b"migration-checkpoint");
     }
 

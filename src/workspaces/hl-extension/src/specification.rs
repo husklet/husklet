@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
+use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),

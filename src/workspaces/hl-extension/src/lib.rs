@@ -36,7 +36,7 @@ pub use capability::{Capability, Grant};
 pub use codec::Coding;
 pub use hl_rpc::{
     Authority, ChannelId, Channels, Compatibility, Denial, Emission, Flags, Frame, Hello, Kind, Limits, Malformed,
-    Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire, PROTOCOL,
+    PROTOCOL, Parcel, Permission, Permit, Purpose, Reason, Refusal, RelativePath, Streams, Transit, Wire,
 };
 pub use installation::{Disposition, Installation, Objection, Record, Stage, Summary, Update, UpdateFailure};
 pub use manifest::{

@@ -129,7 +129,7 @@ impl StateBlob {
                 return Ok(ExtensionPreferences {
                     revision: 0,
                     entries: Vec::new(),
-                })
+                });
             }
             Err(error) => return Err(Self::failure(error)),
         };
@@ -350,12 +350,12 @@ fn identity(contents: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
 
     use hl_extension::port::ExtensionStateStore as _;
 
-    use super::{StateBlob, MAX_STATE_BYTES};
+    use super::{MAX_STATE_BYTES, StateBlob};
 
     fn blob(root: &Path, name: &str) -> StateBlob {
         StateBlob::new(root, &hl_extension::ExtensionName::new(name).unwrap()).unwrap()

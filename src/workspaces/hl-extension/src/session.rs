@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
-    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
-    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
+    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
+    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};

@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::sync::mpsc::Sender;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use hl_client::model::{CreateContainer, HostConfig, InspectImage};
@@ -380,7 +380,9 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, immutable_content, manifest_container_request, manifest_path, split, Acquisition, Candidate};
+    use super::{
+        Acquisition, Candidate, document, immutable_content, manifest_container_request, manifest_path, split,
+    };
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
 
@@ -642,7 +644,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn both_architecture_candidates_are_bound_to_their_workspace_without_starting() {
-        use super::super::sidecar::{Image, SidecarSpec, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
+        use super::super::sidecar::{Image, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, SidecarSpec};
         use hl_client::model::EventQuery;
         use hl_container::{Config, Containers, Persistence};
         use hl_daemon::Daemon;

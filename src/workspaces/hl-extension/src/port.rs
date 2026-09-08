@@ -1538,8 +1538,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
-        PANE_TEXT_BYTES,
+        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
+        bounded_pane_text, pane_lines,
     };
 
     #[test]
@@ -1673,35 +1673,43 @@ mod tests {
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_ok());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone(), entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                architectures: vec!["amd64".into(), "amd64".into()],
-                ..entry.clone()
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                description: "unsafe\nmetadata".into(),
-                ..entry
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone(), entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    architectures: vec!["amd64".into(), "amd64".into()],
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    description: "unsafe\nmetadata".into(),
+                    ..entry
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }
