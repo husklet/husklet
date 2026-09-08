@@ -2332,6 +2332,52 @@
       "kind": "struct",
       "serde": {}
     },
+    "FileRangeRequest": {
+      "fields": [
+        {
+          "name": "path",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "RelativePath"
+          }
+        },
+        {
+          "name": "offset",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "limit",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "observed",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "FilesystemGrant": {
       "fields": [
         {
@@ -8144,6 +8190,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_read_ranges"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_stat"
     },
     {
@@ -8631,6 +8681,10 @@
     {
       "reply": "file_range",
       "request": "filesystem_read_range"
+    },
+    {
+      "reply": "file_ranges",
+      "request": "filesystem_read_ranges"
     },
     {
       "reply": "entry",
@@ -9239,6 +9293,19 @@
             "of": {
               "kind": "ref",
               "name": "FileRange"
+            }
+          }
+        },
+        {
+          "name": "file_ranges",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "array",
+              "of": {
+                "kind": "ref",
+                "name": "FileRange"
+              }
             }
           }
         },
@@ -11680,6 +11747,25 @@
           }
         },
         {
+          "name": "filesystem_read_ranges",
+          "payload": {
+            "fields": [
+              {
+                "name": "ranges",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "ref",
+                    "name": "FileRangeRequest"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_stat",
           "payload": {
             "fields": [
@@ -13302,7 +13388,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:33c40cf7aeeb32b1",
+  "source_fingerprint": "fnv1a64:ac55a3678e6ee077",
   "specification_version": 1,
   "topics": [
     {

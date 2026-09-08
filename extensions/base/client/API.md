@@ -167,6 +167,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.listPage(...)` — `filesystem_list_page`, requires `filesystem:read`.
 - `host.files.read(...)` — `filesystem_read`, requires `filesystem:read`.
 - `host.files.readRange(...)` — `filesystem_read_range`, requires `filesystem:read`.
+- `host.files.readRanges(...)` — `filesystem_read_ranges`, requires `filesystem:read`.
 - `host.files.stat(...)` — `filesystem_stat`, requires `filesystem:read`.
 - `host.files.write(...)` — `filesystem_write`, requires `filesystem:write`.
 - `host.files.writeObserved(...)` — `filesystem_write_observed`, requires `filesystem:write`.
@@ -177,6 +178,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.remove(...)` — `filesystem_remove`, requires `filesystem:write`.
 - `host.files.removeObserved(...)` — `filesystem_remove_observed`, requires `filesystem:write`.
 - `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.
+- `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.
 
 ## Private extension state
 

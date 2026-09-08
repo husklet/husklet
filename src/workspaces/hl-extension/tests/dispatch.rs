@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
     ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionCredential, ExtensionState,
-    ExtensionStateStore, ExtensionStore, ExtensionSummary, FileInventory, FileRange, GridSize, HostError, ImageDetails,
+    ExtensionStateStore, ExtensionStore, ExtensionSummary, FileInventory, FileRange, FileRangeRequest, GridSize, HostError, ImageDetails,
     ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText,
     PreferenceValue, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface, TerminalTopology,
     WorkspaceFiles, WorkspaceInventory, WorkspaceState,
@@ -1562,6 +1562,14 @@ fn calls() -> Vec<(Request, Capability)> {
                 offset: 0,
                 limit: 8,
                 observed: None,
+            },
+            Capability::FilesystemRead,
+        ),
+        (
+            Request::FilesystemReadRanges {
+                ranges: vec![FileRangeRequest {
+                    path: path("logs/app.log"), offset: 0, limit: 8, observed: None,
+                }],
             },
             Capability::FilesystemRead,
         ),
@@ -3194,6 +3202,28 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
         host.ledger.reached().is_empty(),
         "wrong-verb roots must fail before the filesystem port"
     );
+}
+
+#[test]
+fn filesystem_range_batch_confines_every_member_before_any_host_read() {
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").unwrap(),
+        Grant::new([Capability::FilesystemRead]),
+        vec![path("src")],
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![hl_extension::FilesystemSelector::Subtree { subtree: path("src") }],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemReadRanges {
+        ranges: vec![
+            FileRangeRequest { path: path("src/lib.rs"), offset: 0, limit: 8, observed: None },
+            FileRangeRequest { path: path("secrets.env"), offset: 0, limit: 8, observed: None },
+        ],
+    };
+    assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

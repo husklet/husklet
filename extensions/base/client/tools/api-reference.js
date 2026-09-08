@@ -110,6 +110,7 @@ groups
   .get('Files')
   .push(
     '- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.',
+    '- `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.',
   );
 groups
   .get('Extension preferences')

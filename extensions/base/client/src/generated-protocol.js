@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:646385a49cb0ba28
+// Protocol artifact fnv1a64:78546859f41575c0
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -391,6 +391,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
   "filesystem_read_range": "file_range",
+  "filesystem_read_ranges": "file_ranges",
   "filesystem_stat": "entry",
   "filesystem_write": "done",
   "filesystem_write_observed": "identity",
@@ -515,6 +516,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
   "filesystem_read_range": "filesystem:read",
+  "filesystem_read_ranges": "filesystem:read",
   "filesystem_stat": "filesystem:read",
   "filesystem_write": "filesystem:write",
   "filesystem_write_observed": "filesystem:write",
@@ -2649,6 +2651,52 @@ const definitions = {
         "optional": false,
         "schema": {
           "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "FileRangeRequest": {
+    "fields": [
+      {
+        "name": "path",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "RelativePath"
+        }
+      },
+      {
+        "name": "offset",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "limit",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "observed",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "string"
+          }
         }
       }
     ],
@@ -8526,6 +8574,19 @@ const roots = {
         }
       },
       {
+        "name": "file_ranges",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "FileRange"
+            }
+          }
+        }
+      },
+      {
         "name": "state",
         "payload": {
           "kind": "newtype",
@@ -10955,6 +11016,25 @@ const roots = {
                 "kind": "optional",
                 "of": {
                   "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_read_ranges",
+        "payload": {
+          "fields": [
+            {
+              "name": "ranges",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "kind": "ref",
+                  "name": "FileRangeRequest"
                 }
               }
             }

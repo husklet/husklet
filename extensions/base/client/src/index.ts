@@ -1605,6 +1605,33 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }
         return range;
       },
+      readRanges: async (ranges) => {
+        if (!Array.isArray(ranges) || ranges.length < 1 || ranges.length > 64)
+          throw new RangeError('filesystem range batch must contain 1 through 64 ranges');
+        let aggregate = 0;
+        const exact = ranges.map(({ path, offset = 0, limit = 65536, observed = null }) => {
+          const [boundedOffset, boundedLimit] = exactFileRange(offset, limit);
+          aggregate += boundedLimit;
+          return { path, offset: boundedOffset, limit: boundedLimit, observed };
+        });
+        if (aggregate > 65536)
+          throw new RangeError('filesystem range batch exceeds 65536 requested bytes');
+        const values = expect(
+          await session.call('filesystem_read_ranges', { ranges: exact }),
+          'file_ranges',
+        );
+        if (
+          values.length !== exact.length ||
+          values.some(
+            (value, index) =>
+              value.path !== exact[index].path ||
+              value.offset !== exact[index].offset ||
+              value.contents.length > exact[index].limit,
+          )
+        )
+          throw new TypeError('host returned an inconsistent filesystem range batch');
+        return values;
+      },
       readChunks: async function* (
         path,
         {
@@ -3686,6 +3713,7 @@ export const protocolCoverage = Object.freeze({
       'walk',
       'read',
       'readRange',
+      'readRanges',
       'readChunks',
       'stat',
       'write',

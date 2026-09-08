@@ -16,6 +16,44 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix range batch preserves ordered paths and one bounded frame', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-range-batch-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue; calls.push(frame.payload);
+        const ranges = frame.payload.with.ranges.map((range) => ({
+          path: range.path, identity: `id:${range.path}`, offset: range.offset,
+          total: 1, contents: [range.path.charCodeAt(0)], eof: true, truncated: false,
+        }));
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'file_ranges', with: ranges } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'range-batch', granted: ['filesystem:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const values = await workspace(session).files.readRanges([
+      { path: 'src/a.rs', limit: 1 }, { path: 'src/b.rs', limit: 1 },
+    ]);
+    assert.deepEqual(values.map(({ path }) => path), ['src/a.rs', 'src/b.rs']);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], { call: 'filesystem_read_ranges', with: { ranges: [
+      { path: 'src/a.rs', offset: 0, limit: 1, observed: null },
+      { path: 'src/b.rs', offset: 0, limit: 1, observed: null },
+    ] } });
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix credential execution sends only the key and requires both grants', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-exec-'));
   const socketPath = path.join(directory, 'host.sock');

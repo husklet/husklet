@@ -424,6 +424,10 @@ pub enum Request {
         limit: usize,
         observed: Option<String>,
     },
+    /// Reads several confined file ranges in one bounded host round trip.
+    FilesystemReadRanges {
+        ranges: Vec<crate::port::FileRangeRequest>,
+    },
     FilesystemStat {
         path: RelativePath,
     },
@@ -616,6 +620,7 @@ impl Request {
             | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
             | Self::FilesystemReadRange { .. }
+            | Self::FilesystemReadRanges { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. }
             | Self::FilesystemWriteObserved { .. }
@@ -785,6 +790,7 @@ pub enum Reply {
     Entry(Entry),
     Contents(Vec<u8>),
     FileRange(crate::port::FileRange),
+    FileRanges(Vec<crate::port::FileRange>),
     State(crate::port::ExtensionState),
     Preferences(crate::port::ExtensionPreferences),
     Credential(crate::port::ExtensionCredential),

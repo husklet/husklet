@@ -1364,6 +1364,10 @@ export interface WorkspaceApi {
       limit?: number,
       observed?: string | null,
     ): Promise<FileRange>;
+    /** Reads up to 64 confined ranges with one 64 KiB aggregate host round trip. */
+    readRanges(
+      ranges: Array<{ path: string; offset?: number; limit?: number; observed?: string | null }>,
+    ): Promise<FileRange[]>;
     /** Reads a stable file identity as consumer-driven bounded chunks until EOF. */
     readChunks(
       path: string,

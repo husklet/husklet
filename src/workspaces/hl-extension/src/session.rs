@@ -534,6 +534,12 @@ impl Session {
     pub fn dispatch(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let capability = request.capability();
         match request {
+            Request::FilesystemReadRanges { ranges } => {
+                self.peer.authority().permit(capability)?;
+                for range in ranges {
+                    self.permit_filesystem_path(capability, FilesystemAccess::Read, &range.path)?;
+                }
+            }
             Request::FilesystemRename { from, to } | Request::FilesystemRenameObserved { from, to, .. } => {
                 self.permit_filesystem_path(capability, FilesystemAccess::Rename, from)?;
                 self.permit_filesystem_path(capability, FilesystemAccess::Rename, to)?;
@@ -696,6 +702,7 @@ impl Session {
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
             | Request::FilesystemReadRange { .. }
+            | Request::FilesystemReadRanges { .. }
             | Request::FilesystemStat { .. }
             | Request::FilesystemWrite { .. }
             | Request::FilesystemWriteObserved { .. }
@@ -1613,6 +1620,34 @@ impl Session {
                     *limit,
                     observed.as_deref(),
                 )?))
+            }
+            Request::FilesystemReadRanges { ranges } => {
+                if ranges.is_empty()
+                    || ranges.len() > 64
+                    || ranges.iter().any(|range| {
+                        range.limit == 0
+                            || range.limit > 64 * 1024
+                            || range.observed.as_ref().is_some_and(|value| value.len() > 256)
+                    })
+                    || ranges.iter().map(|range| range.limit).sum::<usize>() > 64 * 1024
+                {
+                    return Err(Failure::Failed {
+                        detail: "filesystem range batch exceeds protocol bounds".into(),
+                    });
+                }
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                let values = ranges
+                    .iter()
+                    .map(|range| {
+                        port.read_range(
+                            &range.path,
+                            range.offset,
+                            range.limit,
+                            range.observed.as_deref(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Reply::FileRanges(values))
             }
             Request::FilesystemStat { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
