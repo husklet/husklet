@@ -303,12 +303,14 @@ export function Networks({
                   enabled={operation.state !== 'loading' && container.trim().length > 0}
                   onInvoke={() => begin(network, 'connect')}
                 />
-                <Button
-                  label="Disconnect"
-                  enabled={operation.state !== 'loading' && container.trim().length > 0}
-                  tone="danger"
-                  onInvoke={() => begin(network, 'disconnect')}
-                />
+                {container.trim().length > 0 ? (
+                  <Button
+                    label="Disconnect"
+                    enabled={operation.state !== 'loading'}
+                    tone="danger"
+                    onInvoke={() => begin(network, 'disconnect')}
+                  />
+                ) : null}
                 {network.kind !== 'builtin' ? (
                   <ConfirmAction
                     authorityKey={`network:${id}:remove`}
