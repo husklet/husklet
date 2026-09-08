@@ -129,23 +129,11 @@ impl Containers {
             process = process.env(name, value);
         }
         let root_store = images.roots();
+        // Configure against a cheap empty overlay first. On hosts that cannot
+        // launch overlays, deciding read-only before validation avoids falling
+        // back to a recursive private copy merely to inspect immutable bytes.
         let candidate = root_store.fork_overlay(image.snapshot())?;
-        let mut rootfs = match root_store.open_overlay(&candidate) {
-            Ok(view)
-                if self.service.validate_overlay(&crate::service::OverlayConfig {
-                    lower: view.lower().to_owned(),
-                    upper: view.upper().to_owned(),
-                    work: view.work().to_owned(),
-                    names: view.name_projections(),
-                }) =>
-            {
-                candidate
-            }
-            _ => {
-                root_store.release(&candidate)?;
-                images.rootfs(image)?
-            }
-        };
+        let mut rootfs = candidate.clone();
         if !runtime.user.is_empty() {
             let path = match root_store.open_overlay(&rootfs) {
                 Ok(root) => root.lower().to_owned(),
@@ -169,6 +157,25 @@ impl Containers {
             return Err(crate::Error::InvalidSpec(
                 "image configuration must not replace its owned rootfs".into(),
             ));
+        }
+        if uses_immutable_root(&spec) {
+            root_store.release(&rootfs)?;
+            rootfs = root_store.pin(image.snapshot())?;
+            spec.rootfs = crate::Rootfs::Image(rootfs.clone());
+        } else {
+            let overlay_supported = root_store.open_overlay(&rootfs).is_ok_and(|view| {
+                self.service.validate_overlay(&crate::service::OverlayConfig {
+                    lower: view.lower().to_owned(),
+                    upper: view.upper().to_owned(),
+                    work: view.work().to_owned(),
+                    names: view.name_projections(),
+                })
+            });
+            if !overlay_supported {
+                root_store.release(&rootfs)?;
+                rootfs = images.rootfs(image)?;
+                spec.rootfs = crate::Rootfs::Image(rootfs.clone());
+            }
         }
         if rootfs.overlay().is_some() && requires_materialized_root(&spec.mounts) {
             root_store.release(&rootfs)?;
@@ -202,6 +209,10 @@ fn requires_materialized_root(mounts: &[crate::Mount]) -> bool {
     mounts.iter().any(|mount| mount.populate)
 }
 
+fn uses_immutable_root(spec: &crate::ContainerSpec) -> bool {
+    spec.isolation.read_only_root
+}
+
 fn commit_runtime(container: &Container) -> Result<hl_images::RuntimeConfig> {
     let process = &container.spec.process;
     Ok(hl_images::RuntimeConfig {
@@ -219,8 +230,32 @@ fn commit_runtime(container: &Container) -> Result<hl_images::RuntimeConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::requires_materialized_root;
-    use crate::{Access, Mount};
+    use super::{requires_materialized_root, uses_immutable_root};
+    use crate::{Access, ContainerSpec, Isolation, Mount, Process};
+
+    #[test]
+    fn read_only_images_select_the_immutable_snapshot() {
+        let temporary = tempfile::tempdir().unwrap();
+        let snapshots = hl_images::snapshot::Snapshots::open(temporary.path().join("snapshots")).unwrap();
+        let snapshot = hl_images::snapshot::Id::new("immutable").unwrap();
+        snapshots
+            .prepare(hl_images::snapshot::Id::new("preparing").unwrap(), None)
+            .unwrap()
+            .commit(snapshot.clone())
+            .unwrap();
+        let roots = hl_images::rootfs::Roots::new(
+            snapshots,
+            hl_images::Leases::open(temporary.path().join("leases")).unwrap(),
+        );
+        let reference = roots.pin(&snapshot).unwrap();
+        let readonly = ContainerSpec::new(reference.clone(), Process::new("/bin/true")).isolation(Isolation {
+            read_only_root: true,
+            ..Isolation::default()
+        });
+        let writable = ContainerSpec::new(reference, Process::new("/bin/true"));
+        assert!(uses_immutable_root(&readonly));
+        assert!(!uses_immutable_root(&writable));
+    }
 
     #[test]
     fn ordinary_mounts_keep_the_overlay_root() {

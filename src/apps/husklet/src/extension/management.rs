@@ -232,19 +232,21 @@ fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &st
 }
 
 fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<ExtensionCatalogueEntry> {
-    reference
-        .map(|reference| ExtensionCatalogueEntry {
-            id: "storybook".into(),
-            title: "Component playground".into(),
-            description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
-            reference: reference.into(),
-            publisher: "Husklet".into(),
-            source: "husklet:first-party/storybook".into(),
-            protocol: hl_extension::PROTOCOL,
-            architectures: vec![architecture.into()],
-        })
-        .into_iter()
-        .collect()
+    let reference = reference.unwrap_or(concat!(
+        "ghcr.io/husklet/husklet/extension-storybook:",
+        env!("CARGO_PKG_VERSION")
+    ));
+    std::iter::once(ExtensionCatalogueEntry {
+        id: "storybook".into(),
+        title: "Component playground".into(),
+        description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+        reference: reference.into(),
+        publisher: "Husklet".into(),
+        source: "husklet:first-party/storybook".into(),
+        protocol: hl_extension::PROTOCOL,
+        architectures: vec![architecture.into()],
+    })
+    .collect()
 }
 
 fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAcquisitionStatus {
@@ -355,7 +357,13 @@ mod tests {
         assert_eq!(entries[0].protocol, hl_extension::PROTOCOL);
         assert_eq!(entries[0].architectures, ["arm64"]);
         assert_eq!(entries[0].reference, "registry.example/husklet/storybook:4");
-        assert!(first_party_catalogue(None, "amd64").is_empty());
+        assert_eq!(
+            first_party_catalogue(None, "amd64")[0].reference,
+            format!(
+                "ghcr.io/husklet/husklet/extension-storybook:{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]

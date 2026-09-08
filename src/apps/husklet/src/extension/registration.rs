@@ -20,7 +20,7 @@ use std::sync::{
     Arc,
 };
 
-use hl_client::model::{CreateContainer, InspectImage};
+use hl_client::model::{CreateContainer, HostConfig, InspectImage};
 use hl_extension::port::HostError;
 use hl_extension::{Manifest, PROTOCOL};
 
@@ -269,10 +269,7 @@ fn split(reference: &str) -> (&str, Option<&str>) {
 /// Copies one path out of a container made from `reference`, and removes it again.
 fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancellation) -> Result<Vec<u8>, String> {
     let client = bridge.client();
-    let request = CreateContainer {
-        image: reference.to_owned(),
-        ..CreateContainer::default()
-    };
+    let request = manifest_container_request(reference);
     let created = cancellable(bridge, cancellation, client.containers().create(&request, None))?
         .map_err(|error| error.to_string())?;
     let archive = cancellable(bridge, cancellation, read(bridge, &created.id, path))?;
@@ -282,6 +279,17 @@ fn extract(bridge: &Bridge, reference: &str, path: &str, cancellation: &Cancella
     let _ = bridge
         .wait(async { tokio::time::timeout(CLEANUP_BOUND, client.containers().remove(&created.id, true, true)).await });
     archive
+}
+
+fn manifest_container_request(reference: &str) -> CreateContainer {
+    CreateContainer {
+        image: reference.to_owned(),
+        host_config: Some(HostConfig {
+            readonly_rootfs: true,
+            ..HostConfig::default()
+        }),
+        ..CreateContainer::default()
+    }
 }
 
 fn cancellable<F: std::future::Future>(
@@ -372,7 +380,7 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{document, immutable_content, manifest_path, split, Acquisition, Candidate};
+    use super::{document, immutable_content, manifest_container_request, manifest_path, split, Acquisition, Candidate};
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
 
@@ -441,6 +449,14 @@ mod tests {
     #[test]
     fn an_unlabelled_image_is_read_at_the_default_path() {
         assert_eq!(manifest_path(&BTreeMap::new()).unwrap(), Manifest::DEFAULT_PATH);
+    }
+
+    #[test]
+    fn manifest_inspection_requests_an_immutable_read_only_root() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let request = manifest_container_request(&digest);
+        assert_eq!(request.image, digest);
+        assert!(request.host_config.expect("host policy").readonly_rootfs);
     }
 
     #[test]
