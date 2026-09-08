@@ -8,7 +8,11 @@ import type {
   WireRequestFor,
   WireUiEvent,
 } from './generated-protocol.js';
-export type { ExtensionPreferences, FilesystemSelector, PreferenceValue } from './generated-protocol.js';
+export type {
+  ExtensionPreferences,
+  FilesystemSelector,
+  PreferenceValue,
+} from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
 

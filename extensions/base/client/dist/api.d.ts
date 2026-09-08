@@ -1,5 +1,5 @@
 import type { FilesystemSelector, ExtensionPreferences, PreferenceValue, Row as WireRow, WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
-export type { ExtensionPreferences, FilesystemSelector, PreferenceValue } from './generated-protocol.js';
+export type { ExtensionPreferences, FilesystemSelector, PreferenceValue, } from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
 /** Environment variable naming the extension's authenticated Unix socket. */
