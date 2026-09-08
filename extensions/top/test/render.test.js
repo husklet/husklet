@@ -54,6 +54,7 @@ const api = {
     disconnect: async () => {},
   },
   terminal: { tabs: async () => [], pinTab: async () => {}, focus: async () => {} },
+  extensions: { list: async () => [] },
 };
 
 const firstPartyCatalogue = async () => ({
@@ -1206,6 +1207,7 @@ test('overview never presents stale inventory counts as current during loading o
       volumes: { data: [], loading: false, error: null },
       networks: { data: [], loading: false, error: null },
       terminals: { data: [], loading: false, error: null },
+      extensions: { data: [], loading: false, error: null },
       onOpen: () => {},
     }),
   );
@@ -1213,8 +1215,8 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Reading inventory…'));
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'Refresh failed'));
-  assert.ok(labelled(stage, 'On demand'));
-  assert.ok(labelled(stage, 'Across running containers'));
+  assert.ok(labelled(stage, 'Unavailable'));
+  assert.ok(labelled(stage, 'running containers available to snapshot'));
   assert.ok(labelled(stage, '0 running'));
   for (const resource of [
     'Containers',
@@ -1224,6 +1226,7 @@ test('overview never presents stale inventory counts as current during loading o
     'Volumes',
     'Networks',
     'Terminal tabs',
+    'Extensions',
   ]) {
     assert.ok(
       labelled(stage, `Open ${resource}`),
@@ -1236,6 +1239,7 @@ test('overview never presents stale inventory counts as current during loading o
     'loading cannot retain stale running claims',
   );
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
+  assert.ok(labelled(stage, 'No reported faults'));
 });
 
 test('overview refreshes every authoritative inventory in one action', async () => {
@@ -1256,6 +1260,7 @@ test('overview refreshes every authoritative inventory in one action', async () 
       volumes: inventory('volumes'),
       networks: inventory('networks'),
       terminals: inventory('terminals'),
+      extensions: inventory('extensions'),
       onOpen() {},
     }),
   );
@@ -1264,6 +1269,7 @@ test('overview refreshes every authoritative inventory in one action', async () 
   assert.deepEqual(calls.sort(), [
     'containers',
     'executions',
+    'extensions',
     'images',
     'networks',
     'terminals',

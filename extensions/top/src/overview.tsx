@@ -14,6 +14,7 @@ import {
   ToggleButton,
   type ContainerSummary,
   type ExecutionSummary,
+  type ExtensionSummary,
   type ImageSummary,
   type NetworkSummary,
   type TabSummary,
@@ -87,6 +88,7 @@ export function Overview({
   volumes,
   networks,
   terminals,
+  extensions,
   onOpen,
 }: {
   containers: Resource<ContainerSummary>;
@@ -95,9 +97,10 @@ export function Overview({
   volumes: Resource<VolumeSummary>;
   networks: Resource<NetworkSummary>;
   terminals: Resource<TabSummary>;
+  extensions: Resource<ExtensionSummary>;
   onOpen: (section: Section) => void;
 }) {
-  const resources = [containers, executions, images, volumes, networks, terminals];
+  const resources = [containers, executions, images, volumes, networks, terminals, extensions];
   const refreshing = resources.some((resource) => resource.loading);
   const refreshAll = async () => {
     await Promise.all(resources.map((resource) => resource.reload()));
@@ -117,11 +120,16 @@ export function Overview({
     terminals,
     (records) => `${records.filter((tab) => tab.pinned).length} pinned`,
   );
+  const extensionsSummary = resourceSummary(extensions, (records) => {
+    const faults = records.filter((extension) => extension.status.startsWith('fault:')).length;
+    return faults ? `${faults} need attention` : 'No reported faults';
+  });
+  const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
   return (
     <Scroll grow height="fill">
       <Column pad={2} gap={2}>
         <Heading label="Workspace overview" scale="title" />
-        <Text label="Inspect and operate everything running in this workspace." color="text-dim" />
+        <Text label="Current inventory and reported runtime attention." color="text-dim" />
         <Row gap={1} align="center">
           {refreshing ? <Spinner /> : null}
           <Button
@@ -130,12 +138,18 @@ export function Overview({
             onInvoke={refreshAll}
           />
         </Row>
-        <Row gap={2} wrap>
+        <Row gap={2} wrap width={{ chars: 72 }}>
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
             title="Processes"
-            value="On demand"
-            detail="Across running containers"
+            value={
+              containers.loading
+                ? '…'
+                : containers.error
+                  ? 'Unavailable'
+                  : String(runningContainers)
+            }
+            detail="running containers available to snapshot"
             onOpen={() => onOpen('processes')}
           />
           <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
@@ -143,6 +157,7 @@ export function Overview({
           <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
           <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
           <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
+          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
         </Row>
         <ErrorText
           error={
