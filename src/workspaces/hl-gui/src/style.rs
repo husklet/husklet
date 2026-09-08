@@ -399,8 +399,11 @@ impl Theme {
             name: "dark".into(),
             colors: colors.into_iter().collect(),
             density: Density::Normal,
-            font: "Inter, system-ui, sans-serif".into(),
-            monospace: "SF Mono, Menlo, monospace".into(),
+            // Generic families are resolved by Pango to the host's configured
+            // UI and fixed-width faces. Naming fonts we do not ship makes the
+            // same extension silently acquire different metrics per machine.
+            font: "sans-serif".into(),
+            monospace: "monospace".into(),
             radius: Length::Step(2),
         }
     }

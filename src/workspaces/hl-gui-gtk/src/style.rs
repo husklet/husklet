@@ -182,7 +182,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 3px 0 0 {accent}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
-         .hl-heading {{ font-size: 16px; font-weight: 600; }}\n\
+         .hl-heading {{ font-weight: 600; }}\n\
          .hl-text {{ color: {text}; }}\n\
          columnview header button {{ background: {raised}; color: {dim}; font-weight: 600; }}\n\
          row:selected, :selected {{ background: {accent}; color: {ground}; }}\n\
@@ -256,6 +256,18 @@ mod tests {
         assert!(
             css.contains(".variant-outline:disabled") && css.contains("color: #6b7179; border-color: #2e3238"),
             "semantic variants must not override disabled affordance"
+        );
+    }
+
+    #[test]
+    fn heading_component_chrome_does_not_flatten_the_type_scale() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(".scale-title { font-size: 16px;"));
+        assert!(css.contains(".scale-display { font-size: 22px;"));
+        assert!(css.contains(".hl-heading { font-weight: 600; }"));
+        assert!(
+            !css.contains(".hl-heading { font-size:"),
+            "the later component rule would override every heading scale"
         );
     }
 
