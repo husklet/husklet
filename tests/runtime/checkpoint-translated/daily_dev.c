@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -88,6 +89,8 @@ static int helper(int cycle) {
 #if defined(__x86_64__)
 extern long checkpoint_link_target(long, long, long, long);
 extern long checkpoint_link_source(long, long, long, long);
+extern long checkpoint_forward_link_source(long);
+extern long checkpoint_forward_link_target(long);
 extern long checkpoint_mixed_sse(long);
 extern long checkpoint_capacity_prefix(long);
 extern double checkpoint_far_movsd(void);
@@ -108,6 +111,20 @@ __asm__(".pushsection .text.checkpoint_jcc_link,\"ax\",@progbits\n"
         "checkpoint_link_source:\n test %rdi,%rdi\n jnz checkpoint_link_target\n"
         "lea 3(%rsi,%rcx),%rax\n ret\n"
         ".size checkpoint_link_source,.-checkpoint_link_source\n"
+        ".popsection\n");
+
+/* Keep both directions explicit.  A late-link implementation may patch only
+ * the ascending edge: the descending edge is the bounded IRQ/checkpoint seam
+ * that every cycle must eventually cross. */
+__asm__(".pushsection .text.checkpoint_jcc_lifecycle,\"ax\",@progbits\n"
+        ".balign 4096\n"
+        ".global checkpoint_forward_link_source\n.type checkpoint_forward_link_source,@function\n"
+        "checkpoint_forward_link_source:\n test %rdi,%rdi\n jnz checkpoint_forward_link_target\n mov $42,%eax\n ret\n"
+        ".size checkpoint_forward_link_source,.-checkpoint_forward_link_source\n"
+        ".balign 4096\n"
+        ".global checkpoint_forward_link_target\n.type checkpoint_forward_link_target,@function\n"
+        "checkpoint_forward_link_target:\n dec %rdi\n jnz checkpoint_forward_link_source\n mov $42,%eax\n ret\n"
+        ".size checkpoint_forward_link_target,.-checkpoint_forward_link_target\n"
         ".popsection\n");
 
 __asm__(".text\n"
@@ -211,6 +228,83 @@ static long checkpoint_link_check(int phase) {
     return warm == linked ? linked : -1;
 }
 
+static void late_link_signal(int signal) {
+    if (signal == SIGALRM) _exit(0);
+}
+
+static int wait_late_link_child(pid_t child) {
+    for (unsigned attempt = 0; attempt < 300; ++attempt) {
+        int status = 0;
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        if (waited < 0) break;
+        usleep(10000);
+    }
+    kill(child, SIGKILL);
+    (void)waitpid(child, NULL, 0);
+    return -1;
+}
+
+static long checkpoint_late_link_irq_check(int phase) {
+    if (checkpoint_forward_link_source(4) != 42 || checkpoint_forward_link_source(4) != 42) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        struct sigaction action = {.sa_handler = late_link_signal};
+        if (sigemptyset(&action.sa_mask) != 0 || sigaction(SIGALRM, &action, NULL) != 0) _exit(2);
+        alarm(1);
+        (void)checkpoint_forward_link_source(UINT64_MAX);
+        _exit(3);
+    }
+    return wait_late_link_child(child) == 0 ? 43 + phase : -1;
+}
+
+static void *late_link_thread(void *argument) {
+    long phase = (long)(uintptr_t)argument;
+    return (void *)(uintptr_t)checkpoint_forward_link_source(phase + 1);
+}
+
+static long checkpoint_late_link_topology_check(void);
+
+static long checkpoint_late_link_thread_check(int phase) {
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        pthread_t thread;
+        void *result = NULL;
+        if (pthread_create(&thread, NULL, late_link_thread, (void *)(uintptr_t)phase) != 0 ||
+            pthread_join(thread, &result) != 0)
+            _exit(2);
+        _exit((long)(uintptr_t)result == 42 ? 0 : 3);
+    }
+    return wait_late_link_child(child) == 0 ? 42 : -1;
+}
+
+static long checkpoint_late_link_topology_child(void) {
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) _exit(checkpoint_late_link_topology_check() == 4243 ? 0 : 4);
+    return wait_late_link_child(child) == 0 ? 4243 : -1;
+}
+
+static long checkpoint_late_link_topology_check(void) {
+    unsigned char *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) return -1;
+    static const unsigned char answer42[] = {0xb8, 42, 0, 0, 0, 0xc3};
+    static const unsigned char answer43[] = {0xb8, 43, 0, 0, 0, 0xc3};
+    memcpy(code, answer42, sizeof answer42);
+    if (mprotect(code, 4096, PROT_READ | PROT_EXEC) != 0) return -1;
+    long first = ((int (*)(void))code)();
+    if (mprotect(code, 4096, PROT_NONE) != 0 || munmap(code, 4096) != 0) return -1;
+    code = mmap(code, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (code == MAP_FAILED) return -1;
+    memcpy(code, answer43, sizeof answer43);
+    if (mprotect(code, 4096, PROT_READ | PROT_EXEC) != 0) return -1;
+    long second = ((int (*)(void))code)();
+    if (munmap(code, 4096) != 0) return -1;
+    return first == 42 && second == 43 ? 4243 : -1;
+}
+
 static long checkpoint_mixed_check(int phase) {
     return checkpoint_mixed_sse(phase);
 }
@@ -258,6 +352,10 @@ static long checkpoint_pand_memory_check(int phase) {
 static long checkpoint_link_check(int phase) {
     return 42 + phase;
 }
+static long checkpoint_late_link_irq_check(int phase) { return 43 + phase; }
+static long checkpoint_late_link_thread_check(int phase) { (void)phase; return 42; }
+static long checkpoint_late_link_topology_check(void) { return 4243; }
+static long checkpoint_late_link_topology_child(void) { return 4243; }
 
 
 static long checkpoint_mixed_check(int phase) {
@@ -361,9 +459,13 @@ int main(int argc, char **argv) {
     long initial_addr32_call = checkpoint_addr32_call_check(0);
     long initial_call_mem = checkpoint_call_mem_check(0);
     long initial_pand_memory = checkpoint_pand_memory_check(0);
+    long initial_late_irq = checkpoint_late_link_irq_check(0);
+    long initial_late_thread = checkpoint_late_link_thread_check(0);
+    long initial_late_topology = checkpoint_late_link_topology_child();
     if (initial_link != 42 || initial_mixed != 42 || initial_capacity != 42 || initial_movsd != 42.0 ||
         initial_vector_stores != 42 ||
-        initial_addr32_call != 42 || initial_call_mem != 42 || initial_pand_memory != 240)
+        initial_addr32_call != 42 || initial_call_mem != 42 || initial_pand_memory != 240 || initial_late_irq != 43 ||
+        initial_late_thread != 42 || initial_late_topology != 4243)
         return 16;
     dprintf(STDOUT_FILENO, "JCC-LINK phase=0 value=%ld\n", initial_link);
     dprintf(STDOUT_FILENO, "MIXED-SSE phase=0 value=%ld\n", initial_mixed);
@@ -373,6 +475,8 @@ int main(int argc, char **argv) {
     dprintf(STDOUT_FILENO, "ADDR32-CALL phase=0 value=%ld\n", initial_addr32_call);
     dprintf(STDOUT_FILENO, "CALL-MEM phase=0 value=%ld\n", initial_call_mem);
     dprintf(STDOUT_FILENO, "PAND-MEMORY phase=0 value=%ld\n", initial_pand_memory);
+    dprintf(STDOUT_FILENO, "LATE-JCC-LIFECYCLE phase=0 irq=%ld thread=%ld topology=%ld\n", initial_late_irq,
+            initial_late_thread, initial_late_topology);
     dprintf(STDOUT_FILENO, "RET-DENSE phase=0 chunks=%llu digest=%016llx\n",
             (unsigned long long)observed.ret_chunks, (unsigned long long)observed.ret_digest);
     dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
@@ -405,11 +509,15 @@ int main(int argc, char **argv) {
         long restored_addr32_call = checkpoint_addr32_call_check(next_cycle);
         long restored_call_mem = checkpoint_call_mem_check(next_cycle);
         long restored_pand_memory = checkpoint_pand_memory_check(next_cycle);
+        long restored_late_irq = checkpoint_late_link_irq_check(next_cycle);
+        long restored_late_thread = checkpoint_late_link_thread_check(next_cycle);
+        long restored_late_topology = checkpoint_late_link_topology_child();
         if (restored_link != 42 + next_cycle || restored_mixed != 42 + next_cycle ||
             restored_capacity != 42 + next_cycle || restored_movsd != 42.0 ||
             restored_vector_stores != 42 + next_cycle ||
             restored_addr32_call != 42 + next_cycle || restored_call_mem != 42 + next_cycle ||
-            restored_pand_memory != 240 + next_cycle)
+            restored_pand_memory != 240 + next_cycle || restored_late_irq != 43 + next_cycle ||
+            restored_late_thread != 42 || restored_late_topology != 4243)
             return 17;
         dprintf(STDOUT_FILENO, "JCC-LINK phase=%d value=%ld\n", next_cycle, restored_link);
         dprintf(STDOUT_FILENO, "MIXED-SSE phase=%d value=%ld\n", next_cycle, restored_mixed);
@@ -419,6 +527,8 @@ int main(int argc, char **argv) {
         dprintf(STDOUT_FILENO, "ADDR32-CALL phase=%d value=%ld\n", next_cycle, restored_addr32_call);
         dprintf(STDOUT_FILENO, "CALL-MEM phase=%d value=%ld\n", next_cycle, restored_call_mem);
         dprintf(STDOUT_FILENO, "PAND-MEMORY phase=%d value=%ld\n", next_cycle, restored_pand_memory);
+        dprintf(STDOUT_FILENO, "LATE-JCC-LIFECYCLE phase=%d irq=%ld thread=%ld topology=%ld\n", next_cycle,
+                restored_late_irq, restored_late_thread, restored_late_topology);
         if (observed.ret_chunks <= previous_ret_chunks) return 19;
         dprintf(STDOUT_FILENO, "RET-DENSE phase=%d chunks=%llu digest=%016llx\n", next_cycle,
                 (unsigned long long)observed.ret_chunks, (unsigned long long)observed.ret_digest);

@@ -11,7 +11,9 @@ use super::{
     output,
 };
 use crate::suite::{BoundedCapture as _, Target};
-use hl_container::{Config, Console, ContainerSpec, Containers, ExitStatus, Isolation, Mount, Process, Sandbox, Size};
+use hl_container::{
+    Config, Console, ContainerSpec, ContainerState, Containers, ExitStatus, Isolation, Mount, Process, Sandbox, Size,
+};
 use retention::FailureRetention;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, sync::Arc, time::Duration};
@@ -609,14 +611,14 @@ impl<'a> CaseExecution<'a> {
         let output = state.join("output");
         let diagnostics = state.join("backend-diagnostics");
         let mut diagnostic_offset = 0;
-        let direct_call_guard = (self.target == Target::Amd64)
-            .then(|| self.case.engine_options.direct_call_pre_spill().unwrap_or(true));
+        let direct_call_guard =
+            (self.target == Target::Amd64).then(|| self.case.engine_options.direct_call_pre_spill().unwrap_or(true));
         bounded_checkpoint_phase(deadline, "initial container start", self.containers.start(name)).await?;
         for (generation, (marker, cycle)) in [("READY leader=", "cycle1"), ("CYCLE 1 progress=", "cycle2")]
             .into_iter()
             .enumerate()
         {
-            wait_for_marker(&output, marker, deadline).await?;
+            self.wait_for_checkpoint_marker(name, &output, marker, deadline).await?;
             if let Err(error) = bounded_checkpoint_phase(
                 deadline,
                 "container checkpoint",
@@ -632,7 +634,8 @@ impl<'a> CaseExecution<'a> {
             std::fs::write(state.join(cycle), [])?;
             bounded_checkpoint_phase(deadline, "container restore", self.containers.start(name)).await?;
         }
-        wait_for_marker(&output, "CYCLE 2 progress=", deadline).await?;
+        self.wait_for_checkpoint_marker(name, &output, "CYCLE 2 progress=", deadline)
+            .await?;
         std::fs::write(state.join("stop"), [])?;
         let status = bounded_checkpoint_phase(
             deadline,
@@ -649,6 +652,53 @@ impl<'a> CaseExecution<'a> {
             return Err(format!("container checkpoint fixture exited as {status:?}").into());
         }
         Ok(())
+    }
+
+    async fn wait_for_checkpoint_marker(
+        &self,
+        name: &str,
+        path: &Path,
+        marker: &str,
+        deadline: Instant,
+    ) -> Result<(), Error> {
+        loop {
+            self.require_running_checkpoint_fixture(name, marker, deadline).await?;
+            if tokio::fs::read_to_string(path)
+                .await
+                .is_ok_and(|text| text.contains(marker))
+            {
+                self.require_running_checkpoint_fixture(name, marker, deadline).await?;
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("container checkpoint marker {marker:?} was not emitted").into());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn require_running_checkpoint_fixture(
+        &self,
+        name: &str,
+        marker: &str,
+        deadline: Instant,
+    ) -> Result<(), Error> {
+        let container = tokio::time::timeout_at(deadline, self.containers.inspect(name))
+            .await
+            .map_err(|_| {
+                format!("inspecting checkpoint fixture before marker {marker:?} exceeded the case deadline")
+            })??;
+        if matches!(container.state, ContainerState::Running { .. }) {
+            return Ok(());
+        }
+        let diagnostic = container
+            .runtime_diagnostic()
+            .map_or_else(String::new, |value| format!("; runtime={value}"));
+        Err(format!(
+            "container checkpoint fixture became {:?} before marker {marker:?}{diagnostic}",
+            container.state
+        )
+        .into())
     }
 }
 
@@ -721,21 +771,6 @@ fn remaining(deadline: Instant) -> Result<Duration, Error> {
     (!remaining.is_zero())
         .then_some(remaining)
         .ok_or_else(|| "container checkpoint orchestration exceeded its case timeout".into())
-}
-
-async fn wait_for_marker(path: &Path, marker: &str, deadline: Instant) -> Result<(), Error> {
-    loop {
-        if tokio::fs::read_to_string(path)
-            .await
-            .is_ok_and(|text| text.contains(marker))
-        {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("container checkpoint marker {marker:?} was not emitted").into());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 fn checkpoint_generation_diagnostics(path: &Path, offset: &mut usize) -> Result<Vec<u8>, Error> {
