@@ -254,11 +254,22 @@ export interface ResourceStateProps extends NodeProps {
   emptyDetail?: string;
   error?: string;
   retryLabel?: string;
+  operation?: string;
   onRetry?: () => void;
   children?: ReactNode;
 }
 export const ResourceState: ComponentType<ResourceStateProps>;
 export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
+
+export interface RecoveryStateProps extends NodeProps {
+  error?: unknown;
+  operation?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+}
+export const RecoveryState: ComponentType<RecoveryStateProps>;
+export function recoverySummary(error: unknown, operation?: string): string;
+export const RECOVERY_DIAGNOSTIC_BYTE_LIMIT: 1024;
 
 /** Every tag name, in catalogue order. */
 export const tags: string[];

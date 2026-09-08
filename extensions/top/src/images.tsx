@@ -10,6 +10,7 @@ import {
   Heading,
   Meter,
   ResourceState,
+  RecoveryState,
   Row,
   Scroll,
   Spinner,
@@ -222,13 +223,15 @@ export function Images({
           onChange={(event) => setReference(String(event.value ?? ''))}
         />
         <Button
+          variant="filled"
+          tone="accent"
           label={pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'}
           enabled={
             !busy && reference.trim().length > 0 && (!pull || TERMINAL_PULL_STATES.has(pull.state))
           }
           onInvoke={startPull}
         />
-        <Button label="Refresh" enabled={!busy} onInvoke={resource.reload} />
+        <Button label="Refresh" variant="outline" enabled={!busy} onInvoke={resource.reload} />
       </Row>
       {pull ? <PullStatus pull={pull} onCancel={cancelPull} /> : null}
       <ErrorText error={error} />
@@ -410,7 +413,7 @@ function Page({
   );
 }
 function ErrorText({ error }: { error: unknown }) {
-  return error ? <Text label={boundedMessage(error)} color="danger" wrap /> : null;
+  return error ? <RecoveryState operation="Image operation" error={boundedMessage(error)} /> : null;
 }
 function Omitted({ count }: { count: number }) {
   return count > 0 ? (

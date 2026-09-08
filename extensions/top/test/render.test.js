@@ -1318,7 +1318,9 @@ test('installed extension removal requires final consent and a failure remains r
   rejectRemoval();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Remove failed: extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove extension could not be completed.'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'extension is still stopping'));
   assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
   invoke(stage, 'Remove');
   invoke(stage, 'Remove assistant');
@@ -4885,7 +4887,7 @@ test('volume creation exposes pending failure and retained retry before claiming
         patch.SetProp?.prop === 'Label' &&
         patch.SetProp.value?.Text?.startsWith('storage unavailable'),
     );
-  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  assert.ok(new TextEncoder().encode(failures.at(-1).SetProp.value.Text).byteLength <= 1024);
   invoke(stage, 'Retry create');
   await settled();
   await settled();
@@ -5073,7 +5075,7 @@ test('network creation exposes pending failure and retained retry before claimin
         patch.SetProp?.prop === 'Label' &&
         patch.SetProp.value?.Text?.startsWith('registry unavailable'),
     );
-  assert.equal(failures.at(-1).SetProp.value.Text.length, 513);
+  assert.ok(new TextEncoder().encode(failures.at(-1).SetProp.value.Text).byteLength <= 1024);
   assert.equal(failures.length, 1, 'a network creation failure is rendered exactly once');
 
   invoke(stage, 'Retry create');

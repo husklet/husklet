@@ -13,6 +13,7 @@ import {
   FormControlLabel,
   Heading,
   InlineMessage,
+  RecoveryState,
   Row,
   Scroll,
   Select,
@@ -154,14 +155,18 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       <Column pad={2} gap={2}>
         <Heading label="Workspace" scale="title" />
         {error ? (
-          <InlineMessage label={error} tone="danger" />
+          <RecoveryState
+            operation="Workspace settings"
+            error={error}
+            retryLabel="Retry"
+            onRetry={load}
+          />
         ) : (
           <Row gap={2}>
             <Spinner />
             <Text label="Loading workspace settings…" />
           </Row>
         )}
-        <Button label="Retry" enabled={Boolean(error)} onInvoke={load} />
       </Column>
     );
   const invalid = validationMessage(configuration, numbers);
@@ -184,14 +189,21 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             />
             <CardActions>
               <Button
+                variant="filled"
+                tone="accent"
                 label={saving ? 'Saving…' : 'Save workspace'}
                 enabled={!saving && dirty && !invalid}
                 onInvoke={save}
               />
-              <Button label="Discard changes" enabled={!saving && dirty} onInvoke={load} />
+              <Button
+                label="Discard changes"
+                variant="ghost"
+                enabled={!saving && dirty}
+                onInvoke={load}
+              />
             </CardActions>
             {invalid && <InlineMessage label={invalid} tone="danger" />}
-            {error && <InlineMessage label={error} tone="danger" />}
+            {error && <RecoveryState operation="Saving workspace settings" error={error} />}
             {saved && <InlineMessage label={saved} tone="positive" />}
             <Text
               label="Settings sections · Runtime · Terminal appearance · Environment variables · Filesystem mounts"

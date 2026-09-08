@@ -13,6 +13,7 @@ import {
   FormControlLabel,
   Heading,
   InlineMessage,
+  RecoveryState,
   ResourceState,
   Row,
   Scroll,
@@ -1437,7 +1438,7 @@ function ExtensionFault({ extension }: { extension: ExtensionSummary }) {
   if (!extension.enabled || !extension.status.startsWith('fault:')) return null;
   const detail =
     extension.status.slice('fault:'.length).trim() || 'The extension stopped unexpectedly.';
-  return <InlineMessage label={detail} tone="danger" />;
+  return <RecoveryState operation="Extension" error={detail} />;
 }
 
 function LifecycleFeedback({
@@ -1458,10 +1459,7 @@ function LifecycleFeedback({
     );
   if (failure?.name === extensionName)
     return (
-      <InlineMessage
-        label={`${capitalize(failure.action)} failed: ${failure.detail}`}
-        tone="danger"
-      />
+      <RecoveryState operation={`${capitalize(failure.action)} extension`} error={failure.detail} />
     );
   return null;
 }

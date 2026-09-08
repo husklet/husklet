@@ -13,6 +13,7 @@ import {
   Heading,
   InlineMessage,
   ResourceState,
+  RecoveryState,
   Row,
   Scroll,
   Spinner,
@@ -208,6 +209,8 @@ export function Networks({
           }}
         />
         <Button
+          variant="filled"
+          tone="accent"
           label={
             creation.state === 'loading'
               ? 'Creating…'
@@ -218,7 +221,12 @@ export function Networks({
           enabled={creation.state !== 'loading' && name.trim().length > 0}
           onInvoke={() => void create()}
         />
-        <Button label="Refresh" enabled={creation.state !== 'loading'} onInvoke={resource.reload} />
+        <Button
+          label="Refresh"
+          variant="outline"
+          enabled={creation.state !== 'loading'}
+          onInvoke={resource.reload}
+        />
       </Row>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
@@ -227,7 +235,7 @@ export function Networks({
         </Row>
       ) : null}
       {creation.state === 'error' ? (
-        <Text label={boundedMessage(creation.error)} color="danger" wrap />
+        <RecoveryState operation="Creating network" error={creation.error} />
       ) : null}
       {creation.state === 'success' ? (
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />

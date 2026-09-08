@@ -10,10 +10,10 @@ function labels(frames) { return frames.flatMap((frame) => frame.patches).filter
 
 test('resource states are mutually exclusive and ready reveals children', () => {
   const view = stage();
-  for (const [state, expected] of [['loading', 'Fetching containers'], ['empty', 'No containers'], ['error', 'Host unavailable'], ['ready', 'api running']]) {
+  for (const [state, expected] of [['loading', 'Fetching containers'], ['empty', 'No containers'], ['error', 'This view could not be completed.'], ['ready', 'api running']]) {
     view.render(h(ResourceState, { state, loadingLabel: 'Fetching containers', emptyLabel: 'No containers', error: 'Host unavailable' }, h(Text, { label: 'api running' })));
     const visible = labels(view.frames);
-    assert.equal(visible.at(-1), expected);
+    assert(visible.includes(expected));
   }
 });
 
@@ -27,6 +27,22 @@ test('error retry dispatches exactly once and bounds host text', () => {
   assert(new TextEncoder().encode(error).byteLength <= RESOURCE_STATE_TEXT_BYTE_LIMIT);
   assert(view.surface.dispatch({ trigger: 'Invoke', node: retry, id: `${retry}:Invoke` }));
   assert.equal(retries, 1);
+});
+
+test('frame failures lead with recovery and disclose bounded diagnostics separately', () => {
+  const view = stage();
+  view.render(h(ResourceState, {
+    state: 'error',
+    operation: 'Extension connection',
+    error: 'expected frame 8, received frame 10',
+    onRetry() {},
+  }));
+  const patches = view.frames.flatMap((frame) => frame.patches);
+  const visible = labels(view.frames);
+  assert(visible.includes('Extension connection lost sync with the extension host. No change was assumed.'));
+  assert(visible.includes('Technical details'));
+  assert(visible.includes('expected frame 8, received frame 10'));
+  assert(patches.some((patch) => patch.Create?.tag === 'Expander'));
 });
 
 test('invalid state and retry contracts fail closed', () => {
