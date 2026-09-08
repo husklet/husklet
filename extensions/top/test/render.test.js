@@ -3118,7 +3118,11 @@ test('volume and network panels render bounded real inventories and controls', (
   );
   const networkStage = stageFromFrame(networkFrame);
   assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), undefined);
-  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 1);
+  assert.equal(
+    ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow'),
+    undefined,
+    'the attachment form stays content-height so the empty state follows it',
+  );
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Width'), undefined);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 1);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
