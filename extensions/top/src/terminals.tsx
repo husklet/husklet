@@ -466,7 +466,12 @@ export function Terminals({
             width={{ minimum: { chars: 24 }, maximum: { chars: 72 } }}
             variant={tab.pinned ? 'filled' : 'outline'}
           >
-            <CardHeader label={tab.title} detail={`Tab ${tabIndex + 1}`} />
+            <CardHeader
+              label={tab.title}
+              detail={`Tab ${tabIndex + 1}`}
+              align="start"
+              width="fill"
+            />
             <CardContent gap={1}>
               <Text
                 label={
@@ -506,6 +511,8 @@ export function Terminals({
                         ? 'Bounded live screen text'
                         : 'Bounded semantic XML'
                     }
+                    align="start"
+                    width="fill"
                   />
                   <CardContent gap={1}>
                     <LogView

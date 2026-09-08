@@ -38,6 +38,10 @@ pub(crate) fn detail_label() -> gtk::Label {
 /// An image built to receive its composite's `Icon`.
 pub(crate) fn emblem_image() -> gtk::Image {
     let image = gtk::Image::new();
+    // Composite slots exist before their optional properties arrive. Keeping
+    // an empty image visible reserves icon spacing and indents every title
+    // that does not actually have an icon.
+    image.set_visible(false);
     image.add_css_class(EMBLEM);
     image
 }

@@ -187,7 +187,7 @@ export function Volumes({
             key={`${volume.name}:${volume.generation}`}
             variant={inspection.name === volume.name ? 'filled' : 'outline'}
           >
-            <CardHeader label={volume.name} detail={volume.driver} />
+            <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
             <CardActions gap={1} justify="start">
               <Button
                 label={

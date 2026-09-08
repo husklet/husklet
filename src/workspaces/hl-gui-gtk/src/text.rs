@@ -275,6 +275,7 @@ pub(crate) fn icon(widget: &gtk::Widget, value: &PropValue) {
     }
     if let Some(emblem) = slot::emblem(widget) {
         emblem.set_icon_name(name);
+        emblem.set_visible(name.is_some());
         return;
     }
     if let Some(menu) = widget.downcast_ref::<gtk::MenuButton>() {

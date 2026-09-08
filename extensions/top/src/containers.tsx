@@ -201,7 +201,12 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
         >
           {view.records.map((item) => (
             <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
-              <CardHeader label={item.name || shortId(item.id)} detail={item.image} />
+              <CardHeader
+                label={item.name || shortId(item.id)}
+                detail={item.image}
+                align="start"
+                width="fill"
+              />
               <CardContent gap={2}>
                 <Row gap={2} align={'center'}>
                   <Badge label={item.state} tone={stateTone(item.state)} />

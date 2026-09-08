@@ -286,7 +286,12 @@ export function Images({
         </Card>
         {view.records.map((item) => (
           <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
-            <CardHeader label={item.reference || '<untagged>'} detail={shortId(item.id)} />
+            <CardHeader
+              label={item.reference || '<untagged>'}
+              detail={shortId(item.id)}
+              align="start"
+              width="fill"
+            />
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
               {inspection.id === item.id ? (
@@ -359,7 +364,12 @@ function PullStatus({
   const determinate = pull.total !== null && pull.current !== null && pull.total > 0;
   return (
     <Card variant={pull.state === 'failed' ? 'outline' : 'filled'}>
-      <CardHeader label={pull.reference} detail={pull.status ?? pull.state} />
+      <CardHeader
+        label={pull.reference}
+        detail={pull.status ?? pull.state}
+        align="start"
+        width="fill"
+      />
       <CardContent gap={1}>
         {determinate ? (
           <Meter

@@ -246,6 +246,8 @@ export function Executions({
             <CardHeader
               label={item.command?.join(' ') || shortId(item.id)}
               detail={`container ${shortId(item.container_id)}`}
+              align="start"
+              width="fill"
             />
             <CardContent>
               <Badge

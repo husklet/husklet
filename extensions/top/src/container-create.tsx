@@ -639,6 +639,8 @@ export function ContainerCreate({
           <CardHeader
             label={'New container'}
             detail={'Uses a local image and starts it after durable creation.'}
+            align="start"
+            width="fill"
           />
           <CardContent gap={1}>
             <Heading label={'Identity and image'} scale={'body'} />

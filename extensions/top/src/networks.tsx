@@ -321,6 +321,8 @@ export function Networks({
                   <CardHeader
                     label={network.name}
                     detail={`${network.driver} · ${network.scope}`}
+                    align="start"
+                    width="fill"
                   />
                   {network.kind === 'builtin' ? (
                     <CardContent gap={1}>

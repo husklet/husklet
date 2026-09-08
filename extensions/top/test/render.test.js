@@ -3258,8 +3258,17 @@ test('volume and network panels render bounded real inventories and controls', (
       .map((patch) => patch.SetProp.value.Text);
   for (const label of ['Volumes', 'cache', 'Create', 'Inspect', 'Remove'])
     assert.ok(labels(volumeFrame).includes(label), label);
+  const volumeStage = stageFromFrame(volumeFrame);
+  assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
+  assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  const networkInventoryStage = stageFromFrame(networkFrame);
+  assert.equal(
+    taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Align')?.Align,
+    'Start',
+  );
+  assert.ok(taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Width'));
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
     'destructive endpoint action waits for a target',
