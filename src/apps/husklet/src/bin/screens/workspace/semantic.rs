@@ -469,8 +469,16 @@ mod tests {
             &[ActionKind::Invoke],
             Rc::new(|_, _| {}),
         );
-        let extension = registry.register(
+        let extension_control = registry.register(
             "extensions/installed/demo/Disable",
+            "button",
+            None,
+            None,
+            &[ActionKind::Invoke],
+            Rc::new(|_, _| {}),
+        );
+        let extension_remove = registry.register(
+            "extensions/installed/demo/Remove",
             "button",
             None,
             None,
@@ -482,7 +490,11 @@ mod tests {
             Ok(hl_extension::Capability::WorkspaceControl)
         );
         assert_eq!(
-            registry.requirement(extension),
+            registry.requirement(extension_control),
+            Ok(hl_extension::Capability::ExtensionControl)
+        );
+        assert_eq!(
+            registry.requirement(extension_remove),
             Ok(hl_extension::Capability::ExtensionRemove)
         );
     }
