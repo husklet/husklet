@@ -306,6 +306,7 @@ export class Session {
   #events = new Map<(event: HostEvent, channel: number) => void | Promise<void>, symbol>();
   #topics = new Set();
   #eventTopics = new Map();
+  #eventChannels = new Map<number, symbol>();
   #pending = [];
   #pings = new Map();
   #nextPing = 1;
@@ -686,6 +687,7 @@ export class Session {
       } else {
         const topic = this.#eventTopics.get(frame.channel);
         this.#eventTopics.delete(frame.channel);
+        this.#eventChannels.delete(frame.channel);
         if (topic !== undefined) this.#topics.delete(topic);
       }
       return;
@@ -743,6 +745,9 @@ export class Session {
       } else {
         payload = validateUiEvent(payload);
       }
+      const channelGeneration =
+        this.#eventChannels.get(frame.channel) ?? Symbol('event channel generation');
+      this.#eventChannels.set(frame.channel, channelGeneration);
       const listeners = [...this.#events];
       this.#eventDelivery = this.#eventDelivery
         .then(async () => {
@@ -751,7 +756,12 @@ export class Session {
               // A queued event belongs to this connection generation, but its
               // consumer may not run until an earlier asynchronous delivery
               // settles. Closure and synchronous disposal revoke that work.
-              if (this.#closed || this.#events.get(listener) !== generation) continue;
+              if (
+                this.#closed ||
+                this.#eventChannels.get(frame.channel) !== channelGeneration ||
+                this.#events.get(listener) !== generation
+              )
+                continue;
               try {
                 await listener(payload, frame.channel);
               } catch (error) {
@@ -764,7 +774,8 @@ export class Session {
             }
             // Promise-returning consumers own credit until their work settles.
             // This keeps application queues inside the protocol's bounded window.
-            if (!this.#closed) this.#returnCredit(frame.channel);
+            if (!this.#closed && this.#eventChannels.get(frame.channel) === channelGeneration)
+              this.#returnCredit(frame.channel);
           } finally {
             this.#eventBacklog -= 1;
           }
@@ -825,6 +836,7 @@ export class Session {
     this.#events.clear();
     this.#topics.clear();
     this.#eventTopics.clear();
+    this.#eventChannels.clear();
     this.#deferredCredits.clear();
     this.#resolveClosed(error);
     try {

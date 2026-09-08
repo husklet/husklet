@@ -3199,6 +3199,76 @@ test('real Unix event credit waits for slow async consumers and serializes deliv
   }
 });
 
+test('a coalesced channel close revokes queued GUI delivery and credit', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-event-channel-close-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const returned = [];
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.on('error', () => {});
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'event_channel_close', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const delivered = [];
+  let session;
+  try {
+    session = await connect({
+      path: socketPath,
+      timeout: 500,
+      onEvent: (event) => delivered.push(`primary:${event.slot}`),
+    });
+    session.onEvent((event) => delivered.push(`secondary:${event.slot}`));
+    peer.write(
+      Buffer.concat([
+        encode({
+          channel: 37,
+          kind: KIND.event,
+          payload: { pane_provider: 'database', slot: 'retired-pane' },
+        }),
+        encode({ channel: 37, kind: KIND.close, payload: Buffer.alloc(0) }),
+      ]),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(delivered, [], 'a closed event generation reaches no GUI listener');
+    assert.equal(
+      returned.some((frame) => frame.channel === 37 && frame.kind === KIND.credit),
+      false,
+      'a retired channel receives no credit that could authorize more stale events',
+    );
+
+    peer.write(
+      encode({
+        channel: 37,
+        kind: KIND.event,
+        payload: { pane_provider: 'database', slot: 'replacement-pane' },
+      }),
+    );
+    for (let attempt = 0; attempt < 20 && delivered.length < 2; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(delivered, ['primary:replacement-pane', 'secondary:replacement-pane']);
+    assert.equal(
+      returned.filter((frame) => frame.channel === 37 && frame.kind === KIND.credit).length,
+      1,
+      'only the live replacement generation returns credit',
+    );
+  } finally {
+    await session?.close();
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix half-close revokes queued event work from the old session generation', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stale-event-generation-'));
   const socketPath = path.join(directory, 'host.sock');
