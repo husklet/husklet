@@ -19,6 +19,8 @@ static int hl_native_supervised_selected(const hl_options *options) {
 #include <limits.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
+#include <sys/personality.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -1048,11 +1050,27 @@ static int hl_native_supervised_create_listener(const hl_options *options) {
         HL_NATIVE_NOTIFY(SYS_chroot), HL_NATIVE_NOTIFY(SYS_setns), HL_NATIVE_NOTIFY(SYS_unshare),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
+    struct sock_filter restore_selective[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, HL_NATIVE_AUDIT_ARCH, 1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        HL_NATIVE_NOTIFY(SYS_write), HL_NATIVE_NOTIFY(SYS_clone),
+#ifdef SYS_clone3
+        HL_NATIVE_NOTIFY(SYS_clone3),
+#endif
+        HL_NATIVE_NOTIFY(SYS_ioctl), HL_NATIVE_NOTIFY(SYS_ptrace), HL_NATIVE_NOTIFY(SYS_seccomp),
+        HL_NATIVE_NOTIFY(SYS_mount), HL_NATIVE_NOTIFY(SYS_umount2), HL_NATIVE_NOTIFY(SYS_pivot_root),
+        HL_NATIVE_NOTIFY(SYS_chroot), HL_NATIVE_NOTIFY(SYS_setns), HL_NATIVE_NOTIFY(SYS_unshare),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
 #undef HL_NATIVE_NOTIFY
     int refusal = hl_options_get(options, "HL_NATIVE_SUPERVISED_REFUSE") != NULL;
-    struct sock_fprog program = refusal
-        ? (struct sock_fprog){(unsigned short)(sizeof(instructions) / sizeof(instructions[0])), instructions}
-        : (struct sock_fprog){(unsigned short)(sizeof(selective) / sizeof(selective[0])), selective};
+    int restore = hl_options_get(options, "HL_RESTORE") != NULL;
+    struct sock_fprog program =
+        refusal ? (struct sock_fprog){(unsigned short)(sizeof(instructions) / sizeof(instructions[0])), instructions}
+        : restore ? (struct sock_fprog){(unsigned short)(sizeof(restore_selective) / sizeof(restore_selective[0])), restore_selective}
+                  : (struct sock_fprog){(unsigned short)(sizeof(selective) / sizeof(selective[0])), selective};
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
     return (int)syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER, &program);
 }
@@ -1302,6 +1320,20 @@ static int hl_native_supervised_stopped(pid_t process) {
     bytes[count] = 0;
     char *state = strstr(bytes, "\nState:\t");
     return state != NULL && (state[8] == 'T' || state[8] == 't');
+}
+
+static int hl_native_supervised_untraced_stopped(pid_t process) {
+    char path[64], bytes[1024];
+    if (snprintf(path, sizeof(path), "/proc/%d/status", process) >= (int)sizeof(path)) return 0;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    ssize_t count = read(fd, bytes, sizeof(bytes) - 1);
+    close(fd);
+    if (count <= 0) return 0;
+    bytes[count] = 0;
+    char *state = strstr(bytes, "\nState:\t");
+    char *tracer = strstr(bytes, "\nTracerPid:\t");
+    return state != NULL && (state[8] == 'T' || state[8] == 't') && tracer != NULL && tracer[12] == '0';
 }
 
 #define HL_NATIVE_CHECKPOINT_MEMBER_MAX 4096
@@ -1778,8 +1810,46 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         void *mapping = mmap(NULL, sizeof(uint32_t), PROT_READ | PROT_WRITE, MAP_SHARED, trigger_descriptor, 0);
         if (mapping != MAP_FAILED) { trigger = mapping; trigger_seen = *trigger; }
     }
+    int restore_pending = hl_options_get(options, "HL_RESTORE") != NULL;
+    pid_t restore_workload = -1;
+    struct timespec restore_started = {0};
+    if (restore_pending && clock_gettime(CLOCK_MONOTONIC, &restore_started) != 0) {
+        free(request); free(response); return 70;
+    }
     *guest_signal = 0;
     for (;;) {
+        if (restore_pending) {
+            struct timespec now = {0};
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec - restore_started.tv_sec >= 10) {
+                if (diagnostics)
+                    fprintf(stderr, "[hl-native-checkpoint]\tphase=restore_rendezvous_timeout workload=%d\n",
+                            (int)restore_workload);
+                free(request); free(response); return 70;
+            }
+            if (restore_workload < 0) {
+                (void)hl_native_supervised_single_child(leader, &restore_workload);
+                if (diagnostics && restore_workload > 0)
+                    fprintf(stderr, "[hl-native-checkpoint]\tphase=restore_workload pid=%d\n",
+                            (int)restore_workload);
+            }
+            if (restore_workload > 0 && hl_native_supervised_untraced_stopped(restore_workload)) {
+                uint64_t process = (uint64_t)restore_workload;
+                hl_ckpt_request restore = {
+                    .op = HL_CKPT_OP_NATIVE_RESTORE, .length = sizeof(process), .generation = trigger_seen};
+                hl_ckpt_reply restored = {0};
+                if (diagnostics)
+                    fprintf(stderr, "[hl-native-checkpoint]\tphase=native_restore_request pid=%d\n",
+                            (int)restore_workload);
+                if (hl_ckpt_channel_call(&restore, NULL, &process, &restored, NULL, 0) != 0 ||
+                    restored.status != HL_CKPT_STATUS_OK || kill(restore_workload, SIGCONT) != 0) {
+                    free(request); free(response); return 70;
+                }
+                if (diagnostics)
+                    fprintf(stderr, "[hl-native-checkpoint]\tphase=native_restore_reply status=%u\n",
+                            restored.status);
+                restore_pending = 0;
+            }
+        }
         int status;
         pid_t waited;
         while ((waited = waitpid(-1, &status, WNOHANG)) > 0) {
@@ -1813,7 +1883,8 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         if (waited < 0 && errno != EINTR && errno != ECHILD) { free(request); free(response); return 70; }
         struct pollfd events[3] = {
             {listener_active, POLLIN, 0}, {leader_pidfd, POLLIN, 0}, {trigger_wake, POLLIN, 0}};
-        int polled = poll(events, trigger_wake < 0 ? (leader_pidfd < 0 ? 1 : 2) : 3, -1);
+        int polled = poll(events, trigger_wake < 0 ? (leader_pidfd < 0 ? 1 : 2) : 3,
+                          restore_pending ? 1 : -1);
         if (polled < 0) { if (errno == EINTR) continue; free(request); free(response); return 70; }
         if (polled == 0) { ++idle_timeouts; continue; }
         if (trigger_wake >= 0 && (events[2].revents & POLLIN)) {
@@ -1836,6 +1907,7 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         memset(response, 0, sizes.seccomp_notif_resp);
         response->id = request->id;
         int number = (int)request->data.nr;
+        pid_t stop_after_response = -1;
         if (count_notifications) {
             ++notifications;
 #ifdef SYS_open
@@ -1844,6 +1916,25 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         }
         if (number == refused_number) {
             response->error = -refused_error;
+#ifdef SYS_write
+        } else if (restore_pending && number == SYS_write) {
+            /* The first application write is after the dynamic loader and static-PIE relocation have
+             * finalized the executable VMAs. Suppress that replacement-side effect and stop the task;
+             * hydration replaces its registers and memory with the captured continuation. */
+            if (diagnostics)
+                fprintf(stderr, "[hl-native-checkpoint]\tphase=restore_write notification_pid=%d host_pid=%d\n",
+                        (int)request->pid, (int)restore_workload);
+            if (restore_workload <= 0) {
+                free(request); free(response); return 70;
+            }
+            response->error = -EINTR;
+            stop_after_response = restore_workload;
+#endif
+#ifdef SYS_ptrace
+        } else if (restore_pending && number == SYS_ptrace &&
+                   (request->data.args[0] == PTRACE_TRACEME || request->data.args[0] == PTRACE_DETACH)) {
+            response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+#endif
 #ifdef SYS_clone3
         } else if (number == SYS_clone3) {
             response->error = -ENOSYS;
@@ -1857,6 +1948,9 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
             response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
         }
         if (ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
+            free(request); free(response); return 70;
+        }
+        if (stop_after_response > 0 && kill(stop_after_response, SIGSTOP) != 0) {
             free(request); free(response); return 70;
         }
     }
@@ -1958,6 +2052,12 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
         .pidfd = (uint64_t)(uintptr_t)&leader_pidfd,
         .exit_signal = SIGCHLD,
     };
+    if (hl_options_get(options, "HL_CHECKPOINT_COORDINATOR") != NULL ||
+        hl_options_get(options, "HL_RESTORE") != NULL) {
+        int current_personality = personality(0xffffffffUL);
+        if (current_personality < 0 || personality((unsigned long)current_personality | ADDR_NO_RANDOMIZE) < 0)
+            goto clone_failed;
+    }
 #if defined(HL_NATIVE_TEST_HOOKS)
     const char *stage_fail = test_refusal != NULL && strcmp(test_refusal, "998:38") == 0 ? "clone" :
                              test_refusal != NULL && strcmp(test_refusal, "997:38") == 0 ? "mapping" :
@@ -2018,8 +2118,14 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             int leader_status = 0;
             int status;
             pid_t waited;
-            while ((waited = waitpid(-1, &status, 0)) > 0)
+            while ((waited = waitpid(-1, &status, 0)) > 0) {
+                if (waited == workload && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP &&
+                    hl_options_get(options, "HL_RESTORE") != NULL) {
+                    if (ptrace(PTRACE_DETACH, workload, NULL, NULL) != 0) _exit(70);
+                    continue;
+                }
                 if (waited == workload) leader_status = status;
+            }
             if (WIFSIGNALED(leader_status)) {
                 atomic_store_explicit(&bootstrap->result_signal, WTERMSIG(leader_status), memory_order_release);
                 _exit(128 + WTERMSIG(leader_status));
@@ -2027,6 +2133,7 @@ static int32_t hl_native_supervised_run(const hl_host_services *host, hl_linux_a
             _exit(WIFEXITED(leader_status) ? WEXITSTATUS(leader_status) : 70);
         }
         if (fcntl(executable, F_SETFD, FD_CLOEXEC) != 0) _exit(70);
+        if (hl_options_get(options, "HL_RESTORE") != NULL && ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) _exit(70);
         execveat(executable, "", exec_argv, environment, AT_EMPTY_PATH);
         if (hl_options_get(options, "HL_C_DIAGNOSTICS") != NULL)
             fprintf(stderr, "[hl-native-supervised]\texecveat_errno=%d\n", errno);

@@ -1,8 +1,8 @@
 use super::{
     CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MARK_IRREVERSIBLE,
-    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
-    OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
-    NATIVE_SNAPSHOT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, NATIVE_RESTORE, NATIVE_SNAPSHOT, OBJECT_BEGIN, OBJECT_FINISH,
+    OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD,
+    RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -297,6 +297,12 @@ impl Server {
                 }
                 continue;
             }
+            if request.op == NATIVE_RESTORE {
+                let restored = self.restore_registered_native(&connection, &request, &encoded_name, &payload);
+                let reply = if restored.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                return;
+            }
             if let Some(active) = self.membership_scope()
                 && publishes_capture_bytes(request.op)
                 && connection.registered != Some(active)
@@ -341,8 +347,6 @@ impl Server {
             return Err(());
         }
         self.commit_stopped_native(pid, generation).map_err(|failure| {
-            #[cfg(test)]
-            eprintln!("native snapshot broker failure: {failure:?}");
             self.fail_as(
                 format!("native checkpoint capture failed for stopped process {pid}: {failure:?}"),
                 failure,
@@ -350,8 +354,45 @@ impl Server {
         })
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn restore_registered_native(
+        &self,
+        connection: &Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        let generation = u64::from(request.generation);
+        if !encoded_name.is_empty() || payload.len() != 8 {
+            return Err(());
+        }
+        let peer = connection.peer.as_ref().ok_or(())?;
+        let raw = u64::from_ne_bytes(payload.try_into().map_err(|_| ())?);
+        let pid = libc::pid_t::try_from(raw).map_err(|_| ())?;
+        if pid <= 1 || !native_descends_from(pid, peer.host_pid) {
+            return Err(());
+        }
+        self.restore_stopped_native(pid, generation).map_err(|failure| {
+            self.fail_as(
+                format!("native checkpoint restore failed for stopped process {pid}: {failure:?}"),
+                failure,
+            );
+        })
+    }
+
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     fn capture_registered_native(
+        &self,
+        _connection: &Connection<'_>,
+        _request: &Request,
+        _encoded_name: &[u8],
+        _payload: &[u8],
+    ) -> Result<(), ()> {
+        Err(())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn restore_registered_native(
         &self,
         _connection: &Connection<'_>,
         _request: &Request,

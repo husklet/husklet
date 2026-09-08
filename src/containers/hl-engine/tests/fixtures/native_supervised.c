@@ -32,6 +32,7 @@
 #include <netdb.h>
 
 static void *thread_return(void *argument) { return argument; }
+static void checkpoint_alarm(int signal) { (void)signal; }
 static void *checkpoint_thread(void *argument) {
     const char *release = argument;
     while (access(release, F_OK) != 0) usleep(1000);
@@ -145,8 +146,11 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "checkpoint-native-capture")) {
+        signal(SIGALRM, checkpoint_alarm);
+        alarm(2);
         if (write(STDOUT_FILENO, "native-capture-ready\n", 21) != 21) return 79;
-        for (;;) pause();
+        pause();
+        return 0;
     }
     if (argc > 4 && (!strcmp(argv[1], "checkpoint-phase1") ||
                      !strcmp(argv[1], "checkpoint-descendant") ||

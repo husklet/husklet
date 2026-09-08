@@ -67,6 +67,8 @@ pub(super) const MARK_IRREVERSIBLE: u32 = 30;
 /// A registered native supervisor asks the host to snapshot one stopped host process. Payload is
 /// `[u64 host pid]`; the reply is sent only after the NativeX86V1 generation is durably committed.
 pub(super) const NATIVE_SNAPSHOT: u32 = 31;
+/// A native supervisor asks the host to hydrate one freshly exec'd, stopped descendant.
+pub(super) const NATIVE_RESTORE: u32 = 32;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

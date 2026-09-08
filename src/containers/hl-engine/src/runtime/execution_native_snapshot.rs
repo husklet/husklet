@@ -94,7 +94,7 @@ pub(crate) fn capture_stopped_native(
 /// refuses before mutation when ASLR, the executable, loader, root, or mapped file contents differ;
 /// remote mmap/open reconstruction is a later widening, never an implicit partial restore.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(super) fn restore_stopped_native(
+pub(crate) fn restore_stopped_native(
     pid: libc::pid_t,
     registers: &[u8],
     memory: &[u8],
@@ -113,20 +113,19 @@ pub(super) fn restore_stopped_native(
     check_deadline(deadline)?;
     let root = PathBuf::from(format!("/proc/{pid}/root"));
     let current = parse_maps(&std::fs::read(format!("/proc/{pid}/maps"))?, &root, deadline)?;
-    if current.len() != image.mappings.len()
-        || current.iter().zip(&image.mappings).any(|(current, captured)| {
-            current.start != captured.start
-                || current.end != captured.end
-                || current.offset != captured.offset
-                || current.protection != captured.protection
-                || current.device_major != captured.device_major
-                || current.device_minor != captured.device_minor
-                || current.inode != captured.inode
-                || current.kernel_special != captured.kernel_special
-                || current.root_relative != captured.root_relative
-                || current.file_digest != captured.file_digest
-        })
-    {
+    let mismatch = current.iter().zip(&image.mappings).position(|(current, captured)| {
+        current.start != captured.start
+            || current.end != captured.end
+            || current.offset != captured.offset
+            || current.protection != captured.protection
+            || current.device_major != captured.device_major
+            || current.device_minor != captured.device_minor
+            || current.inode != captured.inode
+            || current.kernel_special != captured.kernel_special
+            || current.root_relative != captured.root_relative
+            || current.file_digest != captured.file_digest
+    });
+    if current.len() != image.mappings.len() || mismatch.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "fresh process address-space layout differs from NativeX86V1 image",
@@ -155,10 +154,7 @@ pub(super) fn restore_stopped_native(
 
     let mut raw: libc::user_regs_struct = unsafe { std::mem::zeroed() };
     unsafe {
-        std::ptr::write_unaligned(
-            (&raw mut raw).cast::<[u64; REGISTER_COUNT]>(),
-            registers.registers,
-        );
+        std::ptr::write_unaligned((&raw mut raw).cast::<[u64; REGISTER_COUNT]>(), registers.registers);
     }
     let mut iov = libc::iovec {
         iov_base: (&raw mut raw).cast(),
@@ -182,12 +178,7 @@ pub(super) fn restore_stopped_native(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn write_process_mem_exact(
-    memory: &std::fs::File,
-    address: u64,
-    bytes: &[u8],
-    deadline: Instant,
-) -> io::Result<()> {
+fn write_process_mem_exact(memory: &std::fs::File, address: u64, bytes: &[u8], deadline: Instant) -> io::Result<()> {
     let mut written = 0;
     while written < bytes.len() {
         check_deadline(deadline)?;
@@ -227,7 +218,7 @@ fn object_name(name: &str) -> [u8; 32] {
     field
 }
 
-pub(super) fn validate_native_objects(
+pub(crate) fn validate_native_objects(
     manifest: &[u8],
     object: impl Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<(), InvalidNativeImage> {
@@ -252,7 +243,7 @@ pub(super) fn validate_native_objects(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum InvalidNativeImage {
+pub(crate) enum InvalidNativeImage {
     Manifest,
     Missing,
     Digest,
@@ -1206,7 +1197,10 @@ mod tests {
             {
                 break address;
             }
-            assert!(Instant::now() < deadline, "fresh-exec child did not publish its sentinel address");
+            assert!(
+                Instant::now() < deadline,
+                "fresh-exec child did not publish its sentinel address"
+            );
             std::thread::yield_now();
         };
         wait_until_stopped(child.id() as libc::pid_t);
@@ -1360,18 +1354,26 @@ mod tests {
         let image = capture_stopped_native(original_pid, Instant::now() + Duration::from_secs(10)).unwrap();
         let capture_elapsed = capture_started.elapsed();
         assert_eq!(unsafe { libc::kill(original_pid, libc::SIGKILL) }, 0);
-        assert!(original.wait().unwrap().code().is_none(), "original must die before restore");
+        assert!(
+            original.wait().unwrap().code().is_none(),
+            "original must die before restore"
+        );
 
         std::fs::write(rendezvous.path(), b"").unwrap();
         let (mut replacement, replacement_address) = spawn_fresh_exec_restore_child(TEST, rendezvous.path());
         let replacement_pid = replacement.id() as libc::pid_t;
         assert_ne!(replacement_pid, original_pid);
-        assert_eq!(replacement_address, original_address, "ASLR-disabled fresh exec must reproduce layout");
+        assert_eq!(
+            replacement_address, original_address,
+            "ASLR-disabled fresh exec must reproduce layout"
+        );
         let memory = std::fs::OpenOptions::new()
             .write(true)
             .open(format!("/proc/{replacement_pid}/mem"))
             .unwrap();
-        memory.write_all_at(&0xdead_beef_dead_beef_u64.to_ne_bytes(), replacement_address).unwrap();
+        memory
+            .write_all_at(&0xdead_beef_dead_beef_u64.to_ne_bytes(), replacement_address)
+            .unwrap();
         let restore_started = Instant::now();
         restore_stopped_native(
             replacement_pid,
@@ -1382,7 +1384,10 @@ mod tests {
         .unwrap();
         let restore_elapsed = restore_started.elapsed();
         assert_eq!(unsafe { libc::kill(replacement_pid, libc::SIGCONT) }, 0);
-        assert!(replacement.wait().unwrap().success(), "restored process must resume at captured state");
+        assert!(
+            replacement.wait().unwrap().success(),
+            "restored process must resume at captured state"
+        );
         eprintln!(
             "native fresh-exec capture_us={} restore_us={}",
             capture_elapsed.as_micros(),

@@ -135,7 +135,8 @@ typedef enum hl_ckpt_stream_op {
     HL_CKPT_OP_MARK_IRREVERSIBLE = 30,
     /* A registered native supervisor asks the host to capture one stopped host process. Payload is
        [u64 host pid]. OK means the native image and manifest are durably committed. */
-    HL_CKPT_OP_NATIVE_SNAPSHOT = 31
+    HL_CKPT_OP_NATIVE_SNAPSHOT = 31,
+    HL_CKPT_OP_NATIVE_RESTORE = 32
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)

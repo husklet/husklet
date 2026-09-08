@@ -3,16 +3,16 @@
 use hl_engine::{
     activation::GuestIsa,
     composition::{
-        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams, Terminal,
-        TerminalPort,
+        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
+        Terminal, TerminalPort,
     },
     engine::ExitKind,
     launcher::plan::{RuntimeBoxPolicy, RuntimePlan},
     options::Options,
     runtime::Engine,
 };
-use std::io::Read as _;
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::net::TcpListener;
 use std::num::NonZeroU64;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
@@ -107,7 +107,10 @@ impl TerminalPort for PaneTerminal {
     fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
         let mut closed = self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*closed {
-            closed = self.changed.wait(closed).unwrap_or_else(std::sync::PoisonError::into_inner);
+            closed = self
+                .changed
+                .wait(closed)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         Ok(0)
     }
@@ -217,28 +220,31 @@ fn run_automatic(executable: &Path, control: Option<&str>) -> (i32, Vec<u8>, Vec
     if let Some(control) = control {
         options.set("HL_NATIVE_SUPERVISED", control, true).unwrap();
     }
-    options.set("HL_NATIVE_SUPERVISED_REFUSE", &getpid_refusal(), true).unwrap();
+    options
+        .set("HL_NATIVE_SUPERVISED_REFUSE", &getpid_refusal(), true)
+        .unwrap();
     let output = Arc::new(Output::default());
     let translated_off = control == Some("0");
     let plan = RuntimePlan {
         rootfs: (!translated_off).then(|| b"/".to_vec()),
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![executable.as_os_str().as_encoded_bytes().to_vec(), b"descendant".to_vec()],
+        arguments: vec![
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            b"descendant".to_vec(),
+        ],
         environment: Vec::new(),
         result_path: None,
         options,
         box_policy: if translated_off {
             RuntimeBoxPolicy::default()
         } else {
-            RuntimeBoxPolicy { hostname: Some(b"native-auto".to_vec()), ..isolated_policy() }
+            RuntimeBoxPolicy {
+                hostname: Some(b"native-auto".to_vec()),
+                ..isolated_policy()
+            }
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     let status = engine.wait().unwrap().guest_status;
     engine.destroy().unwrap();
@@ -254,12 +260,7 @@ fn retained_native_session_restarts_only_after_complete_wait() {
     let output = Arc::new(Output::default());
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"output".to_vec());
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
 
     engine.start().unwrap();
     assert!(
@@ -291,12 +292,7 @@ fn run_policy(executable: &Path, arguments: &[&str], policy: RuntimeBoxPolicy) -
         options,
         box_policy: policy,
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     let status = engine.wait().unwrap().guest_status;
     engine.destroy().unwrap();
@@ -313,7 +309,10 @@ fn eligible_auto_equals_explicit_on_and_off_stays_translated() {
     let selected = run_automatic(&executable, Some("1"));
     let translated = run_automatic(&executable, Some("0"));
     assert_eq!((&automatic.0, &automatic.1), (&selected.0, &selected.1));
-    assert_eq!((&automatic.0, automatic.1.as_slice()), (&0, b"descendant-supervised".as_slice()));
+    assert_eq!(
+        (&automatic.0, automatic.1.as_slice()),
+        (&0, b"descendant-supervised".as_slice())
+    );
     assert_ne!((&translated.0, &translated.1), (&automatic.0, &automatic.1));
 }
 
@@ -341,12 +340,7 @@ fn post_selection_failure_never_retries_the_translated_backend() {
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"output".to_vec());
     plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", "998:38", true).unwrap();
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     let start = engine.start();
     if start.is_ok() {
         if let Ok(exit) = engine.wait() {
@@ -354,7 +348,10 @@ fn post_selection_failure_never_retries_the_translated_backend() {
         }
     }
     engine.destroy().unwrap();
-    assert!(output.stdout.lock().unwrap().is_empty(), "translated retry executed the guest");
+    assert!(
+        output.stdout.lock().unwrap().is_empty(),
+        "translated retry executed the guest"
+    );
 }
 
 #[test]
@@ -372,18 +369,17 @@ fn run_diagnostics(executable: &Path, argument: &str, refusal: Option<&str>, rec
     let mut plan = selected_plan(executable);
     plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
     plan.options
-        .set_bytes("HL_NATIVE_REAP_TEST_RECEIPT", receipt.as_os_str().as_encoded_bytes(), true)
+        .set_bytes(
+            "HL_NATIVE_REAP_TEST_RECEIPT",
+            receipt.as_os_str().as_encoded_bytes(),
+            true,
+        )
         .unwrap();
     if let Some(refusal) = refusal {
         plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
     }
     plan.arguments.push(argument.as_bytes().to_vec());
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     let status = engine
         .start()
         .ok()
@@ -502,12 +498,7 @@ fn supervised_generation_policy_keeps_daemon_writes_kernel_coherent() {
             ..isolated_policy()
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     std::fs::write(&visible, b"updated").unwrap();
     let exit = engine.wait().unwrap();
@@ -549,12 +540,7 @@ fn supervised_overlay_preserves_lower_upper_and_declared_ownership() {
             ..isolated_policy()
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     let exit = engine.wait().unwrap();
     engine.destroy().unwrap();
@@ -645,12 +631,7 @@ fn supervised_overlay_projects_case_distinct_bookworm_names_before_ownership() {
             ..isolated_policy()
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     let exit = engine.wait();
     engine.destroy().unwrap();
@@ -746,12 +727,8 @@ fn selective_filter_skips_continued_open_but_refusal_still_traps_it() {
         if let Some(refusal) = refusal {
             plan.options.set("HL_NATIVE_SUPERVISED_REFUSE", refusal, true).unwrap();
         }
-        let engine = Engine::with_streams(
-            HOST_ISA,
-            plan,
-            StandardStreams::default().with_output(output.clone()),
-        )
-        .unwrap();
+        let engine =
+            Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
         engine.start().unwrap();
         assert_eq!(engine.wait().unwrap().guest_status, 0);
         engine.destroy().unwrap();
@@ -873,12 +850,7 @@ fn supervised_host_network_reuses_host_netns_and_reaches_host_loopback() {
             ..Default::default()
         },
     };
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     let (mut connection, _) = listener.accept().unwrap();
     let mut payload = [0; 4];
@@ -914,7 +886,11 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     std::fs::create_dir_all(root.join("tmp")).unwrap();
     std::fs::create_dir_all(root.join("proc")).unwrap();
     std::fs::create_dir_all(root.join("etc")).unwrap();
-    std::fs::write(root.join("etc/hosts"), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker").unwrap();
+    std::fs::write(
+        root.join("etc/hosts"),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker",
+    )
+    .unwrap();
     std::fs::set_permissions(root.join("etc/hosts"), std::fs::Permissions::from_mode(0o640)).unwrap();
     std::fs::write(root.join("proc/hostile"), b"host").unwrap();
     let executable = root.join("bin/fixture");
@@ -926,18 +902,19 @@ fn supervised_projector_confines_root_cwd_and_replaces_hostile_proc() {
     plan.box_policy.working_directory = Some(b"/tmp".to_vec());
     plan.box_policy.hostname = Some(b"husklet-native".to_vec());
     plan.box_policy.flags |= 1;
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
     assert_eq!(*output.stdout.lock().unwrap(), b"root-contract-hostname");
-    assert_eq!(std::fs::read(root.join("etc/hosts")).unwrap(), b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker");
-    assert_eq!(std::fs::metadata(root.join("etc/hosts")).unwrap().permissions().mode() & 0o7777, 0o640);
+    assert_eq!(
+        std::fs::read(root.join("etc/hosts")).unwrap(),
+        b"192.0.2.10\thusklet-native\n127.0.0.1\toriginal-marker"
+    );
+    assert_eq!(
+        std::fs::metadata(root.join("etc/hosts")).unwrap().permissions().mode() & 0o7777,
+        0o640
+    );
 }
 
 #[test]
@@ -978,12 +955,7 @@ fn supervised_overlay_projector_confines_root_cwd_and_replaces_hostile_proc() {
     plan.box_policy.working_directory = Some(b"/tmp".to_vec());
     plan.box_policy.hostname = Some(b"husklet-native".to_vec());
     plan.box_policy.flags |= 1;
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
@@ -1038,15 +1010,26 @@ fn ephemeral_gui_shape_combines_overlay_pty_identity_volumes_and_selective_sentr
     plan.box_policy.gid = 2345;
     plan.box_policy.volumes =
         Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
-    let streams = StandardStreams::default()
-        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
     let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
-    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    assert!(text.windows(b"secure-jail".len()).any(|window| window == b"secure-jail"), "pty={text:?}");
-    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+    let text = terminal
+        .bytes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        text.windows(b"secure-jail".len())
+            .any(|window| window == b"secure-jail"),
+        "pty={text:?}"
+    );
+    assert!(
+        text.windows(b"pty-session".len())
+            .any(|window| window == b"pty-session"),
+        "pty={text:?}"
+    );
     assert_eq!(native_overlay_directories(), before);
 }
 
@@ -1057,24 +1040,39 @@ fn supervised_terminal_has_a_controlling_session_before_guest_exec() {
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
     plan.arguments.push(b"pty-session".to_vec());
-    let streams = StandardStreams::default()
-        .with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
+    let streams = StandardStreams::default().with_terminal(Terminal::new(terminal.clone(), 37, 111).unwrap());
     let engine = Engine::with_streams(HOST_ISA, plan, streams).unwrap();
     if let Err(error) = engine.start() {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let text = terminal
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         panic!("native terminal start failed: {error:?}, pty={text:?}");
     }
     let waited = engine.wait();
     if let Err(error) = &waited {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let text = terminal
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         panic!("native terminal wait failed: {error:?}, pty={text:?}");
     }
     assert_eq!(waited.unwrap().guest_status, 0);
     engine.destroy().unwrap();
-    let text = terminal.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    assert!(text.windows(b"pty-session".len()).any(|window| window == b"pty-session"), "pty={text:?}");
+    let text = terminal
+        .bytes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        text.windows(b"pty-session".len())
+            .any(|window| window == b"pty-session"),
+        "pty={text:?}"
+    );
 }
 
 #[test]
@@ -1087,12 +1085,14 @@ fn supervised_terminal_refuses_an_image_supplied_non_tty_character_device() {
     std::fs::create_dir_all(root.join("proc")).unwrap();
     let executable = root.join("bin/fixture");
     std::fs::copy(built, &executable).unwrap();
-    assert!(std::process::Command::new("mknod")
-        .arg(root.join("dev/tty"))
-        .args(["c", "1", "3"])
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        std::process::Command::new("mknod")
+            .arg(root.join("dev/tty"))
+            .args(["c", "1", "3"])
+            .status()
+            .unwrap()
+            .success()
+    );
     let terminal = Arc::new(PaneTerminal::default());
     let mut plan = selected_plan(&executable);
     plan.rootfs = Some(root.as_os_str().as_encoded_bytes().to_vec());
@@ -1154,12 +1154,7 @@ fn supervised_projector_mounts_read_only_source_and_read_write_output() {
     plan.arguments.push(b"volumes".to_vec());
     plan.box_policy.volumes =
         Some(format!("ro:/src:{},rw:/out:{}", source.display(), output_directory.display()).into_bytes());
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
@@ -1202,16 +1197,13 @@ fn supervised_projector_mounts_pinned_regular_files_with_exact_access() {
     plan.box_policy.volumes = Some(
         format!(
             "ro:/etc/hosts:{},rw:/etc/hostname:{},rw:/etc/resolv.conf:{}",
-            hosts.display(), hostname.display(), resolver.display()
+            hosts.display(),
+            hostname.display(),
+            resolver.display()
         )
         .into_bytes(),
     );
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
@@ -1281,7 +1273,10 @@ fn supervised_projector_refuses_target_swap_after_pinning_without_mounting_repla
     }
     engine.destroy().unwrap();
     assert_eq!(std::fs::read(root.join("etc/target")).unwrap(), b"attacker-target\n");
-    assert_eq!(std::fs::read(root.join("etc/target.pinned")).unwrap(), b"pinned-target\n");
+    assert_eq!(
+        std::fs::read(root.join("etc/target.pinned")).unwrap(),
+        b"pinned-target\n"
+    );
     assert_eq!(std::fs::read(&source).unwrap(), b"trusted-source\n");
 }
 
@@ -1310,7 +1305,9 @@ fn supervised_projector_refuses_volume_traversal_and_symlink_sources() {
                 ),
             )) => {}
             Ok(engine) => {
-                if engine.start().is_ok() { assert!(engine.wait().is_err()); }
+                if engine.start().is_ok() {
+                    assert!(engine.wait().is_err());
+                }
                 engine.destroy().unwrap();
             }
             Err(error) => panic!("unexpected refusal: {error:?}"),
@@ -1328,12 +1325,7 @@ fn supervised_projector_applies_identity_empty_groups_and_typed_limits() {
     plan.box_policy.uid = 1234;
     plan.box_policy.gid = 2345;
     plan.box_policy.limits = Some(b"nofile=32:32,core=0:0".to_vec());
-    let engine = Engine::with_streams(
-        HOST_ISA,
-        plan,
-        StandardStreams::default().with_output(output.clone()),
-    )
-    .unwrap();
+    let engine = Engine::with_streams(HOST_ISA, plan, StandardStreams::default().with_output(output.clone())).unwrap();
     engine.start().unwrap();
     assert_eq!(engine.wait().unwrap().guest_status, 0);
     engine.destroy().unwrap();
@@ -1414,11 +1406,32 @@ impl CheckpointSource for Checkpoints {
 #[derive(Default)]
 struct NativeCheckpointStore {
     state: Mutex<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>)>,
+    aborts: std::sync::atomic::AtomicUsize,
+}
+
+struct EngineCleanup<'a>(Option<&'a Engine>);
+
+impl EngineCleanup<'_> {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for EngineCleanup<'_> {
+    fn drop(&mut self) {
+        if let Some(engine) = self.0.take() {
+            let _ = engine.destroy();
+        }
+    }
 }
 
 impl CheckpointSink for NativeCheckpointStore {
     fn replace(&self, manifest: &[u8]) -> Result<(), CompositionError> {
-        self.state.lock().unwrap().0.insert("MANIFEST".into(), manifest.to_vec());
+        self.state
+            .lock()
+            .unwrap()
+            .0
+            .insert("MANIFEST".into(), manifest.to_vec());
         Ok(())
     }
     fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
@@ -1437,14 +1450,10 @@ impl CheckpointSink for NativeCheckpointStore {
     }
     fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         self.state.lock().unwrap().1.clear();
+        self.aborts.fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(())
     }
-    fn commit_until(
-        &self,
-        _: NonZeroU64,
-        manifest: &[u8],
-        _: std::time::Instant,
-    ) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, manifest: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         let mut state = self.state.lock().unwrap();
         state.0 = std::mem::take(&mut state.1);
         state.0.insert("MANIFEST".into(), manifest.to_vec());
@@ -1480,7 +1489,7 @@ impl CheckpointSource for NativeCheckpointStore {
 
 #[cfg(target_arch = "x86_64")]
 #[test]
-fn supervised_checkpoint_publishes_native_image_and_terminates_the_original_process() {
+fn supervised_checkpoint_restores_a_fresh_process_after_terminating_the_original() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
     let output = Arc::new(Output::default());
@@ -1496,6 +1505,7 @@ fn supervised_checkpoint_publishes_native_image_and_terminates_the_original_proc
         store.clone(),
     )
     .unwrap();
+    let mut engine_cleanup = EngineCleanup(Some(&engine));
     engine.start().unwrap();
     for _ in 0..5_000 {
         if output.stdout.lock().unwrap().as_slice() == b"native-capture-ready\n" {
@@ -1506,42 +1516,82 @@ fn supervised_checkpoint_publishes_native_image_and_terminates_the_original_proc
     assert_eq!(output.stdout.lock().unwrap().as_slice(), b"native-capture-ready\n");
     let started = std::time::Instant::now();
     let capture = engine.capture_checkpoint_until(started + std::time::Duration::from_secs(10));
-    assert!(capture.is_ok(), "capture={capture:?} stderr={}", String::from_utf8_lossy(&output.stderr.lock().unwrap()));
+    if let Err(error) = capture {
+        let stderr = String::from_utf8_lossy(&output.stderr.lock().unwrap()).into_owned();
+        let _ = engine.destroy();
+        panic!("capture={error:?} stderr={stderr}");
+    }
     let elapsed = started.elapsed();
     {
         let state = store.state.lock().unwrap();
         let objects = &state.0;
-        assert_eq!(objects.keys().cloned().collect::<Vec<_>>(), [
-            "IMAGE", "MANIFEST", "native/memory.x86-v1", "native/registers.x86-v1"
-        ]);
+        assert_eq!(
+            objects.keys().cloned().collect::<Vec<_>>(),
+            ["IMAGE", "MANIFEST", "native/memory.x86-v1", "native/registers.x86-v1"]
+        );
         assert_eq!(&objects["IMAGE"][..8], b"HLIMAGE\0");
     }
-    assert!(engine.wait().is_ok(), "captured native process did not terminate cleanly");
+    assert!(
+        engine.wait().is_ok(),
+        "captured native process did not terminate cleanly"
+    );
     engine.destroy().unwrap();
-    eprintln!("native_product_capture_us={}", elapsed.as_micros());
+    engine_cleanup.disarm();
+    let mut restore_plan = selected_plan(&executable);
+    restore_plan.arguments.push(b"checkpoint-native-capture".to_vec());
+    restore_plan.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
+    restore_plan.options.set("HL_RESTORE", "1", true).unwrap();
+    let restored = Engine::with_checkpoint(
+        HOST_ISA,
+        restore_plan,
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    let mut restored_cleanup = EngineCleanup(Some(&restored));
+    let restore_started = std::time::Instant::now();
+    if let Err(error) = restored.start() {
+        let _ = restored.destroy();
+        panic!("native restore start failed: {error:?}");
+    }
+    let restore_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while store.aborts.load(std::sync::atomic::Ordering::Acquire) == 0 && std::time::Instant::now() < restore_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(
+        store.aborts.load(std::sync::atomic::Ordering::Acquire),
+        1,
+        "native recovery transaction did not settle"
+    );
+    let restore_elapsed = restore_started.elapsed();
+    let restored_exit = restored.wait();
+    assert!(
+        restored_exit.is_ok(),
+        "restored native process did not resume to its captured exit: {restored_exit:?}"
+    );
+    restored.destroy().unwrap();
+    restored_cleanup.disarm();
+    eprintln!(
+        "native_product_capture_us={} restore_us={}",
+        elapsed.as_micros(),
+        restore_elapsed.as_micros()
+    );
 }
 
 #[test]
-fn supervised_checkpoint_lifecycle_refuses_before_launch_or_storage_access() {
+fn supervised_checkpoint_lifecycle_refuses_unsupported_policy_before_storage_access() {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path());
-    for scenario in ["fresh-capture", "restore", "checkpoint-mode", "checkpoint-policy"] {
+    for scenario in ["checkpoint-mode", "checkpoint-policy"] {
         let mut plan = selected_plan(&executable);
         match scenario {
-            "fresh-capture" => {}
-            "restore" => plan.options.set("HL_RESTORE", "1", true).unwrap(),
-            "checkpoint-mode" => plan.box_policy.checkpoint_mode = 1,
+            "checkpoint-mode" => plan.box_policy.checkpoint_mode = 4,
             "checkpoint-policy" => plan.box_policy.checkpoint_policy = 1,
             _ => unreachable!(),
         }
         let store = Arc::new(Checkpoints::default());
-        let result = Engine::with_checkpoint(
-            HOST_ISA,
-            plan,
-            StandardStreams::default(),
-            store.clone(),
-            store.clone(),
-        );
+        let result = Engine::with_checkpoint(HOST_ISA, plan, StandardStreams::default(), store.clone(), store.clone());
         assert!(
             matches!(
                 result,

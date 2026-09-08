@@ -1565,7 +1565,7 @@ fn recovery_and_capture_scopes_are_mutually_exclusive() {
         .unwrap();
     let recovery_activated = std::cell::Cell::new(false);
     assert_eq!(
-        server.begin_recovery_after_admission(std::time::Instant::now() + Duration::from_secs(1), || {
+        server.begin_recovery_after_admission(std::time::Instant::now() + Duration::from_secs(1), false, || {
             recovery_activated.set(true);
             5
         }),

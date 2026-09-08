@@ -28,11 +28,46 @@ impl Drop for AbortTransition<'_> {
 
 impl Server {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub(super) fn commit_stopped_native(
-        &self,
-        pid: libc::pid_t,
-        generation: u64,
-    ) -> Result<(), CaptureFailure> {
+    pub(super) fn restore_stopped_native(&self, pid: libc::pid_t, generation: u64) -> Result<(), CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Recovery { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        let manifest = self
+            .source
+            .get_until("MANIFEST", deadline)
+            .map_err(Self::publication_failure)?;
+        let registers = self
+            .source
+            .get_until(crate::runtime::execution::native_snapshot::REGISTER_OBJECT, deadline)
+            .map_err(Self::publication_failure)?;
+        let memory = self
+            .source
+            .get_until(crate::runtime::execution::native_snapshot::MEMORY_OBJECT, deadline)
+            .map_err(Self::publication_failure)?;
+        crate::runtime::execution::native_snapshot::validate_native_objects(&manifest, |name| match name {
+            crate::runtime::execution::native_snapshot::REGISTER_OBJECT => Some(registers.clone()),
+            crate::runtime::execution::native_snapshot::MEMORY_OBJECT => Some(memory.clone()),
+            _ => None,
+        })
+        .map_err(|_| CaptureFailure::InvalidImage)?;
+        crate::runtime::execution::native_snapshot::restore_stopped_native(pid, &registers, &memory, deadline)
+            .map_err(|error| {
+                hl_log::hl_error!(hl_log::tag::CHECKPOINT, "native checkpoint restore failed: {error}");
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    CaptureFailure::Deadline
+                } else {
+                    CaptureFailure::Failed
+                }
+            })?;
+        self.complete_native_recovery(generation)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn commit_stopped_native(&self, pid: libc::pid_t, generation: u64) -> Result<(), CaptureFailure> {
         let deadline = {
             let capture = self.capture_lock()?;
             match capture.phase {

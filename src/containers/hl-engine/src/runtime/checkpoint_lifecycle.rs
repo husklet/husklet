@@ -113,20 +113,22 @@ impl Server {
 
     #[cfg(test)]
     pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
-        self.begin_recovery_after_admission(deadline, || generation)
+        self.begin_recovery_after_admission(deadline, false, || generation)
     }
 
     pub(crate) fn begin_recovery_after_admission(
         &self,
         deadline: std::time::Instant,
+        native: bool,
         activate: impl FnOnce() -> u32,
     ) -> Result<u64, CaptureFailure> {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
         match self.recovery_reader(deadline)? {
-            super::image_envelope::Reader::Translated => {}
-            super::image_envelope::Reader::NativeX86V1 => return Err(CaptureFailure::UnsupportedImage),
+            super::image_envelope::Reader::Translated if !native => {}
+            super::image_envelope::Reader::NativeX86V1 if native => {}
+            _ => return Err(CaptureFailure::UnsupportedImage),
         }
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Idle) {
@@ -160,6 +162,27 @@ impl Server {
 
     pub(crate) fn fail_recovery(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
         self.settle_recovery(id, Some(failure))
+    }
+
+    pub(super) fn complete_native_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Recovery { id: active, .. } if active == id) || capture.mutations != 0
+        {
+            return Err(CaptureFailure::Busy);
+        }
+        capture.phase = CapturePhase::Aborting { id };
+        self.capture_changed.notify_all();
+        drop(capture);
+        let discarded = self.discard_transaction(std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT);
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Aborting { id: active } if active == id) {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            return Err(CaptureFailure::Poisoned);
+        }
+        capture.phase = CapturePhase::RecoveryFinished { id, result: discarded };
+        self.capture_changed.notify_all();
+        discarded
     }
 
     fn settle_recovery(&self, id: u64, failure: Option<CaptureFailure>) -> Result<(), CaptureFailure> {
