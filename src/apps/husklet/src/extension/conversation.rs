@@ -1795,7 +1795,7 @@ mod tests {
         assert!(matches!(codec::read_failure(&denied), Ok(Failure::Denied { .. })));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
-        assert_eq!(ledger.reached(), ["networks.list", "networks.list", "networks.inspect"]);
+        assert_eq!(ledger.reached(), ["networks.list", "networks.list"]);
     }
 
     #[test]
