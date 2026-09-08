@@ -726,6 +726,7 @@ struct hl_backend_tree_shared {
     /* One shared dynamic count: every admitted link has the same proven JCC disposition. Keeping it in
        the fork-shared record makes emitted increments independent of per-process slot reassignment. */
     _Atomic uint64_t jcc_links;
+    _Atomic uint64_t a64_x86_reset_fork;
     _Atomic uint64_t direct_call_ibtc_emitted;
     _Atomic uint64_t direct_call_ibtc_hits;
     _Atomic uint64_t direct_call_ibtc_misses;
@@ -811,6 +812,11 @@ struct hl_backend_tree_summary {
 static struct hl_backend_tree_shared *g_backend_tree;
 static struct hl_backend_tree_slot *g_backend_tree_self;
 static int g_backend_tree_lifecycle_owned;
+
+static inline void hl_backend_tree_a64_x86_reset_fork(void) {
+    if (g_backend_tree != NULL)
+        atomic_fetch_add_explicit(&g_backend_tree->a64_x86_reset_fork, 1, memory_order_relaxed);
+}
 
 static void hl_backend_tree_sse_riprel_form(uint64_t key) {
     struct hl_backend_tree_shared *tree = g_backend_tree;
@@ -1515,7 +1521,7 @@ static int hl_backend_tree_format(struct hl_backend_tree_shared *shared, char *r
         "translated_steps=%llu interpreted_steps=%llu translations=%llu map_hits=%llu stw_retries=%llu "
         "irq_pending=%llu reason0=%llu reason1=%llu reason2=%llu reason3=%llu reason4=%llu reason5=%llu "
         "reason6=%llu reason7=%llu reason8=%llu reason9=%llu reason10=%llu reason11=%llu reason12=%llu "
-        "reason13=%llu reason14=%llu reason15=%llu reason_other=%llu\n",
+        "reason13=%llu reason14=%llu reason15=%llu reason_other=%llu reset_fork=%llu\n",
         (unsigned long long)summary.root_pid, (unsigned long long)summary.claimed,
         (unsigned long long)summary.completed, (unsigned long long)summary.abnormal,
         (unsigned long long)summary.missing, (unsigned long long)summary.duplicate_finalize,
@@ -1531,7 +1537,8 @@ static int hl_backend_tree_format(struct hl_backend_tree_shared *shared, char *r
         (unsigned long long)summary.reason[9], (unsigned long long)summary.reason[10],
         (unsigned long long)summary.reason[11], (unsigned long long)summary.reason[12],
         (unsigned long long)summary.reason[13], (unsigned long long)summary.reason[14],
-        (unsigned long long)summary.reason[15], (unsigned long long)summary.reason_other);
+        (unsigned long long)summary.reason[15], (unsigned long long)summary.reason_other,
+        (unsigned long long)atomic_load_explicit(&shared->a64_x86_reset_fork, memory_order_relaxed));
 }
 
 static int hl_backend_shape_format(struct hl_backend_tree_shared *shared, char *record, size_t capacity) {

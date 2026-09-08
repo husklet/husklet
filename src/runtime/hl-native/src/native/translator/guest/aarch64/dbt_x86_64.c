@@ -640,6 +640,7 @@ static void hl_a64_x86_pending_reset(unsigned reason) {
                               : reason == HL_PENDING_RESET_FORK ? &g_x86_rel32_reset_fork
                                                                : &g_x86_rel32_reset_cache;
     atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+    if (reason == HL_PENDING_RESET_FORK) hl_backend_tree_a64_x86_reset_fork();
 }
 
 static int hl_a64_x86_patch_known_chain(const struct hl_a64_x86_chain_site *site) {
