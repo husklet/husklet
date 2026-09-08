@@ -121,6 +121,7 @@ pub enum Request {
         image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        images: crate::ImageGrant,
         networks: crate::NetworkGrant,
         volumes: crate::VolumeGrant,
         filesystem: crate::FilesystemGrant,
@@ -132,6 +133,7 @@ pub enum Request {
         image_digest: String,
         granted: crate::Grant,
         containers: crate::ContainerGrant,
+        images: crate::ImageGrant,
         networks: crate::NetworkGrant,
         volumes: crate::VolumeGrant,
         filesystem: crate::FilesystemGrant,
@@ -229,9 +231,6 @@ pub enum Request {
         command: Vec<String>,
     },
     ImageList,
-    ImagePull {
-        reference: String,
-    },
     ImagePullStart {
         reference: String,
     },
@@ -533,12 +532,11 @@ impl Request {
             | Self::ContainerExec { .. } => Capability::ContainerControl,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
-            Self::ImagePull { .. }
-            | Self::ImagePullStart { .. }
-            | Self::ImagePullStatus { .. }
-            | Self::ImagePullCancel { .. }
-            | Self::ImageRemove { .. }
-            | Self::ImagePrune => Capability::ImageWrite,
+            Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {
+                Capability::ImagePull
+            }
+            Self::ImageRemove { .. } => Capability::ImageRemove,
+            Self::ImagePrune => Capability::ImagePrune,
             Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
             Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
             Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
@@ -653,7 +651,7 @@ impl Topic {
             Self::ContainerInventory => Capability::ContainerRead,
             Self::Executions => Capability::ContainerRead,
             Self::Images => Capability::ImageRead,
-            Self::ImagePulls => Capability::ImageWrite,
+            Self::ImagePulls => Capability::ImagePull,
             Self::Volumes => Capability::VolumeRead,
             Self::Networks => Capability::NetworkRead,
             Self::Terminal => Capability::TerminalRead,
@@ -869,11 +867,11 @@ mod tests {
         );
         assert_eq!(Request::ImageList.capability(), Capability::ImageRead);
         assert_eq!(
-            Request::ImagePull {
-                reference: "alpine".into()
+            Request::ImagePullStart {
+                reference: "registry-1.docker.io/library/alpine:latest".into()
             }
             .capability(),
-            Capability::ImageWrite
+            Capability::ImagePull
         );
     }
 

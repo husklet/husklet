@@ -359,6 +359,7 @@ mod tests {
     fn manifest() -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),

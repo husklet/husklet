@@ -46,6 +46,8 @@ pub struct Session {
     containers: ContainerGrant,
     networks: crate::NetworkGrant,
     volumes: crate::VolumeGrant,
+    images: crate::ImageGrant,
+    extension_identity: String,
     filesystem: FilesystemGrant,
     workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
@@ -149,6 +151,8 @@ impl Session {
             containers: ContainerGrant::default(),
             networks: crate::NetworkGrant::default(),
             volumes: crate::VolumeGrant::default(),
+            images: crate::ImageGrant::default(),
+            extension_identity: String::new(),
             filesystem: FilesystemGrant::default(),
             workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
@@ -172,6 +176,88 @@ impl Session {
     pub fn with_volumes(mut self, volumes: crate::VolumeGrant) -> Self {
         self.volumes = volumes;
         self
+    }
+
+    #[must_use]
+    pub fn with_images(mut self, images: crate::ImageGrant) -> Self {
+        self.images = images;
+        self
+    }
+
+    #[must_use]
+    pub fn with_extension_identity(mut self, identity: impl Into<String>) -> Self {
+        self.extension_identity = identity.into();
+        self
+    }
+
+    #[must_use]
+    pub fn extension_identity(&self) -> &str {
+        &self.extension_identity
+    }
+
+    #[must_use]
+    pub fn visible_images(&self, images: Vec<crate::port::ImageSummary>) -> crate::port::ImageInventory {
+        let images = images
+            .into_iter()
+            .filter_map(|mut image| {
+                image.references.retain(|reference| self.images.permits_read(reference));
+                let digest_visible = self.images.permits_read(&image.id);
+                if image.references.is_empty() && !digest_visible {
+                    return None;
+                }
+                image.reference = image.references.first().cloned().unwrap_or_else(|| image.id.clone());
+                Some(image)
+            })
+            .collect();
+        crate::port::ImageInventory::bounded(images)
+    }
+
+    fn canonical_image(reference: &str) -> Result<String, Failure> {
+        if reference.len() == 71
+            && reference.starts_with("sha256:")
+            && reference[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Ok(reference.to_owned());
+        }
+        let canonical = reference
+            .parse::<hl_image_reference::ImageReference>()
+            .map_err(|error| Failure::Conflict {
+                detail: format!("invalid image reference: {error}"),
+            })?
+            .to_string();
+        Ok(canonical)
+    }
+
+    fn permit_image(&self, reference: &str, capability: Capability) -> Result<String, Failure> {
+        let canonical = Self::canonical_image(reference)?;
+        let permitted = match capability {
+            Capability::ImageRead => self.images.permits_read(&canonical),
+            Capability::ImagePull => self.images.permits_pull(&canonical),
+            Capability::ImageRemove => self.images.permits_remove(&canonical),
+            _ => false,
+        };
+        if !permitted {
+            Err(Failure::Denied {
+                capability: capability.as_str().into(),
+                detail: "image is outside the extension's consented resource scope".into(),
+            })
+        } else {
+            Ok(canonical)
+        }
+    }
+
+    fn permit_image_use(&self, reference: &str) -> Result<(), Failure> {
+        let canonical = Self::canonical_image(reference)?;
+        if self.images.permits_use(&canonical) {
+            Ok(())
+        } else {
+            Err(Failure::Denied {
+                capability: Capability::ContainerControl.as_str().into(),
+                detail: "container image use is outside the extension's consented image scope".into(),
+            })
+        }
     }
 
     #[must_use]
@@ -204,7 +290,10 @@ impl Session {
     #[must_use]
     pub fn visible_volumes(&self, volumes: Vec<crate::port::VolumeSummary>) -> crate::port::VolumeInventory {
         crate::port::VolumeInventory::bounded(
-            volumes.into_iter().filter(|volume| self.volumes.permits(&volume.name)).collect(),
+            volumes
+                .into_iter()
+                .filter(|volume| self.volumes.permits(&volume.name))
+                .collect(),
         )
     }
 
@@ -466,7 +555,6 @@ impl Session {
             | Request::ExecutionRemove { .. }
             | Request::ContainerExec { .. } => self.control(request, services),
             Request::ImageList
-            | Request::ImagePull { .. }
             | Request::ImagePullStart { .. }
             | Request::ImagePullStatus { .. }
             | Request::ImagePullCancel { .. }
@@ -679,6 +767,7 @@ impl Session {
                     detail: "container creation was not consented".into(),
                 });
             }
+            self.permit_image_use(&spec.image)?;
             if spec.mounts.iter().any(|mount| mount.read_only) {
                 self.peer.authority().permit(Capability::VolumeRead)?;
             }
@@ -688,7 +777,11 @@ impl Session {
             for mount in &spec.mounts {
                 self.permit_volume(
                     &mount.volume,
-                    if mount.read_only { Capability::VolumeRead } else { Capability::VolumeWrite },
+                    if mount.read_only {
+                        Capability::VolumeRead
+                    } else {
+                        Capability::VolumeWrite
+                    },
                 )?;
             }
             if spec.network.is_some() || spec.ports.iter().any(|port| port.host.is_some()) {
@@ -806,20 +899,38 @@ impl Session {
         }
     }
 
-    fn images(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+    fn images(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         let port = self.peer.authority().port(request.capability(), services.images)?;
         match request {
-            Request::ImageList => Ok(Reply::Images(crate::port::ImageInventory::bounded(port.list()?))),
-            Request::ImagePull { reference } => Ok(Reply::Image(port.pull(reference)?)),
-            Request::ImagePullStart { reference } => Ok(Reply::ImagePullJob(port.pull_start(reference)?)),
-            Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(job)?)),
-            Request::ImagePullCancel { job } => port.pull_cancel(job).map(|()| Reply::Done).map_err(Failure::from),
-            Request::ImageInspect { reference } => Ok(Reply::ImageDetails(port.inspect(reference)?)),
+            Request::ImageList => Ok(Reply::Images(self.visible_images(port.list()?))),
+            Request::ImagePullStart { reference } => {
+                let reference = self.permit_image(reference, Capability::ImagePull)?;
+                let job = port.pull_start(&self.extension_identity, &reference)?;
+                Ok(Reply::ImagePullJob(job))
+            }
+            Request::ImagePullStatus { job } => Ok(Reply::ImagePull(port.pull_status(&self.extension_identity, job)?)),
+            Request::ImagePullCancel { job } => port
+                .pull_cancel(&self.extension_identity, job)
+                .map(|()| Reply::Done)
+                .map_err(Failure::from),
+            Request::ImageInspect { reference } => {
+                let reference = self.permit_image(reference, Capability::ImageRead)?;
+                let mut details = port.inspect(&reference)?;
+                details
+                    .references
+                    .retain(|reference| self.images.permits_read(reference));
+                Ok(Reply::ImageDetails(details))
+            }
             Request::ImageRemove { reference } => {
                 immutable_digest(reference, "image")?;
+                self.permit_image(reference, Capability::ImageRemove)?;
                 port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
             }
-            Request::ImagePrune => Ok(Reply::ImagePrune(port.prune()?)),
+            Request::ImagePrune if self.images.prune_all_unused => Ok(Reply::ImagePrune(port.prune()?)),
+            Request::ImagePrune => Err(Failure::Denied {
+                capability: Capability::ImagePrune.as_str().into(),
+                detail: "global image pruning was not consented".into(),
+            }),
             _ => Err(Failure::Unsupported {
                 call: "image operation".into(),
             }),
@@ -939,10 +1050,10 @@ impl Session {
     }
 
     fn permit_network_reference(&self, reference: &str, capability: Capability) -> Result<(), Failure> {
-        if !resource_name(reference)
-            && immutable_identity(reference, &[32], "network").is_err()
-        {
-            return Err(Failure::Conflict { detail: "network reference must be an exact name or complete immutable ID".into() });
+        if !resource_name(reference) && immutable_identity(reference, &[32], "network").is_err() {
+            return Err(Failure::Conflict {
+                detail: "network reference must be an exact name or complete immutable ID".into(),
+            });
         }
         if self.networks.permits_reference(reference) {
             Ok(())
@@ -1108,6 +1219,7 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -1121,6 +1233,7 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    images,
                     networks,
                     volumes,
                     filesystem,
@@ -1133,6 +1246,7 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -1146,6 +1260,7 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    images,
                     networks,
                     volumes,
                     filesystem,

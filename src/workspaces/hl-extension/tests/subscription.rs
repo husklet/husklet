@@ -52,10 +52,6 @@ impl ImageStore for Host {
     fn list(&self) -> Result<Vec<ImageSummary>, HostError> {
         Ok(Vec::new())
     }
-
-    fn pull(&self, _reference: &str) -> Result<ImageSummary, HostError> {
-        Err(HostError::Failed("no registry".into()))
-    }
 }
 
 impl TerminalSurface for Host {
@@ -135,7 +131,9 @@ impl WorkspaceFiles for Host {
 
 impl hl_extension::port::ExtensionStore for Host {}
 impl hl_extension::NotificationSink for Host {
-    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> { Ok(()) }
+    fn publish(&self, _notification: &hl_extension::Notification) -> Result<(), HostError> {
+        Ok(())
+    }
 }
 
 fn services(host: &Host) -> Services<'_> {

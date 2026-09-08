@@ -51,7 +51,7 @@ export interface ExtensionProviderCatalogue {
     providers: ExtensionProviderDeclaration[];
     truncated: boolean;
 }
-export type ExtensionCapability = 'workspaces:read' | 'workspaces:control' | 'workspaces:events' | 'workspace-environment:read' | 'workspace-environment:write' | 'containers:read' | 'containers:control' | 'containers:attach' | 'images:read' | 'images:write' | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write' | 'terminals:read' | 'terminals:control' | 'terminals:output' | 'panes:observe' | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read' | 'extensions:control' | 'extensions:install' | 'filesystem:read' | 'filesystem:write' | 'interface:render' | 'notifications:publish';
+export type ExtensionCapability = 'workspaces:read' | 'workspaces:control' | 'workspaces:events' | 'workspace-environment:read' | 'workspace-environment:write' | 'containers:read' | 'containers:control' | 'containers:attach' | 'images:read' | 'images:pull' | 'images:remove' | 'images:prune' | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write' | 'terminals:read' | 'terminals:control' | 'terminals:output' | 'panes:observe' | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read' | 'extensions:control' | 'extensions:install' | 'filesystem:read' | 'filesystem:write' | 'state:read' | 'state:write' | 'interface:render' | 'notifications:publish';
 export type ContainerSelector = {
     id: string;
 } | {
@@ -62,6 +62,20 @@ export type ContainerSelector = {
 export interface ContainerGrant {
     selectors: ContainerSelector[];
     create: boolean;
+}
+export type ImageSelector = {
+    digest: string;
+} | {
+    reference: string;
+} | {
+    all: true;
+};
+export interface ImageGrant {
+    read: ImageSelector[];
+    use: ImageSelector[];
+    pull: ImageSelector[];
+    remove: ImageSelector[];
+    prune_all_unused: boolean;
 }
 export type NetworkSelector = {
     id: string;
@@ -110,6 +124,7 @@ export interface ExtensionCandidate {
     image_digest: string;
     requested: ExtensionCapability[];
     requested_containers: ContainerGrant;
+    requested_images: ImageGrant;
     requested_networks: NetworkGrant;
     requested_volumes: VolumeGrant;
     requested_filesystem: FilesystemGrant;
@@ -275,6 +290,7 @@ export interface ExecutionList {
 export interface ImageSummary {
     id: string;
     reference: string;
+    references: string[];
     size: number;
     created: number;
 }
@@ -314,6 +330,7 @@ export interface ImagePullStatus {
     error: string | null;
 }
 export interface ImagePullChange {
+    sequence: number;
     job: string;
     revision: number;
     state: string;
@@ -778,9 +795,9 @@ export interface WorkspaceApi {
             revision: number;
         }>;
         cancelAcquisition(job: string, revision: number): Promise<void>;
-        install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
+        install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
-        installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
+        installAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
             timeoutMs?: number;
             workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{
@@ -792,9 +809,9 @@ export interface WorkspaceApi {
             image_digest: string;
             revision: number;
         }>;
-        update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
+        update(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, update it, then verify its published identity. */
-        updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
+        updateAndWait(job: string, revision: number, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, options?: {
             timeoutMs?: number;
             workspaceEnvironment?: WorkspaceEnvironmentGrant;
         }): Promise<{
@@ -963,7 +980,10 @@ export interface WorkspaceApi {
     images: {
         inventory(): Promise<ImageInventory>;
         list(): Promise<ImageSummary[]>;
-        pull(reference: string): Promise<ImageSummary>;
+        pull(reference: string, options?: {
+            timeoutMs?: number;
+            signal?: AbortSignal;
+        }): Promise<ImageSummary>;
         inspect(reference: string): Promise<ImageDetails>;
         startPull(reference: string): Promise<ImagePullJob>;
         pullStatus(job: string): Promise<ImagePullStatus>;

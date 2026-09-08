@@ -182,6 +182,9 @@ pub struct ExecutionList {
 pub struct ImageSummary {
     pub id: String,
     pub reference: String,
+    /// Every host alias, filtered to the extension's consent before crossing the boundary.
+    #[serde(default)]
+    pub references: Vec<String>,
     pub size: u64,
     pub created: i64,
 }
@@ -249,6 +252,7 @@ pub struct ImagePullStatus {
 /// Coalesced invalidation; callers read status for the bounded full snapshot.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ImagePullChange {
+    pub sequence: u64,
     pub job: String,
     pub revision: u64,
     pub state: String,
@@ -707,6 +711,8 @@ pub struct ExtensionSummary {
     /// Effective capability consent persisted for this exact image digest.
     #[serde(default)]
     pub granted: crate::Grant,
+    #[serde(default)]
+    pub images: crate::ImageGrant,
     /// Effective container resource consent persisted for this exact image digest.
     #[serde(default)]
     pub containers: crate::ContainerGrant,
@@ -748,6 +754,8 @@ pub struct ExtensionCandidate {
     pub version: String,
     pub image_digest: String,
     pub requested: crate::Grant,
+    #[serde(default)]
+    pub requested_images: crate::ImageGrant,
     #[serde(default)]
     pub requested_containers: crate::ContainerGrant,
     #[serde(default)]
@@ -889,6 +897,7 @@ pub trait ExtensionStore {
         _image_digest: &str,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _images: &crate::ImageGrant,
         _networks: &crate::NetworkGrant,
         _volumes: &crate::VolumeGrant,
         _filesystem: &crate::FilesystemGrant,
@@ -903,6 +912,7 @@ pub trait ExtensionStore {
         _image_digest: &str,
         _granted: &crate::Grant,
         _containers: &crate::ContainerGrant,
+        _images: &crate::ImageGrant,
         _networks: &crate::NetworkGrant,
         _volumes: &crate::VolumeGrant,
         _filesystem: &crate::FilesystemGrant,
@@ -1103,20 +1113,16 @@ pub trait ImageStore {
     /// Returns a host failure.
     fn list(&self) -> Result<Vec<ImageSummary>, HostError>;
 
-    /// # Errors
-    /// Returns a host failure.
-    fn pull(&self, reference: &str) -> Result<ImageSummary, HostError>;
-
-    fn pull_start(&self, _reference: &str) -> Result<ImagePullJob, HostError> {
+    fn pull_start(&self, _owner: &str, _reference: &str) -> Result<ImagePullJob, HostError> {
         Err(HostError::Unsupported("image pull progress is unavailable".into()))
     }
-    fn pull_status(&self, _job: &str) -> Result<ImagePullStatus, HostError> {
+    fn pull_status(&self, _owner: &str, _job: &str) -> Result<ImagePullStatus, HostError> {
         Err(HostError::Unsupported("image pull progress is unavailable".into()))
     }
-    fn pull_cancel(&self, _job: &str) -> Result<(), HostError> {
+    fn pull_cancel(&self, _owner: &str, _job: &str) -> Result<(), HostError> {
         Err(HostError::Unsupported("image pull cancellation is unavailable".into()))
     }
-    fn pull_changes(&self) -> Vec<ImagePullChange> {
+    fn pull_changes(&self, _owner: &str, _after: u64) -> Vec<ImagePullChange> {
         Vec::new()
     }
 

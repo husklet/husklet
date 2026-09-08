@@ -512,23 +512,25 @@ export function workspace(session, { signal } = {}) {
             startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
             acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
             cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
-            install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_install', {
+            install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_install', {
                 job,
                 revision,
                 image_digest: immutableDigest(imageDigest, 'extension candidate image'),
                 granted,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
                 workspace_environment: workspaceEnvironment,
             }), 'extension'),
-            update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_update', {
+            update: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_update', {
                 job,
                 revision,
                 image_digest: immutableDigest(imageDigest, 'extension candidate image'),
                 granted,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -672,7 +674,38 @@ export function workspace(session, { signal } = {}) {
             inventory: async () => expect(await session.call('image_list'), 'images'),
             list: async () => (await api.images.inventory()).images,
             inspect: async (reference) => expect(await session.call('image_inspect', { reference }), 'image_details'),
-            pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+            pull: async (reference, { timeoutMs = 120_000, signal } = {}) => {
+                if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_400_000) {
+                    throw new RangeError('image pull timeoutMs must be an integer from 1 to 86400000');
+                }
+                requireOutputActive(signal);
+                const { job } = expect(await session.call('image_pull_start', { reference }), 'image_pull_job');
+                const deadline = Date.now() + timeoutMs;
+                try {
+                    for (;;) {
+                        requireOutputActive(signal);
+                        if (Date.now() >= deadline)
+                            throw new Error(`image pull timed out after ${timeoutMs}ms`);
+                        const status = expect(await session.call('image_pull_status', { job }), 'image_pull');
+                        if (status.state === 'complete' && status.image)
+                            return status.image;
+                        if (status.state === 'failed')
+                            throw new Error(status.error ?? 'image pull failed');
+                        if (status.state === 'cancelled')
+                            throw new Error('image pull was cancelled');
+                        await outputPoll(Math.min(100, Math.max(1, deadline - Date.now())), signal);
+                    }
+                }
+                catch (error) {
+                    try {
+                        await done('image_pull_cancel', { job });
+                    }
+                    catch {
+                        /* Preserve the primary error. */
+                    }
+                    throw error;
+                }
+            },
             startPull: async (reference) => expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
             pullStatus: async (job) => expect(await session.call('image_pull_status', { job }), 'image_pull'),
             cancelPull: (job) => done('image_pull_cancel', { job }),
@@ -2472,7 +2505,7 @@ export function workspace(session, { signal } = {}) {
         }
     };
     api.watchExtensionAcquisitions = (listener) => watch('extension-acquisitions', 'extension_acquisitions', listener, 'extension acquisition');
-    const commitAcquisitionAndWait = async (operation, job, revision, granted, containers = { selectors: [], create: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {}) => {
+    const commitAcquisitionAndWait = async (operation, job, revision, granted, containers = { selectors: [], create: false }, images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {}) => {
         if (!Number.isSafeInteger(revision) || revision < 0) {
             throw new TypeError(`extension ${operation} wait requires a nonnegative safe integer revision`);
         }
@@ -2510,7 +2543,7 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
-            const committed = await api.extensions[operation](job, revision, digest, granted, containers, networks, volumes, filesystem, workspaceEnvironment);
+            const committed = await api.extensions[operation](job, revision, digest, granted, containers, images, networks, volumes, filesystem, workspaceEnvironment);
             if (committed.name !== candidate.name || committed.image_digest !== digest) {
                 throw new Error(`extension ${operation} returned a different candidate identity`);
             }
@@ -2532,8 +2565,8 @@ export function workspace(session, { signal } = {}) {
             await stop();
         }
     };
-    api.extensions.installAndWait = (job, revision, granted, containers, networks, volumes, filesystem, options) => commitAcquisitionAndWait('install', job, revision, granted, containers, networks, volumes, filesystem, options);
-    api.extensions.updateAndWait = (job, revision, granted, containers, networks, volumes, filesystem, options) => commitAcquisitionAndWait('update', job, revision, granted, containers, networks, volumes, filesystem, options);
+    api.extensions.installAndWait = (job, revision, granted, containers, images, networks, volumes, filesystem, options) => commitAcquisitionAndWait('install', job, revision, granted, containers, images, networks, volumes, filesystem, options);
+    api.extensions.updateAndWait = (job, revision, granted, containers, images, networks, volumes, filesystem, options) => commitAcquisitionAndWait('update', job, revision, granted, containers, images, networks, volumes, filesystem, options);
     api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
         if (typeof job !== 'string' ||
             job.length === 0 ||

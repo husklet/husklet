@@ -9,7 +9,7 @@ activation = "tab"
 # from inventory. Pane inventory, live terminal output, semantic UI text, and
 # revision-bound input are separate authorities, so consent describes every
 # operation this compact control surface exercises.
-capabilities = ["workspaces:read", "workspaces:control", "workspaces:events", "workspace-environment:read", "workspace-environment:write", "extensions:read", "extensions:control", "extensions:install", "containers:read", "containers:control", "containers:attach", "images:read", "images:write", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "interface:render"]
+capabilities = ["workspaces:read", "workspaces:control", "workspaces:events", "workspace-environment:read", "workspace-environment:write", "extensions:read", "extensions:control", "extensions:install", "containers:read", "containers:control", "containers:attach", "images:read", "images:pull", "images:remove", "images:prune", "volumes:read", "volumes:write", "networks:read", "networks:write", "terminals:read", "terminals:control", "terminals:output", "panes:observe", "panes:semantic-read", "panes:semantic-control", "interface:render"]
 
 [workspace_environment]
 read = [{ all = true }]
@@ -20,6 +20,13 @@ write = [{ all = true }]
 [containers]
 selectors = [{ all = true }]
 create = true
+
+[images]
+read = [{ all = true }]
+use = [{ all = true }]
+pull = [{ all = true }]
+remove = [{ all = true }]
+prune_all_unused = true
 
 # Top is also the network administrator. Other extensions name only the exact
 # networks they require, and omission grants no network resources.

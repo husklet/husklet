@@ -180,13 +180,12 @@ order; the JavaScript client's checks are never treated as a security boundary.
 ## Images
 
 - `host.images.list(...)` — `image_list`, requires `images:read`.
-- `host.images.pull(...)` — `image_pull`, requires `images:write`.
-- `host.images.startPull(...)` — `image_pull_start`, requires `images:write`.
-- `host.images.pullStatus(...)` — `image_pull_status`, requires `images:write`.
-- `host.images.cancelPull(...)` — `image_pull_cancel`, requires `images:write`.
+- `host.images.startPull(...)` — `image_pull_start`, requires `images:pull`.
+- `host.images.pullStatus(...)` — `image_pull_status`, requires `images:pull`.
+- `host.images.cancelPull(...)` — `image_pull_cancel`, requires `images:pull`.
 - `host.images.inspect(...)` — `image_inspect`, requires `images:read`.
-- `host.images.remove(...)` — `image_remove`, requires `images:write`.
-- `host.images.prune(...)` — `image_prune`, requires `images:write`.
+- `host.images.remove(...)` — `image_remove`, requires `images:remove`.
+- `host.images.prune(...)` — `image_prune`, requires `images:prune`.
 
 ## Networks
 
@@ -267,7 +266,7 @@ client delivers an event. Always unsubscribe or use a `watch*` disposer.
 - `host.subscribe('container-inventory')` / `host.unsubscribe('container-inventory')` — requires `containers:read`.
 - `host.subscribe('executions')` / `host.unsubscribe('executions')` — requires `containers:read`.
 - `host.subscribe('images')` / `host.unsubscribe('images')` — requires `images:read`.
-- `host.subscribe('image-pulls')` / `host.unsubscribe('image-pulls')` — requires `images:write`.
+- `host.subscribe('image-pulls')` / `host.unsubscribe('image-pulls')` — requires `images:pull`.
 - `host.subscribe('volumes')` / `host.unsubscribe('volumes')` — requires `volumes:read`.
 - `host.subscribe('networks')` / `host.unsubscribe('networks')` — requires `networks:read`.
 - `host.subscribe('terminal')` / `host.unsubscribe('terminal')` — requires `terminals:read`.

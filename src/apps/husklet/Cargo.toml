@@ -24,6 +24,7 @@ required-features = ["gui", "gui-checkpoint-e2e"]
 
 [dependencies]
 hl-design = { path = "../../packages/hl-design" }
+hl-image-reference = { path = "../../packages/hl-image-reference" }
 hl-fs = { path = "../../packages/hl-fs", default-features = false }
 # The bare workspace primitive the `config` module wraps — the ONLY non-optional dep, so a `default-
 # features = false` consumer (e.g. hl-gui) gets just the light config and none of the engine stack.

@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
+use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -91,7 +91,6 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("container_exec", "identity"),
     ("container_attach_terminal", "identity"),
     ("image_list", "images"),
-    ("image_pull", "image"),
     ("image_pull_start", "image_pull_job"),
     ("image_pull_status", "image_pull"),
     ("image_pull_cancel", "done"),
@@ -192,8 +191,9 @@ fn request_capability(request: &str) -> Capability {
         | "execution_kill" | "execution_cancel" | "execution_remove" => Capability::ContainerControl,
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
-        "image_pull" | "image_pull_start" | "image_pull_status" | "image_pull_cancel" | "image_remove"
-        | "image_prune" => Capability::ImageWrite,
+        "image_pull_start" | "image_pull_status" | "image_pull_cancel" => Capability::ImagePull,
+        "image_remove" => Capability::ImageRemove,
+        "image_prune" => Capability::ImagePrune,
         "volume_list" | "volume_inspect" => Capability::VolumeRead,
         "volume_create" | "volume_remove" => Capability::VolumeWrite,
         "network_list" | "network_inspect" => Capability::NetworkRead,

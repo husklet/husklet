@@ -337,13 +337,132 @@ pub struct VolumeGrant {
     pub create: bool,
 }
 
+/// One exact canonical image reference, or explicit access to every image.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum ImageSelector {
+    Digest { digest: String },
+    Reference { reference: String },
+    All { all: bool },
+}
+
+/// Image authority is independent from the operation capability.
+///
+/// `prune` is deliberately separate because it is a global destructive operation
+/// that cannot be meaningfully confined to one reference.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageGrant {
+    #[serde(default)]
+    pub read: Vec<ImageSelector>,
+    #[serde(default, rename = "use")]
+    pub r#use: Vec<ImageSelector>,
+    #[serde(default)]
+    pub pull: Vec<ImageSelector>,
+    #[serde(default)]
+    pub remove: Vec<ImageSelector>,
+    #[serde(default)]
+    pub prune_all_unused: bool,
+}
+
+impl ImageGrant {
+    pub const SELECTOR_LIMIT: usize = 128;
+
+    #[must_use]
+    pub fn intersect(&self, consented: &Self) -> Self {
+        Self {
+            read: image_intersection(&self.read, &consented.read),
+            r#use: image_intersection(&self.r#use, &consented.r#use),
+            pull: image_intersection(&self.pull, &consented.pull),
+            remove: image_intersection(&self.remove, &consented.remove),
+            prune_all_unused: self.prune_all_unused && consented.prune_all_unused,
+        }
+    }
+
+    #[must_use]
+    pub fn permits_read(&self, value: &str) -> bool {
+        image_permits(&self.read, value)
+    }
+    #[must_use]
+    pub fn permits_use(&self, value: &str) -> bool {
+        image_permits(&self.r#use, value)
+    }
+    #[must_use]
+    pub fn permits_pull(&self, value: &str) -> bool {
+        image_permits(&self.pull, value)
+    }
+    #[must_use]
+    pub fn permits_remove(&self, value: &str) -> bool {
+        image_permits(&self.remove, value)
+    }
+
+    fn validate(&self) -> Result<(), Invalid> {
+        let sets = [&self.read, &self.r#use, &self.pull, &self.remove];
+        if sets.iter().map(|set| set.len()).sum::<usize>() > Self::SELECTOR_LIMIT {
+            return Err(Invalid::ImageSelectors);
+        }
+        for selectors in sets {
+            validate_image_selectors(selectors)?;
+        }
+        Ok(())
+    }
+}
+
+fn image_intersection(requested: &[ImageSelector], consented: &[ImageSelector]) -> Vec<ImageSelector> {
+    if requested.contains(&ImageSelector::All { all: true }) {
+        return consented.to_vec();
+    }
+    let all = consented.contains(&ImageSelector::All { all: true });
+    requested
+        .iter()
+        .filter(|selector| all || consented.contains(selector))
+        .cloned()
+        .collect()
+}
+
+fn image_permits(selectors: &[ImageSelector], value: &str) -> bool {
+    selectors.iter().any(|selector| match selector {
+        ImageSelector::Digest { digest } => digest == value,
+        ImageSelector::Reference { reference: selected } => selected == value,
+        ImageSelector::All { all } => *all,
+    })
+}
+
+fn validate_image_selectors(selectors: &[ImageSelector]) -> Result<(), Invalid> {
+    let mut unique = std::collections::BTreeSet::new();
+    for selector in selectors {
+        let valid = match selector {
+            ImageSelector::Digest { digest } => {
+                digest.len() == 71
+                    && digest.starts_with("sha256:")
+                    && digest[7..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            }
+            ImageSelector::Reference { reference } => reference
+                .parse::<hl_image_reference::ImageReference>()
+                .is_ok_and(|parsed| parsed.to_string() == *reference),
+            ImageSelector::All { all } => *all,
+        };
+        if !valid || !unique.insert(selector) {
+            return Err(Invalid::ImageSelectors);
+        }
+    }
+    Ok(())
+}
+
 impl VolumeGrant {
     pub const SELECTOR_LIMIT: usize = 128;
 
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
         Self {
-            selectors: self.selectors.iter().filter(|selector| consented.selectors.contains(selector)).cloned().collect(),
+            selectors: self
+                .selectors
+                .iter()
+                .filter(|selector| consented.selectors.contains(selector))
+                .cloned()
+                .collect(),
             create: self.create && consented.create,
         }
     }
@@ -363,8 +482,13 @@ impl VolumeGrant {
         let mut unique = std::collections::BTreeSet::new();
         for selector in &self.selectors {
             let valid = match selector {
-                VolumeSelector::Name { name } => !name.is_empty() && name.len() <= 255
-                    && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')),
+                VolumeSelector::Name { name } => {
+                    !name.is_empty()
+                        && name.len() <= 255
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+                }
                 VolumeSelector::All { all } => *all,
             };
             if !valid || !unique.insert(selector) {
@@ -558,6 +682,9 @@ pub struct Manifest {
     pub version: String,
     pub protocol: u32,
     pub capabilities: Grant,
+    /// Exact canonical image references requested. Omission means none.
+    #[serde(default)]
+    pub images: ImageGrant,
     /// Exact container resources requested. Omission intentionally means none.
     #[serde(default)]
     pub containers: ContainerGrant,
@@ -661,6 +788,22 @@ impl Manifest {
             .workspace_environment
             .validate(manifest.name.to_string() == "top")?;
         manifest.containers.validate()?;
+        manifest.images.validate()?;
+        if !manifest.images.read.is_empty() && !manifest.capabilities.holds(Capability::ImageRead) {
+            return Err(Invalid::Undeclared(Capability::ImageRead));
+        }
+        if !manifest.images.r#use.is_empty() && !manifest.capabilities.holds(Capability::ContainerControl) {
+            return Err(Invalid::Undeclared(Capability::ContainerControl));
+        }
+        if !manifest.images.pull.is_empty() && !manifest.capabilities.holds(Capability::ImagePull) {
+            return Err(Invalid::Undeclared(Capability::ImagePull));
+        }
+        if !manifest.images.remove.is_empty() && !manifest.capabilities.holds(Capability::ImageRemove) {
+            return Err(Invalid::Undeclared(Capability::ImageRemove));
+        }
+        if manifest.images.prune_all_unused && !manifest.capabilities.holds(Capability::ImagePrune) {
+            return Err(Invalid::Undeclared(Capability::ImagePrune));
+        }
         if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
             && !manifest.capabilities.holds(Capability::ContainerRead)
             && !manifest.capabilities.holds(Capability::ContainerControl)
@@ -712,6 +855,7 @@ pub enum Invalid {
     ContainerSelectors,
     NetworkSelectors,
     VolumeSelectors,
+    ImageSelectors,
     FilesystemRoots,
     WorkspaceEnvironment,
 }
@@ -745,6 +889,7 @@ impl std::fmt::Display for Invalid {
             Self::ContainerSelectors => formatter.write_str("container selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
             Self::NetworkSelectors => formatter.write_str("network selectors must contain at most 128 unique exact ids, names, or one explicit `{ all = true }`"),
             Self::VolumeSelectors => formatter.write_str("volume selectors must contain at most 128 unique exact names, or one explicit `{ all = true }`"),
+            Self::ImageSelectors => formatter.write_str("image selectors must contain at most 128 unique canonical references, or one explicit `{ all = true }`"),
             Self::FilesystemRoots => formatter.write_str("filesystem scopes must contain at most 128 unique read or write roots"),
             Self::WorkspaceEnvironment => formatter.write_str("workspace environment scopes must be bounded unique exact pairs; all is reserved for top"),
         }
@@ -755,7 +900,9 @@ impl std::error::Error for Invalid {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, Manifest};
+    use super::{
+        ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
+    };
     use crate::{RelativePath, PROTOCOL};
 
     fn document(extra: &str) -> String {
@@ -821,5 +968,53 @@ mod tests {
                 ..FilesystemGrant::default()
             }
         );
+    }
+
+    #[test]
+    fn image_actions_intersect_independently_and_require_canonical_selectors() {
+        let reference = ImageSelector::Reference {
+            reference: "docker.io/library/alpine:3.20".into(),
+        };
+        let requested = ImageGrant {
+            read: vec![reference.clone()],
+            r#use: vec![reference.clone()],
+            pull: vec![reference.clone()],
+            remove: vec![reference.clone()],
+            prune_all_unused: true,
+        };
+        let consented = ImageGrant {
+            pull: vec![ImageSelector::All { all: true }],
+            remove: vec![reference.clone()],
+            ..ImageGrant::default()
+        };
+        let effective = requested.intersect(&consented);
+        assert!(effective.read.is_empty());
+        assert!(effective.r#use.is_empty());
+        assert_eq!(effective.pull, vec![reference.clone()]);
+        assert_eq!(effective.remove, vec![reference.clone()]);
+        assert!(!effective.prune_all_unused);
+        let narrowed = ImageGrant {
+            read: vec![ImageSelector::All { all: true }],
+            r#use: vec![ImageSelector::All { all: true }],
+            pull: vec![ImageSelector::All { all: true }],
+            remove: vec![ImageSelector::All { all: true }],
+            prune_all_unused: true,
+        }
+        .intersect(&ImageGrant {
+            read: vec![reference.clone()],
+            r#use: vec![reference.clone()],
+            pull: vec![reference.clone()],
+            remove: vec![reference.clone()],
+            prune_all_unused: false,
+        });
+        assert_eq!(narrowed.read, vec![reference.clone()]);
+        assert_eq!(narrowed.r#use, vec![reference.clone()]);
+        assert_eq!(narrowed.pull, vec![reference.clone()]);
+        assert_eq!(narrowed.remove, vec![reference]);
+
+        for invalid in ["alpine:3.20", "registry-1.docker.io/library/alpine:3.20 "] {
+            let manifest = format!("name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"images:read\"]\n[images]\nread = [{{ reference = \"{invalid}\" }}]\n");
+            assert!(Manifest::parse(&manifest, PROTOCOL).is_err(), "accepted {invalid:?}");
+        }
     }
 }

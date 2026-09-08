@@ -149,6 +149,7 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
       image_digest: `sha256:${'a'.repeat(64)}`,
       granted: ['containers:read'],
       containers: { selectors: [{ name: 'database' }], create: false },
+      images: { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
       networks: { selectors: [{ name: 'database' }], create: false },
       volumes: { selectors: [{ name: 'data' }], create: false },
       filesystem: {

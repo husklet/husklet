@@ -27,7 +27,7 @@ test(
           payload: {
             protocol: 1,
             extension: 'image-list-resource-test',
-            granted: ['images:read', 'images:write'],
+            granted: ['images:read', 'images:pull', 'images:remove', 'images:prune'],
           },
         }),
       );

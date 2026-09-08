@@ -62,7 +62,17 @@
     {
       "executes": false,
       "mutates": true,
-      "wire": "images:write"
+      "wire": "images:pull"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "images:remove"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "images:prune"
     },
     {
       "executes": false,
@@ -278,7 +288,19 @@
           }
         },
         {
-          "name": "images:write",
+          "name": "images:pull",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "images:remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "images:prune",
           "payload": {
             "kind": "unit"
           }
@@ -1573,6 +1595,14 @@
           }
         },
         {
+          "name": "requested_images",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ImageGrant"
+          }
+        },
+        {
           "name": "requested_containers",
           "optional": true,
           "schema": {
@@ -1804,6 +1834,14 @@
           "schema": {
             "kind": "ref",
             "name": "Grant"
+          }
+        },
+        {
+          "name": "images",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "ImageGrant"
           }
         },
         {
@@ -2235,6 +2273,65 @@
       "kind": "struct",
       "serde": {}
     },
+    "ImageGrant": {
+      "fields": [
+        {
+          "name": "read",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSelector"
+            }
+          }
+        },
+        {
+          "name": "use",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSelector"
+            }
+          }
+        },
+        {
+          "name": "pull",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSelector"
+            }
+          }
+        },
+        {
+          "name": "remove",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "ImageSelector"
+            }
+          }
+        },
+        {
+          "name": "prune_all_unused",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
     "ImageInventory": {
       "fields": [
         {
@@ -2289,6 +2386,17 @@
     },
     "ImagePullChange": {
       "fields": [
+        {
+          "name": "sequence",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
         {
           "name": "job",
           "optional": false,
@@ -2449,6 +2557,59 @@
       "kind": "struct",
       "serde": {}
     },
+    "ImageSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Digest",
+          "payload": {
+            "fields": [
+              {
+                "name": "digest",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Reference",
+          "payload": {
+            "fields": [
+              {
+                "name": "reference",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
+    },
     "ImageSummary": {
       "fields": [
         {
@@ -2463,6 +2624,16 @@
           "optional": false,
           "schema": {
             "kind": "string"
+          }
+        },
+        {
+          "name": "references",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
           }
         },
         {
@@ -7388,19 +7559,15 @@
       "request": "image_list"
     },
     {
-      "capability": "images:write",
-      "request": "image_pull"
-    },
-    {
-      "capability": "images:write",
+      "capability": "images:pull",
       "request": "image_pull_start"
     },
     {
-      "capability": "images:write",
+      "capability": "images:pull",
       "request": "image_pull_status"
     },
     {
-      "capability": "images:write",
+      "capability": "images:pull",
       "request": "image_pull_cancel"
     },
     {
@@ -7408,11 +7575,11 @@
       "request": "image_inspect"
     },
     {
-      "capability": "images:write",
+      "capability": "images:remove",
       "request": "image_remove"
     },
     {
-      "capability": "images:write",
+      "capability": "images:prune",
       "request": "image_prune"
     },
     {
@@ -7848,10 +8015,6 @@
     {
       "reply": "images",
       "request": "image_list"
-    },
-    {
-      "reply": "image",
-      "request": "image_pull"
     },
     {
       "reply": "image_pull_job",
@@ -9066,6 +9229,14 @@
                 }
               },
               {
+                "name": "images",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImageGrant"
+                }
+              },
+              {
                 "name": "networks",
                 "optional": false,
                 "schema": {
@@ -9144,6 +9315,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "ContainerGrant"
+                }
+              },
+              {
+                "name": "images",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "ImageGrant"
                 }
               },
               {
@@ -9772,21 +9951,6 @@
           "name": "image_list",
           "payload": {
             "kind": "unit"
-          }
-        },
-        {
-          "name": "image_pull",
-          "payload": {
-            "fields": [
-              {
-                "name": "reference",
-                "optional": false,
-                "schema": {
-                  "kind": "string"
-                }
-              }
-            ],
-            "kind": "struct"
           }
         },
         {
@@ -12369,7 +12533,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:93a4e65706fb5ab9",
+  "source_fingerprint": "fnv1a64:5aca27ce255c3cb7",
   "specification_version": 1,
   "topics": [
     {
@@ -12393,7 +12557,7 @@
       "wire": "images"
     },
     {
-      "capability": "images:write",
+      "capability": "images:pull",
       "snapshot": "image_pulls",
       "wire": "image-pulls"
     },
