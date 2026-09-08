@@ -41,7 +41,7 @@ type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
 
-const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 56 } } as const;
+const CONTENT_WIDTH = { minimum: { chars: 32 }, maximum: { chars: 72 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -296,6 +296,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     (LifecycleState & { detail: string }) | null
   >(null);
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
+  const [permissionDetailsExpanded, setPermissionDetailsExpanded] = React.useState(false);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
@@ -376,6 +377,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setBusy('inspect');
     setError('');
     setNotice(null);
+    setPermissionDetailsExpanded(false);
     setAcquisition(null);
     candidateKey.current = '';
     try {
@@ -735,254 +737,260 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   ) : null}
                   <Heading label="Review permissions" scale="caption" />
                   <InlineMessage
-                    label="All access is off by default. Enable only what this extension needs."
+                    label="All access is off. Expand exact grants and enable only what this extension needs."
                     tone="warning"
                   />
-                  <Text
-                    label="Review every permission choice before continuing."
-                    color="text-dim"
-                  />
-                  <Column gap={1}>
-                    {acquisition.candidate.requested.length > 0 && (
-                      <Text
-                        label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
-                        color="text-dim"
-                      />
-                    )}
-                    {acquisition.candidate.requested.length > 0 && (
-                      <Row gap={1} align="center">
-                        {granted.length > 0 && (
-                          <Button
-                            label="Clear product access"
-                            variant="ghost"
-                            onInvoke={() => setGranted([])}
-                          />
-                        )}
-                      </Row>
-                    )}
-                    {acquisition.candidate.requested.map((capability) => (
-                      <FormControlLabel
-                        key={capability}
-                        label={`${capabilityLabel(capability)} (${capability})`}
-                        gap={2}
-                      >
-                        <Switch
-                          checked={granted.includes(capability)}
-                          onToggle={(event: Change) =>
-                            setGranted((current) =>
-                              event.value
-                                ? [...new Set([...current, capability])]
-                                : current.filter((item) => item !== capability),
-                            )
-                          }
-                        />
-                      </FormControlLabel>
-                    ))}
-                    {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
-                      <>
+                  <Expander
+                    label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
+                    expanded={permissionDetailsExpanded}
+                    onExpand={(event: Change) => setPermissionDetailsExpanded(Boolean(event.value))}
+                  >
+                    <Column gap={1}>
+                      {acquisition.candidate.requested.length > 0 && (
                         <Text
-                          label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                          label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
                           color="text-dim"
                         />
-                        <Text
-                          label="Container access starts off. Select only what this extension needs."
-                          color="text-dim"
-                          wrap
-                        />
-                      </>
-                    )}
-                    {requestedContainers.selectors.map((selector) => {
-                      const key = selectorKey(selector);
-                      const selected = grantedContainers.selectors.some(
-                        (candidate) => selectorKey(candidate) === key,
-                      );
-                      return (
-                        <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                      )}
+                      {acquisition.candidate.requested.length > 0 && (
+                        <Row gap={1} align="center">
+                          {granted.length > 0 && (
+                            <Button
+                              label="Clear product access"
+                              variant="ghost"
+                              onInvoke={() => setGranted([])}
+                            />
+                          )}
+                        </Row>
+                      )}
+                      {acquisition.candidate.requested.map((capability) => (
+                        <FormControlLabel
+                          key={capability}
+                          label={`${capabilityLabel(capability)} (${capability})`}
+                          gap={2}
+                        >
                           <Switch
-                            checked={selected}
+                            checked={granted.includes(capability)}
                             onToggle={(event: Change) =>
-                              setGrantedContainers((current) => ({
-                                ...current,
-                                selectors: event.value
-                                  ? current.selectors.some(
-                                      (candidate) => selectorKey(candidate) === key,
-                                    )
-                                    ? current.selectors
-                                    : [...current.selectors, selector]
-                                  : current.selectors.filter(
-                                      (candidate) => selectorKey(candidate) !== key,
-                                    ),
-                              }))
+                              setGranted((current) =>
+                                event.value
+                                  ? [...new Set([...current, capability])]
+                                  : current.filter((item) => item !== capability),
+                              )
                             }
                           />
                         </FormControlLabel>
-                      );
-                    })}
-                    {requestedContainers.create && (
-                      <FormControlLabel label="Create new containers" gap={2}>
-                        <Switch
-                          checked={grantedContainers.create}
-                          onToggle={(event: Change) =>
-                            setGrantedContainers((current) => ({
-                              ...current,
-                              create: Boolean(event.value),
-                            }))
-                          }
-                        />
-                      </FormControlLabel>
-                    )}
-                    {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
-                      <>
-                        <Text
-                          label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
-                          color="text-dim"
-                        />
-                        <Text
-                          label="Network access starts off. Select only the networks this extension needs."
-                          color="text-dim"
-                          wrap
-                        />
-                      </>
-                    )}
-                    {requestedNetworks.selectors.map((selector) => {
-                      const key = networkSelectorKey(selector);
-                      const selected = grantedNetworks.selectors.some(
-                        (candidate) => networkSelectorKey(candidate) === key,
-                      );
-                      return (
-                        <FormControlLabel key={key} label={networkSelectorLabel(selector)} gap={2}>
-                          <Switch
-                            checked={selected}
-                            onToggle={(event: Change) =>
-                              setGrantedNetworks((current) => ({
-                                ...current,
-                                selectors: event.value
-                                  ? current.selectors.some(
-                                      (candidate) => networkSelectorKey(candidate) === key,
-                                    )
-                                    ? current.selectors
-                                    : [...current.selectors, selector]
-                                  : current.selectors.filter(
-                                      (candidate) => networkSelectorKey(candidate) !== key,
-                                    ),
-                              }))
-                            }
+                      ))}
+                      {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
+                        <>
+                          <Text
+                            label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                            color="text-dim"
                           />
-                        </FormControlLabel>
-                      );
-                    })}
-                    {requestedNetworks.create && (
-                      <FormControlLabel label="Create new networks" gap={2}>
-                        <Switch
-                          checked={grantedNetworks.create}
-                          onToggle={(event: Change) =>
-                            setGrantedNetworks((current) => ({
-                              ...current,
-                              create: Boolean(event.value),
-                            }))
-                          }
-                        />
-                      </FormControlLabel>
-                    )}
-                    {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
-                      <Text
-                        label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
-                        color="text-dim"
-                      />
-                    )}
-                    {requestedVolumes.selectors.map((selector) => {
-                      const key = volumeSelectorKey(selector);
-                      const selected = grantedVolumes.selectors.some(
-                        (candidate) => volumeSelectorKey(candidate) === key,
-                      );
-                      return (
-                        <FormControlLabel key={key} label={volumeSelectorLabel(selector)} gap={2}>
-                          <Switch
-                            checked={selected}
-                            onToggle={(event: Change) =>
-                              setGrantedVolumes((current) => ({
-                                ...current,
-                                selectors: event.value
-                                  ? [
-                                      ...current.selectors.filter(
-                                        (candidate) => volumeSelectorKey(candidate) !== key,
-                                      ),
-                                      selector,
-                                    ]
-                                  : current.selectors.filter(
-                                      (candidate) => volumeSelectorKey(candidate) !== key,
-                                    ),
-                              }))
-                            }
+                          <Text
+                            label="Container access starts off. Select only what this extension needs."
+                            color="text-dim"
+                            wrap
                           />
-                        </FormControlLabel>
-                      );
-                    })}
-                    {requestedVolumes.create && (
-                      <FormControlLabel label="Create new volumes" gap={2}>
-                        <Switch
-                          checked={grantedVolumes.create}
-                          onToggle={(event: Change) =>
-                            setGrantedVolumes((current) => ({
-                              ...current,
-                              create: Boolean(event.value),
-                            }))
-                          }
-                        />
-                      </FormControlLabel>
-                    )}
-                    {filesystemGrantCount(requestedFilesystem) > 0 && (
-                      <>
-                        <Text label="Workspace files" color="text-dim" />
-                        <FilesystemConsent
-                          requested={requestedFilesystem}
-                          granted={grantedFilesystem}
-                          onChange={setGrantedFilesystem}
-                        />
-                      </>
-                    )}
-                    {(requestedWorkspaceEnvironment.read.length > 0 ||
-                      requestedWorkspaceEnvironment.write.length > 0) && (
-                      <Text
-                        label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
-                        color="text-dim"
-                      />
-                    )}
-                    {(['read', 'write'] as const).flatMap((verb) =>
-                      requestedWorkspaceEnvironment[verb].map((selector) => {
-                        const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
-                        const checked = grantedWorkspaceEnvironment[verb].some(
-                          (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                        </>
+                      )}
+                      {requestedContainers.selectors.map((selector) => {
+                        const key = selectorKey(selector);
+                        const selected = grantedContainers.selectors.some(
+                          (candidate) => selectorKey(candidate) === key,
                         );
                         return (
-                          <FormControlLabel
-                            key={key}
-                            label={
-                              'all' in selector
-                                ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
-                                : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
-                            }
-                            gap={2}
-                          >
+                          <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
                             <Switch
-                              checked={checked}
+                              checked={selected}
                               onToggle={(event: Change) =>
-                                setGrantedWorkspaceEnvironment((current) => ({
+                                setGrantedContainers((current) => ({
                                   ...current,
-                                  [verb]: event.value
-                                    ? [...current[verb], selector]
-                                    : current[verb].filter(
-                                        (candidate) =>
-                                          JSON.stringify(candidate) !== JSON.stringify(selector),
+                                  selectors: event.value
+                                    ? current.selectors.some(
+                                        (candidate) => selectorKey(candidate) === key,
+                                      )
+                                      ? current.selectors
+                                      : [...current.selectors, selector]
+                                    : current.selectors.filter(
+                                        (candidate) => selectorKey(candidate) !== key,
                                       ),
                                 }))
                               }
                             />
                           </FormControlLabel>
                         );
-                      }),
-                    )}
-                  </Column>
+                      })}
+                      {requestedContainers.create && (
+                        <FormControlLabel label="Create new containers" gap={2}>
+                          <Switch
+                            checked={grantedContainers.create}
+                            onToggle={(event: Change) =>
+                              setGrantedContainers((current) => ({
+                                ...current,
+                                create: Boolean(event.value),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      )}
+                      {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
+                        <>
+                          <Text
+                            label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
+                            color="text-dim"
+                          />
+                          <Text
+                            label="Network access starts off. Select only the networks this extension needs."
+                            color="text-dim"
+                            wrap
+                          />
+                        </>
+                      )}
+                      {requestedNetworks.selectors.map((selector) => {
+                        const key = networkSelectorKey(selector);
+                        const selected = grantedNetworks.selectors.some(
+                          (candidate) => networkSelectorKey(candidate) === key,
+                        );
+                        return (
+                          <FormControlLabel
+                            key={key}
+                            label={networkSelectorLabel(selector)}
+                            gap={2}
+                          >
+                            <Switch
+                              checked={selected}
+                              onToggle={(event: Change) =>
+                                setGrantedNetworks((current) => ({
+                                  ...current,
+                                  selectors: event.value
+                                    ? current.selectors.some(
+                                        (candidate) => networkSelectorKey(candidate) === key,
+                                      )
+                                      ? current.selectors
+                                      : [...current.selectors, selector]
+                                    : current.selectors.filter(
+                                        (candidate) => networkSelectorKey(candidate) !== key,
+                                      ),
+                                }))
+                              }
+                            />
+                          </FormControlLabel>
+                        );
+                      })}
+                      {requestedNetworks.create && (
+                        <FormControlLabel label="Create new networks" gap={2}>
+                          <Switch
+                            checked={grantedNetworks.create}
+                            onToggle={(event: Change) =>
+                              setGrantedNetworks((current) => ({
+                                ...current,
+                                create: Boolean(event.value),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      )}
+                      {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
+                        <Text
+                          label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
+                          color="text-dim"
+                        />
+                      )}
+                      {requestedVolumes.selectors.map((selector) => {
+                        const key = volumeSelectorKey(selector);
+                        const selected = grantedVolumes.selectors.some(
+                          (candidate) => volumeSelectorKey(candidate) === key,
+                        );
+                        return (
+                          <FormControlLabel key={key} label={volumeSelectorLabel(selector)} gap={2}>
+                            <Switch
+                              checked={selected}
+                              onToggle={(event: Change) =>
+                                setGrantedVolumes((current) => ({
+                                  ...current,
+                                  selectors: event.value
+                                    ? [
+                                        ...current.selectors.filter(
+                                          (candidate) => volumeSelectorKey(candidate) !== key,
+                                        ),
+                                        selector,
+                                      ]
+                                    : current.selectors.filter(
+                                        (candidate) => volumeSelectorKey(candidate) !== key,
+                                      ),
+                                }))
+                              }
+                            />
+                          </FormControlLabel>
+                        );
+                      })}
+                      {requestedVolumes.create && (
+                        <FormControlLabel label="Create new volumes" gap={2}>
+                          <Switch
+                            checked={grantedVolumes.create}
+                            onToggle={(event: Change) =>
+                              setGrantedVolumes((current) => ({
+                                ...current,
+                                create: Boolean(event.value),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      )}
+                      {filesystemGrantCount(requestedFilesystem) > 0 && (
+                        <>
+                          <Text label="Workspace files" color="text-dim" />
+                          <FilesystemConsent
+                            requested={requestedFilesystem}
+                            granted={grantedFilesystem}
+                            onChange={setGrantedFilesystem}
+                          />
+                        </>
+                      )}
+                      {(requestedWorkspaceEnvironment.read.length > 0 ||
+                        requestedWorkspaceEnvironment.write.length > 0) && (
+                        <Text
+                          label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
+                          color="text-dim"
+                        />
+                      )}
+                      {(['read', 'write'] as const).flatMap((verb) =>
+                        requestedWorkspaceEnvironment[verb].map((selector) => {
+                          const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                          const checked = grantedWorkspaceEnvironment[verb].some(
+                            (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                          );
+                          return (
+                            <FormControlLabel
+                              key={key}
+                              label={
+                                'all' in selector
+                                  ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                                  : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
+                              }
+                              gap={2}
+                            >
+                              <Switch
+                                checked={checked}
+                                onToggle={(event: Change) =>
+                                  setGrantedWorkspaceEnvironment((current) => ({
+                                    ...current,
+                                    [verb]: event.value
+                                      ? [...current[verb], selector]
+                                      : current[verb].filter(
+                                          (candidate) =>
+                                            JSON.stringify(candidate) !== JSON.stringify(selector),
+                                        ),
+                                  }))
+                                }
+                              />
+                            </FormControlLabel>
+                          );
+                        }),
+                      )}
+                    </Column>
+                  </Expander>
                 </CardContent>
               )}
               {acquisition && acquisition.state !== 'ready' && (
