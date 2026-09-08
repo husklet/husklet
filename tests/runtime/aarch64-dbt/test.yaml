@@ -49,6 +49,7 @@ cases:
       diagnostics:
         - { counter: patched, greater-than: 0 }
         - { counter: executed, greater-than: 0 }
+        - { counter: reset_fork, greater-than: 0 }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }
