@@ -748,6 +748,37 @@ export function workspace(session, { signal } = {}) {
                 const snapshot = expect(await session.call('pane_semantic_read', { slot }), 'semantics');
                 return { kind: 'ui', text: semanticXml(snapshot), snapshot };
             },
+            readAll: async ({ lines } = {}) => {
+                const inventory = expect(await session.call('pane_list'), 'panes');
+                const panes = [];
+                for (const pane of inventory.panes) {
+                    if (pane.kind === 'terminal') {
+                        const snapshot = expect(await session.call('terminal_read_pane', { slot: pane.slot, lines }), 'text');
+                        if (snapshot.slot !== pane.slot ||
+                            snapshot.generation !== pane.generation ||
+                            snapshot.revision !== pane.revision) {
+                            throw new Error(`pane ${pane.slot} changed during bounded text inventory`);
+                        }
+                        panes.push({
+                            pane,
+                            readable: { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot },
+                        });
+                    }
+                    else {
+                        const snapshot = expect(await session.call('pane_semantic_read', { slot: pane.slot }), 'semantics');
+                        if (snapshot.slot !== pane.slot ||
+                            snapshot.generation !== pane.generation ||
+                            snapshot.revision !== pane.revision) {
+                            throw new Error(`pane ${pane.slot} changed during bounded text inventory`);
+                        }
+                        panes.push({
+                            pane,
+                            readable: { kind: 'ui', text: semanticXml(snapshot), snapshot },
+                        });
+                    }
+                }
+                return { panes, complete: !inventory.truncated };
+            },
             act: (slot, action) => {
                 return done('pane_semantic_action', { slot, action: exactSemanticAction(action) });
             },

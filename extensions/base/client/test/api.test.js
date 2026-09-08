@@ -2116,6 +2116,23 @@ test('pane text conversion never guesses when bounded discovery omitted the slot
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('bounded all-pane conversion refuses a cursor race instead of mixing inventories', async () => {
+  const stage = await pair(); const next = frames(stage.host); await next();
+  const pending = workspace(stage.session).terminal.readAll({ lines: 20 });
+  assert.deepEqual((await next()).payload, { call: 'pane_list' });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'panes', with: {
+    panes: [{ slot: 'shell', generation: 4, revision: 8, kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }],
+    truncated: true,
+  } } }));
+  assert.deepEqual((await next()).payload, { call: 'terminal_read_pane', with: { slot: 'shell', lines: 20 } });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: {
+    slot: 'shell', generation: 4, revision: 9, columns: 80, rows: 24,
+    lines: ['changed'], cursor_column: 0, cursor_row: 1, truncated: false,
+  } } }));
+  await assert.rejects(pending, /changed during bounded text inventory/);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('pane text wait arms first, ignores its unchanged cursor, and disposes after a later revision', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const pending = workspace(stage.session).terminal.waitForText(

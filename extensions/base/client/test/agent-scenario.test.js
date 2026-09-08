@@ -66,9 +66,8 @@ test('packaged external agent controls terminal bytes and semantic UI over real 
     assert.equal(result.terminal, '$ '); assert.equal(result.terminalAfter, '$ ^C');
     assert.match(result.ui, /<value>off<\/value>/); assert.match(result.uiAfter, /<value>on<\/value>/);
     assert.deepEqual(calls, [
-      'pane_list', 'pane_list', 'terminal_read_pane',
+      'pane_list', 'terminal_read_pane', 'pane_semantic_read',
       'event_subscribe', 'terminal_read_pane', 'terminal_write_pane', 'terminal_read_pane', 'event_unsubscribe',
-      'pane_list', 'pane_semantic_read',
       'event_subscribe', 'pane_semantic_read', 'pane_semantic_action', 'pane_semantic_read', 'event_unsubscribe',
     ]);
   } finally {

@@ -410,6 +410,11 @@ export interface PaneSemanticTree {
 export type ReadablePane =
   | { kind: 'terminal'; text: string; snapshot: PaneText }
   | { kind: 'ui'; text: string; snapshot: PaneSemanticTree };
+export interface ReadablePaneInventory {
+  panes: Array<{ pane: InspectablePane; readable: ReadablePane }>;
+  /** False means bounded discovery omitted additional panes. */
+  complete: boolean;
+}
 export interface PaneSemanticAction {
   generation: number;
   revision: number;
@@ -1002,6 +1007,8 @@ export interface WorkspaceApi {
     semantics(slot: string): Promise<PaneSemanticTree>;
     /** Discover the pane kind and return terminal screen text or bounded semantic XML. */
     toText(slot: string, options?: { lines?: number }): Promise<ReadablePane>;
+    /** Convert every pane in one bounded discovery pass without hiding truncation or cursor races. */
+    readAll(options?: { lines?: number }): Promise<ReadablePaneInventory>;
     /** Wait for a pane cursor to change, then return a fresh bounded text projection. */
     waitForText(
       slot: string,
