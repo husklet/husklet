@@ -491,6 +491,43 @@ test('the host-event hook keeps a fresh callback and disposes on unmount', async
   stage.close();
 });
 
+test('reattaching the same callback cannot replay a queued event from its old generation', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  let release;
+  let entered;
+  const firstEntered = new Promise((resolve) => { entered = resolve; });
+  const listener = async (event) => {
+    seen.push(event.slot);
+    if (event.slot === 'old-1') {
+      entered();
+      await new Promise((resolve) => { release = resolve; });
+    }
+  };
+  const dispose = session.onEvent(listener);
+  try {
+    await stage.push({ pane_provider: 'logs', slot: 'old-1' });
+    await firstEntered;
+    await stage.push({ pane_provider: 'logs', slot: 'old-2' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    dispose();
+    const disposeFresh = session.onEvent(listener);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(seen, ['old-1'], 'queued work crossed the listener generation boundary');
+
+    await stage.push({ pane_provider: 'logs', slot: 'fresh' });
+    await until(() => seen.length === 2);
+    assert.deepEqual(seen, ['old-1', 'fresh']);
+    disposeFresh();
+  } finally {
+    release?.();
+    await session.close();
+    stage.close();
+  }
+});
+
 test('the pane-selection hook filters providers and exposes stable slot identity', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });

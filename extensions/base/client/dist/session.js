@@ -233,7 +233,7 @@ export class Session {
     #onRows;
     #onEventError;
     #onClose;
-    #events = new Set();
+    #events = new Map();
     #topics = new Set();
     #eventTopics = new Map();
     #pending = [];
@@ -300,7 +300,7 @@ export class Session {
         this.#onRows = onRows;
         this.#onEventError = onEventError;
         this.#onClose = onClose;
-        this.#events.add(onEvent);
+        this.#events.set(onEvent, Symbol('event listener generation'));
         this.#greetingTimer = setTimeout(() => {
             const error = new Error(`extension host handshake timed out after ${this.#timeout}ms`);
             this.#finish(error);
@@ -499,8 +499,12 @@ export class Session {
     onEvent(listener) {
         if (typeof listener !== 'function')
             throw new TypeError('event listener must be a function');
-        this.#events.add(listener);
-        return () => this.#events.delete(listener);
+        const generation = Symbol('event listener generation');
+        this.#events.set(listener, generation);
+        return () => {
+            if (this.#events.get(listener) === generation)
+                this.#events.delete(listener);
+        };
     }
     close() {
         if (this.#closing)
@@ -650,11 +654,11 @@ export class Session {
             this.#eventDelivery = this.#eventDelivery
                 .then(async () => {
                 try {
-                    for (const listener of listeners) {
+                    for (const [listener, generation] of listeners) {
                         // A queued event belongs to this connection generation, but its
                         // consumer may not run until an earlier asynchronous delivery
                         // settles. Closure and synchronous disposal revoke that work.
-                        if (this.#closed || !this.#events.has(listener))
+                        if (this.#closed || this.#events.get(listener) !== generation)
                             continue;
                         try {
                             await listener(payload, frame.channel);
