@@ -646,8 +646,13 @@ export class Session {
       this.#pending.shift();
       clearTimeout(pending.timer);
       pending.signal?.removeEventListener('abort', pending.abort);
-      if ((frame.flags & ERROR) !== 0) pending.reject(new ExtensionError(payload));
-      else {
+      if ((frame.flags & ERROR) !== 0) {
+        if (pending.name === 'event_subscribe') {
+          for (const [channel, topic] of this.#eventTopics)
+            if (topic === pending.argument.topic) this.#eventTopics.delete(channel);
+        }
+        pending.reject(new ExtensionError(payload));
+      } else {
         if (pending.name === 'event_subscribe') this.#topics.add(pending.argument.topic);
         if (pending.name === 'event_unsubscribe') {
           this.#topics.delete(pending.argument.topic);
@@ -664,7 +669,10 @@ export class Session {
       if (typeof payload?.snapshot === 'string') {
         payload = validateSnapshot(payload);
         const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
-        if (!topic || !this.#topics.has(topic))
+        const pendingSubscription = this.#pending.some(
+          (pending) => pending.name === 'event_subscribe' && pending.argument.topic === topic,
+        );
+        if (!topic || (!this.#topics.has(topic) && !pendingSubscription))
           throw new TypeError(`snapshot ${payload.snapshot} has no active subscription`);
         const bound = this.#eventTopics.get(frame.channel);
         if (bound !== undefined && bound !== topic)
