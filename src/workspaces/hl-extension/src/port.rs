@@ -1341,6 +1341,30 @@ fn workspace_control_unavailable() -> HostError {
 }
 
 /// Files beneath the extension's declared roots.
+/// One private, host-managed state blob owned by the authenticated extension.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ExtensionState {
+    pub contents: Vec<u8>,
+}
+
+pub trait ExtensionStateStore {
+    fn read(&self) -> Result<ExtensionState, HostError>;
+    fn write(&self, contents: &[u8]) -> Result<(), HostError>;
+    fn clear(&self) -> Result<(), HostError>;
+}
+
+impl<T: WorkspaceFiles + ?Sized> ExtensionStateStore for T {
+    fn read(&self) -> Result<ExtensionState, HostError> {
+        Err(HostError::Unsupported("extension state is unavailable".into()))
+    }
+    fn write(&self, _contents: &[u8]) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension state is unavailable".into()))
+    }
+    fn clear(&self) -> Result<(), HostError> {
+        Err(HostError::Unsupported("extension state is unavailable".into()))
+    }
+}
+
 pub trait WorkspaceFiles {
     /// Recursively inventories only the roots declared by this extension.
     fn inventory(&self, _roots: &[crate::FilesystemSelector]) -> Result<FileInventory, HostError> {

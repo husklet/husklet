@@ -947,6 +947,7 @@ fn services(host: &Host) -> Services<'_> {
         networks: host,
         terminal: host,
         files: host,
+        state: host,
         notifications: host,
     }
 }
@@ -1562,6 +1563,14 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::FilesystemWrite,
         ),
+        (Request::StateRead, Capability::StateRead),
+        (
+            Request::StateWrite {
+                contents: vec![0, 17, 255],
+            },
+            Capability::StateWrite,
+        ),
+        (Request::StateClear, Capability::StateWrite),
         (
             Request::InterfaceOpenTab {
                 title: "Postgres".into(),

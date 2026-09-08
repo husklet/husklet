@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStore, GridSize, ImageStore, NetworkStore,
-    NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore, WorkspaceConfiguration,
-    WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
+    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
+    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -33,6 +33,7 @@ pub struct Services<'a> {
     pub networks: &'a dyn NetworkStore,
     pub terminal: &'a dyn TerminalSurface,
     pub files: &'a dyn WorkspaceFiles,
+    pub state: &'a dyn ExtensionStateStore,
     pub notifications: &'a dyn NotificationSink,
 }
 
@@ -518,6 +519,7 @@ impl Session {
             | Request::FilesystemRenameObserved { .. }
             | Request::FilesystemRemove { .. }
             | Request::FilesystemRemoveObserved { .. } => self.files(request, services),
+            Request::StateRead | Request::StateWrite { .. } | Request::StateClear => self.state(request, services),
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceWithdraw { slot } => self.withdraw(slot, services),
@@ -1325,6 +1327,35 @@ impl Session {
             }
             _ => Err(Failure::Unsupported {
                 call: "filesystem".into(),
+            }),
+        }
+    }
+
+    fn state(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        const LIMIT: usize = 1024 * 1024;
+        let capability = request.capability();
+        let port = self.peer.authority().port(capability, services.state)?;
+        match request {
+            Request::StateRead => {
+                let state = port.read()?;
+                if state.contents.len() > LIMIT {
+                    return Err(Failure::Failed {
+                        detail: "extension state exceeds the 1 MiB quota".into(),
+                    });
+                }
+                Ok(Reply::State(state))
+            }
+            Request::StateWrite { contents } => {
+                if contents.len() > LIMIT {
+                    return Err(Failure::Conflict {
+                        detail: "extension state exceeds the 1 MiB quota".into(),
+                    });
+                }
+                port.write(contents).map(|()| Reply::Done).map_err(Failure::from)
+            }
+            Request::StateClear => port.clear().map(|()| Reply::Done).map_err(Failure::from),
+            _ => Err(Failure::Unsupported {
+                call: "extension state".into(),
             }),
         }
     }

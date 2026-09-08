@@ -26,22 +26,34 @@ test('real Unix watcher accepts the host initial snapshot before subscribe ackno
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         if (frame.payload.call === 'event_subscribe') {
-          socket.write(encode({ channel: 101, kind: KIND.event, payload: {
-            snapshot: 'containers', of: [],
-          } }));
+          socket.write(
+            encode({
+              channel: 101,
+              kind: KIND.event,
+              payload: { snapshot: 'containers', of: [] },
+            }),
+          );
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
         } else if (frame.payload.call === 'container_list') {
-          socket.write(encode({ channel: 2, kind: KIND.response, payload: {
-            reply: 'containers', with: [],
-          } }));
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'containers', with: [] },
+            }),
+          );
         } else if (frame.payload.call === 'event_unsubscribe') {
           socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
         }
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'fixture', granted: ['containers:read'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['containers:read'] },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -52,6 +64,58 @@ test('real Unix watcher accepts the host initial snapshot before subscribe ackno
     assert.deepEqual(seen, [[]]);
     assert.deepEqual(await host.containers.list(), []);
     await stop();
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix private state preserves bytes and independent read/write authority', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-state-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const payload =
+          frame.payload.call === 'state_read'
+            ? { reply: 'state', with: { contents: [0, 17, 255] } }
+            : { error: 'refused', capability: 'state:write' };
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            flags: payload.error ? 3 : 1,
+            payload,
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'state-fixture', granted: ['state:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const api = workspace(session);
+    assert.deepEqual(await api.state.read(), { contents: [0, 17, 255] });
+    await assert.rejects(api.state.write([1, 2]), /state:write/);
+    assert.deepEqual(requests, [{ call: 'state_read' }]);
+    assert.throws(() => api.state.write(new Uint8Array(1024 * 1024 + 1)), /1 MiB/);
+    assert.equal(requests.length, 1, 'denied and oversized writes never reach socket framing');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

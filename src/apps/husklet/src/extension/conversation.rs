@@ -1657,6 +1657,7 @@ mod tests {
             networks: host,
             terminal: host,
             files: host,
+            state: host,
             notifications: host,
         }
     }

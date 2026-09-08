@@ -1,5 +1,6 @@
 //! Durable installed-extension inventory and lifecycle policy.
 
+use hl_extension::port::ExtensionStateStore as _;
 use hl_extension::port::{
     ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
     ExtensionCatalogue, ExtensionCatalogueEntry, ExtensionStore, ExtensionSummary, HostError,
@@ -124,11 +125,12 @@ impl ExtensionStore for ExtensionManagement {
     }
 
     fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
-        let result = self
-            .roster()?
-            .remove_if_digest(&Self::optional_name(name)?, image_digest)
-            .map_err(failure);
-        self.changed(result)
+        let name = Self::optional_name(name)?;
+        let result = self.roster()?.remove_if_digest(&name, image_digest).map_err(failure);
+        self.changed(result)?;
+        super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
+            .map_err(|error| HostError::Failed(error.to_string()))?
+            .clear()
     }
 
     fn acquisition_start(&self, reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
@@ -409,6 +411,55 @@ mod tests {
             .remove("absent", &format!("sha256:{}", "a".repeat(64)))
             .is_err());
         assert!(events.drain().is_none());
+    }
+
+    #[test]
+    fn failed_removal_retains_private_extension_state() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let management = ExtensionManagement::new(&workspace);
+        let name = ExtensionName::new("postgres").unwrap();
+        let state = super::super::StateBlob::new(root.path(), &name).unwrap();
+        state.write(b"migration-checkpoint").unwrap();
+
+        assert!(management
+            .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
+        assert_eq!(state.read().unwrap().contents, b"migration-checkpoint");
+    }
+
+    #[test]
+    fn successful_removal_clears_private_extension_state() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let management = ExtensionManagement::new(&workspace);
+        let name = ExtensionName::new("postgres").unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let manifest = hl_extension::Manifest {
+            containers: hl_extension::ContainerGrant::default(),
+            name: name.clone(),
+            display_name: "Postgres".into(),
+            version: "1".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::new([hl_extension::Capability::StateWrite]),
+            entrypoint: None,
+            activation: hl_extension::Activation::default(),
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: hl_extension::Resources::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        management
+            .roster()
+            .unwrap()
+            .register(&manifest, &digest, &manifest.capabilities, 1)
+            .unwrap();
+        let state = super::super::StateBlob::new(root.path(), &name).unwrap();
+        state.write(b"remove-me").unwrap();
+
+        management.remove(name.as_str(), &digest).unwrap();
+        assert!(state.read().unwrap().contents.is_empty());
     }
 
     #[test]

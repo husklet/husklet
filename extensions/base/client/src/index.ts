@@ -384,6 +384,18 @@ function exactPaneInput(input: string | Iterable<number>) {
   return Uint8Array.from(values);
 }
 
+function exactStateBytes(input: Iterable<number>) {
+  const values: number[] = [];
+  for (const value of input ?? []) {
+    if (values.length === 1024 * 1024)
+      throw new RangeError('extension state exceeds the 1 MiB limit');
+    if (!Number.isInteger(value) || value < 0 || value > 255)
+      throw new TypeError('extension state bytes must be integers from 0 through 255');
+    values.push(value);
+  }
+  return values;
+}
+
 function exactExecutionWaitOptions({ timeoutMs = 30_000, stdout = true, stderr = true } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
     throw new RangeError(
@@ -1384,6 +1396,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         ),
       remove: (path) => done('filesystem_remove', { path }),
       removeObserved: (path, observed) => done('filesystem_remove_observed', { path, observed }),
+    },
+    state: {
+      read: async () => expect(await session.call('state_read', undefined), 'state'),
+      write: (contents) => done('state_write', { contents: exactStateBytes(contents) }),
+      clear: () => done('state_clear', undefined),
     },
     subscribe,
     unsubscribe,
@@ -3126,6 +3143,7 @@ function facadePath(call) {
     ['network_', 'networks.'],
     ['terminal_', 'terminal.'],
     ['filesystem_', 'files.'],
+    ['state_', 'state.'],
     ['notification_', 'notifications.'],
   ])
     if (call.startsWith(prefix)) return group + camel(call.slice(prefix.length));
@@ -3268,6 +3286,7 @@ export const protocolCoverage = Object.freeze({
       'remove',
       'removeObserved',
     ],
+    state: ['read', 'write', 'clear'],
     extensions: [
       'list',
       'inspect',
