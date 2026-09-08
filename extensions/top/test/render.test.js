@@ -2229,6 +2229,8 @@ test('image removal and prune require an explicit confirmation step', async () =
 
   const pruneStage = host();
   const pruneFrame = pruneStage.render(h(Images, { api: controlled, resource }));
+  assert.ok(labelled(pruneStage, 'Image maintenance'));
+  assert.ok(labelled(pruneStage, 'Bulk action · removes every image not used by a container.'));
   const prune = pruneFrame.patches.find(
     (patch) =>
       'SetProp' in patch &&

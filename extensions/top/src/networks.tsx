@@ -51,7 +51,7 @@ type Operation = {
   error: unknown;
 };
 const EMPTY_INSPECTION: Inspection = { id: '', state: 'idle', count: 0, detail: null, error: null };
-const NETWORK_CARD_WIDTH = { minimum: { chars: 42 }, maximum: { chars: 68 } } as const;
+const RESOURCE_WIDTH = { chars: 68 } as const;
 
 export function Networks({
   api,
@@ -207,7 +207,7 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1}>
+      <Row gap={1} width={RESOURCE_WIDTH}>
         <Entry
           value={name}
           placeholder="Network name"
@@ -243,25 +243,33 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Entry
-        value={container}
-        placeholder="Complete container ID"
-        enabled={operation.state !== 'loading'}
-        onChange={(event) => {
-          setContainer(String(event.value ?? ''));
-          setOperation({ state: 'idle', request: null, error: null });
-          setDisconnectRequest(null);
-        }}
-      />
-      <Entry
-        value={aliases}
-        placeholder="Endpoint aliases (comma-separated, optional)"
-        enabled={operation.state !== 'loading'}
-        onChange={(event) => {
-          setAliases(String(event.value ?? ''));
-          setOperation({ state: 'idle', request: null, error: null });
-        }}
-      />
+      <Column gap={1} width={RESOURCE_WIDTH}>
+        <Text label="Container attachment" />
+        <Text label="Required · complete immutable container ID" color="text-dim" />
+        <Entry
+          value={container}
+          placeholder="Complete container ID"
+          enabled={operation.state !== 'loading'}
+          onChange={(event) => {
+            setContainer(String(event.value ?? ''));
+            setOperation({ state: 'idle', request: null, error: null });
+            setDisconnectRequest(null);
+          }}
+        />
+        <Row gap={1} align="center">
+          <Text label="Optional aliases" color="text-dim" />
+          <Entry
+            value={aliases}
+            placeholder="Endpoint aliases (comma-separated, optional)"
+            width={{ chars: 44 }}
+            enabled={operation.state !== 'loading'}
+            onChange={(event) => {
+              setAliases(String(event.value ?? ''));
+              setOperation({ state: 'idle', request: null, error: null });
+            }}
+          />
+        </Row>
+      </Column>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
       <ResourceState
@@ -294,7 +302,7 @@ export function Networks({
               key={id}
               grow={false}
               justify="start"
-              width={NETWORK_CARD_WIDTH}
+              width={RESOURCE_WIDTH}
               variant={inspection.id === id ? 'filled' : 'outline'}
             >
               <CardHeader label={network.name} detail={`${network.driver} · ${network.scope}`} />

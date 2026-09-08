@@ -20,6 +20,7 @@ import {
   type ImageSummary,
   type WorkspaceApi,
 } from '@husklet/react';
+const RESOURCE_WIDTH = { chars: 68 } as const;
 import { ImageDetailsSource, bounded, boundedMessage, bytes, shortId } from './model.js';
 import type { Resource } from './overview.js';
 
@@ -217,7 +218,7 @@ export function Images({
         : 'ready';
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
-      <Row gap={1}>
+      <Row gap={1} width={RESOURCE_WIDTH}>
         <Entry
           value={reference}
           placeholder="registry/image:tag"
@@ -244,32 +245,47 @@ export function Images({
         retryLabel="Retry images"
         onRetry={resource.reload}
       >
-        <Row gap={1} align="center">
-          {busy ? <Spinner /> : null}
-          {confirm === 'prune' ? (
-            <>
-              <Text label="Remove every unused image?" color="warning" />
+        <Card grow={false} width={RESOURCE_WIDTH} variant="outline">
+          <CardContent gap={1}>
+            <Text label="Image maintenance" />
+            <Text
+              label="Bulk action · removes every image not used by a container."
+              color="text-dim"
+              wrap
+            />
+          </CardContent>
+          <CardActions gap={1}>
+            {busy ? <Spinner /> : null}
+            {confirm === 'prune' ? (
+              <>
+                <Text label="Remove every unused image?" color="warning" />
+                <Button
+                  label="Confirm prune"
+                  enabled={!busy}
+                  tone="danger"
+                  destructive
+                  onInvoke={prune}
+                />
+                <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
+              </>
+            ) : (
               <Button
-                label="Confirm prune"
+                label="Prune unused images"
                 enabled={!busy}
                 tone="danger"
-                destructive
-                onInvoke={prune}
+                variant="outline"
+                onInvoke={() => setConfirm('prune')}
               />
-              <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
-            </>
-          ) : (
-            <Button
-              label="Prune unused images"
-              enabled={!busy}
-              tone="danger"
-              variant="outline"
-              onInvoke={() => setConfirm('prune')}
-            />
-          )}
-        </Row>
+            )}
+          </CardActions>
+        </Card>
         {view.records.map((item) => (
-          <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
+          <Card
+            key={item.id}
+            grow={false}
+            width={RESOURCE_WIDTH}
+            variant={detail?.id === item.id ? 'filled' : 'outline'}
+          >
             <CardHeader label={item.reference || '<untagged>'} detail={shortId(item.id)} />
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
@@ -293,7 +309,7 @@ export function Images({
                 </ResourceState>
               ) : null}
             </CardContent>
-            <CardActions gap={1}>
+            <CardActions gap={1} justify="start">
               <Button label="Inspect" enabled={!busy} onInvoke={() => inspect(item)} />
               {confirm === item.id ? (
                 <>

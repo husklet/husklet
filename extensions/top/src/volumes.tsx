@@ -19,6 +19,7 @@ import {
   type VolumeSummary,
   type WorkspaceApi,
 } from '@husklet/react';
+const RESOURCE_WIDTH = { chars: 68 } as const;
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
 
@@ -128,7 +129,7 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Row gap={1}>
+      <Row gap={1} width={RESOURCE_WIDTH}>
         <Entry
           value={name}
           placeholder="Volume name"
@@ -176,10 +177,12 @@ export function Volumes({
         {view.records.map((volume) => (
           <Card
             key={`${volume.name}:${volume.generation}`}
+            grow={false}
+            width={RESOURCE_WIDTH}
             variant={inspection.name === volume.name ? 'filled' : 'outline'}
           >
             <CardHeader label={volume.name} detail={volume.driver} />
-            <CardActions gap={1}>
+            <CardActions gap={1} justify="start">
               <Button
                 label={
                   inspection.name === volume.name && inspection.state === 'error'
