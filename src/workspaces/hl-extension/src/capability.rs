@@ -112,6 +112,12 @@ pub enum Capability {
     /// Mutates one bounded preference through revision compare-and-swap.
     #[serde(rename = "preferences:write")]
     PreferenceWrite,
+    /// Reads one named credential owned by this authenticated extension.
+    #[serde(rename = "credentials:read")]
+    CredentialRead,
+    /// Replaces or removes one named credential through revision compare-and-swap.
+    #[serde(rename = "credentials:write")]
+    CredentialWrite,
     #[serde(rename = "interface:render")]
     Interface,
     /// Publishes bounded user-visible notifications outside an extension surface.
@@ -161,6 +167,8 @@ impl Capability {
             Self::StateWrite => "state:write",
             Self::PreferenceRead => "preferences:read",
             Self::PreferenceWrite => "preferences:write",
+            Self::CredentialRead => "credentials:read",
+            Self::CredentialWrite => "credentials:write",
             Self::Interface => "interface:render",
             Self::NotificationPublish => "notifications:publish",
         }
@@ -194,6 +202,7 @@ impl Capability {
                 | Self::FilesystemWrite
                 | Self::StateWrite
                 | Self::PreferenceWrite
+                | Self::CredentialWrite
                 | Self::NotificationPublish
         )
     }
@@ -252,6 +261,8 @@ impl Capability {
         Self::StateWrite,
         Self::PreferenceRead,
         Self::PreferenceWrite,
+        Self::CredentialRead,
+        Self::CredentialWrite,
         Self::Interface,
         Self::NotificationPublish,
     ];

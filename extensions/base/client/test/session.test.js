@@ -16,6 +16,42 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix credential calls reveal only the named value and preserve CAS framing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-'));
+  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue; calls.push(frame.payload);
+        const reply = frame.payload.call === 'credential_read'
+          ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
+          : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'credential-test', granted: ['credentials:read', 'credentials:write'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath }); const credentials = workspace(session).credentials;
+    assert.deepEqual(await credentials.read('postgres.password'), { revision: 7, value: [0, 255, 10] });
+    assert.equal(await credentials.set(7, 'postgres.password', [0, 255, 10]), 8);
+    assert.equal(await credentials.remove(8, 'postgres.password'), 9);
+    assert.deepEqual(calls, [
+      { call: 'credential_read', with: { key: 'postgres.password' } },
+      { call: 'credential_set', with: { observed: 7, key: 'postgres.password', value: [0, 255, 10] } },
+      { call: 'credential_remove', with: { observed: 8, key: 'postgres.password' } },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix container inventory preserves a published PostgreSQL port', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-port-'));
   const socketPath = path.join(directory, 'host.sock');

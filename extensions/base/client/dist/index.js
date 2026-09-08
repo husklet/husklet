@@ -287,6 +287,22 @@ function exactStateIdentity(identity) {
         return identity;
     throw new TypeError('extension state mutation requires the exact identity returned by state.read()');
 }
+function exactCredentialKey(key) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(key))
+        throw new TypeError("credential keys must be 1 through 64 ASCII letters, digits, '.', '_' or '-'");
+    return key;
+}
+function exactCredentialBytes(input) {
+    const values = [];
+    for (const value of input ?? []) {
+        if (values.length === 64 * 1024)
+            throw new RangeError('credentials are limited to 64 KiB');
+        if (!Number.isInteger(value) || value < 0 || value > 255)
+            throw new TypeError('credential bytes must be integers from 0 through 255');
+        values.push(value);
+    }
+    return values;
+}
 function exactStateCodec(codec) {
     if (typeof codec?.decode !== 'function' || typeof codec?.encode !== 'function')
         throw new TypeError('extension state JSON codec requires encode and decode functions');
@@ -1240,6 +1256,15 @@ export function workspace(session, { signal } = {}) {
             read: async () => expect(await session.call('preference_read', undefined), 'preferences'),
             set: async (observed, key, value) => expect(await session.call('preference_set', { observed, key, value }), 'revision'),
             remove: async (observed, key) => expect(await session.call('preference_remove', { observed, key }), 'revision'),
+        },
+        credentials: {
+            read: async (key) => expect(await session.call('credential_read', { key: exactCredentialKey(key) }), 'credential'),
+            set: async (observed, key, value) => expect(await session.call('credential_set', {
+                observed,
+                key: exactCredentialKey(key),
+                value: exactCredentialBytes(value),
+            }), 'revision'),
+            remove: async (observed, key) => expect(await session.call('credential_remove', { observed, key: exactCredentialKey(key) }), 'revision'),
         },
         subscribe,
         unsubscribe,
@@ -2890,6 +2915,7 @@ function facadePath(call) {
         ['filesystem_', 'files.'],
         ['state_', 'state.'],
         ['preference_', 'preferences.'],
+        ['credential_', 'credentials.'],
         ['notification_', 'notifications.'],
     ])
         if (call.startsWith(prefix))

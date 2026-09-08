@@ -116,6 +116,8 @@ export type ExtensionCapability =
   | 'filesystem:write'
   | 'state:read'
   | 'state:write'
+  | 'credentials:read'
+  | 'credentials:write'
   | 'interface:render'
   | 'notifications:publish';
 export type ContainerSelector = { id: string } | { name: string } | { all: true };
@@ -550,6 +552,12 @@ export interface FileRange {
 export interface ExtensionState {
   identity: string;
   contents: number[];
+}
+
+/** Host-protected per-extension credential; private file isolation, not encryption or a keychain. */
+export interface ExtensionCredential {
+  revision: number;
+  value?: number[] | null;
 }
 export interface StateCodec<T> {
   decode(value: unknown): T;
@@ -1376,6 +1384,12 @@ export interface WorkspaceApi {
   preferences: {
     read(): Promise<ExtensionPreferences>;
     set(observed: number, key: string, value: PreferenceValue): Promise<number>;
+    remove(observed: number, key: string): Promise<number>;
+  };
+  /** Named credentials isolated to this extension; values are never enumerable. */
+  credentials: {
+    read(key: string): Promise<ExtensionCredential>;
+    set(observed: number, key: string, value: Iterable<number>): Promise<number>;
     remove(observed: number, key: string): Promise<number>;
   };
   subscribe(topic: Topic): Promise<void>;

@@ -466,6 +466,9 @@ pub enum Request {
         observed: u64,
         key: String,
     },
+    CredentialRead { key: String },
+    CredentialSet { observed: u64, key: String, value: Vec<u8> },
+    CredentialRemove { observed: u64, key: String },
     InterfaceOpenTab {
         title: String,
     },
@@ -604,6 +607,8 @@ impl Request {
             Self::StateWrite { .. } | Self::StateClear { .. } => Capability::StateWrite,
             Self::PreferenceRead => Capability::PreferenceRead,
             Self::PreferenceSet { .. } | Self::PreferenceRemove { .. } => Capability::PreferenceWrite,
+            Self::CredentialRead { .. } => Capability::CredentialRead,
+            Self::CredentialSet { .. } | Self::CredentialRemove { .. } => Capability::CredentialWrite,
             Self::InterfaceOpenTab { .. }
             | Self::InterfaceSplit { .. }
             | Self::InterfaceWithdraw { .. }
@@ -760,6 +765,7 @@ pub enum Reply {
     FileRange(crate::port::FileRange),
     State(crate::port::ExtensionState),
     Preferences(crate::port::ExtensionPreferences),
+    Credential(crate::port::ExtensionCredential),
     Revision(u64),
     Identity(String),
     Done,

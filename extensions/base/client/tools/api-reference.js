@@ -30,6 +30,7 @@ const groups = new Map([
   ['Files', []],
   ['Private extension state', []],
   ['Extension preferences', []],
+  ['Extension credentials', []],
   ['Images', []],
   ['Networks', []],
   ['Volumes', []],
@@ -55,6 +56,7 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
             files: 'Files',
             state: 'Private extension state',
             preferences: 'Extension preferences',
+            credentials: 'Extension credentials',
             images: 'Images',
             networks: 'Networks',
             volumes: 'Volumes',
@@ -101,6 +103,7 @@ groups
   .push(
     '- `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.',
     '- `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.',
+    '- `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.',
   );
 groups
   .get('Files')

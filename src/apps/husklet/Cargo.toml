@@ -84,6 +84,7 @@ runtime = [
     "dep:rustix",
     "dep:tokio",
     "dep:serde_json",
+    "dep:serde",
     "dep:sha2",
     "dep:tar",
     "dep:notify",
@@ -94,7 +95,6 @@ gui = [
     "dep:hl-gui-gtk",
     "dep:gtk",
     "dep:vte4",
-    "dep:serde",
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
 ]

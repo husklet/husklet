@@ -184,6 +184,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.clear(...)` — `state_clear`, requires `state:write`.
 - `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
 - `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
+- `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.
 
 ## Extension preferences
 
@@ -191,6 +192,12 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.preferences.set(...)` — `preference_set`, requires `preferences:write`.
 - `host.preferences.remove(...)` — `preference_remove`, requires `preferences:write`.
 - Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.
+
+## Extension credentials
+
+- `host.credentials.read(...)` — `credential_read`, requires `credentials:read`.
+- `host.credentials.set(...)` — `credential_set`, requires `credentials:write`.
+- `host.credentials.remove(...)` — `credential_remove`, requires `credentials:write`.
 
 ## Images
 
