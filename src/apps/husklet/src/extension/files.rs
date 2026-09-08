@@ -409,6 +409,9 @@ impl WorkspaceFiles for WorkspaceDirectory {
             .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
         let entry = self.pinned(path)?;
         let opened = open_entry_identity(path, &entry, observed)?;
+        if !opened.is_file() {
+            return Err(HostError::Conflict(format!("{path} is not a regular file")));
+        }
         for _ in 0..128 {
             let quarantine = CString::new(format!(
                 ".husklet-write-old-{}-{}",

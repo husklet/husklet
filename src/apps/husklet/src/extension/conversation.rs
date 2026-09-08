@@ -1103,6 +1103,7 @@ mod tests {
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
+    use crate::extension::files::WorkspaceDirectory;
 
     /// What the adapters were actually asked for, so a refusal that still
     /// reached a service would be visible rather than silent.
@@ -1640,6 +1641,40 @@ mod tests {
         (theirs, served)
     }
 
+    fn exact_write_host(
+        ledger: Arc<Ledger>,
+        root: std::path::PathBuf,
+        exact: RelativePath,
+    ) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let files = WorkspaceDirectory::new(root).expect("workspace directory");
+            let authority = Authority::new(
+                ExtensionName::new("sample").expect("name"),
+                Grant::new([Capability::FilesystemWrite]),
+                vec![exact.clone()],
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours,
+                authority,
+                "dev",
+                Queue::new(),
+                hl_extension::ContainerGrant::default(),
+                hl_extension::FilesystemGrant {
+                    write: vec![hl_extension::FilesystemSelector::Exact { exact }],
+                    ..hl_extension::FilesystemGrant::default()
+                },
+                hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            let mut ports = services(&host);
+            ports.files = &files;
+            conversation.greet()?;
+            conversation.serve(&ports)
+        });
+        (theirs, served)
+    }
+
     fn workspace_read_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
         let (ours, theirs) = UnixStream::pair().expect("socket pair");
         let served = std::thread::spawn(move || {
@@ -2112,6 +2147,55 @@ mod tests {
         );
         assert!(matches!(codec::read_reply(&stated), Ok(Reply::Entry(_))));
         assert_eq!(ledger.reached(), vec!["files.stat"]);
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn observed_exact_file_write_cannot_quarantine_a_directory_over_the_extension_socket() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("state")).expect("directory");
+        std::fs::write(root.join("state/secret.txt"), b"preserved").expect("nested file");
+        let exact = RelativePath::new("state").expect("path");
+        let files = WorkspaceDirectory::new(&root).expect("workspace directory");
+        let observed = files
+            .stat(&exact)
+            .expect("directory identity")
+            .identity
+            .expect("stable identity");
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = exact_write_host(Arc::clone(&ledger), root.clone(), exact.clone());
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemWriteObserved {
+                path: exact,
+                observed,
+                contents: b"replacement".to_vec(),
+            },
+        );
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Conflict { .. })));
+        assert_eq!(
+            std::fs::read(root.join("state/secret.txt")).expect("nested file remains visible"),
+            b"preserved"
+        );
+        assert!(root.join("state").is_dir(), "the authorized name remains a directory");
+        assert!(
+            std::fs::read_dir(&root).expect("workspace listing").all(|entry| !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-old-")),
+            "a rejected exact-file write must not hide the directory under a quarantine name"
+        );
+        assert!(
+            ledger.reached().is_empty(),
+            "the real filesystem adapter replaced the fake service"
+        );
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
