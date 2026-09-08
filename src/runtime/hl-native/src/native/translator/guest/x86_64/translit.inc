@@ -762,6 +762,7 @@ static int translit_fallthrough_ibtc_fixture_test(unsigned scenario);
 static int translit_direct_call_ibtc_fixture_test(unsigned scenario);
 static int translit_ret_ibtc_fixture_test(unsigned scenario);
 static int translit_indirect_ibtc_fixture_test(unsigned scenario);
+static void dispatch_fast_redispatch_commit(struct cpu *cpu, void *code);
 static int translit_jcc_ibtc_signal_stage_test(int direct_jmp);
 static int translit_direct_call_signal_stage_test(void);
 static int translit_ret_signal_stage_test(void);
@@ -3360,12 +3361,14 @@ static void translit_jcc_ibtc_finalize_cpu(struct cpu *cpu) {
                                 cpu->jcc_ibtc_miss <
                                     TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_COUNT))) {
         uint32_t miss_kind = cpu->jcc_ibtc_miss;
+        int fallthrough = miss_kind >= TL_FALLTHROUGH_IBTC_MISS_BASE &&
+                          miss_kind < TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_COUNT;
         cpu->jcc_ibtc_miss = 0;
         if (miss_kind == TL_DIRECT_JMP_IBTC_MISS)
             translit_direct_jmp_ibtc_count(TL_DIRECT_JMP_IBTC_COUNT_INVALID_REFUSAL, 1);
         else if (miss_kind == TL_DIRECT_CALL_IBTC_MISS)
             translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_INVALID_REFUSAL, 1);
-        else if (miss_kind != TL_DIRECT_CALL_IBTC_MISS && miss_kind != TL_INDIRECT_IBTC_MISS)
+        else if (miss_kind != TL_DIRECT_CALL_IBTC_MISS && miss_kind != TL_INDIRECT_IBTC_MISS && !fallthrough)
             translit_jcc_ibtc_count(TL_JCC_IBTC_COUNT_INVALID_REFUSAL, 1);
     }
 }
@@ -10983,7 +10986,7 @@ static int translit_direct_call_ibtc_fixture_test(unsigned scenario) {
         /* A mapped A->B redispatch must consume B's typed miss before B executes.
            Otherwise B->C reaches the ordinary loop with the stale marker and
            publishes C under the wrong branch family (or simulates a RET there). */
-        translit_jcc_ibtc_fast_redispatch(&cpu, target_block);
+        dispatch_fast_redispatch_commit(&cpu, target_block);
         ibtc_ent target_entry = ibtc_snapshot(&g_ibtc[ibtc_index(target)]);
         if (cpu.jcc_ibtc_miss != 0 || target_entry.target != target || target_entry.body == NULL) {
             result = 210 + (int)(scenario - 126);
