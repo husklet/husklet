@@ -1600,6 +1600,7 @@ test('installed extensions translate the host duty stage into a developer-facing
 test('overview never presents stale inventory counts as current during loading or failure', () => {
   const stale = [{ id: 'old', state: 'running' }];
   const stage = host();
+  const opened = [];
   stage.render(
     h(Overview, {
       containers: { data: stale, loading: true, error: null },
@@ -1609,7 +1610,7 @@ test('overview never presents stale inventory counts as current during loading o
       networks: { data: [], loading: false, error: null },
       terminals: { data: [], loading: false, error: null },
       extensions: { data: [], loading: false, error: null },
-      onOpen: () => {},
+      onOpen: (section) => opened.push(section),
     }),
   );
   assert.ok(labelled(stage, '…'));
@@ -1642,14 +1643,27 @@ test('overview never presents stale inventory counts as current during loading o
   assert.equal(labelled(stage, '1'), undefined, 'failure cannot retain stale inventory counts');
   assert.ok(labelled(stage, 'No reported faults'));
   assert.equal(
-    ancestorProperty(stage, 'Containers', 'Column', 'Grow')?.Number,
-    0,
-    'the summary matrix does not absorb unused page width',
+    ancestorProperty(stage, 'Containers', 'Row', 'Wrap')?.Flag,
+    true,
+    'the summary cards reflow instead of clipping at narrow widths',
   );
-  assert.ok(
-    ancestorProperty(stage, 'Containers', 'Column', 'Width'),
-    'the non-growing matrix has an explicit readable width bound',
+  assert.deepEqual(
+    ancestorProperty(stage, 'Containers', 'Row', 'Width'),
+    { Length: 'Fill' },
+    'the summary cards use the available page width',
   );
+  assert.equal(
+    ancestorProperty(stage, 'Open Containers', 'Card', 'Grow')?.Number,
+    1,
+    'cards share spare row width instead of leaving a dead column',
+  );
+  assert.deepEqual(
+    taggedProperty(stage, 'Open Containers', 'CardActionArea', 'Tooltip'),
+    { Text: 'Open Containers' },
+    'the card itself navigates without a generic button row',
+  );
+  invoke(stage, 'Open Containers');
+  assert.deepEqual(opened, ['containers'], 'the directly clickable card retains navigation');
 });
 
 test('overview refreshes every authoritative inventory in one action', async () => {

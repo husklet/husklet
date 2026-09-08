@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Button,
   Card,
-  CardActions,
+  CardActionArea,
   CardContent,
   CardHeader,
   Column,
@@ -157,49 +157,27 @@ export function Overview({
             onInvoke={refreshAll}
           />
         </Row>
-        <Column grow={false} width={{ minimum: { chars: 54 }, maximum: { chars: 70 } }} gap={2}>
-          <Row gap={2}>
-            <Summary
-              title="Containers"
-              {...containersSummary}
-              onOpen={() => onOpen('containers')}
-            />
-            <Summary
-              title="Processes"
-              value={
-                containers.loading
-                  ? '…'
-                  : containers.error
-                    ? 'Unavailable'
-                    : String(runningContainers)
-              }
-              detail="running containers available to snapshot"
-              onOpen={() => onOpen('processes')}
-            />
-            <Summary
-              title="Executions"
-              {...executionsSummary}
-              onOpen={() => onOpen('executions')}
-            />
-          </Row>
-          <Row gap={2}>
-            <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
-            <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
-            <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
-          </Row>
-          <Row gap={2}>
-            <Summary
-              title="Terminal tabs"
-              {...terminalsSummary}
-              onOpen={() => onOpen('terminals')}
-            />
-            <Summary
-              title="Extensions"
-              {...extensionsSummary}
-              onOpen={() => onOpen('extensions')}
-            />
-          </Row>
-        </Column>
+        <Row width="fill" gap={2} wrap>
+          <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
+          <Summary
+            title="Processes"
+            value={
+              containers.loading
+                ? '…'
+                : containers.error
+                  ? 'Unavailable'
+                  : String(runningContainers)
+            }
+            detail="running containers available to snapshot"
+            onOpen={() => onOpen('processes')}
+          />
+          <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
+          <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
+          <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
+          <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
+          <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
+          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
+        </Row>
         <ErrorText
           error={
             containers.error ??
@@ -237,15 +215,14 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }} variant="outline">
+    <Card grow width={{ minimum: { chars: 18 } }} variant="outline">
       <CardHeader label={label} />
-      <CardContent gap={1}>
-        <Heading label={value} scale="title" />
-        <Text label={detail} color="text-dim" />
-      </CardContent>
-      <CardActions>
-        <Button label={`Open ${label}`} variant="ghost" onInvoke={onOpen} />
-      </CardActions>
+      <CardActionArea label={`Open ${label}`} tooltip={`Open ${label}`} onInvoke={onOpen}>
+        <CardContent gap={1} pad={1}>
+          <Heading label={value} scale="title" />
+          <Text label={detail} color="text-dim" wrap />
+        </CardContent>
+      </CardActionArea>
     </Card>
   );
 }
