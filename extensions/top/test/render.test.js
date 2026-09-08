@@ -329,6 +329,65 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   );
 });
 
+test('a developer drag wins over a late stored sidebar width and is persisted', async () => {
+  let resolveRead;
+  let reads = 0;
+  const writes = [];
+  const preferences = {
+    read: () => {
+      reads += 1;
+      if (reads > 1) return Promise.resolve({ revision: 7, entries: [] });
+      return new Promise((resolve) => {
+        resolveRead = resolve;
+      });
+    },
+    set: async (observed, key, value) => {
+      writes.push([observed, key, value]);
+      return observed + 1;
+    },
+  };
+  const stage = host();
+  stage.render(
+    h(Top, {
+      api: { ...api, preferences },
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  await settled();
+  const splitter = stage.frames
+    .flatMap((frame) => frame.patches)
+    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: splitter,
+      id: `${splitter}:Change`,
+      value: 240,
+    }),
+  );
+  resolveRead({
+    revision: 7,
+    entries: [['sidebar.width', { kind: 'number', value: 300 }]],
+  });
+  await settled();
+  await new Promise((resolve) => setTimeout(resolve, SIDEBAR_SAVE_DELAY_MS + 25));
+  await settled();
+
+  const positions = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position');
+  assert.deepEqual(positions.at(-1).SetProp.value, { Number: 240 });
+  assert.deepEqual(writes, [[7, 'sidebar.width', { kind: 'number', value: 240 }]]);
+});
+
 test('Top owns workspace settings and extension management in the same tab', async () => {
   const managed = {
     ...api,
