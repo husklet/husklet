@@ -1007,7 +1007,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
   const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, undefined, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
     api.extensions.update('job-2', 8, digest, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -1015,7 +1015,7 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, filesystem: { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
     { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [], write: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };

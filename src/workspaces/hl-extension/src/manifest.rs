@@ -4,20 +4,38 @@ use hl_rpc::{Rejection, RelativePath};
 
 use crate::capability::{Capability, Grant};
 
-/// Exact workspace paths an extension may read or change.
+/// Workspace paths an extension may read or change.
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilesystemGrant {
     #[serde(default)]
-    pub read: Vec<RelativePath>,
+    pub read: Vec<FilesystemSelector>,
     #[serde(default)]
-    pub write: Vec<RelativePath>,
+    pub write: Vec<FilesystemSelector>,
     #[serde(default)]
-    pub create: Vec<RelativePath>,
+    pub create: Vec<FilesystemSelector>,
     #[serde(default)]
-    pub delete: Vec<RelativePath>,
+    pub delete: Vec<FilesystemSelector>,
     #[serde(default)]
-    pub rename: Vec<RelativePath>,
+    pub rename: Vec<FilesystemSelector>,
+}
+
+/// One exact workspace path or an explicitly selected directory subtree.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum FilesystemSelector {
+    Exact { exact: RelativePath },
+    Subtree { subtree: RelativePath },
+}
+
+impl FilesystemSelector {
+    #[must_use]
+    pub fn permits(&self, path: &RelativePath) -> bool {
+        match self {
+            Self::Exact { exact } => path == exact,
+            Self::Subtree { subtree } => path.within(subtree),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -159,7 +177,7 @@ impl FilesystemGrant {
     }
 }
 
-fn intersection(requested: &[RelativePath], consented: &[RelativePath]) -> Vec<RelativePath> {
+fn intersection(requested: &[FilesystemSelector], consented: &[FilesystemSelector]) -> Vec<FilesystemSelector> {
     requested
         .iter()
         .filter(|root| consented.contains(root))
@@ -558,7 +576,7 @@ impl std::error::Error for Invalid {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerGrant, ContainerSelector, FilesystemGrant, Manifest};
+    use super::{ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, Manifest};
     use crate::{RelativePath, PROTOCOL};
 
     fn document(extra: &str) -> String {
@@ -600,27 +618,27 @@ mod tests {
 
     #[test]
     fn filesystem_consent_intersects_read_and_write_roots_independently() {
+        let exact = |path| FilesystemSelector::Exact {
+            exact: RelativePath::new(path).unwrap(),
+        };
+        let subtree = |path| FilesystemSelector::Subtree {
+            subtree: RelativePath::new(path).unwrap(),
+        };
         let requested = FilesystemGrant {
-            read: vec![
-                RelativePath::new("src").unwrap(),
-                RelativePath::new("README.md").unwrap(),
-            ],
-            write: vec![RelativePath::new("workspace.toml").unwrap()],
+            read: vec![subtree("src"), exact("README.md")],
+            write: vec![exact("workspace.toml")],
             ..FilesystemGrant::default()
         };
         let consented = FilesystemGrant {
-            read: vec![RelativePath::new("src").unwrap()],
-            write: vec![
-                RelativePath::new("README.md").unwrap(),
-                RelativePath::new("workspace.toml").unwrap(),
-            ],
+            read: vec![subtree("src")],
+            write: vec![exact("README.md"), exact("workspace.toml")],
             ..FilesystemGrant::default()
         };
         assert_eq!(
             requested.intersect(&consented),
             FilesystemGrant {
-                read: vec![RelativePath::new("src").unwrap()],
-                write: vec![RelativePath::new("workspace.toml").unwrap()],
+                read: vec![subtree("src")],
+                write: vec![exact("workspace.toml")],
                 ..FilesystemGrant::default()
             }
         );

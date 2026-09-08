@@ -185,27 +185,19 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
-  assert.ok(labelled(stage, 'Workspace control'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Install from image'));
   assert.ok(labelled(stage, 'No extensions installed'));
-  assert.deepEqual(ancestorTags(stage, 'Workspace control').slice(0, 3), [
-    'Card',
-    'Column',
-    'Column',
-  ]);
+  assert.equal(labelled(stage, 'Workspace control'), undefined);
+  assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 2), ['Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
   assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
   ]);
-  assert.ok(
-    ancestorProperty(stage, 'Workspace control', 'Card', 'Width'),
-    'discovery cards retain a readable bound instead of stretching with the window',
-  );
-  assert.equal(ancestorProperty(stage, 'Workspace control', 'Card', 'Grow')?.Number, 0);
   assert.equal(
-    ancestorProperty(stage, 'Workspace control', 'Card', 'Justify')?.Align,
+    ancestorProperty(stage, 'Component playground', 'Card', 'Justify')?.Align,
     'Start',
     'cross-axis alignment lets the declared maximum width govern the GTK card',
   );
@@ -564,11 +556,11 @@ for (const updating of [false, true]) {
         create: true,
       },
       requested_filesystem: {
-        read: ['src', 'docs'],
-        write: ['src/config.json'],
-        create: ['generated'],
-        delete: ['cache'],
-        rename: ['migrations'],
+        read: [{ subtree: 'src' }, { exact: 'README.md' }],
+        write: [{ exact: 'src/config.json' }],
+        create: [{ subtree: 'generated' }],
+        delete: [{ subtree: 'cache' }],
+        rename: [{ subtree: 'migrations' }],
       },
       installed_image_digest: updating ? `sha256:${'b'.repeat(64)}` : null,
     };
@@ -632,12 +624,12 @@ for (const updating of [false, true]) {
       ),
     );
     for (const label of [
-      'View contents · src (read)',
-      'View contents · docs (read)',
-      'Modify existing contents · src/config.json (write)',
-      'Create new entries · generated (create)',
-      'Delete entries · cache (delete)',
-      'Rename or move entries · migrations (rename)',
+      'View contents · src/ (subtree) (read)',
+      'View contents · README.md (exact file) (read)',
+      'Modify existing contents · src/config.json (exact file) (write)',
+      'Create new entries · generated/ (subtree) (create)',
+      'Delete entries · cache/ (subtree) (delete)',
+      'Rename or move entries · migrations/ (subtree) (rename)',
     ])
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
@@ -662,11 +654,11 @@ for (const updating of [false, true]) {
       create: true,
     });
     assert.deepEqual(calls[0][4], {
-      read: ['docs'],
+      read: [{ exact: 'README.md' }],
       write: [],
-      create: ['generated'],
+      create: [{ subtree: 'generated' }],
       delete: [],
-      rename: ['migrations'],
+      rename: [{ subtree: 'migrations' }],
     });
   });
 }
@@ -800,6 +792,7 @@ test('a ready extension review can be abandoned without granting authority', asy
 test('installed extension removal requires final consent and a failure remains retryable', async () => {
   const calls = [];
   let removes = 0;
+  let rejectRemoval;
   const extension = {
     name: 'assistant',
     image_digest: `sha256:${'b'.repeat(64)}`,
@@ -816,7 +809,10 @@ test('installed extension removal requires final consent and a failure remains r
           removeAndWait: async (name, digest) => {
             calls.push([name, digest]);
             removes += 1;
-            if (removes === 1) throw new Error('extension is still stopping');
+            if (removes === 1)
+              return new Promise((_, reject) => {
+                rejectRemoval = () => reject(new Error('extension is still stopping'));
+              });
             return { changed: true, extension };
           },
         },
@@ -829,9 +825,14 @@ test('installed extension removal requires final consent and a failure remains r
   assert.deepEqual(calls, [], 'opening consent carries no removal authority');
   assert.ok(labelled(stage, 'Remove assistant from this workspace?'));
   invoke(stage, 'Remove assistant');
+  invoke(stage, 'Remove assistant');
+  assert.equal(calls.length, 1, 'a repeated confirmation cannot duplicate removal authority');
+  await settled();
+  assert.ok(labelled(stage, 'Removing assistant…'));
+  rejectRemoval();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'extension is still stopping'));
+  assert.ok(labelled(stage, 'Remove failed: extension is still stopping'));
   assert.ok(labelled(stage, 'Remove'), 'failure returns to a fresh two-step consent');
   invoke(stage, 'Remove');
   invoke(stage, 'Remove assistant');
@@ -844,6 +845,7 @@ test('installed extension removal requires final consent and a failure remains r
 test('installed extensions expose truthful enabled, disabled, fault and retry states', async () => {
   const calls = [];
   let publish;
+  let release;
   let extension = {
     name: 'assistant',
     image_digest: `sha256:${'d'.repeat(64)}`,
@@ -851,13 +853,18 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     enabled: true,
     status: 'running',
   };
-  const result = async (action) => {
+  const result = (action) => {
     calls.push(action);
-    extension =
+    const resulting =
       action === 'disable'
         ? { ...extension, enabled: false, status: 'stopped' }
         : { ...extension, enabled: true, status: 'running' };
-    return { changed: true, extension };
+    return new Promise((resolve) => {
+      release = () => {
+        extension = resulting;
+        resolve({ changed: true, extension });
+      };
+    });
   };
   const stage = host();
   stage.render(
@@ -878,10 +885,18 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   );
   await settled();
   invoke(stage, 'Disable');
+  invoke(stage, 'Disable');
+  await settled();
+  assert.deepEqual(calls, ['disable'], 'pending disable admits one authority call');
+  assert.ok(labelled(stage, 'Disabling assistant…'));
+  release();
   await settled();
   await settled();
   assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
   invoke(stage, 'Enable');
+  await settled();
+  assert.ok(labelled(stage, 'Enabling assistant…'));
+  release();
   await settled();
   await settled();
   assert.ok(labelled(stage, 'running'));
@@ -898,6 +913,9 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   );
   assert.ok(labelled(stage, 'Retry'));
   invoke(stage, 'Retry');
+  await settled();
+  assert.ok(labelled(stage, 'Retrying assistant…'));
+  release();
   await settled();
   await settled();
   assert.deepEqual(calls, ['disable', 'enable', 'retry']);

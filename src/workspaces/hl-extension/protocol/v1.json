@@ -1831,7 +1831,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "RelativePath"
+              "name": "FilesystemSelector"
             }
           }
         },
@@ -1842,7 +1842,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "RelativePath"
+              "name": "FilesystemSelector"
             }
           }
         },
@@ -1853,7 +1853,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "RelativePath"
+              "name": "FilesystemSelector"
             }
           }
         },
@@ -1864,7 +1864,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "RelativePath"
+              "name": "FilesystemSelector"
             }
           }
         },
@@ -1875,7 +1875,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "RelativePath"
+              "name": "FilesystemSelector"
             }
           }
         }
@@ -1884,6 +1884,47 @@
       "serde": {
         "deny_unknown_fields": true
       }
+    },
+    "FilesystemSelector": {
+      "kind": "enum",
+      "serde": {
+        "deny_unknown_fields": true,
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Exact",
+          "payload": {
+            "fields": [
+              {
+                "name": "exact",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Subtree",
+          "payload": {
+            "fields": [
+              {
+                "name": "subtree",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        }
+      ]
     },
     "Frame": {
       "fields": [
@@ -11808,7 +11849,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:d7c696fb92989470",
+  "source_fingerprint": "fnv1a64:d4fb98306bb16211",
   "specification_version": 1,
   "topics": [
     {

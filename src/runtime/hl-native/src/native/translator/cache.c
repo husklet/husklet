@@ -1871,7 +1871,7 @@ static int map_growth_test(uint32_t scenario, uint64_t *answer) {
 // aliasing pressure ~8x, so far more indirect branches hit inline and never reach the
 // dispatcher. The reader's hash width (guest/aarch64/stubs.c) and both fills (the per-arch
 // G_IBTC_FILL, which key on `(target>>2) & (IBTC_N-1)`) follow this constant.
-#define IBTC_N 65536
+#define IBTC_N 131072
 
 // 16-byte aligned so each {target,body} entry sits in a single 16-byte granule -> a
 // naturally-aligned 128-bit ldp/stp is single-copy atomic under FEAT_LSE2 (all Apple
@@ -1919,6 +1919,8 @@ _Alignas(IBTC_ALIGN) static ibtc_ent g_ibtc[IBTC_N];
    grown ibtc_ent silently reintroduces torn dispatch), and movdqa #GP-faults if misaligned. */
 _Static_assert(sizeof(ibtc_ent) == 16, "ibtc_ent must be one 16-byte granule for the atomic pair publish");
 _Static_assert(IBTC_ALIGN % 16u == 0u, "the ibtc table's alignment must keep every entry 16-byte aligned");
+_Static_assert(sizeof g_ibtc == 2u * 1024u * 1024u,
+               "the shared IBTC has a deliberate two-MiB per-process memory bound");
 
 /* Wholesale-invalidate the inline-branch cache.  In a fork child the table is
    COW-inherited fully populated, so a memset first faults in every page (~190us
