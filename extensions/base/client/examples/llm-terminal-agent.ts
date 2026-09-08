@@ -26,7 +26,7 @@ try {
     const cancellation = new AbortController();
     const deadline = setTimeout(() => cancellation.abort('agent interaction deadline'), deadlineMs);
     try {
-      const result = await terminal.writeObservedAndWait(
+      const result = await terminal.writeObservedAndWaitForText(
         observed.snapshot,
         `${configuration.prompt}\n`,
         {
@@ -36,7 +36,7 @@ try {
         },
       );
       process.stdout.write(
-        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: !context.complete, selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.lines.join('\n') : null, replacement: result.changed && result.after.generation !== observed.snapshot.generation } })}\n`,
+        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: !context.complete, selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.changed && result.after.snapshot.generation !== observed.snapshot.generation } })}\n`,
       );
     } finally {
       clearTimeout(deadline);

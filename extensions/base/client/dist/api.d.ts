@@ -1218,6 +1218,19 @@ export interface WorkspaceApi {
             changed: false;
             before: PaneText;
         }>;
+        /** Write against an observed terminal and project a replacement as terminal or semantic text. */
+        writeObservedAndWaitForText(before: PaneText, input: string | Iterable<number>, options?: {
+            lines?: number;
+            timeoutMs?: number;
+            signal?: AbortSignal;
+        }): Promise<{
+            changed: true;
+            before: PaneText;
+            after: ReadablePane;
+        } | {
+            changed: false;
+            before: PaneText;
+        }>;
         resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
         resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
         /** Arm and read before CAS resize, then verify the exact terminal grid on a later screen revision. */

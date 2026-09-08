@@ -94,6 +94,7 @@ function respond(socket, frame, payload) {
 
 test('LLM terminal agent observes, writes, and follows replacement over the extension socket', async () => {
   let reads = 0;
+  let replaced = false;
   const pane = {
     slot: 'term',
     generation: 4,
@@ -114,7 +115,15 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
     (socket, frame) => {
       const call = frame.payload.call;
       if (call === 'pane_list')
-        respond(socket, frame, { reply: 'panes', with: { panes: [pane, uiPane], truncated: false } });
+        respond(socket, frame, {
+          reply: 'panes',
+          with: {
+            panes: replaced
+              ? [{ ...pane, generation: 5, revision: 1, kind: 'surface', provider: { extension: 'status', provider: 'main' } }, uiPane]
+              : [pane, uiPane],
+            truncated: false,
+          },
+        });
       else if (call === 'event_subscribe' || call === 'event_unsubscribe')
         respond(socket, frame, { reply: 'done' });
       else if (call === 'terminal_read_pane') {
@@ -136,15 +145,19 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
           },
         });
       } else if (call === 'pane_semantic_read') {
+        const target = frame.payload.with.slot;
         respond(socket, frame, {
           reply: 'semantics',
           with: {
-            slot: 'dashboard', generation: 2, revision: 3,
-            root: { id: 0, role: 'group', label: 'Deployment healthy', value: null, disabled: false, destructive: false, actions: [], children: [] },
+            slot: target,
+            generation: target === 'term' ? 5 : 2,
+            revision: target === 'term' ? 1 : 3,
+            root: { id: 0, role: 'group', label: target === 'term' ? 'Agent result healthy' : 'Deployment healthy', value: null, disabled: false, destructive: false, actions: [], children: [] },
             truncated: false,
           },
         });
       } else if (call === 'terminal_write_pane') {
+        replaced = true;
         assert.deepEqual(frame.payload.with, {
           slot: 'term',
           generation: 4,
@@ -157,7 +170,7 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
             kind: KIND.event,
             payload: {
               snapshot: 'pane_changes',
-              of: { slot: 'term', kind: 'terminal', generation: 4, revision: 9, coalesced: 0 },
+              of: { slot: 'term', kind: 'surface', generation: 5, revision: 1, coalesced: 0 },
             },
           }),
         );
@@ -167,7 +180,8 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
   );
   assert.equal(run.result.selected.kind, 'terminal');
   assert.equal(run.result.selected.before, '$ \n');
-  assert.match(run.result.selected.after, /healthy/);
+  assert.match(run.result.selected.after, /Agent result healthy/);
+  assert.equal(run.result.selected.afterKind, 'ui');
   assert.equal(run.result.selected.replacement, true);
   assert.equal(run.result.incomplete, false);
   assert.match(run.result.context.find(({ kind }) => kind === 'ui').text, /Deployment healthy/);

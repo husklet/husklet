@@ -2099,12 +2099,17 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
     });
   };
-  api.terminal.writeAndWait = async (
-    slot,
-    generation,
-    revision,
-    input,
-    { lines, timeoutMs = 30_000, signal } = {},
+  const writeAndWait = async (
+    slot: string,
+    generation: number,
+    revision: number,
+    input: string | Iterable<number>,
+    {
+      lines,
+      timeoutMs = 30_000,
+      signal,
+    }: { lines?: number; timeoutMs?: number; signal?: AbortSignal } = {},
+    projectReadable = false,
   ) => {
     if (typeof slot !== 'string' || slot.length === 0)
       throw new TypeError('terminal input wait requires a nonempty slot');
@@ -2157,17 +2162,22 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }),
       ]);
       if (change === null) return { changed: false, before };
-      const after = await scoped.terminal.read(slot, lines);
+      const readable = projectReadable ? await scoped.terminal.toText(slot, { lines }) : undefined;
+      const after = readable?.snapshot ?? (await scoped.terminal.read(slot, lines));
       if (after.generation === generation && after.revision === revision) {
         throw new Error('pane change did not advance the terminal screen cursor');
       }
-      return { changed: true, before, after };
+      return { changed: true, before, after: readable ?? after };
     } finally {
       clearTimeout(timer);
       if (abort) signal?.removeEventListener('abort', abort);
       await stop();
     }
   };
+  api.terminal.writeAndWait = (slot, generation, revision, input, options) =>
+    writeAndWait(slot, generation, revision, input, options) as ReturnType<
+      WorkspaceApi['terminal']['writeAndWait']
+    >;
   api.terminal.writeObservedAndWait = (before, input, options) => {
     if (
       !before ||
@@ -2177,13 +2187,31 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     ) {
       throw new TypeError('observed terminal input requires a snapshot with an exact cursor');
     }
-    return api.terminal.writeAndWait(
+    return writeAndWait(
       before.slot,
       before.generation,
       before.revision,
       input,
       options,
-    );
+    ) as ReturnType<WorkspaceApi['terminal']['writeObservedAndWait']>;
+  };
+  api.terminal.writeObservedAndWaitForText = (before, input, options) => {
+    if (
+      !before ||
+      typeof before.slot !== 'string' ||
+      !Number.isSafeInteger(before.generation) ||
+      !Number.isSafeInteger(before.revision)
+    ) {
+      throw new TypeError('observed terminal input requires a snapshot with an exact cursor');
+    }
+    return writeAndWait(
+      before.slot,
+      before.generation,
+      before.revision,
+      input,
+      options,
+      true,
+    ) as ReturnType<WorkspaceApi['terminal']['writeObservedAndWaitForText']>;
   };
   api.terminal.spawnAndWait = async (
     slot,
