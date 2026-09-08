@@ -188,7 +188,7 @@ impl Session {
                 FilesystemAccess::Create => &self.filesystem.create,
                 FilesystemAccess::Delete => &self.filesystem.delete,
                 FilesystemAccess::Rename => &self.filesystem.rename,
-                FilesystemAccess::Read => &[],
+                FilesystemAccess::List | FilesystemAccess::Read => &[],
             },
             _ => {
                 return Err(Failure::Denied {
@@ -197,7 +197,11 @@ impl Session {
                 });
             }
         };
-        if roots.iter().any(|selector| selector.permits(path)) {
+        if roots.iter().any(|selector| {
+            selector.permits(path)
+                && (!matches!(access, FilesystemAccess::List)
+                    || matches!(selector, crate::FilesystemSelector::Subtree { .. }))
+        }) {
             return Ok(());
         }
         Err(Failure::Denied {
@@ -1427,6 +1431,7 @@ fn validate_notification(notification: &crate::port::Notification) -> Result<(),
 
 #[derive(Clone, Copy)]
 enum FilesystemAccess {
+    List,
     Read,
     Write,
     Create,
@@ -1436,6 +1441,7 @@ enum FilesystemAccess {
 
 fn filesystem_access(request: &Request) -> FilesystemAccess {
     match request {
+        Request::FilesystemList { .. } | Request::FilesystemListPage { .. } => FilesystemAccess::List,
         Request::FilesystemWrite { .. } | Request::FilesystemWriteObserved { .. } => FilesystemAccess::Write,
         Request::FilesystemCreateObserved { .. } | Request::FilesystemMkdir { .. } => FilesystemAccess::Create,
         Request::FilesystemRemove { .. } | Request::FilesystemRemoveObserved { .. } => FilesystemAccess::Delete,

@@ -1619,9 +1619,14 @@ mod tests {
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
                 hl_extension::FilesystemGrant {
-                    read: vec![hl_extension::FilesystemSelector::Subtree {
-                        subtree: RelativePath::new("src").unwrap(),
-                    }],
+                    read: vec![
+                        hl_extension::FilesystemSelector::Subtree {
+                            subtree: RelativePath::new("src").unwrap(),
+                        },
+                        hl_extension::FilesystemSelector::Exact {
+                            exact: RelativePath::new("workspace.toml").unwrap(),
+                        },
+                    ],
                     write: vec![hl_extension::FilesystemSelector::Exact {
                         exact: RelativePath::new("workspace.toml").unwrap(),
                     }],
@@ -2055,7 +2060,7 @@ mod tests {
         let answer = ask(
             &mut wire,
             &Request::FilesystemRead {
-                path: RelativePath::new("workspace.toml").unwrap(),
+                path: RelativePath::new("private.toml").unwrap(),
             },
         );
         assert!(codec::is_failure(&answer));
@@ -2072,6 +2077,41 @@ mod tests {
             ledger.reached().is_empty(),
             "denied calls must not reach the filesystem service"
         );
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn exact_file_read_grant_cannot_enumerate_children_over_the_extension_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = filesystem_scoped_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let listed = ask(
+            &mut wire,
+            &Request::FilesystemList {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&listed),
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::FilesystemRead.as_str()
+        ));
+        assert!(
+            ledger.reached().is_empty(),
+            "exact authority reached directory enumeration"
+        );
+
+        let stated = ask(
+            &mut wire,
+            &Request::FilesystemStat {
+                path: RelativePath::new("workspace.toml").unwrap(),
+            },
+        );
+        assert!(matches!(codec::read_reply(&stated), Ok(Reply::Entry(_))));
+        assert_eq!(ledger.reached(), vec!["files.stat"]);
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
