@@ -606,6 +606,62 @@ test('reviewing an unchanged installed digest is an explicit no-op', async () =>
   assert.equal(updates, 0);
 });
 
+test('extension review calls out destructive image authority before consent', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'image-review' }),
+          acquisition: async () => ({
+            job: 'image-review',
+            reference: 'registry.example/tools:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'tools',
+              version: '1',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: null,
+              requested: ['images:remove', 'images:prune'],
+              requested_images: {
+                read: [],
+                use: [],
+                pull: [],
+                remove: [{ digest: `sha256:${'b'.repeat(64)}` }],
+                prune_all_unused: true,
+              },
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/tools:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ),
+  );
+  assert.equal(
+    ancestorTags(
+      stage,
+      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+    ).includes('Expander'),
+    false,
+    'destructive authority is announced while exact grants remain collapsed',
+  );
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {

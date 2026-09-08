@@ -768,6 +768,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     label="All access is off. Expand exact grants and enable only what this extension needs."
                     tone="warning"
                   />
+                  {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
+                    <InlineMessage
+                      label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
+                      tone="warning"
+                    />
+                  )}
                   <Expander
                     label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
                     expanded={permissionDetailsExpanded}
