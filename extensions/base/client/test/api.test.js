@@ -1235,6 +1235,21 @@ test('text execution preserves split UTF-8 and cancels aggregate overflow', asyn
     (error) => error instanceof ExecutionOperationError && /5 byte limit/.test(error.cause.message),
   );
   assert.equal(cancelled, 1);
+  api.containers.execStreaming = async (_id, _generation, _options, onPage) => {
+    try {
+      await onPage({ entries: [
+        { sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [0xff] },
+      ], next: 1, more: false, eof: true, gap: false });
+    } catch (error) {
+      cancelled += 1;
+      throw new ExecutionOperationError('e'.repeat(32), 'output', error);
+    }
+  };
+  await assert.rejects(
+    api.containers.execText('c'.repeat(64), 1, { command: ['query'], maxBytes: 6 }),
+    (error) => error instanceof ExecutionOperationError && error.cause instanceof TypeError,
+  );
+  assert.equal(cancelled, 2, 'malformed text cancels instead of corrupting a query result');
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

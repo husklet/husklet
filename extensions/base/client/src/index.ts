@@ -975,8 +975,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         let bytes = 0;
         let stdout = '';
         let stderr = '';
-        const stdoutDecoder = new TextDecoder();
-        const stderrDecoder = new TextDecoder();
+        // Query/result protocols are textual. Replacing malformed bytes with U+FFFD could silently
+        // change a database value or delimiter, so fail and cancel the owned execution instead.
+        const stdoutDecoder = new TextDecoder('utf-8', { fatal: true });
+        const stderrDecoder = new TextDecoder('utf-8', { fatal: true });
         const result = await api.containers.execStreaming(id, generation, options, (page) => {
           for (const entry of page.entries) {
             bytes += entry.bytes.length;
