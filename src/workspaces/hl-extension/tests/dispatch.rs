@@ -90,14 +90,16 @@ impl hl_extension::port::VolumeStore for Host {
 impl hl_extension::port::NetworkStore for Host {
     fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
         self.ledger.note("networks.list");
-        Ok(vec![hl_extension::port::NetworkSummary {
-            id: "a".repeat(32),
-            name: "private".into(),
-            driver: "bridge".into(),
-            scope: "local".into(),
-            kind: hl_extension::NetworkKind::Custom,
-            endpoints: None,
-        }])
+        Ok(vec![
+            hl_extension::port::NetworkSummary {
+                id: "a".repeat(32), name: "private".into(), driver: "bridge".into(), scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+            },
+            hl_extension::port::NetworkSummary {
+                id: "f".repeat(32), name: "unrelated".into(), driver: "bridge".into(), scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+            },
+        ])
     }
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
         self.ledger.note("networks.inspect");
@@ -846,6 +848,7 @@ impl ExtensionStore for Host {
             pane_providers: Vec::new(),
             granted: Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }])
@@ -861,6 +864,7 @@ impl ExtensionStore for Host {
             pane_providers: Vec::new(),
             granted: Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         })
@@ -909,6 +913,7 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _networks: &hl_extension::NetworkGrant,
         _filesystem: &hl_extension::FilesystemGrant,
         _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -922,6 +927,7 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _networks: &hl_extension::NetworkGrant,
         _filesystem: &hl_extension::FilesystemGrant,
         _workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -969,6 +975,10 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
     ))
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::All { all: true }],
+        create: true,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::All { all: true }],
         create: true,
     })
     .with_filesystem(hl_extension::FilesystemGrant {
@@ -1197,6 +1207,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
@@ -1208,6 +1219,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
+                networks: hl_extension::NetworkGrant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
@@ -1928,6 +1940,7 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
                 image_digest: "sha256:stale-catalogue-label".into(),
                 granted: Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             },
@@ -3336,6 +3349,28 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
     );
     assert!(matches!(
         write.dispatch(&Request::NetworkList, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+}
+
+#[test]
+fn exact_network_scope_filters_inventory_and_denies_unrelated_inspection_and_creation() {
+    let host = Host::new();
+    let mut scoped = session(&[Capability::NetworkRead, Capability::NetworkWrite], &[])
+        .with_networks(hl_extension::NetworkGrant {
+            selectors: vec![hl_extension::NetworkSelector::Name { name: "private".into() }],
+            create: false,
+        });
+    let Reply::Networks(inventory) = scoped.dispatch(&Request::NetworkList, &services(&host)).unwrap() else {
+        panic!("network inventory reply");
+    };
+    assert_eq!(inventory.networks.iter().map(|network| network.name.as_str()).collect::<Vec<_>>(), ["private"]);
+    assert!(matches!(
+        scoped.dispatch(&Request::NetworkInspect { reference: "unrelated".into() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(matches!(
+        scoped.dispatch(&Request::NetworkCreate { name: "another".into() }, &services(&host)),
         Err(Failure::Denied { .. })
     ));
 }

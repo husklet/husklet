@@ -535,6 +535,7 @@ mod tests {
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),

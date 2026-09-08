@@ -30,7 +30,7 @@ wrong caller.
 | --- | --- | --- |
 | Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing, and private bounded state stores its checkpoint. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
-| PostgreSQL GUI | Strong | Container inspection, process/execution APIs, bounded logs, networks, file-scoped credentials, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. |
+| PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded output, cancellation, redacted exec environment values, and virtualized rendered tables cover administration without placing passwords in argv. Durable credentials still require a dedicated secret provider; private extension state is not a vault. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
 | Single-file workspace editor | Strong | `[filesystem]` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. `stat` plus `writeObserved` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
@@ -183,6 +183,8 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.images.prune(...)` — `image_prune`, requires `images:write`.
 
 ## Networks
+
+Network verbs and resources are granted independently. A manifest requests exact network IDs or names (or explicit `all`) through `networks`; installation consent intersects that request, and `create` is separately consented. Inventory, inspection, removal, connection, disconnection, and snapshots are filtered or denied against persisted selectors.
 
 - `host.networks.list(...)` — `network_list`, requires `networks:read`.
 - `host.networks.inspect(...)` — `network_inspect`, requires `networks:read`.

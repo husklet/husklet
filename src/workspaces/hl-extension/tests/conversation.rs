@@ -95,6 +95,17 @@ struct Host {
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
+    fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
+        Ok(hl_extension::port::NetworkSummary {
+            id: "a".repeat(32),
+            name: reference.into(),
+            driver: "bridge".into(),
+            scope: "local".into(),
+            kind: hl_extension::NetworkKind::Custom,
+            endpoints: None,
+        })
+    }
+
     fn connect_with_aliases(&self, _reference: &str, _container: &str, aliases: &[String]) -> Result<(), HostError> {
         *self.network_aliases.borrow_mut() = aliases.to_vec();
         Ok(())
@@ -1082,6 +1093,10 @@ fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::Id { id: "b".repeat(64) }],
         create: false,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::All { all: true }],
+        create: false,
     });
     let mut sender = hl_extension::Wire::new(extension_end);
     let mut receiver = hl_extension::Wire::new(host_end);
@@ -1121,6 +1136,10 @@ fn network_write_cannot_cross_an_ungranted_container_scope_over_a_real_socket() 
     ))
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::Id { id: "c".repeat(64) }],
+        create: false,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::All { all: true }],
         create: false,
     });
     let request = Request::NetworkConnect {

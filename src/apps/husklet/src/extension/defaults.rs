@@ -50,6 +50,7 @@ fn install_defaults_with(
                 &candidate.digest,
                 &candidate.manifest.capabilities,
                 &candidate.manifest.containers,
+                &candidate.manifest.networks,
                 &candidate.manifest.filesystem,
                 &candidate.manifest.workspace_environment,
                 moment(),
@@ -101,6 +102,7 @@ mod tests {
                 digest: format!("sha256:{name}"),
                 manifest: Manifest {
                     containers: hl_extension::ContainerGrant::default(),
+                    networks: hl_extension::NetworkGrant::default(),
                     name: ExtensionName::new(name).unwrap(),
                     display_name: name.to_owned(),
                     version: "0.1.0".to_owned(),

@@ -1581,6 +1581,14 @@
           }
         },
         {
+          "name": "requested_networks",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "NetworkGrant"
+          }
+        },
+        {
           "name": "requested_filesystem",
           "optional": true,
           "schema": {
@@ -1796,6 +1804,14 @@
           "schema": {
             "kind": "ref",
             "name": "ContainerGrant"
+          }
+        },
+        {
+          "name": "networks",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "NetworkGrant"
           }
         },
         {
@@ -2693,6 +2709,32 @@
       "kind": "struct",
       "serde": {}
     },
+    "NetworkGrant": {
+      "fields": [
+        {
+          "name": "selectors",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "ref",
+              "name": "NetworkSelector"
+            }
+          }
+        },
+        {
+          "name": "create",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {
+        "deny_unknown_fields": true
+      }
+    },
     "NetworkInventory": {
       "fields": [
         {
@@ -2733,6 +2775,59 @@
           "name": "custom",
           "payload": {
             "kind": "unit"
+          }
+        }
+      ]
+    },
+    "NetworkSelector": {
+      "kind": "enum",
+      "serde": {
+        "untagged": true
+      },
+      "variants": [
+        {
+          "name": "Id",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "Name",
+          "payload": {
+            "fields": [
+              {
+                "name": "name",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "All",
+          "payload": {
+            "fields": [
+              {
+                "name": "all",
+                "optional": false,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
           }
         }
       ]
@@ -8891,6 +8986,14 @@
                 }
               },
               {
+                "name": "networks",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NetworkGrant"
+                }
+              },
+              {
                 "name": "filesystem",
                 "optional": false,
                 "schema": {
@@ -8953,6 +9056,14 @@
                 "schema": {
                   "kind": "ref",
                   "name": "ContainerGrant"
+                }
+              },
+              {
+                "name": "networks",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "NetworkGrant"
                 }
               },
               {
@@ -12162,7 +12273,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:ab390de6db2941be",
+  "source_fingerprint": "fnv1a64:94c0bbd371687d07",
   "specification_version": 1,
   "topics": [
     {

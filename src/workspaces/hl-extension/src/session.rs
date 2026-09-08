@@ -44,6 +44,7 @@ pub struct Session {
     pending: Vec<SurfaceFrame>,
     mutations: Vec<SurfaceMutation>,
     containers: ContainerGrant,
+    networks: crate::NetworkGrant,
     filesystem: FilesystemGrant,
     workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
@@ -145,6 +146,7 @@ impl Session {
             pending: Vec::new(),
             mutations: Vec::new(),
             containers: ContainerGrant::default(),
+            networks: crate::NetworkGrant::default(),
             filesystem: FilesystemGrant::default(),
             workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
@@ -155,6 +157,12 @@ impl Session {
     #[must_use]
     pub fn with_containers(mut self, containers: ContainerGrant) -> Self {
         self.containers = containers;
+        self
+    }
+
+    #[must_use]
+    pub fn with_networks(mut self, networks: crate::NetworkGrant) -> Self {
+        self.networks = networks;
         self
     }
 
@@ -173,6 +181,16 @@ impl Session {
     #[must_use]
     pub fn filesystem_read_selectors(&self) -> &[crate::FilesystemSelector] {
         &self.filesystem.read
+    }
+
+    #[must_use]
+    pub fn visible_networks(
+        &self,
+        networks: Vec<crate::port::NetworkSummary>,
+    ) -> crate::port::NetworkInventory {
+        crate::port::NetworkInventory::bounded(
+            networks.into_iter().filter(|network| self.networks.permits(&network.id, &network.name)).collect(),
+        )
     }
 
     fn permit_filesystem_path(
@@ -802,11 +820,24 @@ impl Session {
         let capability = request.capability();
         let port = self.peer.authority().port(capability, services.networks)?;
         match request {
-            Request::NetworkList => Ok(Reply::Networks(crate::port::NetworkInventory::bounded(port.list()?))),
-            Request::NetworkInspect { reference } => Ok(Reply::Network(port.inspect(reference)?)),
-            Request::NetworkCreate { name } => Ok(Reply::Identity(port.create(name)?)),
+            Request::NetworkList => {
+                Ok(Reply::Networks(self.visible_networks(port.list()?)))
+            }
+            Request::NetworkInspect { reference } => {
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
+                Ok(Reply::Network(network))
+            }
+            Request::NetworkCreate { name } => {
+                if !self.networks.create {
+                    return Err(Failure::Denied { capability: capability.as_str().into(), detail: "network creation is outside the consented resource scope".into() });
+                }
+                Ok(Reply::Identity(port.create(name)?))
+            }
             Request::NetworkRemove { reference } => {
                 immutable_identity(reference, &[32], "network")?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 port.remove(reference).map(|()| Reply::Done).map_err(Failure::from)
             }
             Request::NetworkConnect {
@@ -816,6 +847,8 @@ impl Session {
             } => {
                 validate_endpoint_aliases(aliases)?;
                 let reference = immutable_reference(reference, &[32], "network")?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 immutable_identity(container, &[32, 64], "container")?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.connect_with_aliases(reference, &target.id, aliases)
@@ -824,6 +857,8 @@ impl Session {
             }
             Request::NetworkDisconnect { reference, container } => {
                 let reference = immutable_reference(reference, &[32], "network")?;
+                let network = port.inspect(reference)?;
+                self.permit_network(&network, capability)?;
                 immutable_identity(container, &[32, 64], "container")?;
                 let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
                 port.disconnect(reference, &target.id)
@@ -832,6 +867,14 @@ impl Session {
             }
             _ => unreachable!(),
         }
+    }
+
+
+    fn permit_network(&self, network: &crate::port::NetworkSummary, capability: Capability) -> Result<(), Failure> {
+        self.networks.permits(&network.id, &network.name).then_some(()).ok_or_else(|| Failure::Denied {
+            capability: capability.as_str().into(),
+            detail: "network is outside the consented resource scope".into(),
+        })
     }
 
     /// Every workspace the host knows of.
@@ -988,6 +1031,7 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                networks,
                 filesystem,
                 workspace_environment,
             } => {
@@ -999,6 +1043,7 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    networks,
                     filesystem,
                     workspace_environment,
                 )?))
@@ -1009,6 +1054,7 @@ impl Session {
                 image_digest,
                 granted,
                 containers,
+                networks,
                 filesystem,
                 workspace_environment,
             } => {
@@ -1020,6 +1066,7 @@ impl Session {
                     image_digest,
                     granted,
                     containers,
+                    networks,
                     filesystem,
                     workspace_environment,
                 )?))

@@ -155,6 +155,7 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -165,6 +166,7 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            networks,
             filesystem,
             workspace_environment,
         )?;
@@ -183,6 +185,7 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<ExtensionSummary, HostError> {
@@ -193,6 +196,7 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            networks,
             filesystem,
             workspace_environment,
         )?;
@@ -256,6 +260,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 image_digest: candidate.digest,
                 requested: candidate.requested,
                 requested_containers: candidate.requested_containers,
+                requested_networks: candidate.requested_networks,
                 requested_filesystem: candidate.requested_filesystem,
                 requested_workspace_environment: candidate.requested_workspace_environment,
                 installed_image_digest: candidate.installed_digest,
@@ -289,6 +294,7 @@ fn summary(entry: super::roster::Entry) -> ExtensionSummary {
         pane_providers: entry.pane_providers,
         granted: entry.granted,
         containers: entry.containers,
+        networks: entry.networks,
         filesystem: entry.filesystem,
         workspace_environment: entry.workspace_environment,
         status: match entry.stage {
@@ -358,6 +364,7 @@ mod tests {
                 revision: 7,
                 state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                     requested_containers: hl_extension::ContainerGrant::default(),
+                    requested_networks: hl_extension::NetworkGrant::default(),
                     requested_filesystem: hl_extension::FilesystemGrant::default(),
                     requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                     reference: "registry.example/team/tool:2".into(),
@@ -383,6 +390,7 @@ mod tests {
             revision: 7,
             state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
                 requested_containers: hl_extension::ContainerGrant::default(),
+                requested_networks: hl_extension::NetworkGrant::default(),
                 requested_filesystem: hl_extension::FilesystemGrant::default(),
                 requested_workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 reference: "registry.example/team/tool:latest".into(),
@@ -437,6 +445,7 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let manifest = hl_extension::Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             name: name.clone(),
             display_name: "Postgres".into(),
             version: "1".into(),
@@ -493,6 +502,7 @@ mod tests {
                 selectors: vec![hl_extension::ContainerSelector::Name { name: "database".into() }],
                 create: false,
             },
+            networks: hl_extension::NetworkGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
                 read: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
                     workspace: "dev".into(),

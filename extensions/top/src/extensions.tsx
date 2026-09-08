@@ -27,6 +27,8 @@ import {
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
+  type NetworkGrant,
+  type NetworkSelector,
   type FilesystemGrant,
   type FilesystemSelector,
   type WorkspaceEnvironmentGrant,
@@ -157,14 +159,18 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
   const capabilities = extension.granted ?? [];
   const containerSelectors = extension.containers?.selectors ?? [];
   const containerCount = containerSelectors.length + Number(extension.containers?.create ?? false);
+  const networkSelectors = extension.networks?.selectors ?? [];
+  const networkCount = networkSelectors.length + Number(extension.networks?.create ?? false);
   const filesystemCount = extension.filesystem ? filesystemGrantCount(extension.filesystem) : 0;
   const environmentRead = extension.workspace_environment?.read ?? [];
   const environmentWrite = extension.workspace_environment?.write ?? [];
   const environmentCount = environmentRead.length + environmentWrite.length;
-  const total = capabilities.length + containerCount + filesystemCount + environmentCount;
+  const total =
+    capabilities.length + containerCount + networkCount + filesystemCount + environmentCount;
   const summary = [
     capabilities.length ? `${capabilities.length} product` : '',
     containerCount ? `${containerCount} container` : '',
+    networkCount ? `${networkCount} network` : '',
     filesystemCount ? `${filesystemCount} file` : '',
     environmentCount ? `${environmentCount} environment` : '',
   ]
@@ -191,6 +197,14 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
           />
         ))}
         {extension.containers?.create ? <Text label="Containers · create new containers" /> : null}
+        {networkSelectors.map((selector, index) => (
+          <Text
+            key={`network:${index}`}
+            label={`Network · ${networkSelectorLabel(selector)}`}
+            wrap
+          />
+        ))}
+        {extension.networks?.create ? <Text label="Networks · create new networks" /> : null}
         {extension.filesystem
           ? FILESYSTEM_VERBS.flatMap(({ key, label }) =>
               filesystemRoots(extension.filesystem!, key).map((selector) => (
@@ -237,6 +251,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
   const [grantedContainers, setGrantedContainers] = React.useState<ContainerGrant>({
+    selectors: [],
+    create: false,
+  });
+  const [grantedNetworks, setGrantedNetworks] = React.useState<NetworkGrant>({
     selectors: [],
     create: false,
   });
@@ -350,6 +368,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             // including during an update where a manifest may have widened.
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
+            setGrantedNetworks({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
             setGrantedWorkspaceEnvironment({ read: [], write: [] });
           }
@@ -394,6 +413,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.revision,
         granted,
         grantedContainers,
+        grantedNetworks,
         grantedFilesystem,
         { workspaceEnvironment: grantedWorkspaceEnvironment },
       );
@@ -421,6 +441,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setAcquisition(null);
     setGranted([]);
     setGrantedContainers({ selectors: [], create: false });
+    setGrantedNetworks({ selectors: [], create: false });
     setGrantedFilesystem(emptyFilesystemGrant());
     setGrantedWorkspaceEnvironment({ read: [], write: [] });
     candidateKey.current = '';
@@ -484,6 +505,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
+  const requestedNetworks = acquisition?.candidate?.requested_networks ?? {
+    selectors: [],
+    create: false,
+  };
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
@@ -499,6 +524,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     ? acquisition.candidate.requested.length +
       requestedContainers.selectors.length +
       Number(requestedContainers.create) +
+      requestedNetworks.selectors.length +
+      Number(requestedNetworks.create) +
       filesystemGrantCount(requestedFilesystem) +
       requestedWorkspaceEnvironment.read.length +
       requestedWorkspaceEnvironment.write.length
@@ -507,6 +534,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     granted.length +
     grantedContainers.selectors.length +
     Number(grantedContainers.create) +
+    grantedNetworks.selectors.length +
+    Number(grantedNetworks.create) +
     filesystemGrantCount(grantedFilesystem) +
     grantedWorkspaceEnvironment.read.length +
     grantedWorkspaceEnvironment.write.length;
@@ -744,6 +773,59 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           checked={grantedContainers.create}
                           onToggle={(event: Change) =>
                             setGrantedContainers((current) => ({
+                              ...current,
+                              create: Boolean(event.value),
+                            }))
+                          }
+                        />
+                      </FormControlLabel>
+                    )}
+                    {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
+                      <>
+                        <Text
+                          label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
+                          color="text-dim"
+                        />
+                        <Text
+                          label="Network access starts off. Select only the networks this extension needs."
+                          color="text-dim"
+                          wrap
+                        />
+                      </>
+                    )}
+                    {requestedNetworks.selectors.map((selector) => {
+                      const key = networkSelectorKey(selector);
+                      const selected = grantedNetworks.selectors.some(
+                        (candidate) => networkSelectorKey(candidate) === key,
+                      );
+                      return (
+                        <FormControlLabel key={key} label={networkSelectorLabel(selector)} gap={2}>
+                          <Switch
+                            checked={selected}
+                            onToggle={(event: Change) =>
+                              setGrantedNetworks((current) => ({
+                                ...current,
+                                selectors: event.value
+                                  ? current.selectors.some(
+                                      (candidate) => networkSelectorKey(candidate) === key,
+                                    )
+                                    ? current.selectors
+                                    : [...current.selectors, selector]
+                                  : current.selectors.filter(
+                                      (candidate) => networkSelectorKey(candidate) !== key,
+                                    ),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      );
+                    })}
+                    {requestedNetworks.create && (
+                      <FormControlLabel label="Create new networks" gap={2}>
+                        <Switch
+                          checked={grantedNetworks.create}
+                          onToggle={(event: Change) =>
+                            setGrantedNetworks((current) => ({
                               ...current,
                               create: Boolean(event.value),
                             }))
@@ -1016,6 +1098,18 @@ function selectorLabel(selector: ContainerSelector): string {
   if ('all' in selector) return 'All workspace containers';
   if ('id' in selector) return `Exact container ${selector.id}`;
   return `Container named ${selector.name}`;
+}
+
+function networkSelectorKey(selector: NetworkSelector): string {
+  if ('all' in selector) return 'all';
+  if ('id' in selector) return `id:${selector.id}`;
+  return `name:${selector.name}`;
+}
+
+function networkSelectorLabel(selector: NetworkSelector): string {
+  if ('all' in selector) return 'All workspace networks';
+  if ('id' in selector) return `Exact network ${selector.id}`;
+  return `Network named ${selector.name}`;
 }
 
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {

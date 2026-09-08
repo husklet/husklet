@@ -255,6 +255,10 @@ impl Conversation {
                 selectors: vec![hl_extension::ContainerSelector::All { all: true }],
                 create: true,
             },
+            hl_extension::NetworkGrant {
+                selectors: vec![hl_extension::NetworkSelector::All { all: true }],
+                create: true,
+            },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
                 write: roots.clone(),
@@ -273,6 +277,7 @@ impl Conversation {
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
+        networks: hl_extension::NetworkGrant,
         filesystem: hl_extension::FilesystemGrant,
         workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     ) -> io::Result<Self> {
@@ -285,6 +290,7 @@ impl Conversation {
             // surfaces are acquired explicitly through the terminal port.
             session: Session::new(authority)
                 .with_containers(containers)
+                .with_networks(networks)
                 .with_filesystem(filesystem)
                 .with_workspace_environment(workspace_environment)
                 .with_surface(""),
@@ -458,9 +464,7 @@ impl Conversation {
         }
         if self.may_observe(Topic::Networks) {
             if let Ok(networks) = services.networks.list() {
-                snapshots.push(Snapshot::Networks(hl_extension::port::NetworkInventory::bounded(
-                    networks,
-                )));
+                snapshots.push(Snapshot::Networks(self.session.visible_networks(networks)));
             }
         }
         if self.may_observe(Topic::Terminal) {
@@ -1242,7 +1246,26 @@ mod tests {
     impl hl_extension::port::NetworkStore for Host {
         fn list(&self) -> Result<Vec<hl_extension::port::NetworkSummary>, HostError> {
             self.ledger.note("networks.list");
-            Ok(Vec::new())
+            Ok([("a", "database"), ("b", "unrelated")]
+                .into_iter()
+                .map(|(id, name)| hl_extension::port::NetworkSummary {
+                    id: id.repeat(32), name: name.into(), driver: "bridge".into(), scope: "local".into(),
+                    kind: hl_extension::NetworkKind::Custom, endpoints: None,
+                })
+                .collect())
+        }
+
+        fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
+            self.ledger.note("networks.inspect");
+            let (id, name) = if reference == "database" || reference == "a".repeat(32) {
+                ("a".repeat(32), "database")
+            } else {
+                ("b".repeat(32), "unrelated")
+            };
+            Ok(hl_extension::port::NetworkSummary {
+                id, name: name.into(), driver: "bridge".into(), scope: "local".into(),
+                kind: hl_extension::NetworkKind::Custom, endpoints: None,
+            })
         }
     }
 
@@ -1617,6 +1640,7 @@ mod tests {
                 pane_providers: Vec::new(),
                 granted: hl_extension::Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             }])
@@ -1689,6 +1713,51 @@ mod tests {
             conversation.serve(&services(&host))
         });
         (theirs, served)
+    }
+
+    fn network_scoped_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("postgres").unwrap(),
+                Grant::new([Capability::NetworkRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new_scoped(
+                ours, authority, "dev", Queue::new(), hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant {
+                    selectors: vec![hl_extension::NetworkSelector::Name { name: "database".into() }],
+                    create: false,
+                },
+                hl_extension::FilesystemGrant::default(), hl_extension::WorkspaceEnvironmentGrant::default(),
+            )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    #[test]
+    fn exact_network_scope_filters_and_denies_over_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = network_scoped_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let listed = ask(&mut wire, &Request::NetworkList);
+        assert!(matches!(codec::read_reply(&listed), Ok(Reply::Networks(inventory))
+            if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
+        let subscribed = ask(&mut wire, &Request::EventSubscribe { topic: hl_extension::Topic::Networks });
+        assert_eq!(codec::read_reply(&subscribed), Ok(Reply::Done));
+        let event = wire.receive().expect("scoped network snapshot");
+        let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
+        assert!(matches!(snapshot, Snapshot::Networks(inventory)
+            if inventory.networks.len() == 1 && inventory.networks[0].name == "database"));
+        let denied = ask(&mut wire, &Request::NetworkInspect { reference: "unrelated".into() });
+        assert!(matches!(codec::read_failure(&denied), Ok(Failure::Denied { .. })));
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+        assert_eq!(ledger.reached(), ["networks.list", "networks.list", "networks.inspect"]);
     }
 
     #[test]
@@ -1796,6 +1865,7 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
                 hl_extension::FilesystemGrant {
                     read: vec![
                         hl_extension::FilesystemSelector::Subtree {
@@ -1838,6 +1908,7 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
                 hl_extension::FilesystemGrant {
                     write: vec![hl_extension::FilesystemSelector::Exact { exact }],
                     ..hl_extension::FilesystemGrant::default()
@@ -1890,6 +1961,7 @@ mod tests {
                 "dev",
                 Queue::new(),
                 hl_extension::ContainerGrant::default(),
+                hl_extension::NetworkGrant::default(),
                 hl_extension::FilesystemGrant::default(),
                 grant,
             )?;
@@ -1913,6 +1985,7 @@ mod tests {
             pane_providers: Vec::new(),
             granted: hl_extension::Grant::default(),
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         }]);
@@ -2678,6 +2751,7 @@ mod tests {
                 selectors: vec![hl_extension::ContainerSelector::Name { name: "other".into() }],
                 create: false,
             },
+            hl_extension::NetworkGrant::default(),
             hl_extension::FilesystemGrant::default(),
             hl_extension::WorkspaceEnvironmentGrant::default(),
         )

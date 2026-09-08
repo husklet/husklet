@@ -817,6 +817,10 @@ for (const updating of [false, true]) {
       create: true,
     });
     assert.deepEqual(calls[0][4], {
+      selectors: [],
+      create: false,
+    });
+    assert.deepEqual(calls[0][5], {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -825,6 +829,61 @@ for (const updating of [false, true]) {
     });
   });
 }
+
+test('extension review grants one exact network without workspace-wide network authority', async () => {
+  const calls = [];
+  const candidate = {
+    name: 'postgres',
+    version: '1.0.0',
+    image_digest: `sha256:${'a'.repeat(64)}`,
+    requested: ['networks:read'],
+    requested_containers: { selectors: [], create: false },
+    requested_networks: { selectors: [{ name: 'database' }, { name: 'internal' }], create: true },
+    requested_filesystem: { read: [], write: [], create: [], delete: [], rename: [] },
+    requested_workspace_environment: { read: [], write: [] },
+    installed_image_digest: null,
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'network-review' }),
+          acquisition: async () => ({
+            job: 'network-review',
+            reference: 'local/postgres:1',
+            revision: 1,
+            state: 'ready',
+            progress: null,
+            candidate,
+            error: null,
+          }),
+          installAndWait: async (...args) => {
+            calls.push(args);
+            return { changed: true, extension: { ...candidate, status: 'running' } };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  change(stage, 'registry.example/extension:version', 'local/postgres:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(stage, 'Network access starts off. Select only the networks this extension needs.'),
+  );
+  assert.ok(labelled(stage, 'Network named database'));
+  assert.ok(labelled(stage, 'Network named internal'));
+  toggleSwitch(stage, 1, true);
+  invoke(stage, 'Install with selected access');
+  await settled();
+  await settled();
+  assert.deepEqual(calls[0][4], { selectors: [{ name: 'database' }], create: false });
+});
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
   const calls = [];

@@ -52,6 +52,8 @@ export interface ExtensionSummary {
   granted?: ExtensionCapability[];
   /** Effective container authority persisted for this exact image digest. */
   containers?: ContainerGrant;
+  /** Effective network authority persisted for this exact image digest. */
+  networks?: NetworkGrant;
   /** Durable, manifest-intersected workspace file authority. */
   filesystem?: FilesystemGrant;
   /** Effective workspace-environment authority persisted for this exact image digest. */
@@ -103,6 +105,11 @@ export interface ContainerGrant {
   selectors: ContainerSelector[];
   create: boolean;
 }
+export type NetworkSelector = { id: string } | { name: string } | { all: true };
+export interface NetworkGrant {
+  selectors: NetworkSelector[];
+  create: boolean;
+}
 export interface FilesystemGrant {
   read: FilesystemSelector[];
   write: FilesystemSelector[];
@@ -120,6 +127,7 @@ export interface ExtensionCandidate {
   image_digest: string;
   requested: ExtensionCapability[];
   requested_containers: ContainerGrant;
+  requested_networks: NetworkGrant;
   requested_filesystem: FilesystemGrant;
   requested_workspace_environment: WorkspaceEnvironmentGrant;
   installed_image_digest: string | null;
@@ -736,6 +744,7 @@ export interface WorkspaceApi {
       imageDigest: string,
       granted: ExtensionCapability[],
       containers?: ContainerGrant,
+      networks?: NetworkGrant,
       filesystem?: FilesystemGrant,
       workspaceEnvironment?: WorkspaceEnvironmentGrant,
     ): Promise<ExtensionSummary>;
@@ -745,6 +754,7 @@ export interface WorkspaceApi {
       revision: number,
       granted: ExtensionCapability[],
       containers?: ContainerGrant,
+      networks?: NetworkGrant,
       filesystem?: FilesystemGrant,
       options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
     ): Promise<
@@ -757,6 +767,7 @@ export interface WorkspaceApi {
       imageDigest: string,
       granted: ExtensionCapability[],
       containers?: ContainerGrant,
+      networks?: NetworkGrant,
       filesystem?: FilesystemGrant,
       workspaceEnvironment?: WorkspaceEnvironmentGrant,
     ): Promise<ExtensionSummary>;
@@ -766,6 +777,7 @@ export interface WorkspaceApi {
       revision: number,
       granted: ExtensionCapability[],
       containers?: ContainerGrant,
+      networks?: NetworkGrant,
       filesystem?: FilesystemGrant,
       options?: { timeoutMs?: number; workspaceEnvironment?: WorkspaceEnvironmentGrant },
     ): Promise<

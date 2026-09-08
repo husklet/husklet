@@ -86,6 +86,7 @@ pub struct Entry {
     /// Exactly what the person agreed to.
     pub granted: Grant,
     pub containers: hl_extension::ContainerGrant,
+    pub networks: hl_extension::NetworkGrant,
     pub filesystem: hl_extension::FilesystemGrant,
     pub workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
     /// Where the extension stands under the lifecycle policy.
@@ -162,6 +163,7 @@ impl<S: Storage> Roster<S> {
                 version: record.version.clone(),
                 granted: record.granted.clone(),
                 containers: record.containers.clone(),
+                networks: record.networks.clone(),
                 filesystem: record.filesystem.clone(),
                 workspace_environment: record.workspace_environment.clone(),
                 stage: self.installation.stage(&record.name),
@@ -208,6 +210,7 @@ impl<S: Storage> Roster<S> {
             digest,
             consented,
             containers,
+            &hl_extension::NetworkGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
@@ -220,6 +223,7 @@ impl<S: Storage> Roster<S> {
         digest: &str,
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
@@ -232,6 +236,7 @@ impl<S: Storage> Roster<S> {
                 digest,
                 consented,
                 containers,
+                networks,
                 filesystem,
                 workspace_environment,
                 at,
@@ -281,6 +286,7 @@ impl<S: Storage> Roster<S> {
             update,
             consented,
             containers,
+            &hl_extension::NetworkGrant::default(),
             &hl_extension::FilesystemGrant::default(),
             &hl_extension::WorkspaceEnvironmentGrant::default(),
             at,
@@ -292,6 +298,7 @@ impl<S: Storage> Roster<S> {
         update: Update,
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
+        networks: &hl_extension::NetworkGrant,
         filesystem: &hl_extension::FilesystemGrant,
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
@@ -302,6 +309,7 @@ impl<S: Storage> Roster<S> {
                 update,
                 consented,
                 containers,
+                networks,
                 filesystem,
                 workspace_environment,
                 at,
@@ -453,6 +461,7 @@ impl<S> std::fmt::Debug for Roster<S> {
 pub fn described(record: &Record) -> Manifest {
     let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
         containers: hl_extension::ContainerGrant::default(),
+        networks: hl_extension::NetworkGrant::default(),
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: record.version.clone(),
@@ -473,6 +482,7 @@ pub fn described(record: &Record) -> Manifest {
     manifest.protocol = hl_extension::PROTOCOL;
     manifest.capabilities.clone_from(&record.granted);
     manifest.containers.clone_from(&record.containers);
+    manifest.networks.clone_from(&record.networks);
     manifest.filesystem.clone_from(&record.filesystem);
     manifest.workspace_environment.clone_from(&record.workspace_environment);
     manifest.pane_providers.clone_from(&record.pane_providers);
@@ -486,6 +496,7 @@ fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objecti
         &record.image_digest,
         &record.granted,
         &record.containers,
+        &record.networks,
         &record.filesystem,
         &record.workspace_environment,
         record.installed_at,
@@ -546,6 +557,7 @@ mod tests {
     fn manifest(name: &str, capabilities: &[Capability]) -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
             name: ExtensionName::new(name).expect("name"),
             display_name: name.to_owned(),
             version: "1.0.0".to_owned(),
@@ -606,6 +618,7 @@ mod tests {
                 "sha256:exact",
                 &asked.capabilities,
                 &asked.containers,
+                &asked.networks,
                 &asked.filesystem,
                 &exact,
                 7,

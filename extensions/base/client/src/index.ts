@@ -681,6 +681,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         imageDigest,
         granted,
         containers = { selectors: [], create: false },
+        networks = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
         workspaceEnvironment = { read: [], write: [] },
       ) =>
@@ -691,6 +692,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             image_digest: immutableDigest(imageDigest, 'extension candidate image'),
             granted,
             containers,
+            networks,
             filesystem,
             workspace_environment: workspaceEnvironment,
           }),
@@ -702,6 +704,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         imageDigest,
         granted,
         containers = { selectors: [], create: false },
+        networks = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
         workspaceEnvironment = { read: [], write: [] },
       ) =>
@@ -712,6 +715,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             image_digest: immutableDigest(imageDigest, 'extension candidate image'),
             granted,
             containers,
+            networks,
             filesystem,
             workspace_environment: workspaceEnvironment,
           }),
@@ -2992,6 +2996,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     revision,
     granted,
     containers = { selectors: [], create: false },
+    networks = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
     { timeoutMs = 30_000, workspaceEnvironment = { read: [], write: [] } } = {},
   ): ReturnType<WorkspaceApi['extensions']['installAndWait']> => {
@@ -3043,6 +3048,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         digest,
         granted,
         containers,
+        networks,
         filesystem,
         workspaceEnvironment,
       );
@@ -3065,10 +3071,44 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       await stop();
     }
   };
-  api.extensions.installAndWait = (job, revision, granted, containers, filesystem, options) =>
-    commitAcquisitionAndWait('install', job, revision, granted, containers, filesystem, options);
-  api.extensions.updateAndWait = (job, revision, granted, containers, filesystem, options) =>
-    commitAcquisitionAndWait('update', job, revision, granted, containers, filesystem, options);
+  api.extensions.installAndWait = (
+    job,
+    revision,
+    granted,
+    containers,
+    networks,
+    filesystem,
+    options,
+  ) =>
+    commitAcquisitionAndWait(
+      'install',
+      job,
+      revision,
+      granted,
+      containers,
+      networks,
+      filesystem,
+      options,
+    );
+  api.extensions.updateAndWait = (
+    job,
+    revision,
+    granted,
+    containers,
+    networks,
+    filesystem,
+    options,
+  ) =>
+    commitAcquisitionAndWait(
+      'update',
+      job,
+      revision,
+      granted,
+      containers,
+      networks,
+      filesystem,
+      options,
+    );
   api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
     if (
       typeof job !== 'string' ||
