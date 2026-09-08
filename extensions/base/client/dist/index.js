@@ -1,4 +1,4 @@
-export { ExtensionError, Session, SOCKET, PROTOCOL, validateUiEvent } from './session.js';
+export { ExtensionError, Session, SOCKET, PROTOCOL, validateRowRequest, validateUiEvent, } from './session.js';
 export { PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS, PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest, validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot, } from './generated-protocol.js';
 import { semanticXml } from './semantic.js';
 export { semanticXml };

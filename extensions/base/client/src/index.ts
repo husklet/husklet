@@ -1,4 +1,11 @@
-export { ExtensionError, Session, SOCKET, PROTOCOL, validateUiEvent } from './session.js';
+export {
+  ExtensionError,
+  Session,
+  SOCKET,
+  PROTOCOL,
+  validateRowRequest,
+  validateUiEvent,
+} from './session.js';
 export {
   PROTOCOL_SPECIFICATION_VERSION,
   PROTOCOL_VERSION,

@@ -1,7 +1,14 @@
 // The public API: connect to the host, render React into its tab.
 
 import { Session } from '@husklet/client';
-import type { ConnectOptions, Frame, SourceMutation, SurfaceBootstrap } from '@husklet/client';
+import type {
+  ConnectOptions,
+  Frame,
+  DataRow,
+  RowRequest,
+  SourceMutation,
+  SurfaceBootstrap,
+} from '@husklet/client';
 import type { ReactNode } from 'react';
 import { Surface, reconciler } from './reconciler.js';
 import { PROPS, TRIGGERS, sourceMutation } from './protocol.js';
@@ -26,6 +33,8 @@ interface RenderOptions {
   title?: string;
   split?: { slot: string; division: 'beside' | 'below' } | null;
   bootstrap?: SurfaceBootstrap | null;
+  /** Supplies only the bounded table windows this surface asks for. */
+  rows?: ((request: RowRequest) => readonly DataRow[] | Promise<readonly DataRow[]>) | null;
 }
 interface RenderHandle {
   surface: Surface;
@@ -35,6 +44,7 @@ interface RenderHandle {
   flush(): Promise<void>;
   source(mutation: SourceMutation): Promise<void>;
   close(): Promise<void>;
+  rowProvider: RenderOptions['rows'];
 }
 interface Registry {
   handles: Set<RenderHandle>;
@@ -57,7 +67,9 @@ export async function connect({
   connectTimeout,
 }: ConnectOptions = {}) {
   const session = await Session.connect(path, {
-    onRows,
+    onRows: (request, channel) => {
+      if (!deliverRows(session, request, onEventError) && onRows) onRows(request, channel);
+    },
     pendingLimit,
     timeout,
     connectTimeout,
@@ -75,6 +87,35 @@ export async function connect({
   return session;
 }
 
+function deliverRows(
+  session: Session,
+  request: RowRequest,
+  onError: ConnectOptions['onEventError'],
+): boolean {
+  const registry = attached.get(session);
+  const handle = request.slot === undefined ? undefined : registry?.slots.get(request.slot);
+  const provider = handle?.rowProvider;
+  if (!handle || !provider) return false;
+  void (async () => {
+    const rows = await provider(request);
+    if (registry?.slots.get(request.slot ?? '') !== handle || !registry.handles.has(handle)) return;
+    if (!Array.isArray(rows)) throw new TypeError('surface row provider must return an array');
+    if (rows.length > request.range.count) {
+      throw new RangeError('surface row provider returned more rows than the requested window');
+    }
+    await handle.source({
+      Window: {
+        source: request.source,
+        version: request.version,
+        request: request.id,
+        range: request.range,
+        rows,
+      },
+    });
+  })().catch((error) => onError?.(error));
+  return true;
+}
+
 /**
  * Renders an element tree into the extension's tab.
  *
@@ -84,7 +125,7 @@ export async function connect({
 export function render(
   element: ReactNode,
   session: Session,
-  { title = 'Extension', split = null, bootstrap = null }: RenderOptions = {},
+  { title = 'Extension', split = null, bootstrap = null, rows = null }: RenderOptions = {},
 ): RenderHandle {
   let registry = attached.get(session);
   if (!registry && bootstrap !== null) {
@@ -155,7 +196,7 @@ export function render(
           patches: [{ Remove: { id: bootstrap.bootstrapNode } }],
         },
   );
-  const handle = { surface } as RenderHandle;
+  const handle = { surface, rowProvider: rows } as RenderHandle;
   registry.handles.add(handle);
 
   const opening =

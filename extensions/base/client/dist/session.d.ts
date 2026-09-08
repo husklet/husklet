@@ -1,8 +1,10 @@
-import type { CallOptions, ConnectOptions, HostEvent } from './api.js';
+import type { CallOptions, ConnectOptions, HostEvent, RowRequest } from './api.js';
 /** The protocol this package speaks. The host refuses anything else. */
 export declare const PROTOCOL: 1;
 /** Where the host mounts the socket inside an extension's container. */
 export declare const SOCKET = "HUSKLET_EXTENSION_SOCKET";
+/** Validate the host-pushed request before extension code uses it for database paging. */
+export declare function validateRowRequest(value: any): RowRequest;
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export declare function validateUiEvent(value: any): any;
 /** Refusal returned by the host, with its stable machine-readable category. */
@@ -27,6 +29,8 @@ export declare class Session {
     get grantedCapabilities(): readonly string[];
     /** Resolves when the handshake is complete and calls may be sent. */
     get ready(): any;
+    /** Resolves once with the reason this session ended. */
+    get closed(): any;
     /** Opens the socket the host provided. */
     static connect(path?: any, handlers?: ConnectOptions): Promise<unknown>;
     /** Sends one call and resolves with the tagged host reply. */

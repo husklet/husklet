@@ -9,9 +9,9 @@ use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
-use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
+use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -39,6 +39,19 @@ impl ExtensionManagement {
 
     fn name(value: &str) -> Result<ExtensionName, HostError> {
         ExtensionName::new(value).map_err(|error| HostError::Conflict(error.to_string()))
+    }
+
+    fn optional_name(value: &str) -> Result<ExtensionName, HostError> {
+        let name = Self::name(value)?;
+        if super::defaults::DEFAULT_EXTENSIONS
+            .iter()
+            .any(|(required, _)| name.as_str() == *required)
+        {
+            return Err(HostError::Conflict(
+                "Top is the required workspace management extension and cannot be disabled or removed".into(),
+            ));
+        }
+        Ok(name)
     }
 
     pub(crate) fn events(&self) -> ExtensionEvents {
@@ -95,7 +108,7 @@ impl ExtensionStore for ExtensionManagement {
     fn disable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
         let result = self
             .roster()?
-            .disable_if_digest(&Self::name(name)?, image_digest)
+            .disable_if_digest(&Self::optional_name(name)?, image_digest)
             .map_err(failure);
         self.changed(result)
     }
@@ -111,7 +124,7 @@ impl ExtensionStore for ExtensionManagement {
     fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
         let result = self
             .roster()?
-            .remove_if_digest(&Self::name(name)?, image_digest)
+            .remove_if_digest(&Self::optional_name(name)?, image_digest)
             .map_err(failure);
         self.changed(result)
     }
@@ -144,8 +157,14 @@ impl ExtensionStore for ExtensionManagement {
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
-        self.acquisitions
-            .install_resource_scoped(job, revision, granted, containers, filesystem, workspace_environment)?;
+        self.acquisitions.install_resource_scoped(
+            job,
+            revision,
+            granted,
+            containers,
+            filesystem,
+            workspace_environment,
+        )?;
         super::revision::publish_inventory_change(&self.workspace);
         let installed = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -166,8 +185,14 @@ impl ExtensionStore for ExtensionManagement {
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
-        self.acquisitions
-            .update_resource_scoped(job, revision, granted, containers, filesystem, workspace_environment)?;
+        self.acquisitions.update_resource_scoped(
+            job,
+            revision,
+            granted,
+            containers,
+            filesystem,
+            workspace_environment,
+        )?;
         super::revision::publish_inventory_change(&self.workspace);
         let updated = self.inspect(&name)?;
         if let Ok(entries) = self.list() {
@@ -366,12 +391,23 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(
-            management
-                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-                .is_err()
-        );
+        assert!(management
+            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
         assert!(events.drain().is_none());
+    }
+
+    #[test]
+    fn socket_management_cannot_remove_its_only_recovery_extension() {
+        let root = tempfile::tempdir().unwrap();
+        let management = ExtensionManagement::new(&workspace(root.path()));
+        let digest = format!("sha256:{}", "a".repeat(64));
+
+        for result in [management.disable("top", &digest), management.remove("top", &digest)] {
+            assert!(
+                matches!(result, Err(HostError::Conflict(reason)) if reason.contains("required workspace management"))
+            );
+        }
     }
 
     #[test]

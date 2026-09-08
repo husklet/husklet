@@ -128,6 +128,64 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   stage.close();
 });
 
+test('virtualized row requests route to their owning surface with the exact cursor', async () => {
+  const stage = await host(); const errors = [];
+  const session = await connect({ path: stage.socket, onEventError: (error) => errors.push(error) });
+  const firstRequests = []; const secondRequests = [];
+  const first = render(h(DataTable, { source: 9, schema: [] }), session, {
+    title: 'First', rows: (request) => { firstRequests.push(request); return []; },
+  });
+  const second = render(h(DataTable, { source: 9, schema: [] }), session, {
+    split: { slot: 'surface-1', division: 'beside' },
+    rows: async (request) => { secondRequests.push(request); return [{ key: request.range.start, cells: [{ Text: 'millionth row' }] }]; },
+  });
+  await Promise.all([first.ready, second.ready]);
+  await stage.push({ id: 71, source: 9, version: 4, range: { start: 999_936, count: 128 },
+    sort: { column: 'name', descending: true }, filter: 'active', slot: 'surface-2' });
+  await until(() => stage.calls.some((call) => call.call === 'source_resize_at' && call.with.mutation.Window));
+  assert.equal(firstRequests.length, 0);
+  assert.equal(secondRequests.length, 1);
+  assert.deepEqual(stage.calls.find((call) => call.call === 'source_resize_at' && call.with.mutation.Window), {
+    call: 'source_resize_at', with: { slot: 'surface-2', mutation: { Window: {
+      source: 9, version: 4, request: 71, range: { start: 999_936, count: 128 },
+      rows: [{ key: 999_936, cells: [{ Text: 'millionth row' }] }],
+    } } },
+  });
+  assert.deepEqual(errors, []);
+  await Promise.all([first.close(), second.close()]); await session.close(); stage.close();
+});
+
+test('row provider rejection is reported and the surface still closes cleanly', async () => {
+  const stage = await host(); const errors = [];
+  const session = await connect({ path: stage.socket, onEventError: (error) => errors.push(error) });
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, {
+    rows: () => Array.from({ length: 129 }, (_, key) => ({ key, cells: [] })),
+  });
+  await surface.ready;
+  await stage.push({ id: 1, source: 3, version: 1, range: { start: 0, count: 128 },
+    sort: null, filter: null, slot: surface.slot });
+  await until(() => errors.length === 1);
+  assert.match(String(errors[0]), /more rows than the requested window/);
+  assert.equal(stage.calls.some((call) => call.call === 'source_resize_at'), false);
+  await surface.close();
+  assert.equal(stage.calls.at(-1).call, 'interface_withdraw');
+  await session.close(); stage.close();
+});
+
+test('closing a surface discards its in-flight row provider result', async () => {
+  const stage = await host(); const session = await connect({ path: stage.socket });
+  let release; const pending = new Promise((resolve) => { release = resolve; });
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, { rows: () => pending });
+  await surface.ready;
+  await stage.push({ id: 1, source: 3, version: 1, range: { start: 0, count: 128 },
+    sort: null, filter: null, slot: surface.slot });
+  await surface.close();
+  release([{ key: 0, cells: [] }]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stage.calls.some((call) => call.call === 'source_resize_at'), false);
+  await session.close(); stage.close();
+});
+
 test('a slotless event never guesses between multiple surfaces', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
