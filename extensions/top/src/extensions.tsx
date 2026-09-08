@@ -791,6 +791,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   <CardContent>
                     <Row gap={1} width="fill" wrap>
                       <Entry
+                        grow
                         value={reference}
                         placeholder="registry.example/extension:version"
                         tooltip={

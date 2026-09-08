@@ -1522,6 +1522,11 @@ test('extension image entry submits from the keyboard and consent explains reque
     { Length: { Chars: 24 } },
     'the OCI reference keeps a compact minimum while its tooltip preserves the exact value',
   );
+  assert.deepEqual(
+    placeholderProperty(stage, 'registry.example/extension:version', 'Grow'),
+    { Number: 1 },
+    'the OCI reference grows into available page width instead of leaving a dead form row',
+  );
   change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
   submit(stage, 'registry.example/extension:version');
   await settled();
