@@ -127,7 +127,7 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Row gap={1} grow wrap>
+      <Row gap={1} wrap>
         <Entry
           value={name}
           placeholder="Volume name"

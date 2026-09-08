@@ -1724,6 +1724,22 @@ test('every empty operational page explains what is absent and how to proceed', 
     await settled();
     await settled();
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
+    if (section === 'Images') {
+      assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
+      assert.equal(
+        ancestorProperty(stage, 'Pull', 'Row', 'Grow'),
+        undefined,
+        'the image toolbar cannot consume vertical empty-state space',
+      );
+    }
+    if (section === 'Volumes') {
+      assert.equal(ancestorTags(stage, 'Create')[0], 'Row');
+      assert.equal(
+        ancestorProperty(stage, 'Create', 'Row', 'Grow'),
+        undefined,
+        'the volume toolbar cannot consume vertical empty-state space',
+      );
+    }
     if (section === 'Containers') {
       assert.ok(labelled(stage, 'Create first container'));
       assert.ok(labelled(stage, 'Create a container to start a service or open a shell.'));

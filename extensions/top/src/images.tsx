@@ -216,7 +216,7 @@ export function Images({
         : 'ready';
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
-      <Row gap={1} grow wrap>
+      <Row gap={1} wrap>
         <Entry
           value={reference}
           placeholder="registry/image:tag"
@@ -245,7 +245,7 @@ export function Images({
         retryLabel="Retry images"
         onRetry={resource.reload}
       >
-        <Card grow variant="outline">
+        <Card variant="outline">
           <CardContent gap={1}>
             <Text label="Image maintenance" />
             <Text
@@ -280,7 +280,7 @@ export function Images({
           </CardActions>
         </Card>
         {view.records.map((item) => (
-          <Card key={item.id} grow variant={detail?.id === item.id ? 'filled' : 'outline'}>
+          <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
             <CardHeader label={item.reference || '<untagged>'} detail={shortId(item.id)} />
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
