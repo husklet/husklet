@@ -337,6 +337,9 @@ static int smc_commit(struct cpu *c) {
         removed = map_invalidate_source_ranges((const uint64_t (*)[2])c->smc_ranges, c->smc_range_count);
     }
     pend_reset();
+#ifdef G_PENDING_RESET
+    G_PENDING_RESET(HL_PENDING_RESET_SMC);
+#endif
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT, "smc invalidate backend=interp mode=%s ranges=%u removed=%u retained=%u",
             (force_whole || c->smc_range_overflow) ? "whole" : "targeted", c->smc_range_count, removed,
             g_live_map_count);

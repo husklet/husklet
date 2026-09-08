@@ -23,14 +23,16 @@ static void *thread_main(void *unused) {
 
 int main(void) {
     uint64_t parent = branch_memory(20000);
-    pid_t child = fork();
-    if (child == 0) _exit(branch_memory(20000) == parent ? 0 : 1);
-    int status = 0;
-    if (child < 0 || waitpid(child, &status, 0) != child || status != 0) return 2;
-
     pthread_t thread;
     if (pthread_create(&thread, 0, thread_main, 0) != 0) return 3;
     void *answer = 0;
     if (pthread_join(thread, &answer) != 0 || (uint64_t)(uintptr_t)answer != parent) return 4;
+
+    /* Fork after the 0->1 thread transition so the child must take the
+     * non-preserving cache path and clear inherited pending patch sites. */
+    pid_t child = fork();
+    if (child == 0) _exit(branch_memory(20000) == parent ? 0 : 1);
+    int status = 0;
+    if (child < 0 || waitpid(child, &status, 0) != child || status != 0) return 2;
     return parent == 30000 ? 42 : 5;
 }
