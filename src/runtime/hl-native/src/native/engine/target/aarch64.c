@@ -573,7 +573,7 @@ static int translit_report(char *out, size_t size) {
                     (unsigned long long)g_x86_rel32_executed,
                     (unsigned long long)g_x86_rel32_reset_cache,
                     (unsigned long long)g_x86_rel32_reset_smc,
-                    (unsigned long long)g_x86_rel32_reset_fork,
+                    (unsigned long long)hl_backend_tree_a64_x86_reset_fork_count(),
                     (unsigned long long)g_x86_rel32_reset_thread);
 #else
     return snprintf(out, size, "[prof] translit: absent, aarch64 guest\n");
@@ -592,7 +592,7 @@ static int translit_unsupported_report(char *out, size_t size) {
                            (unsigned long long)g_x86_rel32_executed,
                            (unsigned long long)g_x86_rel32_reset_cache,
                            (unsigned long long)g_x86_rel32_reset_smc,
-                           (unsigned long long)g_x86_rel32_reset_fork,
+                           (unsigned long long)hl_backend_tree_a64_x86_reset_fork_count(),
                            (unsigned long long)g_x86_rel32_reset_thread);
     return written > 0 && (size_t)written < size ? written : 0;
 #else

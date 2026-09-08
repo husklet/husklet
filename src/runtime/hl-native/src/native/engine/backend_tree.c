@@ -818,6 +818,12 @@ static inline void hl_backend_tree_a64_x86_reset_fork(void) {
         atomic_fetch_add_explicit(&g_backend_tree->a64_x86_reset_fork, 1, memory_order_relaxed);
 }
 
+static inline uint64_t hl_backend_tree_a64_x86_reset_fork_count(void) {
+    return g_backend_tree == NULL
+               ? 0
+               : atomic_load_explicit(&g_backend_tree->a64_x86_reset_fork, memory_order_relaxed);
+}
+
 static void hl_backend_tree_sse_riprel_form(uint64_t key) {
     struct hl_backend_tree_shared *tree = g_backend_tree;
     // Like translated_fall_stop, this event belongs to the shared tree even before a fork child
