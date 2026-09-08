@@ -2553,7 +2553,10 @@ test('volume and network panels render bounded real inventories and controls', (
   const networkFrame = host().render(
     h(Networks, {
       api,
-      resource: resource([{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }]),
+      resource: resource([
+        { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+        { id: 'n2', name: 'bridge', driver: 'bridge', scope: 'local', kind: 'builtin' },
+      ]),
     }),
   );
   const labels = (frame) =>
@@ -2564,6 +2567,12 @@ test('volume and network panels render bounded real inventories and controls', (
     assert.ok(labels(volumeFrame).includes(label), label);
   for (const label of ['Networks', 'private', 'Connect', 'Disconnect', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
+  assert.ok(labels(networkFrame).includes('Built-in'));
+  assert.equal(
+    labels(networkFrame).filter((label) => label === 'Remove').length,
+    1,
+    'only the custom network offers removal',
+  );
   const networkStage = stageFromFrame(networkFrame);
   assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
@@ -2594,12 +2603,12 @@ test('network inspection exposes loading, retry, empty and bounded typed details
       inspect: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('network inspect unavailable');
-        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local' };
+        return { id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' };
       },
     },
   };
   const resource = {
-    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [{ id: 'n1', name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},
@@ -4153,7 +4162,7 @@ test('volume and network mutations expose danger only on final confirm and cance
 
   const networks = host();
   const initialNetworks = resource([
-    { id: networkId, name: 'private', driver: 'bridge', scope: 'local' },
+    { id: networkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
   ]);
   networks.render(h(Networks, { api: controlled, resource: initialNetworks }));
   change(networks, 'Complete container ID', containerId);
@@ -4177,7 +4186,7 @@ test('volume and network mutations expose danger only on final confirm and cance
   );
   const staleConfirm = labelled(networks, 'Confirm remove').SetProp.id;
   const refreshedNetworks = resource([
-    { id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local' },
+    { id: refreshedNetworkId, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
   ]);
   networks.render(h(Networks, { api: controlled, resource: refreshedNetworks }));
   networks.surface.dispatch({
@@ -4304,7 +4313,9 @@ test('network connect validates aliases, exposes progress, success, bounded fail
     },
   };
   const resource = {
-    data: [{ id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [
+      { id: 'a'.repeat(32), name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' },
+    ],
     loading: false,
     error: null,
     reload: async () => calls.push(['reload']),
@@ -4441,7 +4452,7 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
     networks: { ...api.networks, disconnect: async (...args) => calls.push(args) },
   };
   const resource = {
-    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local' }],
+    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
     loading: false,
     error: null,
     reload: async () => {},

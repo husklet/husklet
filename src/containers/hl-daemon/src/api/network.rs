@@ -57,6 +57,8 @@ pub struct Network {
     pub created: String,
     pub scope: String,
     pub driver: String,
+    /// Husklet's authoritative lifecycle ownership for this network.
+    pub husklet_kind: NetworkKind,
     #[serde(rename = "EnableIPv6")]
     pub enable_ipv6: bool,
     #[serde(rename = "IPAM")]
@@ -69,6 +71,13 @@ pub struct Network {
     pub containers: BTreeMap<String, NetworkContainer>,
     pub options: BTreeMap<String, String>,
     pub labels: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkKind {
+    Builtin,
+    Custom,
 }
 
 impl Network {

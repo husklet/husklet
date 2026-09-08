@@ -55,6 +55,7 @@ test(
                           name: attempts === 1 ? 'stale-net' : 'current-net',
                           driver: 'bridge',
                           scope: 'local',
+                          kind: 'custom',
                         },
                       ],
                 truncated: false,

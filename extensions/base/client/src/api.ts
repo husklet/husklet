@@ -329,6 +329,7 @@ export interface NetworkSummary {
   name: string;
   driver: string;
   scope: string;
+  kind: 'builtin' | 'custom';
 }
 export interface NetworkInventory {
   networks: NetworkSummary[];

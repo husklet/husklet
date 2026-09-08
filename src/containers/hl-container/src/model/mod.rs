@@ -25,7 +25,7 @@ pub use log::{Entry, Logs, Stream};
 pub(crate) use log::{JournalId, LogChunk};
 pub(crate) use mount::ResolvedMount;
 pub use mount::{Access, BindPropagation, Mount, MountSource, normalized_mount_target};
-pub use network::{Endpoint, EndpointSpec, Network, NetworkDriver, NetworkId, NetworkSpec, Subnet};
+pub use network::{Endpoint, EndpointSpec, Network, NetworkDriver, NetworkId, NetworkKind, NetworkSpec, Subnet};
 pub use port::{Port, Protocol, Publication};
 pub use process::{
     Console, ContainerSpec, Environment, EnvironmentRecord, Execution, Guest, Process, Resolver, Rootfs, Size,

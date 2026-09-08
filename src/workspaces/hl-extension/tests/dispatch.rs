@@ -94,6 +94,7 @@ impl hl_extension::port::NetworkStore for Host {
             name: "private".into(),
             driver: "bridge".into(),
             scope: "local".into(),
+            kind: hl_extension::NetworkKind::Custom,
         }])
     }
     fn inspect(&self, reference: &str) -> Result<hl_extension::port::NetworkSummary, HostError> {
@@ -103,6 +104,7 @@ impl hl_extension::port::NetworkStore for Host {
             name: reference.into(),
             driver: "bridge".into(),
             scope: "local".into(),
+            kind: hl_extension::NetworkKind::Custom,
         })
     }
     fn create(&self, _name: &str) -> Result<String, HostError> {
