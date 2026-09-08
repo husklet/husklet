@@ -26,19 +26,18 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
-        Self::flag(
-            &mut options,
-            "HL_C_DIAGNOSTICS",
-            launch.execution.diagnostics(),
-        )?;
+        Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
         Self::flag(
             &mut options,
             "HL_TRANSLIT",
             launch.execution.translit(matches!(launch.guest, crate::Guest::X86_64)),
         )?;
-        Self::flag(&mut options, "HL_NATIVE_SUPERVISED", launch.execution.is_native())?;
-        if launch.execution == crate::Execution::Interpreted {
-            Self::set(&mut options, "HL_NATIVE_SUPERVISED", "off")?;
+        match launch.execution {
+            crate::Execution::Native { .. } => Self::set(&mut options, "HL_NATIVE_SUPERVISED", b"1")?,
+            crate::Execution::Interpreted | crate::Execution::Translit | crate::Execution::Translated { .. } => {
+                Self::set(&mut options, "HL_NATIVE_SUPERVISED", b"off")?;
+            }
+            crate::Execution::Auto => {}
         }
         #[cfg(feature = "native-test-hooks")]
         Self::flag(

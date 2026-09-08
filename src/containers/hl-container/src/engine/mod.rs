@@ -494,11 +494,17 @@ mod tests {
             let spec = Spec::try_from(&launch).unwrap();
             assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
             assert_eq!(spec.plan.options.get("HL_TRANSLIT"), selected.then_some("1"));
+            assert_eq!(
+                spec.plan.options.get("HL_NATIVE_SUPERVISED"),
+                match execution {
+                    crate::Execution::Auto => None,
+                    crate::Execution::Native { .. } => Some("1"),
+                    crate::Execution::Interpreted
+                    | crate::Execution::Translit
+                    | crate::Execution::Translated { .. } => Some("off"),
+                }
+            );
         }
-        let mut interpreted = launch();
-        interpreted.execution = crate::Execution::Interpreted;
-        let spec = Spec::try_from(&interpreted).unwrap();
-        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("off"));
         let launch = launch();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_TRANSLIT"), None);
@@ -538,12 +544,8 @@ mod tests {
 
         launch.direct_call_pre_spill = true;
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(
-            spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL"),
-            Some("1")
-        );
+        assert_eq!(spec.plan.options.get("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL"), Some("1"));
     }
-
 
     #[test]
     fn aarch64_x86_conditional_links_require_a_translated_aarch64_guest() {
@@ -563,15 +565,27 @@ mod tests {
         );
 
         launch.execution = crate::Execution::Interpreted;
-        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            None
+        );
         launch.execution = crate::Execution::native(false);
-        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            None
+        );
         launch.execution = crate::Execution::translated(false);
         launch.guest = crate::Guest::X86_64;
-        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            None
+        );
         launch.guest = crate::Guest::Aarch64;
         launch.a64_x86_jcc_link = false;
-        assert_eq!(Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"), None);
+        assert_eq!(
+            Spec::try_from(&launch).unwrap().plan.options.get("HL_A64_X86_JCC_LINK"),
+            None
+        );
     }
 
     #[test]

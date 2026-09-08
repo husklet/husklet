@@ -545,7 +545,10 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
         return Some("translation-cache-policy");
     }
     plan.options.iter().find_map(|(name, _)| {
-        (name == "HL_PCACHE" || name == "HL_PCACHE_DIR" || name.starts_with("HL_TRANSLIT")).then_some(name)
+        (name == "HL_PCACHE"
+            || name == "HL_PCACHE_DIR"
+            || (name.starts_with("HL_TRANSLIT") && name != "HL_TRANSLIT_DIRECT_CALL_PRE_SPILL"))
+            .then_some(name)
     })
 }
 
@@ -1005,6 +1008,17 @@ mod native_eligibility_tests {
         let mut changed = plan();
         changed.box_policy.translation_cache = Some(b"/tmp/cache".to_vec());
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
+
+        let mut tuning_only = plan();
+        tuning_only
+            .options
+            .set("HL_TRANSLIT_DIRECT_CALL_PRE_SPILL", "1", true)
+            .unwrap();
+        assert_eq!(verdict(&tuning_only, host()), Ok(()));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::Auto, verdict(&tuning_only, host())),
+            Ok(true)
+        );
 
         let mut diagnostic = plan();
         diagnostic.options.set("HL_C_DIAGNOSTICS", "1", true).unwrap();
