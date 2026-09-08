@@ -1,8 +1,9 @@
 use super::{
     CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MARK_IRREVERSIBLE,
-    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, NATIVE_RESTORE, NATIVE_SNAPSHOT, OBJECT_BEGIN, OBJECT_FINISH,
-    OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD,
-    RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, NATIVE_RESTORE_COMPLETE, NATIVE_RESTORE_PREPARE, NATIVE_SNAPSHOT,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY,
+    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP,
+    SETTLE_REFUSAL, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -113,6 +114,8 @@ impl Server {
             id,
             peer,
             registered: None,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            prepared_native: None,
             _accepted: accepted,
         };
         let Ok(mut channels) = self.channels.lock() else {
@@ -297,8 +300,17 @@ impl Server {
                 }
                 continue;
             }
-            if request.op == NATIVE_RESTORE {
-                let restored = self.restore_registered_native(&connection, &request, &encoded_name, &payload);
+            if request.op == NATIVE_RESTORE_PREPARE {
+                let prepared = self.prepare_registered_native(&mut connection, &request, &encoded_name, &payload);
+                let reply = if prepared.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                if prepared.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if request.op == NATIVE_RESTORE_COMPLETE {
+                let restored = self.complete_registered_native(&mut connection, &request, &encoded_name, &payload);
                 let reply = if restored.is_ok() { Reply::ok() } else { Reply::error() };
                 let _ = reply.write(&mut channel);
                 return;
@@ -355,9 +367,9 @@ impl Server {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    fn restore_registered_native(
+    fn prepare_registered_native(
         &self,
-        connection: &Connection<'_>,
+        connection: &mut Connection<'_>,
         request: &Request,
         encoded_name: &[u8],
         payload: &[u8],
@@ -369,15 +381,36 @@ impl Server {
         let peer = connection.peer.as_ref().ok_or(())?;
         let raw = u64::from_ne_bytes(payload.try_into().map_err(|_| ())?);
         let pid = libc::pid_t::try_from(raw).map_err(|_| ())?;
+        let pidfd = crate::runtime::execution::native_snapshot::pin_native_process(pid).map_err(|_| ())?;
         if pid <= 1 || !native_descends_from(pid, peer.host_pid) {
             return Err(());
         }
-        self.restore_stopped_native(pid, generation).map_err(|failure| {
+        let prepared = self.prepare_native_restore(pid, pidfd, generation).map_err(|failure| {
             self.fail_as(
                 format!("native checkpoint restore failed for stopped process {pid}: {failure:?}"),
                 failure,
             );
-        })
+        })?;
+        connection.prepared_native = Some(prepared);
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn complete_registered_native(
+        &self,
+        connection: &mut Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        if !encoded_name.is_empty() || !payload.is_empty() {
+            return Err(());
+        }
+        let prepared = connection.prepared_native.take().ok_or(())?;
+        self.complete_prepared_native_restore(prepared, u64::from(request.generation))
+            .map_err(|failure| {
+                self.fail_as("native checkpoint restore completion failed".into(), failure);
+            })
     }
 
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -392,9 +425,20 @@ impl Server {
     }
 
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    fn restore_registered_native(
+    fn prepare_registered_native(
         &self,
-        _connection: &Connection<'_>,
+        _connection: &mut Connection<'_>,
+        _request: &Request,
+        _encoded_name: &[u8],
+        _payload: &[u8],
+    ) -> Result<(), ()> {
+        Err(())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn complete_registered_native(
+        &self,
+        _connection: &mut Connection<'_>,
         _request: &Request,
         _encoded_name: &[u8],
         _payload: &[u8],

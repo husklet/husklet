@@ -1322,20 +1322,6 @@ static int hl_native_supervised_stopped(pid_t process) {
     return state != NULL && (state[8] == 'T' || state[8] == 't');
 }
 
-static int hl_native_supervised_untraced_stopped(pid_t process) {
-    char path[64], bytes[1024];
-    if (snprintf(path, sizeof(path), "/proc/%d/status", process) >= (int)sizeof(path)) return 0;
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
-    ssize_t count = read(fd, bytes, sizeof(bytes) - 1);
-    close(fd);
-    if (count <= 0) return 0;
-    bytes[count] = 0;
-    char *state = strstr(bytes, "\nState:\t");
-    char *tracer = strstr(bytes, "\nTracerPid:\t");
-    return state != NULL && (state[8] == 'T' || state[8] == 't') && tracer != NULL && tracer[12] == '0';
-}
-
 #define HL_NATIVE_CHECKPOINT_MEMBER_MAX 4096
 
 typedef struct {
@@ -1832,23 +1818,6 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
                     fprintf(stderr, "[hl-native-checkpoint]\tphase=restore_workload pid=%d\n",
                             (int)restore_workload);
             }
-            if (restore_workload > 0 && hl_native_supervised_untraced_stopped(restore_workload)) {
-                uint64_t process = (uint64_t)restore_workload;
-                hl_ckpt_request restore = {
-                    .op = HL_CKPT_OP_NATIVE_RESTORE, .length = sizeof(process), .generation = trigger_seen};
-                hl_ckpt_reply restored = {0};
-                if (diagnostics)
-                    fprintf(stderr, "[hl-native-checkpoint]\tphase=native_restore_request pid=%d\n",
-                            (int)restore_workload);
-                if (hl_ckpt_channel_call(&restore, NULL, &process, &restored, NULL, 0) != 0 ||
-                    restored.status != HL_CKPT_STATUS_OK || kill(restore_workload, SIGCONT) != 0) {
-                    free(request); free(response); return 70;
-                }
-                if (diagnostics)
-                    fprintf(stderr, "[hl-native-checkpoint]\tphase=native_restore_reply status=%u\n",
-                            restored.status);
-                restore_pending = 0;
-            }
         }
         int status;
         pid_t waited;
@@ -1907,7 +1876,7 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         memset(response, 0, sizes.seccomp_notif_resp);
         response->id = request->id;
         int number = (int)request->data.nr;
-        pid_t stop_after_response = -1;
+        int complete_restore_after_response = 0;
         if (count_notifications) {
             ++notifications;
 #ifdef SYS_open
@@ -1918,17 +1887,24 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
             response->error = -refused_error;
 #ifdef SYS_write
         } else if (restore_pending && number == SYS_write) {
-            /* The first application write is after the dynamic loader and static-PIE relocation have
-             * finalized the executable VMAs. Suppress that replacement-side effect and stop the task;
-             * hydration replaces its registers and memory with the captured continuation. */
+            /* Keep the notification unresolved while the broker takes ptrace ownership. Only after
+             * READY is the write answered EINTR; final registers are installed after that reply. */
             if (diagnostics)
                 fprintf(stderr, "[hl-native-checkpoint]\tphase=restore_write notification_pid=%d host_pid=%d\n",
                         (int)request->pid, (int)restore_workload);
             if (restore_workload <= 0) {
                 free(request); free(response); return 70;
             }
+            uint64_t process = (uint64_t)restore_workload;
+            hl_ckpt_request prepare = {.op = HL_CKPT_OP_NATIVE_RESTORE_PREPARE,
+                                       .length = sizeof(process), .generation = trigger_seen};
+            hl_ckpt_reply prepared = {0};
+            if (hl_ckpt_channel_call(&prepare, NULL, &process, &prepared, NULL, 0) != 0 ||
+                prepared.status != HL_CKPT_STATUS_OK) {
+                free(request); free(response); return 70;
+            }
             response->error = -EINTR;
-            stop_after_response = restore_workload;
+            complete_restore_after_response = 1;
 #endif
 #ifdef SYS_ptrace
         } else if (restore_pending && number == SYS_ptrace &&
@@ -1950,8 +1926,14 @@ static int hl_native_supervised_wait(int listener, int leader_pidfd, pid_t leade
         if (ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
             free(request); free(response); return 70;
         }
-        if (stop_after_response > 0 && kill(stop_after_response, SIGSTOP) != 0) {
-            free(request); free(response); return 70;
+        if (complete_restore_after_response) {
+            hl_ckpt_request complete = {.op = HL_CKPT_OP_NATIVE_RESTORE_COMPLETE, .generation = trigger_seen};
+            hl_ckpt_reply restored = {0};
+            if (hl_ckpt_channel_call(&complete, NULL, NULL, &restored, NULL, 0) != 0 ||
+                restored.status != HL_CKPT_STATUS_OK) {
+                free(request); free(response); return 70;
+            }
+            restore_pending = 0;
         }
     }
 }

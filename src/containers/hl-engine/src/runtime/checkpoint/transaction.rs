@@ -28,7 +28,12 @@ impl Drop for AbortTransition<'_> {
 
 impl Server {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub(super) fn restore_stopped_native(&self, pid: libc::pid_t, generation: u64) -> Result<(), CaptureFailure> {
+    pub(super) fn prepare_native_restore(
+        &self,
+        pid: libc::pid_t,
+        pidfd: std::os::fd::OwnedFd,
+        generation: u64,
+    ) -> Result<crate::runtime::execution::native_snapshot::PreparedNativeRestore, CaptureFailure> {
         let deadline = {
             let capture = self.capture_lock()?;
             match capture.phase {
@@ -54,7 +59,7 @@ impl Server {
             _ => None,
         })
         .map_err(|_| CaptureFailure::InvalidImage)?;
-        crate::runtime::execution::native_snapshot::restore_stopped_native(pid, &registers, &memory, deadline)
+        crate::runtime::execution::native_snapshot::prepare_native_restore(pid, pidfd, &registers, &memory, deadline)
             .map_err(|error| {
                 hl_log::hl_error!(hl_log::tag::CHECKPOINT, "native checkpoint restore failed: {error}");
                 if error.kind() == std::io::ErrorKind::TimedOut {
@@ -62,7 +67,30 @@ impl Server {
                 } else {
                     CaptureFailure::Failed
                 }
-            })?;
+            })
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn complete_prepared_native_restore(
+        &self,
+        prepared: crate::runtime::execution::native_snapshot::PreparedNativeRestore,
+        generation: u64,
+    ) -> Result<(), CaptureFailure> {
+        let deadline = {
+            let capture = self.capture_lock()?;
+            match capture.phase {
+                CapturePhase::Recovery { id, deadline } if id == generation => deadline,
+                _ => return Err(CaptureFailure::Busy),
+            }
+        };
+        crate::runtime::execution::native_snapshot::complete_native_restore(prepared, deadline).map_err(|error| {
+            hl_log::hl_error!(hl_log::tag::CHECKPOINT, "native checkpoint restore failed: {error}");
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                CaptureFailure::Deadline
+            } else {
+                CaptureFailure::Failed
+            }
+        })?;
         self.complete_native_recovery(generation)
     }
 

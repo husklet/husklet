@@ -7,6 +7,8 @@
 use crate::composition::{CheckpointSink, CompositionError};
 use sha2::{Digest as _, Sha256};
 use std::io;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -33,6 +35,18 @@ const STOP_DEADLINE: Duration = Duration::from_secs(2);
 const ABORT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) const REGISTER_OBJECT: &str = "native/registers.x86-v1";
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn pin_native_process(pid: libc::pid_t) -> io::Result<OwnedFd> {
+    // SAFETY: pidfd_open consumes only scalar arguments and returns a new descriptor or -1; it retains no pointer.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        // SAFETY: the successful syscall returned a new owned descriptor, transferred exactly once here.
+        Ok(unsafe { OwnedFd::from_raw_fd(descriptor as libc::c_int) })
+    }
+}
 pub(crate) const MEMORY_OBJECT: &str = "native/memory.x86-v1";
 const MANIFEST_MAGIC: &[u8; 16] = b"HLNATIVE-X86-V1\0";
 const MANIFEST_SIZE: usize = 160;
@@ -94,23 +108,48 @@ pub(crate) fn capture_stopped_native(
 /// refuses before mutation when ASLR, the executable, loader, root, or mapped file contents differ;
 /// remote mmap/open reconstruction is a later widening, never an implicit partial restore.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn restore_stopped_native(
+pub(crate) struct PreparedNativeRestore {
     pid: libc::pid_t,
+    _pidfd: OwnedFd,
+    registers: X86RegisterRecord,
+    image: NativeMemoryImage,
+    guard: TraceGuard,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn prepare_native_restore(
+    pid: libc::pid_t,
+    pidfd: OwnedFd,
     registers: &[u8],
     memory: &[u8],
     deadline: Instant,
-) -> io::Result<()> {
+) -> io::Result<PreparedNativeRestore> {
     let registers = X86RegisterRecord::decode(registers)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid register image: {error:?}")))?;
     let image = NativeMemoryImage::decode(memory)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid memory image: {error:?}")))?;
-    if pid <= 1 || pid == unsafe { libc::getpid() } || !process_is_stopped(pid)? {
+    if pid <= 1 || pid == unsafe { libc::getpid() } || !process_incarnation_matches(pid, pidfd.as_raw_fd())? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "native restore requires another stopped process",
+            "native restore requires another pinned process",
         ));
     }
     check_deadline(deadline)?;
+    ptrace(libc::PTRACE_SEIZE, pid, 0, 0)?;
+    let mut guard = TraceGuard {
+        pid,
+        was_group_stopped: false,
+        ptrace_stopped: false,
+    };
+    ptrace(libc::PTRACE_INTERRUPT, pid, 0, 0)?;
+    guard.was_group_stopped = wait_for_ptrace_stop_until(pid, deadline)?;
+    guard.ptrace_stopped = true;
+    if !process_incarnation_matches(pid, pidfd.as_raw_fd())? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "native restore target incarnation changed",
+        ));
+    }
     let root = PathBuf::from(format!("/proc/{pid}/root"));
     let current = parse_maps(&std::fs::read(format!("/proc/{pid}/maps"))?, &root, deadline)?;
     let mismatch = current.iter().zip(&image.mappings).position(|(current, captured)| {
@@ -132,15 +171,30 @@ pub(crate) fn restore_stopped_native(
         ));
     }
 
-    ptrace(libc::PTRACE_SEIZE, pid, 0, 0)?;
-    let mut guard = TraceGuard {
+    Ok(PreparedNativeRestore {
         pid,
-        was_group_stopped: false,
-        ptrace_stopped: false,
-    };
-    ptrace(libc::PTRACE_INTERRUPT, pid, 0, 0)?;
-    guard.was_group_stopped = wait_for_ptrace_stop_until(pid, deadline)?;
-    guard.ptrace_stopped = true;
+        _pidfd: pidfd,
+        registers,
+        image,
+        guard,
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn complete_native_restore(prepared: PreparedNativeRestore, deadline: Instant) -> io::Result<()> {
+    let PreparedNativeRestore {
+        pid,
+        _pidfd,
+        registers,
+        image,
+        guard,
+    } = prepared;
+    if !process_incarnation_matches(pid, _pidfd.as_raw_fd())? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "native restore target incarnation changed",
+        ));
+    }
     let process_memory = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -175,6 +229,19 @@ pub(crate) fn restore_stopped_native(
     check_deadline(deadline)?;
     drop(guard);
     Ok(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn process_incarnation_matches(pid: libc::pid_t, pidfd: std::os::fd::RawFd) -> io::Result<bool> {
+    if pidfd < 0 {
+        return Ok(false);
+    }
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{pidfd}"))?;
+    let pinned = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:\t"))
+        .and_then(|value| value.trim().parse::<libc::pid_t>().ok());
+    Ok(pinned == Some(pid))
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1375,13 +1442,24 @@ mod tests {
             .write_all_at(&0xdead_beef_dead_beef_u64.to_ne_bytes(), replacement_address)
             .unwrap();
         let restore_started = Instant::now();
-        restore_stopped_native(
+        let replacement_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, replacement_pid, 0) } as RawFd;
+        assert!(replacement_pidfd >= 0, "pidfd_open replacement");
+        let substituted_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as RawFd;
+        assert!(substituted_pidfd >= 0, "pidfd_open substitution");
+        assert!(
+            !process_incarnation_matches(replacement_pid, substituted_pidfd).unwrap(),
+            "numeric target accepted a pidfd for another process incarnation"
+        );
+        unsafe { libc::close(substituted_pidfd) };
+        let prepared = prepare_native_restore(
             replacement_pid,
+            unsafe { OwnedFd::from_raw_fd(replacement_pidfd) },
             &image.registers,
             &image.memory,
             Instant::now() + Duration::from_secs(10),
         )
         .unwrap();
+        complete_native_restore(prepared, Instant::now() + Duration::from_secs(10)).unwrap();
         let restore_elapsed = restore_started.elapsed();
         assert_eq!(unsafe { libc::kill(replacement_pid, libc::SIGCONT) }, 0);
         assert!(

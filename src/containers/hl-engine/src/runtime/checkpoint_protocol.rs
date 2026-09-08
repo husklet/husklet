@@ -68,7 +68,8 @@ pub(super) const MARK_IRREVERSIBLE: u32 = 30;
 /// `[u64 host pid]`; the reply is sent only after the NativeX86V1 generation is durably committed.
 pub(super) const NATIVE_SNAPSHOT: u32 = 31;
 /// A native supervisor asks the host to hydrate one freshly exec'd, stopped descendant.
-pub(super) const NATIVE_RESTORE: u32 = 32;
+pub(super) const NATIVE_RESTORE_PREPARE: u32 = 32;
+pub(super) const NATIVE_RESTORE_COMPLETE: u32 = 33;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.
