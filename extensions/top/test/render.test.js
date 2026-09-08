@@ -423,6 +423,60 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+test('extension discovery keeps unknown compatibility reviewable and blocks known mismatches', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine' }),
+        extensions: {
+          list: async () => [],
+          catalogue: async () => ({
+            complete: true,
+            entries: [
+              {
+                id: 'unknown',
+                title: 'Unknown',
+                description: 'u',
+                reference: 'u',
+                publisher: 'p',
+                source: 's',
+              },
+              {
+                id: 'arm',
+                title: 'ARM only',
+                description: 'a',
+                reference: 'a',
+                publisher: 'p',
+                source: 's',
+                architectures: ['arm64'],
+              },
+              {
+                id: 'future',
+                title: 'Future protocol',
+                description: 'f',
+                reference: 'f',
+                publisher: 'p',
+                source: 's',
+                protocol: 999,
+              },
+            ],
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Compatibility not declared'));
+  assert.equal(isEnabled(stage, 'Review Unknown'), true);
+  assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
+  assert.equal(isEnabled(stage, 'Review ARM only'), false);
+  assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
+  assert.equal(isEnabled(stage, 'Review Future protocol'), false);
+});
+
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
   const references = [];
   const digest = `sha256:${'a'.repeat(64)}`;

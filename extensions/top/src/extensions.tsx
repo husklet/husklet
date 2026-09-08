@@ -1,4 +1,5 @@
 import React from 'react';
+import { PROTOCOL } from '@husklet/client';
 import {
   Badge,
   Button,
@@ -22,6 +23,7 @@ import {
   type ExtensionAcquisitionStatus,
   type ExtensionCapability,
   type ExtensionCatalogue,
+  type ExtensionCatalogueEntry,
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
@@ -65,6 +67,31 @@ function filesystemConsentLabel(selector: FilesystemSelector, action: string): s
 
 function filesystemGrantCount(grant: FilesystemGrant): number {
   return FILESYSTEM_VERBS.reduce((count, { key }) => count + filesystemRoots(grant, key).length, 0);
+}
+
+function catalogueCompatibility(entry: ExtensionCatalogueEntry, architecture: string) {
+  if (entry.protocol !== undefined && entry.protocol !== PROTOCOL) {
+    return {
+      compatible: false,
+      label: `Incompatible · requires protocol ${entry.protocol}; this client uses ${PROTOCOL}`,
+    } as const;
+  }
+  if (entry.architectures && architecture && !entry.architectures.includes(architecture)) {
+    return {
+      compatible: false,
+      label: `Incompatible · supports ${entry.architectures.join(', ')}; workspace is ${architecture}`,
+    } as const;
+  }
+  if (entry.protocol === undefined && entry.architectures === undefined) {
+    return { compatible: null, label: 'Compatibility not declared' } as const;
+  }
+  if (entry.architectures && !architecture) {
+    return { compatible: null, label: 'Checking workspace architecture compatibility…' } as const;
+  }
+  return {
+    compatible: true,
+    label: `Compatible${entry.protocol === undefined ? '' : ` · protocol ${entry.protocol}`}${entry.architectures === undefined ? '' : ` · ${architecture}`}`,
+  } as const;
 }
 
 function FilesystemConsent({
@@ -200,6 +227,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     'loading',
   );
   const [catalogueError, setCatalogueError] = React.useState('');
+  const [workspaceArchitecture, setWorkspaceArchitecture] = React.useState('');
   const [inventoryState, setInventoryState] = React.useState<
     'loading' | 'empty' | 'error' | 'ready'
   >('loading');
@@ -266,6 +294,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   React.useEffect(() => {
     void loadCatalogue();
   }, [loadCatalogue]);
+  React.useEffect(() => {
+    if (typeof api.info !== 'function') return;
+    void api
+      .info()
+      .then((workspace) => setWorkspaceArchitecture(workspace.architecture))
+      .catch(() => setWorkspaceArchitecture(''));
+  }, [api]);
   React.useEffect(() => {
     let dispose: (() => Promise<void>) | undefined;
     void api
@@ -502,28 +537,36 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     tone="neutral"
                   />
                 )}
-                {availableCatalogue.map((entry) => (
-                  <Card
-                    key={entry.id}
-                    grow={false}
-                    justify="start"
-                    width={CONTENT_WIDTH}
-                    variant="filled"
-                  >
-                    <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
-                    <CardContent gap={1}>
-                      <Text label={entry.description} color="text-dim" wrap />
-                      <Text label={`Source ${entry.source}`} color="text-dim" wrap />
-                      <Row>
-                        <Button
-                          label={`Review ${entry.title}`}
-                          enabled={!busy}
-                          onInvoke={() => inspect(entry.reference)}
+                {availableCatalogue.map((entry) => {
+                  const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
+                  return (
+                    <Card
+                      key={entry.id}
+                      grow={false}
+                      justify="start"
+                      width={CONTENT_WIDTH}
+                      variant="filled"
+                    >
+                      <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                      <CardContent gap={1}>
+                        <Text label={entry.description} color="text-dim" wrap />
+                        <Text label={`Source ${entry.source}`} color="text-dim" wrap />
+                        <Text
+                          label={compatibility.label}
+                          color={compatibility.compatible === false ? 'warning' : 'text-dim'}
+                          wrap
                         />
-                      </Row>
-                    </CardContent>
-                  </Card>
-                ))}
+                        <Row>
+                          <Button
+                            label={`Review ${entry.title}`}
+                            enabled={!busy && compatibility.compatible !== false}
+                            onInvoke={() => inspect(entry.reference)}
+                          />
+                        </Row>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
                 {catalogue && !catalogue.complete && (
                   <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
                 )}
@@ -814,6 +857,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             >
               {installed.map((extension) => {
                 const update = catalogue?.entries.find((entry) => entry.id === extension.name);
+                const updateCompatibility = update
+                  ? catalogueCompatibility(update, workspaceArchitecture)
+                  : null;
                 return (
                   <Card
                     key={`${extension.name}:${extension.image_digest}`}
@@ -844,6 +890,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                       <ExtensionFault extension={extension} />
                       <InstalledPermissionSummary extension={extension} />
+                      {updateCompatibility ? (
+                        <Text
+                          label={`Update · ${updateCompatibility.label}`}
+                          color={updateCompatibility.compatible === false ? 'warning' : 'text-dim'}
+                          wrap
+                        />
+                      ) : null}
                       <LifecycleFeedback
                         extensionName={extension.name}
                         pending={pendingLifecycle}
@@ -853,7 +906,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         {update && (
                           <Button
                             label="Review update"
-                            enabled={!busy}
+                            enabled={!busy && updateCompatibility?.compatible !== false}
                             onInvoke={() => inspect(update.reference)}
                           />
                         )}
