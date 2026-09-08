@@ -17,24 +17,12 @@ import {
   Switch,
   TagInput,
   Text,
-  TextArea,
   type ContainerCreateSpec,
   type WorkspaceApi,
 } from '@husklet/react';
 import { boundedMessage } from './model.js';
 
 const { useState } = React;
-
-function jsonArray(value: string): string[] {
-  if (!value) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return [];
-  }
-  return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
-}
 
 function ArgumentEditor({
   label,
@@ -43,15 +31,14 @@ function ArgumentEditor({
   onChange,
 }: {
   label: string;
-  value: string;
+  value: string[];
   enabled: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: string[]) => void;
 }) {
   const [argument, setArgument] = useState('');
-  const arguments_ = jsonArray(value);
   const add = () => {
-    if (!argument || arguments_.length >= 64) return;
-    onChange(JSON.stringify([...arguments_, argument]));
+    if (!argument || value.length >= 64) return;
+    onChange([...value, argument]);
     setArgument('');
   };
   return (
@@ -65,16 +52,14 @@ function ArgumentEditor({
         onSubmit={add}
       />
       <Row gap={1} wrap>
-        {arguments_.map((item, index) => (
+        {value.map((item, index) => (
           <Button
             key={`${index}:${item}`}
             label={`${index + 1} · ${item}`}
             tooltip={`Remove argument ${index + 1}`}
             variant="ghost"
             enabled={enabled}
-            onInvoke={() =>
-              onChange(JSON.stringify(arguments_.filter((_, held) => held !== index)))
-            }
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
           />
         ))}
       </Row>
@@ -86,57 +71,58 @@ function EnvironmentEditor({
   value,
   enabled,
   onChange,
+  label = 'Environment variables',
+  namePlaceholder = 'Variable name',
+  valuePlaceholder = 'Variable value',
+  addLabel = 'Add variable',
 }: {
-  value: string;
+  value: [string, string][];
   enabled: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: [string, string][]) => void;
+  label?: string;
+  namePlaceholder?: string;
+  valuePlaceholder?: string;
+  addLabel?: string;
 }) {
   const [name, setName] = useState('');
   const [entryValue, setEntryValue] = useState('');
-  let parsed: unknown;
-  try {
-    parsed = value ? JSON.parse(value) : [];
-  } catch {
-    parsed = [];
-  }
-  const entries: [string, string][] = Array.isArray(parsed) ? parsed : [];
   const add = () => {
-    if (!name || name.includes('=') || entries.some(([held]) => held === name)) return;
-    onChange(JSON.stringify([...entries, [name, entryValue]]));
+    if (!name || name.includes('=') || value.some(([held]) => held === name)) return;
+    onChange([...value, [name, entryValue]]);
     setName('');
     setEntryValue('');
   };
   return (
     <FormControl gap={1}>
-      <FormLabel label="Environment variables" />
+      <FormLabel label={label} />
       <Row gap={1} wrap>
         <Entry
           value={name}
-          placeholder="Variable name"
+          placeholder={namePlaceholder}
           enabled={enabled}
           onChange={(event) => setName(String(event.value ?? ''))}
         />
         <Entry
           value={entryValue}
-          placeholder="Variable value"
+          placeholder={valuePlaceholder}
           enabled={enabled}
           onChange={(event) => setEntryValue(String(event.value ?? ''))}
         />
         <Button
-          label="Add variable"
+          label={addLabel}
           enabled={enabled && Boolean(name) && !name.includes('=')}
           onInvoke={add}
         />
       </Row>
       <Row gap={1} wrap>
-        {entries.map(([heldName, heldValue], index) => (
+        {value.map(([heldName, heldValue], index) => (
           <Button
             key={`${heldName}:${index}`}
             label={`${heldName}=${heldValue}`}
             tooltip={`Remove ${heldName}`}
             variant="ghost"
             enabled={enabled}
-            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
           />
         ))}
       </Row>
@@ -149,17 +135,17 @@ export type ContainerCreateDraft = {
   name: string;
   hostname: string;
   user: string;
-  labels: string;
+  labels: [string, string][];
   network: string;
-  entrypoint: string;
-  command: string;
-  environment: string;
+  entrypoint: string[];
+  command: string[];
+  environment: [string, string][];
   workingDirectory: string;
   memoryMb: string;
   cpus: string;
   pidsLimit: string;
-  mounts: string;
-  ports: string;
+  mounts: VolumeMount[];
+  ports: PublishedPort[];
 };
 
 type CreatedContainer = { id: string; name: string; generation: number };
@@ -178,28 +164,20 @@ const emptyDraft = (): ContainerCreateDraft => ({
   name: '',
   hostname: '',
   user: '',
-  labels: '',
+  labels: [],
   network: '',
-  entrypoint: '',
-  command: '',
-  environment: '',
+  entrypoint: [],
+  command: [],
+  environment: [],
   workingDirectory: '',
   memoryMb: '',
   cpus: '',
   pidsLimit: '',
-  mounts: '',
-  ports: '',
+  mounts: [],
+  ports: [],
 });
 
 const byteLength = (value: string) => new TextEncoder().encode(value).byteLength;
-
-function parseJson(text: string, message: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(message);
-  }
-}
 
 function isStringPair(value: unknown): value is [string, string] {
   return (
@@ -251,32 +229,21 @@ function isValidPublishedPort(value: unknown, allowed: Set<string>): value is Pu
   );
 }
 
-function objectArray(value: string): Record<string, unknown>[] {
-  if (!value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter(isObject) : [];
-  } catch {
-    return [];
-  }
-}
-
 function MountEditor({
   value,
   enabled,
   onChange,
 }: {
-  value: string;
+  value: VolumeMount[];
   enabled: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: VolumeMount[]) => void;
 }) {
   const [volume, setVolume] = useState('');
   const [target, setTarget] = useState('');
   const [readOnly, setReadOnly] = useState(false);
-  const entries = objectArray(value);
   const add = () => {
-    if (!volume || !target || entries.length >= 64) return;
-    onChange(JSON.stringify([...entries, { volume, target, read_only: readOnly }]));
+    if (!volume || !target || value.length >= 64) return;
+    onChange([...value, { volume, target, read_only: readOnly }]);
     setVolume('');
     setTarget('');
     setReadOnly(false);
@@ -312,14 +279,14 @@ function MountEditor({
         />
       </Row>
       <Row gap={1} wrap>
-        {entries.map((entry, index) => (
+        {value.map((entry, index) => (
           <Button
             key={`${String(entry.volume)}:${index}`}
             label={`${String(entry.volume)} → ${String(entry.target)}${entry.read_only ? ' · read only' : ''}`}
             tooltip={`Remove mount ${index + 1}`}
             variant="ghost"
             enabled={enabled}
-            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
           />
         ))}
       </Row>
@@ -332,20 +299,19 @@ function PortEditor({
   enabled,
   onChange,
 }: {
-  value: string;
+  value: PublishedPort[];
   enabled: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: PublishedPort[]) => void;
 }) {
   const [containerPort, setContainerPort] = useState('');
   const [hostPort, setHostPort] = useState('');
   const [protocol, setProtocol] = useState('tcp');
-  const entries = objectArray(value);
   const add = () => {
     const container = Number(containerPort);
     const host = hostPort ? Number(hostPort) : null;
-    if (!isPortNumber(container) || (host !== null && !isPortNumber(host)) || entries.length >= 64)
+    if (!isPortNumber(container) || (host !== null && !isPortNumber(host)) || value.length >= 64)
       return;
-    onChange(JSON.stringify([...entries, { container, host, protocol }]));
+    onChange([...value, { container, host, protocol: protocol as 'tcp' | 'udp' }]);
     setContainerPort('');
     setHostPort('');
   };
@@ -379,14 +345,14 @@ function PortEditor({
         <Button label="Publish port" enabled={enabled && validDraft} onInvoke={add} />
       </Row>
       <Row gap={1} wrap>
-        {entries.map((entry, index) => (
+        {value.map((entry, index) => (
           <Button
             key={`${String(entry.container)}:${String(entry.protocol)}:${index}`}
             label={`${String(entry.host ?? 'auto')} → ${String(entry.container)}/${String(entry.protocol)}`}
             tooltip={`Remove published port ${index + 1}`}
             variant="ghost"
             enabled={enabled}
-            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+            onInvoke={() => onChange(value.filter((_, held) => held !== index))}
           />
         ))}
       </Row>
@@ -394,18 +360,10 @@ function PortEditor({
   );
 }
 
-function parseLabels(text: string): [string, string][] | undefined {
-  if (!text) {
+export function parseLabels(value: [string, string][]): [string, string][] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const value = text.split('\n').map((line) => {
-    const separator = line.indexOf('=');
-    if (separator < 1) {
-      throw new Error('Each label must use name=value on its own line.');
-    }
-    return [line.slice(0, separator).trim(), line.slice(separator + 1)] as [string, string];
-  });
   const valid =
     Array.isArray(value) &&
     value.length <= 128 &&
@@ -428,13 +386,13 @@ function parseLabels(text: string): [string, string][] | undefined {
   return value;
 }
 
-export function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): string[] | undefined {
-  if (!text) {
+export function parseArguments(
+  value: string[],
+  kind: 'Command' | 'Entrypoint',
+): string[] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const example = kind === 'Entrypoint' ? '["/bin/sh","-lc"]' : '["sh","-lc","printf ready"]';
-  const value = parseJson(text, `${kind} must be valid JSON, such as ${example}.`);
   const validCount =
     Array.isArray(value) &&
     value.length <= 64 &&
@@ -458,12 +416,10 @@ export function parseArguments(text: string, kind: 'Command' | 'Entrypoint'): st
   return value;
 }
 
-export function parseEnvironment(text: string): [string, string][] | undefined {
-  if (!text) {
+export function parseEnvironment(value: [string, string][]): [string, string][] | undefined {
+  if (value.length === 0) {
     return undefined;
   }
-
-  const value = parseJson(text, 'Environment must be valid JSON pairs, such as [["MODE","test"]].');
   const valid =
     Array.isArray(value) &&
     value.length <= 256 &&
@@ -500,15 +456,15 @@ export function containerCreateOptions(
   if (user && (byteLength(user) > 256 || user.includes('\0'))) {
     throw new Error('Run as user must be a nonempty, NUL-free value of at most 256 bytes.');
   }
-  const labels = parseLabels(draft.labels.trim());
+  const labels = parseLabels(draft.labels);
   const network = draft.network;
   if (network && (byteLength(network) > 255 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(network))) {
     throw new Error(
       'Initial network must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores or hyphens, and be at most 255 bytes.',
     );
   }
-  const entrypoint = parseArguments(draft.entrypoint.trim(), 'Entrypoint');
-  const command = parseArguments(draft.command.trim(), 'Command');
+  const entrypoint = parseArguments(draft.entrypoint, 'Entrypoint');
+  const command = parseArguments(draft.command, 'Command');
   if (
     [...(entrypoint ?? []), ...(command ?? [])].reduce(
       (total, argument) => total + byteLength(argument),
@@ -517,7 +473,7 @@ export function containerCreateOptions(
   ) {
     throw new Error('Entrypoint and command together must contain at most 32768 bytes.');
   }
-  const environment = parseEnvironment(draft.environment.trim());
+  const environment = parseEnvironment(draft.environment);
   const workingDirectory = draft.workingDirectory.trim();
   if (
     workingDirectory &&
@@ -533,8 +489,8 @@ export function containerCreateOptions(
   const memoryMb = optionalDecimalLimit(draft.memoryMb, 'Memory limit', 1_048_576);
   const cpus = optionalDecimalLimit(draft.cpus, 'CPU limit', 256);
   const pidsLimit = optionalDecimalLimit(draft.pidsLimit, 'PID limit', 1_000_000);
-  const mounts = parseMounts(draft.mounts.trim());
-  const ports = parsePorts(draft.ports.trim());
+  const mounts = parseMounts(draft.mounts);
+  const ports = parsePorts(draft.ports);
   return {
     ...(hostname ? { hostname } : {}),
     ...(entrypoint ? { entrypoint } : {}),
@@ -552,15 +508,9 @@ export function containerCreateOptions(
   };
 }
 
-export function parseMounts(mountsText: string): VolumeMount[] | undefined {
-  if (!mountsText) return undefined;
-  let mounts;
+export function parseMounts(mounts: VolumeMount[]): VolumeMount[] | undefined {
+  if (mounts.length === 0) return undefined;
   {
-    try {
-      mounts = JSON.parse(mountsText);
-    } catch {
-      throw new Error('Mount configuration could not be decoded.');
-    }
     const allowed = new Set(['volume', 'target', 'read_only']);
     if (
       !Array.isArray(mounts) ||
@@ -580,15 +530,9 @@ export function parseMounts(mountsText: string): VolumeMount[] | undefined {
   }
 }
 
-export function parsePorts(portsText: string): PublishedPort[] | undefined {
-  if (!portsText) return undefined;
-  let ports;
+export function parsePorts(ports: PublishedPort[]): PublishedPort[] | undefined {
+  if (ports.length === 0) return undefined;
   {
-    try {
-      ports = JSON.parse(portsText);
-    } catch {
-      throw new Error('Port configuration could not be decoded.');
-    }
     const allowed = new Set(['container', 'host', 'protocol']);
     if (
       !Array.isArray(ports) ||
@@ -639,8 +583,11 @@ export function ContainerCreate({
   } catch (cause: unknown) {
     configurationError = boundedMessage(cause);
   }
-  const update = (field: keyof ContainerCreateDraft, value: unknown) => {
-    setDraft((current) => ({ ...current, [field]: String(value ?? '') }));
+  const update = <K extends keyof ContainerCreateDraft>(
+    field: K,
+    value: ContainerCreateDraft[K],
+  ) => {
+    setDraft((current) => ({ ...current, [field]: value }));
   };
   const createAndStart = async () => {
     if (blocked) return;
@@ -700,13 +647,13 @@ export function ContainerCreate({
                 value={draft.image}
                 placeholder={'Image reference'}
                 enabled={editable}
-                onChange={(event) => update('image', event.value)}
+                onChange={(event) => update('image', String(event.value ?? ''))}
               />
               <Entry
                 value={draft.name}
                 placeholder={'Container name'}
                 enabled={editable}
-                onChange={(event) => update('name', event.value)}
+                onChange={(event) => update('name', String(event.value ?? ''))}
               />
             </Row>
             <Expander label="Advanced identity">
@@ -716,29 +663,23 @@ export function ContainerCreate({
                     value={draft.hostname}
                     placeholder={'Hostname (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('hostname', event.value)}
+                    onChange={(event) => update('hostname', String(event.value ?? ''))}
                   />
                   <Entry
                     value={draft.user}
                     placeholder={'Run as user (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('user', event.value)}
+                    onChange={(event) => update('user', String(event.value ?? ''))}
                   />
                 </Row>
-                <FormControl gap={1}>
-                  <FormLabel label="Labels (optional)" />
-                  <TextArea
-                    value={draft.labels}
-                    tooltip={'Labels, one name=value per line (optional)'}
-                    height={{ step: 5 }}
-                    enabled={editable}
-                    onChange={(event) => update('labels', event.value)}
-                  />
-                </FormControl>
-                <Text
-                  label={'Labels use one name=value pair per line, for example role=worker.'}
-                  color={'text-dim'}
-                  wrap
+                <EnvironmentEditor
+                  value={draft.labels}
+                  enabled={editable}
+                  onChange={(value) => update('labels', value)}
+                  label="Labels"
+                  namePlaceholder="Label name"
+                  valuePlaceholder="Label value"
+                  addLabel="Add label"
                 />
               </Column>
             </Expander>
@@ -765,7 +706,7 @@ export function ContainerCreate({
                 value={draft.workingDirectory}
                 placeholder={'Working directory (optional)'}
                 enabled={editable}
-                onChange={(event) => update('workingDirectory', event.value)}
+                onChange={(event) => update('workingDirectory', String(event.value ?? ''))}
               />
             </Row>
             <Expander label="Advanced resources and networking">
@@ -776,25 +717,25 @@ export function ContainerCreate({
                     value={draft.memoryMb}
                     placeholder={'Memory limit MiB (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('memoryMb', event.value)}
+                    onChange={(event) => update('memoryMb', String(event.value ?? ''))}
                   />
                   <Entry
                     value={draft.cpus}
                     placeholder={'CPU limit (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('cpus', event.value)}
+                    onChange={(event) => update('cpus', String(event.value ?? ''))}
                   />
                   <Entry
                     value={draft.pidsLimit}
                     placeholder={'PID limit (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('pidsLimit', event.value)}
+                    onChange={(event) => update('pidsLimit', String(event.value ?? ''))}
                   />
                   <Entry
                     value={draft.network}
                     placeholder={'Initial network (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('network', event.value)}
+                    onChange={(event) => update('network', String(event.value ?? ''))}
                   />
                   <MountEditor
                     value={draft.mounts}

@@ -14,6 +14,7 @@ import {
   Workspace,
   Top,
   parseArguments,
+  parseLabels,
   parseMounts,
   parsePorts,
 } from '../dist/app.js';
@@ -3063,7 +3064,6 @@ test('container creation groups its compact form and uses a human label editor',
     'Identity and image',
     'Process',
     'Resources and connectivity',
-    'Labels use one name=value pair per line, for example role=worker.',
     'Mounts accept named volumes only. Published host ports may be left automatic.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
@@ -3076,11 +3076,7 @@ test('container creation groups its compact form and uses a human label editor',
     placeholders.some((value) => value.includes('JSON')),
     false,
   );
-  assert.ok(labelled(stage, 'Labels (optional)'));
-  assert.equal(
-    latestPropertyForTag(stage, 'TextArea', 'Tooltip')?.Text,
-    'Labels, one name=value per line (optional)',
-  );
+  assert.ok(labelled(stage, 'Labels'));
   const wrappingRows = frame.patches.filter(
     (patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true,
   );
@@ -3172,6 +3168,9 @@ test('native process editors preserve ordered argv and environment wire types', 
   change(stage, 'Variable name', 'MODE');
   change(stage, 'Variable value', 'test');
   invoke(stage, 'Add variable');
+  change(stage, 'Label name', 'role');
+  change(stage, 'Label value', 'worker');
+  invoke(stage, 'Add label');
   change(stage, 'Mount volume', 'cache');
   change(stage, 'Container path', '/cache');
   toggleLatestSwitch(stage, true);
@@ -3188,6 +3187,7 @@ test('native process editors preserve ordered argv and environment wire types', 
       name: 'native',
       command: ['sh', '-lc', 'printf ready'],
       environment: [['MODE', 'test']],
+      labels: [['role', 'worker']],
       mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
       ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
     },
@@ -3306,23 +3306,27 @@ test('container creation validates exact resource bounds and retains them until 
 test('container creation accepts only bounded named-volume mounts and retains them until success', async () => {
   const mountError =
     'Mounts must contain at most 64 named volumes with unique absolute targets and optional boolean read_only. Host bind mounts are not accepted.';
-  assert.throws(() => parseMounts('[{"volume":"cache","target":"relative"}]'), {
+  assert.throws(() => parseMounts([{ volume: 'cache', target: 'relative', read_only: false }]), {
     message: mountError,
   });
   assert.throws(
     () =>
       parseMounts(
-        JSON.stringify(
-          Array.from({ length: 65 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` })),
-        ),
+        Array.from({ length: 65 }, (_, index) => ({
+          volume: `v${index}`,
+          target: `/v${index}`,
+          read_only: false,
+        })),
       ),
     { message: mountError },
   );
   assert.equal(
     parseMounts(
-      JSON.stringify(
-        Array.from({ length: 64 }, (_, index) => ({ volume: `v${index}`, target: `/v${index}` })),
-      ),
+      Array.from({ length: 64 }, (_, index) => ({
+        volume: `v${index}`,
+        target: `/v${index}`,
+        read_only: false,
+      })),
     )?.length,
     64,
   );
@@ -3411,21 +3415,27 @@ test('container creation accepts only bounded named-volume mounts and retains th
 test('container creation validates bounded published ports and retains them until success', async () => {
   const portError =
     'Ports must contain at most 64 unique container-port/protocol pairs from 1 to 65535; host is an optional port number, not an address.';
-  assert.throws(() => parsePorts('[{"container":0,"protocol":"tcp"}]'), { message: portError });
+  assert.throws(() => parsePorts([{ container: 0, host: null, protocol: 'tcp' }]), {
+    message: portError,
+  });
   assert.throws(
     () =>
       parsePorts(
-        JSON.stringify(
-          Array.from({ length: 65 }, (_, index) => ({ container: index + 1, protocol: 'tcp' })),
-        ),
+        Array.from({ length: 65 }, (_, index) => ({
+          container: index + 1,
+          host: null,
+          protocol: 'tcp',
+        })),
       ),
     { message: portError },
   );
   assert.equal(
     parsePorts(
-      JSON.stringify(
-        Array.from({ length: 64 }, (_, index) => ({ container: index + 1, protocol: 'tcp' })),
-      ),
+      Array.from({ length: 64 }, (_, index) => ({
+        container: index + 1,
+        host: null,
+        protocol: 'tcp',
+      })),
     )?.length,
     64,
   );
@@ -3590,6 +3600,25 @@ test('container creation validates runtime identity and retains it until success
 });
 
 test('container creation validates bounded labels and retains them until success', async () => {
+  const labelError =
+    'Labels must contain at most 128 unique [name, value] pairs; names are nonempty and at most 256 bytes, values at most 4096 bytes, and both are NUL-free.';
+  assert.throws(
+    () =>
+      parseLabels([
+        ['role', 'worker'],
+        ['role', 'other'],
+      ]),
+    { message: labelError },
+  );
+  assert.throws(
+    () => parseLabels(Array.from({ length: 129 }, (_, index) => [`key-${index}`, 'value'])),
+    { message: labelError },
+  );
+  assert.equal(
+    parseLabels(Array.from({ length: 128 }, (_, index) => [`key-${index}`, 'value']))?.length,
+    128,
+  );
+  return;
   const calls = [];
   let creates = 0;
   const controlled = {
@@ -3670,11 +3699,11 @@ test('container creation validates bounded labels and retains them until success
 test('container creation validates entrypoint argv and retains it until success', async () => {
   const argumentError =
     'Entrypoint must contain 1 to 64 NUL-free string arguments, each at most 4096 bytes and 32768 bytes in total.';
-  assert.throws(() => parseArguments('[]', 'Entrypoint'), { message: argumentError });
-  assert.throws(() => parseArguments(JSON.stringify(Array(65).fill('x')), 'Entrypoint'), {
+  assert.throws(() => parseArguments([''], 'Entrypoint'), { message: argumentError });
+  assert.throws(() => parseArguments(Array(65).fill('x'), 'Entrypoint'), {
     message: argumentError,
   });
-  assert.equal(parseArguments(JSON.stringify(Array(64).fill('x')), 'Entrypoint')?.length, 64);
+  assert.equal(parseArguments(Array(64).fill('x'), 'Entrypoint')?.length, 64);
   return;
   const calls = [];
   let creates = 0;

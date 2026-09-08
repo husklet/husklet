@@ -647,17 +647,6 @@ test(
       );
       peer.write(
         encode({
-          channel: 53,
-          kind: KIND.event,
-          payload: changeInvocation(
-            requests,
-            'Labels, one name=value per line (optional)',
-            'role=worker\ntier=backend',
-          ),
-        }),
-      );
-      peer.write(
-        encode({
           channel: 55,
           kind: KIND.event,
           payload: changeInvocation(requests, 'Initial network (optional)', 'private_backend.v1'),
@@ -773,13 +762,10 @@ test(
         entrypoint: null,
         command: [],
         environment: [],
+        labels: [],
         working_directory: '/workspace/app',
         hostname: 'worker-1.internal',
         user: '1000:1000',
-        labels: [
-          ['role', 'worker'],
-          ['tier', 'backend'],
-        ],
         mounts: [{ volume: 'cache', target: '/cache', read_only: false }],
         network: 'private_backend.v1',
         ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
