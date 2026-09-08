@@ -870,6 +870,35 @@ test('catalogue does not advertise an update at the installed version', async ()
   assert.equal(labelled(stage, 'Update available · Version 2.0.0'), undefined);
 });
 
+test('catalogue never advertises an older release as an update', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: async () => ({
+            ...(await firstPartyCatalogue()),
+            entries: [{ ...(await firstPartyCatalogue()).entries[0], version: '0.4.0' }],
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.equal(labelled(stage, 'Update available · Version 0.4.0'), undefined);
+});
+
 test('extension review calls out destructive image authority before consent', async () => {
   const stage = host();
   stage.render(

@@ -1248,7 +1248,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Row gap={1} width="fill" wrap>
                 {installed.map((extension) => {
                   const update = catalogue?.entries.find(
-                    (entry) => entry.id === extension.name && entry.version !== extension.version,
+                    (entry) =>
+                      entry.id === extension.name && newerVersion(entry.version, extension.version),
                   );
                   const updateCompatibility = update
                     ? catalogueCompatibility(update, workspaceArchitecture)
@@ -1581,6 +1582,21 @@ function LifecycleFeedback({
 
 function capitalize(value: string): string {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function newerVersion(candidate: string, installed?: string): boolean {
+  if (!installed) return true;
+  const parse = (version: string) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    return match ? match.slice(1).map(Number) : null;
+  };
+  const next = parse(candidate);
+  const current = parse(installed);
+  if (!next || !current) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (next[index] !== current[index]) return next[index] > current[index];
+  }
+  return false;
 }
 
 function capabilityLabel(capability: ExtensionCapability): string {
