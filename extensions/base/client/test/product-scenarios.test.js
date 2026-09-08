@@ -226,17 +226,22 @@ test('embeddings indexer watches, range-reads one identity, and CAS-updates its 
   );
 });
 
-test('Postgres GUI reads scoped credentials, queries by exec environment, and renders a bounded result window', async () => {
+test('Postgres GUI stays live and serves a scrolled database window before host shutdown', async () => {
   const id = 'c'.repeat(64);
   const password = 'sentinel-password-never-in-replies';
   const executionId = 'e'.repeat(32);
+  let outputCalls = 0;
   const run = await scenario('postgres-inspector.ts', {
-    containerId: id,
+    container: id,
     credentialPath: 'secrets/postgres.password',
     query: 'select id,name from widgets',
   }, (socket, frame) => {
     const { call } = frame.payload;
-    if (call === 'container_inspect')
+    if (call === 'container_list')
+      respond(socket, frame, { reply: 'containers', with: [{
+        id, name: 'postgres', image: 'postgres:18', state: 'running', created: 1, generation: 2,
+      }] });
+    else if (call === 'container_inspect')
       respond(socket, frame, {
         reply: 'container',
         with: {
@@ -288,7 +293,14 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
       respond(socket, frame, { reply: 'contents', with: [...Buffer.from(`${password}\n`)] });
     else if (call === 'container_exec')
       respond(socket, frame, { reply: 'identity', with: executionId });
-    else if (call === 'execution_wait')
+    else if (call === 'execution_output') {
+      outputCalls += 1;
+      const bytes = outputCalls === 1 ? Buffer.from('rows\n2\n') : Buffer.from('id,name\n1,alpha\n2,beta\n');
+      respond(socket, frame, { reply: 'execution_output', with: {
+        entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [...bytes] }],
+        next: 1, more: false, eof: true, gap: false,
+      } });
+    } else if (call === 'execution_inspect')
       respond(socket, frame, {
         reply: 'execution',
         with: {
@@ -296,23 +308,33 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
           command: ['psql', '--csv'], user: 'postgres',
         },
       });
-    else if (call === 'execution_logs')
-      respond(socket, frame, {
-        reply: 'logs',
-        with: {
-          stdout: [...Buffer.from('id,name\n1,alpha\n2,beta\n')], stderr: [], truncated: false,
-          stdout_truncated: false, stderr_truncated: false, eof: true,
-        },
-      });
     else if (call === 'interface_open_tab')
       respond(socket, frame, { reply: 'identity', with: 'postgres-pane' });
-    else respond(socket, frame, { reply: 'done' });
+    else if (call === 'source_resize_at') {
+      respond(socket, frame, { reply: 'done' });
+      if (frame.payload.with.mutation.Length) {
+        socket.write(encode({
+          channel: 17,
+          kind: KIND.event,
+          payload: {
+            id: 41,
+            slot: 'postgres-pane',
+            source: 1,
+            version: 1,
+            range: { start: 1, count: 1 },
+            sort: null,
+            filter: null,
+          },
+        }));
+      } else if (frame.payload.with.mutation.Window) {
+        socket.end();
+      }
+    } else respond(socket, frame, { reply: 'done' });
   });
   assert.deepEqual(run.result, {
     container: id,
     processes: 2,
     queryRows: 2,
-    logsComplete: true,
     networks: 1,
     slot: 'postgres-pane',
   });
@@ -322,14 +344,20 @@ test('Postgres GUI reads scoped credentials, queries by exec environment, and re
     .filter(({ call }) => call === 'source_resize_at')
     .map(({ with: value }) => value.mutation);
   assert.equal(mutations.length, 3);
-  assert.equal(mutations[2].Window.rows.length, 2);
-  assert.equal(mutations[2].Window.range.count, 2);
-  const exec = run.calls.find(({ call }) => call === 'container_exec');
-  assert.deepEqual(exec.with, {
-    id, generation: 2,
-    command: ['psql', '--csv', '--no-psqlrc', '-c', 'select id,name from widgets'],
-    environment: [['PGPASSWORD', password]], user: null, working_directory: null,
+  assert.equal(mutations[1].Length.rows, 2);
+  assert.deepEqual(mutations[2].Window, {
+    source: 1,
+    version: 1,
+    request: 41,
+    range: { start: 1, count: 1 },
+    rows: [{ key: 1, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
   });
+  const execs = run.calls.filter(({ call }) => call === 'container_exec');
+  assert.equal(execs.length, 3);
+  assert.deepEqual(execs[1].with.command.slice(0, 4), ['psql', '--csv', '--no-psqlrc', '--command']);
+  assert.match(execs[1].with.command[4], /LIMIT 128 OFFSET 0$/);
+  assert.match(execs[2].with.command[4], /LIMIT 1 OFFSET 1$/);
+  assert.deepEqual(execs[1].with.environment, [['PGPASSWORD', password]]);
   for (const call of run.calls.filter(({ call }) => call !== 'container_exec'))
     assert(!JSON.stringify(call).includes(password), `credential leaked through ${call.call}`);
 });

@@ -10,11 +10,21 @@ import {
   protocolCoverage,
   protocolSurface,
   requestCapability,
+  validateRowRequest,
   validateUiEvent,
   workspace,
 } from '../dist/index.js';
 import { KIND, Reader, encode } from '../dist/wire.js';
 import { PROTOCOL } from '../dist/session.js';
+
+test('row requests reject unsafe or unbounded database windows', () => {
+  const request = { id: 4, source: 7, version: 2, range: { start: 999_936, count: 128 },
+    sort: { column: 'name', descending: true }, filter: 'active', slot: 'surface-2' };
+  assert.equal(validateRowRequest(request), request);
+  assert.throws(() => validateRowRequest({ ...request, range: { start: 0, count: 129 } }), /between 1 and 128/);
+  assert.throws(() => validateRowRequest({ ...request, sort: { column: 'name', descending: 'yes' } }), /boolean direction/);
+  assert.throws(() => validateRowRequest({ ...request, slot: '' }), /nonempty string/);
+});
 
 test('resizeGridAndWait verifies the requested grid after an observed cursor advance', async () => {
   const calls = [];

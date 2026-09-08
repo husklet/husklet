@@ -98,4 +98,4 @@ HUSKLET_CATALOGUE="$catalogue" HUSKLET_DECLARATIONS="$declarations" \
 
 cmp "$catalogue" "$root/extensions/base/react/catalogue.json"
 cmp "$catalogue" "$root/extensions/storybook/src/catalogue.json"
-cmp "$declarations" "$root/extensions/base/react/src/index.d.ts"
+cmp "$declarations" "$root/extensions/base/react/dist/index.d.ts"

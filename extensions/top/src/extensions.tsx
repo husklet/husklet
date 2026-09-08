@@ -33,7 +33,7 @@ type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
 
-const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 72 } } as const;
+const CONTENT_WIDTH = { minimum: { chars: 48 }, maximum: { chars: 56 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -55,8 +55,10 @@ function filesystemSelectorKey(selector: FilesystemSelector): string {
   return 'exact' in selector ? `exact:${selector.exact}` : `subtree:${selector.subtree}`;
 }
 
-function filesystemSelectorLabel(selector: FilesystemSelector): string {
-  return 'exact' in selector ? `${selector.exact} (exact file)` : `${selector.subtree}/ (subtree)`;
+function filesystemConsentLabel(selector: FilesystemSelector, action: string): string {
+  return 'exact' in selector
+    ? `${action} file · ${selector.exact}`
+    : `${action} folder · ${selector.subtree || 'workspace root'}/ and everything inside`;
 }
 
 function filesystemGrantCount(grant: FilesystemGrant): number {
@@ -89,11 +91,11 @@ function FilesystemConsent({
         label={`${filesystemGrantCount(granted)}/${requestCount} workspace paths allowed`}
         color="text-dim"
       />
-      {FILESYSTEM_VERBS.flatMap(({ key, label, meaning }) =>
+      {FILESYSTEM_VERBS.flatMap(({ key, label }) =>
         filesystemRoots(requested, key).map((selector) => (
           <FormControlLabel
             key={`${key}:${filesystemSelectorKey(selector)}`}
-            label={`${label} · ${filesystemSelectorLabel(selector)} (${meaning})`}
+            label={filesystemConsentLabel(selector, label)}
             gap={2}
           >
             <Switch
@@ -389,6 +391,21 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     read: [],
     write: [],
   };
+  const requestedPermissionCount = acquisition?.candidate
+    ? acquisition.candidate.requested.length +
+      requestedContainers.selectors.length +
+      Number(requestedContainers.create) +
+      filesystemGrantCount(requestedFilesystem) +
+      requestedWorkspaceEnvironment.read.length +
+      requestedWorkspaceEnvironment.write.length
+    : 0;
+  const grantedPermissionCount =
+    granted.length +
+    grantedContainers.selectors.length +
+    Number(grantedContainers.create) +
+    filesystemGrantCount(grantedFilesystem) +
+    grantedWorkspaceEnvironment.read.length +
+    grantedWorkspaceEnvironment.write.length;
 
   return (
     <Scroll grow height="fill">
@@ -455,36 +472,47 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               </Column>
             )}
             <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
-              <CardHeader label="Install from image" detail="OCI image reference" />
-              <CardContent>
-                <Row gap={1}>
-                  <Entry
-                    value={reference}
-                    placeholder="registry.example/extension:version"
-                    onChange={(event: Change) =>
-                      setReference(String(event.value ?? '').slice(0, 512))
-                    }
-                    onSubmit={() => inspect()}
-                  />
-                  <Button
-                    label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
-                    enabled={Boolean(reference.trim()) && !busy}
-                    onInvoke={() => inspect()}
-                  />
-                </Row>
-              </CardContent>
+              <CardHeader
+                label={
+                  acquisition?.candidate
+                    ? `Review ${acquisition.candidate.name}`
+                    : 'Install from image'
+                }
+                detail={
+                  acquisition?.candidate
+                    ? acquisition.candidate.installed_image_digest
+                      ? 'Update extension'
+                      : 'Install extension'
+                    : 'OCI image reference'
+                }
+              />
+              {!acquisition && (
+                <CardContent>
+                  <Row gap={1}>
+                    <Entry
+                      value={reference}
+                      placeholder="registry.example/extension:version"
+                      tooltip={
+                        reference || 'Paste a full OCI image reference; press Enter to inspect'
+                      }
+                      onChange={(event: Change) =>
+                        setReference(String(event.value ?? '').slice(0, 512))
+                      }
+                      onSubmit={() => inspect()}
+                    />
+                    <Button
+                      label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
+                      enabled={Boolean(reference.trim()) && !busy}
+                      onInvoke={() => inspect()}
+                    />
+                  </Row>
+                  <Text label="Paste a full image reference · Enter to inspect" color="text-dim" />
+                </CardContent>
+              )}
               {acquisition?.candidate && (
                 <CardContent gap={1}>
-                  <Heading
-                    label={
-                      acquisition.candidate.installed_image_digest
-                        ? 'Review update'
-                        : 'Review install'
-                    }
-                    scale="caption"
-                  />
                   <Text
-                    label={`Manifest ${acquisition.candidate.name} ${acquisition.candidate.version}`}
+                    label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
                   />
                   <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
                   <Text
@@ -503,15 +531,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     label="All access is off by default. Enable only what this extension needs."
                     tone="warning"
                   />
+                  <Text
+                    label={`${grantedPermissionCount}/${requestedPermissionCount} permissions allowed`}
+                    color="text-dim"
+                  />
                   {acquisition.candidate.requested.length > 0 && (
-                    <Text label="Husklet access" color="text-dim" />
+                    <Text
+                      label={`Husklet access · ${granted.length}/${acquisition.candidate.requested.length}`}
+                      color="text-dim"
+                    />
                   )}
                   {acquisition.candidate.requested.length > 0 && (
                     <Row gap={1} align="center">
-                      <Text
-                        label={`${granted.length}/${acquisition.candidate.requested.length} allowed`}
-                        color="text-dim"
-                      />
                       {granted.length > 0 && (
                         <Button
                           label="Clear Husklet access"
@@ -541,7 +572,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   ))}
                   {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
                     <>
-                      <Text label="Container access" color="text-dim" />
+                      <Text
+                        label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                        color="text-dim"
+                      />
                       <Text
                         label="Container access starts off. Select only what this extension needs."
                         color="text-dim"
@@ -589,15 +623,22 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                     </FormControlLabel>
                   )}
-                  <Text label="Workspace files" color="text-dim" />
-                  <FilesystemConsent
-                    requested={requestedFilesystem}
-                    granted={grantedFilesystem}
-                    onChange={setGrantedFilesystem}
-                  />
+                  {filesystemGrantCount(requestedFilesystem) > 0 && (
+                    <>
+                      <Text label="Workspace files" color="text-dim" />
+                      <FilesystemConsent
+                        requested={requestedFilesystem}
+                        granted={grantedFilesystem}
+                        onChange={setGrantedFilesystem}
+                      />
+                    </>
+                  )}
                   {(requestedWorkspaceEnvironment.read.length > 0 ||
                     requestedWorkspaceEnvironment.write.length > 0) && (
-                    <Text label="Workspace environment values" color="text-dim" />
+                    <Text
+                      label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
+                      color="text-dim"
+                    />
                   )}
                   {(['read', 'write'] as const).flatMap((verb) =>
                     requestedWorkspaceEnvironment[verb].map((selector) => {
@@ -641,8 +682,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           : busy === 'install'
                             ? 'Installing…'
                             : acquisition.candidate.installed_image_digest
-                              ? 'Update extension'
-                              : 'Install extension'
+                              ? 'Update with selected access'
+                              : 'Install with selected access'
                       }
                       enabled={!busy && acquisition.state === 'ready'}
                       onInvoke={publish}
@@ -689,7 +730,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                     )}
                   </Row>
-                  {acquisition.error && <InlineMessage label={acquisition.error} tone="danger" />}
+                  {acquisition.error && (
+                    <InlineMessage label={acquisitionFailure(acquisition.error)} tone="danger" />
+                  )}
                 </CardContent>
               )}
             </Card>
@@ -729,7 +772,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 >
                   <CardHeader
                     label={extension.name}
-                    detail={extension.version ?? extension.image_digest}
+                    detail={
+                      extension.version ? `Version ${extension.version}` : 'Version unavailable'
+                    }
                   />
                   <CardContent gap={1}>
                     <Row gap={1} wrap>
@@ -738,7 +783,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                       />
                       <Text
-                        label={compactDigest(extension.image_digest)}
+                        label={`Image ${compactDigest(extension.image_digest)}`}
                         tooltip={extension.image_digest}
                       />
                     </Row>
@@ -749,7 +794,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       failure={lifecycleFailure}
                     />
                     <Row gap={1} wrap>
-                      {extension.status.startsWith('fault:') ? (
+                      {extension.name === 'top' ? (
+                        <Badge label="Required workspace manager" tone="positive" />
+                      ) : extension.status.startsWith('fault:') ? (
                         <Button
                           label="Retry"
                           enabled={!busy}
@@ -768,14 +815,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           onInvoke={() => lifecycle(extension, 'enable')}
                         />
                       )}
-                      <ConfirmAction
-                        label="Remove"
-                        confirmLabel={`Remove ${extension.name}`}
-                        question={`Remove ${extension.name} from this workspace?`}
-                        authorityKey={extension.image_digest}
-                        enabled={!busy}
-                        onConfirm={() => lifecycle(extension, 'remove')}
-                      />
+                      {extension.name !== 'top' && (
+                        <ConfirmAction
+                          label="Remove"
+                          confirmLabel={`Remove ${extension.name}`}
+                          question={`Remove ${extension.name} from this workspace?`}
+                          authorityKey={extension.image_digest}
+                          enabled={!busy}
+                          onConfirm={() => lifecycle(extension, 'remove')}
+                        />
+                      )}
                     </Row>
                   </CardContent>
                 </Card>
@@ -825,6 +874,18 @@ function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
             Math.round((progress.current / Math.max(1, progress.total)) * 100),
           )}%)`;
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
+}
+
+function acquisitionFailure(detail: string): string {
+  const normalized = detail.replaceAll('\\n', ' ').replaceAll(/\s+/g, ' ').trim();
+  const registryMessage = /"message"\s*:\s*"([^"]+)"/.exec(normalized)?.[1];
+  if (registryMessage) {
+    return `Registry refused the image: ${registryMessage}. Check that the reference exists and is accessible.`.slice(
+      0,
+      300,
+    );
+  }
+  return normalized.slice(0, 300);
 }
 
 function lifecycleResult(action: LifecycleAction): string {
