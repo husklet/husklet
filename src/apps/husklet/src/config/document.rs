@@ -86,6 +86,7 @@ struct WsBuilder {
     env: Vec<(String, String)>,
     mounts: Vec<Mount>,
     docker_sock: Option<bool>,
+    translation_cache: Option<bool>,
     scrollback: ScrollbackValue,
     vpn: Option<VpnConfig>,
     terminal: TerminalPreferences,
@@ -117,6 +118,9 @@ impl WsBuilder {
             "cpus" => self.cpus = Some(Value::new("cpus", v).number()?),
             "memory" => self.memory_mb = Some(Value::new("memory", v).number()?),
             "docker_sock" => self.docker_sock = Some(Value::new("docker_sock", v).boolean()?),
+            "translation_cache" => {
+                self.translation_cache = Some(Value::new("translation_cache", v).boolean()?);
+            }
             "scrollback" => {
                 self.scrollback = match v.to_ascii_lowercase().as_str() {
                     "0" | "unlimited" => ScrollbackValue::Unlimited,
@@ -242,6 +246,7 @@ impl WsBuilder {
             generation,
             configuration_revision,
             docker_sock: self.docker_sock.unwrap_or(true),
+            translation_cache: self.translation_cache.unwrap_or(false),
             scrollback: match self.scrollback {
                 ScrollbackValue::Missing => Some(super::DEFAULT_SCROLLBACK_LINES),
                 ScrollbackValue::Unlimited => None,

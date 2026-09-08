@@ -8,7 +8,7 @@ use hl_ws::Arch;
 use crate::config::WorkspaceConfig;
 use crate::paths;
 
-use super::{Configuration, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE, SIGNATURE};
+use super::{CONFIGURATION_SIGNATURE, CONTAINER, Configuration, RUNTIME_SIGNATURE, SIGNATURE};
 
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;
@@ -159,8 +159,11 @@ impl Runtime {
             crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root).map_err(io::Error::other)?,
         );
         let root = workspace_root.join("containers");
-        let translation_cache = Self::translation_cache(&workspace_root, workspace);
-        let containers = Containers::builder(Config::new(&root).translation_cache(translation_cache))
+        let config = match Self::translation_cache(&workspace_root, workspace) {
+            Some(cache) => Config::new(&root).translation_cache(cache),
+            None => Config::new(&root),
+        };
+        let containers = Containers::builder(config)
             .images(images)
             .checkpoints(checkpoints)
             .build()
@@ -169,8 +172,14 @@ impl Runtime {
         Ok((containers, platform))
     }
 
-    fn translation_cache(workspace_root: &std::path::Path, workspace: &WorkspaceConfig) -> std::path::PathBuf {
-        workspace_root.join("translation-cache").join(super::RuntimeIdentity::current(workspace).as_str())
+    /// Enables the fixed-address translated-code cache only on the host/guest pair whose production
+    /// warm path is measured. Host ASLR remains untouched; guest image addresses become deterministic,
+    /// so widening this policy requires equivalent correctness and security evidence on that host.
+    fn translation_cache(workspace_root: &std::path::Path, workspace: &WorkspaceConfig) -> Option<std::path::PathBuf> {
+        (workspace.translation_cache
+            && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+            && workspace.arch == Arch::Amd64)
+            .then(|| workspace_root.join("translation-cache-v1"))
     }
 
     /// Brings a reusable container's published signatures up to date.
@@ -457,26 +466,88 @@ impl Runtime {
 mod translation_cache_tests {
     use super::Runtime;
     use crate::config::WorkspaceConfig;
+    use crate::runtime::domain::{Close, Domain};
     use hl_ws::Arch;
     use std::path::Path;
 
     #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn workspace_launches_share_only_their_runtime_cache_generation() {
-        let one = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
-        let other = WorkspaceConfig::new("two", "ubuntu:a", Arch::Amd64);
-        let path = Runtime::translation_cache(Path::new("/state/workspaces/one"), &one);
-        assert_eq!(path, Runtime::translation_cache(Path::new("/state/workspaces/one"), &one));
-        assert_ne!(path, Runtime::translation_cache(Path::new("/state/workspaces/two"), &other));
-        assert!(!path.to_string_lossy().contains("generation-"));
+        let mut one = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
+        let mut other = WorkspaceConfig::new("two", "ubuntu:a", Arch::Amd64);
+        one.translation_cache = true;
+        other.translation_cache = true;
+        let path = Runtime::translation_cache(Path::new("/state/workspaces/one"), &one).unwrap();
+        assert_eq!(
+            path,
+            Runtime::translation_cache(Path::new("/state/workspaces/one"), &one).unwrap()
+        );
+        assert_ne!(
+            path,
+            Runtime::translation_cache(Path::new("/state/workspaces/two"), &other).unwrap()
+        );
+        assert_eq!(path, Path::new("/state/workspaces/one/translation-cache-v1"));
     }
 
     #[test]
-    fn isa_and_image_changes_select_new_cache_generations() {
+    fn only_the_measured_linux_x86_pair_enables_the_cache() {
         let base = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
         let isa = WorkspaceConfig::new("one", "ubuntu:a", Arch::Arm64);
         let image = WorkspaceConfig::new("one", "ubuntu:b", Arch::Amd64);
         let root = Path::new("/state/workspaces/one");
-        assert_ne!(Runtime::translation_cache(root, &base), Runtime::translation_cache(root, &isa));
-        assert_ne!(Runtime::translation_cache(root, &base), Runtime::translation_cache(root, &image));
+        assert!(Runtime::translation_cache(root, &base).is_none());
+        let mut opted = base.clone();
+        opted.translation_cache = true;
+        assert_eq!(
+            Runtime::translation_cache(root, &opted).is_some(),
+            cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        );
+        assert!(Runtime::translation_cache(root, &isa).is_none());
+        assert_eq!(
+            Runtime::translation_cache(root, &base),
+            Runtime::translation_cache(root, &image)
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn workspace_close_and_reopen_preserve_the_warm_cache() {
+        let state = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
+        workspace.translation_cache = true;
+        let workspace_root = state.path().join("workspaces/one");
+        workspace.storage = Some(workspace_root.clone());
+        let cache = Runtime::translation_cache(&workspace_root, &workspace).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("authenticated.x64pcache"), b"warm").unwrap();
+
+        Domain::in_root(state.path(), &workspace).close(Close::Kill).unwrap();
+
+        let reopened = Runtime::translation_cache(&workspace_root, &workspace).unwrap();
+        assert_eq!(
+            std::fs::read(reopened.join("authenticated.x64pcache")).unwrap(),
+            b"warm"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    async fn product_runtime_open_reuses_its_workspace_cache_without_pruning_a_live_entry() {
+        let state = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("one", "ubuntu:a", Arch::Amd64);
+        workspace.translation_cache = true;
+        let workspace_root = state.path().join("workspaces/one");
+        workspace.storage = Some(workspace_root.clone());
+        let cache = Runtime::translation_cache(&workspace_root, &workspace).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let receipt = cache.join("authenticated.x64pcache");
+        std::fs::write(&receipt, b"warm").unwrap();
+
+        let first = Runtime::open(&workspace).await.unwrap();
+        drop(first);
+        let second = Runtime::open(&workspace).await.unwrap();
+        drop(second);
+
+        assert_eq!(std::fs::read(receipt).unwrap(), b"warm");
     }
 }

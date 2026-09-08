@@ -193,6 +193,9 @@ pub struct WorkspaceConfig {
     pub configuration_revision: String,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
+    /// Opts this workspace into persistent translated code. This improves warm-start performance but
+    /// currently fixes guest image/library addresses, reducing guest ASLR; it is therefore off by default.
+    pub translation_cache: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = explicitly unlimited. A
     /// TERMINAL knob (see `hl-ws-term`'s `TermConfig::scrollback`) persisted per-workspace here.
     pub scrollback: Option<u64>,
@@ -237,6 +240,7 @@ impl WorkspaceConfig {
             generation: uuid::Uuid::new_v4().simple().to_string(),
             configuration_revision: uuid::Uuid::new_v4().simple().to_string(),
             docker_sock: true,
+            translation_cache: false,
             scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
             terminal: TerminalPreferences::default(),
@@ -549,6 +553,9 @@ impl WorkspaceStore {
                 out.field("memory", &m.to_string());
             }
             out.field("docker_sock", if w.docker_sock { "true" } else { "false" });
+            if w.translation_cache {
+                out.field("translation_cache", "true");
+            }
             match w.scrollback {
                 Some(sb) => out.field("scrollback", &sb.to_string()),
                 None => out.field("scrollback", "unlimited"),
