@@ -226,6 +226,18 @@ pub enum Request {
         user: Option<String>,
         working_directory: Option<String>,
     },
+    /// Executes with named environment values resolved from this extension's
+    /// host-protected credential store. Requires both container execution and
+    /// credential read authority.
+    ContainerExecCredential {
+        id: String,
+        generation: u64,
+        command: Vec<String>,
+        environment: Vec<(String, ExecEnvironmentValue)>,
+        credentials: Vec<(String, String)>,
+        user: Option<String>,
+        working_directory: Option<String>,
+    },
     ContainerAttachTerminal {
         id: String,
         command: Vec<String>,
@@ -466,9 +478,18 @@ pub enum Request {
         observed: u64,
         key: String,
     },
-    CredentialRead { key: String },
-    CredentialSet { observed: u64, key: String, value: Vec<u8> },
-    CredentialRemove { observed: u64, key: String },
+    CredentialRead {
+        key: String,
+    },
+    CredentialSet {
+        observed: u64,
+        key: String,
+        value: Vec<u8>,
+    },
+    CredentialRemove {
+        observed: u64,
+        key: String,
+    },
     InterfaceOpenTab {
         title: String,
     },
@@ -546,7 +567,8 @@ impl Request {
             Self::ExecutionKill { .. }
             | Self::ExecutionCancel { .. }
             | Self::ExecutionRemove { .. }
-            | Self::ContainerExec { .. } => Capability::ContainerExecute,
+            | Self::ContainerExec { .. }
+            | Self::ContainerExecCredential { .. } => Capability::ContainerExecute,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {

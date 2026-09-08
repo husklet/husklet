@@ -96,6 +96,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.rename(...)` — `container_rename`, requires `containers:lifecycle`.
 - `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
 - `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
+- `host.containers.execWithCredentials(...)` — `container_exec_credential`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
 - Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.
 
@@ -185,6 +186,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.state.readJson(codec)` / `writeJson(observed, value, codec)` — decode and encode the bounded blob through an extension-owned runtime validator/migrator.
 - `host.state.updateJson(codec, update, { attempts })` — retries only CAS conflicts (up to 16 attempts); `update` may run more than once and must be safe to repeat.
 - `host.credentials` — named per-extension credentials in mode-0600 atomic host files with CAS mutation; reads require an exact 1–64 byte key and no value-listing API exists. Values are limited to 64 KiB, 64 entries, and 4 MiB encoded total. This is access isolation, not encryption or an OS keychain.
+- `host.containers.execWithCredentials(...)` — executes with environment values resolved by exact credential key inside the host; requires both `containers:execute` and `credentials:read`, and never returns credential bytes to JavaScript.
 
 ## Extension preferences
 

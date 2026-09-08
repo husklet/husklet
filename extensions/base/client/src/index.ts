@@ -903,6 +903,25 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           }),
           'identity',
         ),
+      execWithCredentials: async (
+        id,
+        generation,
+        { command, environment = [], credentials, user, workingDirectory },
+      ) =>
+        expect(
+          await session.call('container_exec_credential', {
+            ...containerMutation(id, generation),
+            command,
+            environment: exactExecEnvironment(environment),
+            credentials: (credentials ?? []).map(([variable, key]) => [
+              variable,
+              exactCredentialKey(key),
+            ]),
+            user: user ?? null,
+            working_directory: workingDirectory ?? null,
+          }),
+          'identity',
+        ),
       execAndWait: async (
         id,
         generation,
@@ -3493,6 +3512,7 @@ const facadeOverrides = Object.freeze({
   execution_cancel: 'containers.cancelExecution',
   execution_remove: 'containers.removeExecution',
   container_attach_terminal: 'containers.attachTerminal',
+  container_exec_credential: 'containers.execWithCredentials',
   image_pull_start: 'images.startPull',
   image_pull_status: 'images.pullStatus',
   image_pull_cancel: 'images.cancelPull',

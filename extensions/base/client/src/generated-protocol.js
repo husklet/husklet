@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:f04992d02b839097
+// Protocol artifact fnv1a64:646385a49cb0ba28
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -341,6 +341,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "container_rename": "done",
   "container_kill": "done",
   "container_exec": "identity",
+  "container_exec_credential": "identity",
   "container_attach_terminal": "identity",
   "image_list": "images",
   "image_pull_start": "image_pull_job",
@@ -464,6 +465,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "container_rename": "containers:lifecycle",
   "container_kill": "containers:lifecycle",
   "container_exec": "containers:execute",
+  "container_exec_credential": "containers:execute",
   "container_attach_terminal": "containers:attach",
   "image_list": "images:read",
   "image_pull_start": "images:pull",
@@ -9672,6 +9674,99 @@ const roots = {
                     {
                       "kind": "ref",
                       "name": "ExecEnvironmentValue"
+                    }
+                  ],
+                  "kind": "tuple"
+                }
+              }
+            },
+            {
+              "name": "user",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "working_directory",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "container_exec_credential",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "command",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "environment",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "items": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "ExecEnvironmentValue"
+                    }
+                  ],
+                  "kind": "tuple"
+                }
+              }
+            },
+            {
+              "name": "credentials",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "items": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "string"
                     }
                   ],
                   "kind": "tuple"

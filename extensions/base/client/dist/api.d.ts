@@ -1044,6 +1044,14 @@ export interface WorkspaceApi {
             user?: string;
             workingDirectory?: string;
         }): Promise<string>;
+        /** Execute while resolving named environment values inside the host credential boundary. */
+        execWithCredentials(id: string, generation: number, options: {
+            command: string[];
+            environment?: [string, string][];
+            credentials: [environment: string, key: string][];
+            user?: string;
+            workingDirectory?: string;
+        }): Promise<string>;
         attachTerminal(id: string, command: string[]): Promise<string>;
     };
     images: {

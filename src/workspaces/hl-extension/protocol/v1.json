@@ -7943,6 +7943,10 @@
       "request": "container_exec"
     },
     {
+      "capability": "containers:execute",
+      "request": "container_exec_credential"
+    },
+    {
       "capability": "containers:attach",
       "request": "container_attach_terminal"
     },
@@ -8427,6 +8431,10 @@
     {
       "reply": "identity",
       "request": "container_exec"
+    },
+    {
+      "reply": "identity",
+      "request": "container_exec_credential"
     },
     {
       "reply": "identity",
@@ -10383,6 +10391,99 @@
                       {
                         "kind": "ref",
                         "name": "ExecEnvironmentValue"
+                      }
+                    ],
+                    "kind": "tuple"
+                  }
+                }
+              },
+              {
+                "name": "user",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "working_directory",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_exec_credential",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "environment",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "items": [
+                      {
+                        "kind": "string"
+                      },
+                      {
+                        "kind": "ref",
+                        "name": "ExecEnvironmentValue"
+                      }
+                    ],
+                    "kind": "tuple"
+                  }
+                }
+              },
+              {
+                "name": "credentials",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "items": [
+                      {
+                        "kind": "string"
+                      },
+                      {
+                        "kind": "string"
                       }
                     ],
                     "kind": "tuple"
@@ -13201,7 +13302,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:16f481e1aab505b8",
+  "source_fingerprint": "fnv1a64:33c40cf7aeeb32b1",
   "specification_version": 1,
   "topics": [
     {

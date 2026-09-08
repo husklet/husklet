@@ -16,39 +16,128 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
-test('real Unix credential calls reveal only the named value and preserve CAS framing', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-'));
-  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+test('real Unix credential execution sends only the key and requires both grants', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-exec-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
   const server = net.createServer((socket) => {
-    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
-        if (frame.kind !== KIND.request) continue; calls.push(frame.payload);
-        const reply = frame.payload.call === 'credential_read'
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'identity', with: 'exec-1' },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'credential-exec',
+          granted: ['containers:execute', 'credentials:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.equal(
+      await workspace(session).containers.execWithCredentials('a'.repeat(64), 4, {
+        command: ['psql', '-c', 'select 1'],
+        credentials: [['PGPASSWORD', 'postgres.password']],
+      }),
+      'exec-1',
+    );
+    assert.deepEqual(calls, [
+      {
+        call: 'container_exec_credential',
+        with: {
+          id: 'a'.repeat(64),
+          generation: 4,
+          command: ['psql', '-c', 'select 1'],
+          environment: [],
+          credentials: [['PGPASSWORD', 'postgres.password']],
+          user: null,
+          working_directory: null,
+        },
+      },
+    ]);
+    assert.ok(!JSON.stringify(calls).includes('sentinel-password'));
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix credential calls reveal only the named value and preserve CAS framing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const reply =
+          frame.payload.call === 'credential_read'
           ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
           : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'credential-test', granted: ['credentials:read', 'credentials:write'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'credential-test',
+          granted: ['credentials:read', 'credentials:write'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
-    const session = await connect({ path: socketPath }); const credentials = workspace(session).credentials;
-    assert.deepEqual(await credentials.read('postgres.password'), { revision: 7, value: [0, 255, 10] });
+    const session = await connect({ path: socketPath });
+    const credentials = workspace(session).credentials;
+    assert.deepEqual(await credentials.read('postgres.password'), {
+      revision: 7,
+      value: [0, 255, 10],
+    });
     assert.equal(await credentials.set(7, 'postgres.password', [0, 255, 10]), 8);
     assert.equal(await credentials.remove(8, 'postgres.password'), 9);
     assert.deepEqual(calls, [
       { call: 'credential_read', with: { key: 'postgres.password' } },
-      { call: 'credential_set', with: { observed: 7, key: 'postgres.password', value: [0, 255, 10] } },
+      {
+        call: 'credential_set',
+        with: { observed: 7, key: 'postgres.password', value: [0, 255, 10] },
+      },
       { call: 'credential_remove', with: { observed: 8, key: 'postgres.password' } },
     ]);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
-    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -57,8 +146,13 @@ test('real Unix container inventory preserves a published PostgreSQL port', asyn
   const socketPath = path.join(directory, 'host.sock');
   const connections = new Set();
   const container = {
-    id: 'db-id', name: 'postgres', image: 'postgres:17', state: 'running', created: 1,
-    generation: 4, ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+    id: 'db-id',
+    name: 'postgres',
+    image: 'postgres:17',
+    state: 'running',
+    created: 1,
+    generation: 4,
+    ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
   };
   const server = net.createServer((socket) => {
     connections.add(socket);
@@ -68,14 +162,29 @@ test('real Unix container inventory preserves a published PostgreSQL port', asyn
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         assert.deepEqual(frame.payload, { call: 'container_list' });
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
-          reply: 'containers', with: [container],
-        } }));
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'containers',
+              with: [container],
+            },
+          }),
+        );
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'postgres-port', granted: ['containers:read'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'postgres-port',
+          granted: ['containers:read'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -103,25 +212,45 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
-          reply: 'file_changes', with: page,
-        } }));
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'file_changes',
+              with: page,
+            },
+          }),
+        );
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'filtered-cursor', granted: ['filesystem:read'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'filtered-cursor',
+          granted: ['filesystem:read'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
     const controller = new AbortController();
     let delivered;
-    const seen = new Promise((resolve) => { delivered = resolve; });
-    const stop = await workspace(session).files.watchChanges((value) => {
+    const seen = new Promise((resolve) => {
+      delivered = resolve;
+    });
+    const stop = await workspace(session).files.watchChanges(
+      (value) => {
       controller.abort();
       delivered(value);
-    }, { after: 7, pageSize: 32, pollMs: 1_000, signal: controller.signal });
+      },
+      { after: 7, pageSize: 32, pollMs: 1_000, signal: controller.signal },
+    );
     assert.deepEqual(await seen, page);
     await stop();
     assert.deepEqual(calls, [{ call: 'filesystem_changes', with: { after: 7, limit: 32 } }]);
@@ -138,8 +267,17 @@ test('real Unix text wait reconciles an unread revision without requiring a late
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
   const connections = new Set();
-  const snapshot = { slot: 'shell', generation: 4, revision: 9, columns: 80, rows: 24,
-    lines: ['unread output'], cursor_column: 13, cursor_row: 0, truncated: false };
+  const snapshot = {
+    slot: 'shell',
+    generation: 4,
+    revision: 9,
+    columns: 80,
+    rows: 24,
+    lines: ['unread output'],
+    cursor_column: 13,
+    cursor_row: 0,
+    truncated: false,
+  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
@@ -148,31 +286,61 @@ test('real Unix text wait reconciles an unread revision without requiring a late
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload.call);
-        const reply = frame.payload.call === 'pane_list'
-          ? { reply: 'panes', with: { panes: [{ slot: 'shell', generation: 4, revision: 9,
-            kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }], truncated: false } }
+        const reply =
+          frame.payload.call === 'pane_list'
+            ? {
+                reply: 'panes',
+                with: {
+                  panes: [
+                    {
+                      slot: 'shell',
+                      generation: 4,
+                      revision: 9,
+                      kind: 'terminal',
+                      provider: null,
+                      tab: 'tab-1',
+                      title: 'Shell',
+                      focused: true,
+                    },
+                  ],
+                  truncated: false,
+                },
+              }
           : frame.payload.call === 'terminal_read_pane'
             ? { reply: 'text', with: snapshot }
             : { reply: 'done' };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'text-reconcile', granted: ['panes:observe', 'terminals:output'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'text-reconcile',
+          granted: ['panes:observe', 'terminals:output'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
     const result = await workspace(session).terminal.waitForText(
-      'shell', { generation: 4, revision: 8 }, { lines: 40, timeoutMs: 1_000 },
+      'shell',
+      { generation: 4, revision: 8 },
+      { lines: 40, timeoutMs: 1_000 },
     );
     assert.deepEqual(result, {
       changed: true,
       readable: { kind: 'terminal', text: 'unread output', snapshot },
     });
     assert.deepEqual(calls, [
-      'event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe',
+      'event_subscribe',
+      'pane_list',
+      'terminal_read_pane',
+      'event_unsubscribe',
     ]);
     await session.close();
   } finally {
@@ -185,39 +353,90 @@ test('real Unix text wait reconciles an unread revision without requiring a late
 test('real Unix text wait aborts promptly, releases its subscription, and leaves reconnect usable', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-abort-'));
   const socketPath = path.join(directory, 'host.sock');
-  const calls = []; const connections = new Set(); let initialRead;
-  const readReady = new Promise((resolve) => { initialRead = resolve; });
+  const calls = [];
+  const connections = new Set();
+  let initialRead;
+  const readReady = new Promise((resolve) => {
+    initialRead = resolve;
+  });
   const server = net.createServer((socket) => {
-    connections.add(socket); socket.on('close', () => connections.delete(socket));
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
     const reader = new Reader();
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload.call);
-        const reply = frame.payload.call === 'pane_list'
-          ? { reply: 'panes', with: { panes: [{ slot: 'shell', generation: 2, revision: 3,
-            kind: 'terminal', provider: null, tab: 'tab-1', title: 'Shell', focused: true }], truncated: false } }
+        const reply =
+          frame.payload.call === 'pane_list'
+            ? {
+                reply: 'panes',
+                with: {
+                  panes: [
+                    {
+                      slot: 'shell',
+                      generation: 2,
+                      revision: 3,
+                      kind: 'terminal',
+                      provider: null,
+                      tab: 'tab-1',
+                      title: 'Shell',
+                      focused: true,
+                    },
+                  ],
+                  truncated: false,
+                },
+              }
           : frame.payload.call === 'terminal_read_pane'
-            ? { reply: 'text', with: { slot: 'shell', generation: 2, revision: 3, columns: 80, rows: 24,
-              lines: ['still running'], cursor_column: 13, cursor_row: 0, truncated: false } }
+              ? {
+                  reply: 'text',
+                  with: {
+                    slot: 'shell',
+                    generation: 2,
+                    revision: 3,
+                    columns: 80,
+                    rows: 24,
+                    lines: ['still running'],
+                    cursor_column: 13,
+                    cursor_row: 0,
+                    truncated: false,
+                  },
+                }
             : { reply: 'done' };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
         if (frame.payload.call === 'terminal_read_pane') initialRead();
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'text-abort', granted: ['panes:observe', 'terminals:output'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'text-abort',
+          granted: ['panes:observe', 'terminals:output'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
-    const session = await connect({ path: socketPath }); const controller = new AbortController();
+    const session = await connect({ path: socketPath });
+    const controller = new AbortController();
     const pending = workspace(session).terminal.waitForText(
-      'shell', { generation: 2, revision: 3 }, { timeoutMs: 30_000, signal: controller.signal },
+      'shell',
+      { generation: 2, revision: 3 },
+      { timeoutMs: 30_000, signal: controller.signal },
     );
-    await readReady; controller.abort(new Error('agent cancelled'));
+    await readReady;
+    controller.abort(new Error('agent cancelled'));
     await assert.rejects(pending, /agent cancelled|aborted/);
-    assert.deepEqual(calls, ['event_subscribe', 'pane_list', 'terminal_read_pane', 'event_unsubscribe']);
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'pane_list',
+      'terminal_read_pane',
+      'event_unsubscribe',
+    ]);
     assert.equal((await workspace(session).terminal.panes()).panes[0].slot, 'shell');
     await session.close();
   } finally {
@@ -329,7 +548,11 @@ test('real Unix private state preserves bytes and independent read/write authori
     assert.deepEqual(requests, [{ call: 'state_read' }]);
     await assert.rejects(api.state.write('absent', new Uint8Array(1024 * 1024 + 1)), /1 MiB/);
     await assert.rejects(api.state.write('latest', [1]), /exact identity/);
-    assert.equal(requests.length, 1, 'denied, malformed, and oversized writes never reach socket framing');
+    assert.equal(
+      requests.length,
+      1,
+      'denied, malformed, and oversized writes never reach socket framing',
+    );
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -361,14 +584,27 @@ test('real Unix private state exposes a stale-writer conflict instead of losing 
           identity = `sha256:${'a'.repeat(64)}`;
           payload = { reply: 'identity', with: identity };
         }
-        socket.write(encode({
-          channel: frame.channel, kind: KIND.response, flags: payload.error ? 3 : 1, payload,
-        }));
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            flags: payload.error ? 3 : 1,
+            payload,
+          }),
+        );
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'state-cas-fixture', granted: ['state:read', 'state:write'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'state-cas-fixture',
+          granted: ['state:read', 'state:write'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -378,7 +614,10 @@ test('real Unix private state exposes a stale-writer conflict instead of losing 
     const background = await api.state.read();
     assert.equal(await api.state.write(background.identity, [2]), `sha256:${'a'.repeat(64)}`);
     await assert.rejects(api.state.write(foreground.identity, [1]), /changed after it was read/);
-    assert.deepEqual(await api.state.read(), { identity: `sha256:${'a'.repeat(64)}`, contents: [2] });
+    assert.deepEqual(await api.state.read(), {
+      identity: `sha256:${'a'.repeat(64)}`,
+      contents: [2],
+    });
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -399,22 +638,55 @@ test('real Unix catalogue carries bounded compatibility hints', async () => {
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         assert.deepEqual(frame.payload, { call: 'extension_catalogue' });
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
-          reply: 'extension_catalogue', with: { complete: true, entries: [{
-            id: 'storybook', title: 'Component playground', description: 'Native components', version: '1.4.0',
-            reference: 'registry/storybook:latest', publisher: 'Husklet', source: 'first-party',
-            protocol: 1, architectures: ['amd64', 'arm64'],
-          }, {
-            id: 'metrics', title: 'Metrics explorer', description: 'Workspace metrics', version: '2.1.0',
-            reference: 'registry/metrics:2.1.0', publisher: 'Example', source: 'partner:metrics',
-            protocol: 1, architectures: ['amd64'],
-          }] },
-        } }));
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'extension_catalogue',
+              with: {
+                complete: true,
+                entries: [
+                  {
+                    id: 'storybook',
+                    title: 'Component playground',
+                    description: 'Native components',
+                    version: '1.4.0',
+                    reference: 'registry/storybook:latest',
+                    publisher: 'Husklet',
+                    source: 'first-party',
+                    protocol: 1,
+                    architectures: ['amd64', 'arm64'],
+                  },
+                  {
+                    id: 'metrics',
+                    title: 'Metrics explorer',
+                    description: 'Workspace metrics',
+                    version: '2.1.0',
+                    reference: 'registry/metrics:2.1.0',
+                    publisher: 'Example',
+                    source: 'partner:metrics',
+                    protocol: 1,
+                    architectures: ['amd64'],
+                  },
+                ],
+              },
+            },
+          }),
+        );
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'fixture', granted: ['extensions:read'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['extensions:read'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -450,22 +722,45 @@ test('real Unix extension inventory preserves every effective permission dimensi
             kind: KIND.response,
             payload: {
               reply: 'extensions',
-              with: [{
-                name: 'database-tools', image_digest: 'sha256:reviewed', status: 'standby',
-                version: '2.0.0', enabled: false, pane_providers: [],
+              with: [
+                {
+                  name: 'database-tools',
+                  image_digest: 'sha256:reviewed',
+                  status: 'standby',
+                  version: '2.0.0',
+                  enabled: false,
+                  pane_providers: [],
                 granted: ['containers:read', 'filesystem:write'],
                 containers: { selectors: [{ name: 'postgres' }], create: false },
-                filesystem: { read: [], write: [{ exact: 'database.json' }], create: [], delete: [], rename: [] },
-                workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] },
-              }],
+                  filesystem: {
+                    read: [],
+                    write: [{ exact: 'database.json' }],
+                    create: [],
+                    delete: [],
+                    rename: [],
+                  },
+                  workspace_environment: {
+                    read: [{ workspace: 'dev', name: 'PGPASSWORD' }],
+                    write: [],
+                  },
+                },
+              ],
             },
           }),
         );
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'fixture', granted: ['extensions:read'],
-    } }));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['extensions:read'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -474,7 +769,9 @@ test('real Unix extension inventory preserves every effective permission dimensi
     assert.deepEqual(installed.granted, ['containers:read', 'filesystem:write']);
     assert.deepEqual(installed.containers.selectors, [{ name: 'postgres' }]);
     assert.deepEqual(installed.filesystem.write, [{ exact: 'database.json' }]);
-    assert.deepEqual(installed.workspace_environment.read, [{ workspace: 'dev', name: 'PGPASSWORD' }]);
+    assert.deepEqual(installed.workspace_environment.read, [
+      { workspace: 'dev', name: 'PGPASSWORD' },
+    ]);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -503,7 +800,9 @@ test('real Unix filesystem inventory can reconcile immediately after reconnect',
             payload: {
               reply: 'file_inventory',
               with: {
-                entries: [{ path: 'src/index.ts', directory: false, size: 17, identity: 'sha256:abc' }],
+                entries: [
+                  { path: 'src/index.ts', directory: false, size: 17, identity: 'sha256:abc' },
+                ],
                 complete: false,
                 coalesced: 9,
                 revision: 12,
@@ -560,7 +859,16 @@ test('real Unix execution cancellation is one bounded ordered operation', async 
       encode({
         channel: CONTROL,
         kind: KIND.open,
-        payload: { protocol: 1, peer: 'fixture', granted: ['containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'] },
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: [
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
+        },
       }),
     );
   });
@@ -676,14 +984,17 @@ test('real Unix streaming cancellation preserves inspection, cleanup, and sessio
     assert.deepEqual(await containers.execution(executionId), execution);
     await containers.removeExecution(executionId);
     assert.deepEqual(await containers.list(), []);
-    assert.deepEqual(requests.map(({ call }) => call), [
+    assert.deepEqual(
+      requests.map(({ call }) => call),
+      [
       'container_exec',
       'execution_output',
       'execution_cancel',
       'execution_inspect',
       'execution_remove',
       'container_list',
-    ]);
+      ],
+    );
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -2079,9 +2390,7 @@ test('a timed-out real Unix heartbeat closes concurrent calls before a late pong
       for (const frame of reader.take(chunk)) {
         if (frame.kind === KIND.ping) latePong = frame;
         if (frame.payload?.call === 'event_subscribe') {
-          socket.write(
-            encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
-          );
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
         }
         if (frame.payload?.call === 'state_write') {
           reportLargeCall();
@@ -2131,7 +2440,10 @@ test('a timed-out real Unix heartbeat closes concurrent calls before a late pong
     await session.closed;
     assert.equal(closed.length, 1, 'timeout establishes exactly one close boundary');
     assert(latePong, 'the peer retained a real heartbeat token');
-    await assert.rejects(session.call('state_write', { observed: 'absent', contents: [] }), /closed/);
+    await assert.rejects(
+      session.call('state_write', { observed: 'absent', contents: [] }),
+      /closed/,
+    );
   } finally {
     for (const connection of connections) connection.destroy();
     await new Promise((resolve) => server.close(resolve));
@@ -2255,7 +2567,11 @@ test('truncated Unix frame tears down a pending call and subscription before cle
     assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
     const delivered = events.length;
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(events.length, delivered, 'closed sessions deliver no later subscription callbacks');
+    assert.equal(
+      events.length,
+      delivered,
+      'closed sessions deliver no later subscription callbacks',
+    );
     await assert.rejects(stop(), /closed/);
 
     const second = await connect({ path: socketPath, timeout: 1_000 });
@@ -2421,7 +2737,9 @@ test('a real Unix event flood cannot outgrow callback delivery or cross reconnec
     const first = await connect({ path: socketPath, pendingLimit: 2, timeout: 1_000 });
     const host = workspace(first);
     const stopFirst = await host.watchContainers((snapshot) => delivered.push(['first', snapshot]));
-    const stopSecond = await host.watchContainers((snapshot) => delivered.push(['second', snapshot]));
+    const stopSecond = await host.watchContainers((snapshot) =>
+      delivered.push(['second', snapshot]),
+    );
 
     const pending = workspace(first, { signal: controller.signal }).info();
     await assert.rejects(pending, /event delivery limit of 2 is exhausted/);
@@ -2819,7 +3137,10 @@ test('real Unix event credit waits for slow async consumers and serializes deliv
   const releases = [];
   const entered = [];
   let reportEntered;
-  const entry = () => new Promise((resolve) => { reportEntered = resolve; });
+  const entry = () =>
+    new Promise((resolve) => {
+      reportEntered = resolve;
+    });
   let nextEntry = entry();
   const session = await connect({
     path: socketPath,
@@ -2836,10 +3157,20 @@ test('real Unix event credit waits for slow async consumers and serializes deliv
       new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 200)),
     ]);
   try {
-    peer.write(Buffer.concat([
-      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
-      encode({ channel: 19, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
-    ]));
+    peer.write(
+      Buffer.concat([
+        encode({
+          channel: 19,
+          kind: KIND.event,
+          payload: { pane_provider: 'one', slot: 'pane-1' },
+        }),
+        encode({
+          channel: 19,
+          kind: KIND.event,
+          payload: { pane_provider: 'two', slot: 'pane-2' },
+        }),
+      ]),
+    );
     await promptly(nextEntry, 'first async listener');
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(entered, ['pane-1']);
@@ -2853,7 +3184,11 @@ test('real Unix event credit waits for slow async consumers and serializes deliv
     assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 1);
 
     releases.shift()();
-    for (let attempt = 0; attempt < 20 && returned.filter((frame) => frame.kind === KIND.credit).length < 2; attempt += 1)
+    for (
+      let attempt = 0;
+      attempt < 20 && returned.filter((frame) => frame.kind === KIND.credit).length < 2;
+      attempt += 1
+    )
       await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(returned.filter((frame) => frame.kind === KIND.credit).length, 2);
   } finally {
@@ -2883,17 +3218,31 @@ test('real Unix half-close revokes queued event work from the old session genera
   const entered = [];
   let release;
   let reportEntered;
-  const firstEntered = new Promise((resolve) => { reportEntered = resolve; });
+  const firstEntered = new Promise((resolve) => {
+    reportEntered = resolve;
+  });
   const dispose = session.onEvent(async (event) => {
     entered.push(event.slot);
     reportEntered();
-    await new Promise((resolve) => { release = resolve; });
+    await new Promise((resolve) => {
+      release = resolve;
+    });
   });
   try {
-    peer.write(Buffer.concat([
-      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
-      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
-    ]));
+    peer.write(
+      Buffer.concat([
+        encode({
+          channel: 23,
+          kind: KIND.event,
+          payload: { pane_provider: 'one', slot: 'pane-1' },
+        }),
+        encode({
+          channel: 23,
+          kind: KIND.event,
+          payload: { pane_provider: 'two', slot: 'pane-2' },
+        }),
+      ]),
+    );
     await Promise.race([
       firstEntered,
       new Promise((_, reject) => setTimeout(() => reject(new Error('first event timed out')), 200)),
@@ -3287,7 +3636,13 @@ test('real Unix container start wait arms first and ignores unchanged initial st
         payload: {
           protocol: 1,
           peer: 'container-start-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -3360,7 +3715,13 @@ test('real Unix container stop wait arms first and ignores unchanged running sta
         payload: {
           protocol: 1,
           peer: 'container-stop-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -3445,7 +3806,13 @@ test('real Unix container remove wait rejects incomplete absence then accepts co
         payload: {
           protocol: 1,
           peer: 'remove-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -3522,7 +3889,13 @@ test('real Unix restart wait requires the same container at a newer running gene
         payload: {
           protocol: 1,
           peer: 'restart-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -4125,7 +4498,11 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
       'event_unsubscribe',
     ]);
     assert.equal((await terminal.read(slot, 20)).revision, 8);
-    assert.equal(calls.at(-1), 'terminal_read_pane', 'the session remains usable after cancellation');
+    assert.equal(
+      calls.at(-1),
+      'terminal_read_pane',
+      'the session remains usable after cancellation',
+    );
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -4202,7 +4579,13 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
         payload: {
           protocol: 1,
           peer: 'signal-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -4320,7 +4703,13 @@ test('real Unix removeExecutionAndWait requires a finished cursor and complete l
         payload: {
           protocol: 1,
           peer: 'execution-remove-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -4902,7 +5291,13 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
         payload: {
           protocol: 1,
           peer: 'exec-wait',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -4981,7 +5376,13 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
         payload: {
           protocol: 1,
           peer: 'exec-wait-failure',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
@@ -5071,7 +5472,13 @@ test('real Unix execAndWait preserves the completed execution when bounded log r
         payload: {
           protocol: 1,
           peer: 'exec-log-failure',
-          granted: ['containers:read', 'containers:create', 'containers:execute', 'containers:lifecycle', 'containers:remove'],
+          granted: [
+            'containers:read',
+            'containers:create',
+            'containers:execute',
+            'containers:lifecycle',
+            'containers:remove',
+          ],
         },
       }),
     );
