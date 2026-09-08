@@ -1714,11 +1714,25 @@ mod tests {
         shake(&mut wire, PROTOCOL);
         let contents = vec![255; 1024 * 1024];
 
-        let written = ask(&mut wire, &Request::StateWrite { contents: contents.clone() });
-        assert!(matches!(codec::read_reply(&written), Ok(Reply::Done)));
+        let initial = ask(&mut wire, &Request::StateRead);
+        let Ok(Reply::State(initial)) = codec::read_reply(&initial) else {
+            panic!("initial state must be readable");
+        };
+        let written = ask(
+            &mut wire,
+            &Request::StateWrite {
+                observed: initial.identity,
+                contents: contents.clone(),
+            },
+        );
+        let Ok(Reply::Identity(identity)) = codec::read_reply(&written) else {
+            panic!("full state quota must be writable");
+        };
         let read = ask(&mut wire, &Request::StateRead);
-        assert!(matches!(codec::read_reply(&read), Ok(Reply::State(state)) if state.contents == contents));
-        let cleared = ask(&mut wire, &Request::StateClear);
+        assert!(
+            matches!(codec::read_reply(&read), Ok(Reply::State(state)) if state.identity == identity && state.contents == contents)
+        );
+        let cleared = ask(&mut wire, &Request::StateClear { observed: identity });
         assert!(matches!(codec::read_reply(&cleared), Ok(Reply::Done)));
         let empty = ask(&mut wire, &Request::StateRead);
         assert!(matches!(codec::read_reply(&empty), Ok(Reply::State(state)) if state.contents.is_empty()));
