@@ -167,6 +167,13 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(labelled(stage, 'Save workspace'));
   assert.equal(labelled(stage, 'Unsaved changes'), undefined);
+  change(stage, 'registry/image:tag', 'alpine:3.20');
+  await settled();
+  assert.equal(
+    labelled(stage, 'Unsaved changes'),
+    undefined,
+    'a native initialization callback carrying the loaded value does not dirty the form',
+  );
   change(stage, 'registry/image:tag', 'alpine:3.21');
   await settled();
   const unsaved = labelled(stage, 'Unsaved changes').SetProp.id;

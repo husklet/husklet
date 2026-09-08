@@ -41,9 +41,10 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const [error, setError] = React.useState('');
   const [saved, setSaved] = React.useState('');
   const [saving, setSaving] = React.useState(false);
-  const [dirty, setDirty] = React.useState(false);
+  const [hydrated, setHydrated] = React.useState(false);
   const [expanded, setExpanded] = React.useState('runtime');
   const load = React.useCallback(async () => {
+    setHydrated(false);
     try {
       const current = await api.info();
       const inspected = await api.inspect(current.name);
@@ -52,7 +53,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       setNumbers(numberDraft(inspected));
       setError('');
       setSaved('');
-      setDirty(false);
+      setHydrated(true);
     } catch (cause) {
       setError(message(cause));
     }
@@ -62,7 +63,6 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   }, [load]);
   const changed = () => {
     setSaved('');
-    setDirty(true);
   };
   const change = <K extends keyof WorkspaceConfiguration>(
     key: K,
@@ -124,7 +124,6 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             setConfiguration({ ...inspected, environment: candidate.environment });
             setObserved(inspected);
             setNumbers(numberDraft(inspected));
-            setDirty(true);
             setSaved('');
             setError(
               `Settings were saved, but environment changes were not. Reloaded the latest workspace and retained your concealed environment edits for review and retry: ${patchError}`,
@@ -140,7 +139,6 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       setConfiguration(updated);
       setObserved(updated);
       setNumbers(numberDraft(updated));
-      setDirty(false);
       setError('');
       setSaved(
         'Workspace settings saved. Reopen panes or restart the workspace for runtime changes.',
@@ -167,6 +165,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       </Column>
     );
   const invalid = validationMessage(configuration, numbers);
+  const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
     <Scroll grow height="fill">
       <Column pad={2} gap={2}>
@@ -179,6 +178,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               width={CONTROL_WIDTH}
               wrap
             />
+            {dirty ? <Text label="Unsaved changes" color="warning" /> : null}
             <CardActions>
               <Button
                 label={saving ? 'Saving…' : 'Save workspace'}
@@ -186,7 +186,6 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                 onInvoke={save}
               />
               <Button label="Discard changes" enabled={!saving && dirty} onInvoke={load} />
-              {dirty ? <Text label="Unsaved changes" color="warning" /> : null}
             </CardActions>
             {invalid && <InlineMessage label={invalid} tone="danger" />}
             {error && <InlineMessage label={error} tone="danger" />}
@@ -336,6 +335,18 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
         </Card>
       </Column>
     </Scroll>
+  );
+}
+
+function changedFrom(
+  configuration: WorkspaceConfiguration,
+  observed: WorkspaceConfiguration | null,
+  numbers: Numbers,
+) {
+  if (!observed) return false;
+  return (
+    JSON.stringify(configuration) !== JSON.stringify(observed) ||
+    JSON.stringify(numbers) !== JSON.stringify(numberDraft(observed))
   );
 }
 
