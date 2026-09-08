@@ -133,6 +133,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("terminal_ratio_observed", "done"),
     ("terminal_switch_occupant", "done"),
     ("terminal_switch_occupant_observed", "done"),
+    ("filesystem_inventory", "file_inventory"),
     ("filesystem_list", "entries"),
     ("filesystem_list_page", "directory_page"),
     ("filesystem_read", "contents"),
@@ -218,7 +219,8 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_ratio_observed"
         | "terminal_switch_occupant"
         | "terminal_switch_occupant_observed" => Capability::TerminalControl,
-        "filesystem_list"
+        "filesystem_inventory"
+        | "filesystem_list"
         | "filesystem_list_page"
         | "filesystem_read"
         | "filesystem_read_range"

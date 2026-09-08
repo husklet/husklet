@@ -1150,6 +1150,8 @@ export interface WorkspaceApi {
     >;
   };
   files: {
+    /** Returns the current bounded inventory for the exact consented read roots. */
+    inventory(): Promise<FileInventory>;
     list(path: string): Promise<FileEntry[]>;
     /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
     listPage(

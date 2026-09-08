@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:58dc288c389c7301
+// Protocol artifact fnv1a64:145d9c22d1dbc977
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -315,6 +315,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "terminal_ratio_observed": "done",
   "terminal_switch_occupant": "done",
   "terminal_switch_occupant_observed": "done",
+  "filesystem_inventory": "file_inventory",
   "filesystem_list": "entries",
   "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
@@ -428,6 +429,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_ratio_observed": "terminals:control",
   "terminal_switch_occupant": "terminals:control",
   "terminal_switch_occupant_observed": "terminals:control",
+  "filesystem_inventory": "filesystem:read",
   "filesystem_list": "filesystem:read",
   "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
@@ -7593,6 +7595,16 @@ const roots = {
         }
       },
       {
+        "name": "file_inventory",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "FileInventory"
+          }
+        }
+      },
+      {
         "name": "entries",
         "payload": {
           "kind": "newtype",
@@ -9753,6 +9765,12 @@ const roots = {
             }
           ],
           "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_inventory",
+        "payload": {
+          "kind": "unit"
         }
       },
       {

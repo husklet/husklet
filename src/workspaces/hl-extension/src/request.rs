@@ -386,6 +386,7 @@ pub enum Request {
         revision: u64,
         target: crate::port::PaneOccupantTarget,
     },
+    FilesystemInventory,
     FilesystemList {
         path: RelativePath,
     },
@@ -560,7 +561,8 @@ impl Request {
             Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
-            Self::FilesystemList { .. }
+            Self::FilesystemInventory
+            | Self::FilesystemList { .. }
             | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
             | Self::FilesystemReadRange { .. }
@@ -720,6 +722,7 @@ pub enum Reply {
     Panes(PaneInventory),
     Text(PaneText),
     Semantics(crate::port::PaneSemanticTree),
+    FileInventory(crate::port::FileInventory),
     Entries(Vec<Entry>),
     DirectoryPage(crate::port::DirectoryPage),
     Entry(Entry),

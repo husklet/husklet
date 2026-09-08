@@ -27,9 +27,11 @@ type Group = Snapshot | Failure;
 export function Processes({
   api,
   resource,
+  onOpenContainers,
 }: {
   api: WorkspaceApi;
   resource: Resource<ContainerSummary>;
+  onOpenContainers?: () => void;
 }) {
   const [snapshots, setSnapshots] = React.useState<Snapshot[]>([]);
   const [failures, setFailures] = React.useState<Failure[]>([]);
@@ -96,8 +98,11 @@ export function Processes({
           ? 'empty'
           : 'ready';
   return (
-    <Page title="Processes" subtitle="A bounded snapshot across all visible containers.">
-      <Toolbar loading={state === 'loading'} onRefresh={load} />
+    <Page
+      title="Processes"
+      subtitle="Live process snapshots across visible containers; nothing here is a durable command record."
+      action={<Toolbar loading={state === 'loading'} onRefresh={load} />}
+    >
       <ResourceState
         state={state}
         loadingLabel="Reading processes…"
@@ -152,6 +157,11 @@ export function Processes({
           />
         ) : null}
       </ResourceState>
+      {state === 'empty' && onOpenContainers ? (
+        <Row width="fill" justify="center">
+          <Button label="Open containers" onInvoke={onOpenContainers} />
+        </Row>
+      ) : null}
       {snapshots.length > 0 && failures.length > 0 ? (
         <Column gap={1}>
           <Text
@@ -179,16 +189,21 @@ export function Processes({
 function Page({
   title,
   subtitle,
+  action,
   children,
 }: {
   title: string;
   subtitle: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <Scroll grow height="fill">
       <Column pad={4} gap={2}>
-        <Heading label={title} scale="title" />
+        <Row gap={2} align="center" justify="start" wrap>
+          <Heading label={title} scale="title" />
+          {action}
+        </Row>
         <Text label={subtitle} color="text-dim" wrap />
         {children}
       </Column>

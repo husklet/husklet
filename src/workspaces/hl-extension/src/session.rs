@@ -504,7 +504,8 @@ impl Session {
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
-            Request::FilesystemList { .. }
+            Request::FilesystemInventory
+            | Request::FilesystemList { .. }
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
             | Request::FilesystemReadRange { .. }
@@ -1162,6 +1163,10 @@ impl Session {
 
     fn files(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         match request {
+            Request::FilesystemInventory => {
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::FileInventory(port.inventory(&self.filesystem.read)?))
+            }
             Request::FilesystemList { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Entries(port.list(path)?))

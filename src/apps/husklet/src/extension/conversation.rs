@@ -937,9 +937,24 @@ impl Conversation {
             // generation. Both checks happen in one dispatch.
             action.generation = pane.generation;
         }
+        // A terminal read mints authority for a later byte write. Bracket the
+        // requested snapshot with the canonical pane observation so output
+        // arriving during the read cannot be returned with a newer cursor.
+        let terminal_read_generation = if let hl_extension::Request::TerminalReadPane { slot, .. } = &request {
+            Some(self.observe_pane_generation(services, slot)?)
+        } else {
+            None
+        };
         let mut answer = self.session.dispatch(&request, services);
         if let Ok(reply) = &mut answer {
             self.attach_pane_cursors(reply, services);
+            if let (Some(before), Reply::Text(text)) = (terminal_read_generation, reply) {
+                if text.generation != before {
+                    answer = Err(Failure::Conflict {
+                        detail: format!("pane {} changed while its terminal screen was read", text.slot),
+                    });
+                }
+            }
         }
         if answer.is_ok() {
             match &request {
@@ -966,6 +981,23 @@ impl Conversation {
             }
         }
         answer
+    }
+
+    fn observe_pane_generation(&mut self, services: &Services<'_>, slot: &str) -> Result<u64, Failure> {
+        let topology = services.terminal.topology().ok().map(|topology| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&topology).unwrap_or_default().hash(&mut hash);
+            hash.finish()
+        });
+        let inventory = services.terminal.pane_inventory()?;
+        let pane = inventory
+            .panes
+            .iter()
+            .find(|pane| pane.slot == slot)
+            .ok_or_else(|| Failure::Absent {
+                detail: format!("pane {slot} is absent"),
+            })?;
+        Ok(self.pane_state(services, pane, topology).2)
     }
 
     fn attach_pane_cursors(&mut self, reply: &mut Reply, services: &Services<'_>) {
@@ -1111,6 +1143,8 @@ mod tests {
     struct Ledger {
         reached: Mutex<Vec<&'static str>>,
         semantic_revision: AtomicU64,
+        terminal_transition: AtomicU64,
+        terminal_reads: AtomicU64,
     }
 
     impl Ledger {
@@ -1124,6 +1158,10 @@ mod tests {
 
         fn semantic_revision(&self, revision: u64) {
             self.semantic_revision.store(revision, Ordering::Release);
+        }
+
+        fn transition_terminal_during_read(&self) {
+            self.terminal_transition.store(1, Ordering::Release);
         }
     }
 
@@ -1353,13 +1391,19 @@ mod tests {
 
         fn read(&self, slot: &str, lines: usize) -> Result<hl_extension::port::PaneText, HostError> {
             self.ledger.note("terminal.read");
+            let read = self.ledger.terminal_reads.fetch_add(1, Ordering::AcqRel);
+            let transitioned = self.ledger.terminal_transition.load(Ordering::Acquire) != 0 && read >= 2;
             Ok(hl_extension::port::PaneText {
                 slot: slot.to_owned(),
                 generation: 0,
                 revision: 0,
                 columns: 120,
                 rows: 40,
-                lines: vec![format!("at most {lines}")],
+                lines: vec![if transitioned {
+                    "changed while reading".to_owned()
+                } else {
+                    format!("at most {lines}")
+                }],
                 cursor_column: 12,
                 cursor_row: 3,
                 truncated: false,
@@ -1629,6 +1673,26 @@ mod tests {
             let authority = Authority::new(
                 ExtensionName::new("semantic-reader").expect("name"),
                 Grant::new([Capability::PaneSemanticRead]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn terminal_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("terminal-agent").expect("name"),
+                Grant::new([
+                    Capability::ContainerRead,
+                    Capability::TerminalOutput,
+                    Capability::TerminalControl,
+                ]),
                 Vec::new(),
             );
             let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
@@ -3378,6 +3442,31 @@ mod tests {
         let later = ask(&mut wire, &Request::ContainerList);
         assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
         assert_eq!(ledger.reached(), vec!["containers.list"]);
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn terminal_read_refuses_to_pair_changed_text_with_fresh_write_authority() {
+        let ledger = Arc::new(Ledger::default());
+        ledger.transition_terminal_during_read();
+        let (theirs, served) = terminal_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        // The fixture changes after the canonical observation and requested
+        // text read, but before the authority cursor would be attached.
+        let read = ask(
+            &mut wire,
+            &Request::TerminalReadPane {
+                slot: "s1".into(),
+                lines: Some(199),
+            },
+        );
+        assert!(matches!(codec::read_failure(&read), Ok(Failure::Conflict { .. })));
+
+        let later = ask(&mut wire, &Request::ContainerList);
+        assert!(matches!(codec::read_reply(&later), Ok(Reply::Containers(_))));
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
