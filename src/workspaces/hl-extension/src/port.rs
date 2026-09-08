@@ -783,6 +783,12 @@ pub struct ExtensionCatalogueEntry {
     pub reference: String,
     pub publisher: String,
     pub source: String,
+    /// Discovery-time protocol compatibility hint; acquisition remains authoritative.
+    #[serde(default)]
+    pub protocol: u32,
+    /// Bounded OCI architecture names advertised by the catalogue source.
+    #[serde(default)]
+    pub architectures: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -802,6 +808,7 @@ impl ExtensionCatalogue {
         let mut ids = std::collections::BTreeSet::new();
         for entry in &self.entries {
             let id = entry.id.as_bytes();
+            let architectures = entry.architectures.iter().collect::<std::collections::BTreeSet<_>>();
             if id.is_empty()
                 || id.len() > 64
                 || !id
@@ -813,6 +820,15 @@ impl ExtensionCatalogue {
                 || !bounded_text(&entry.publisher, 128)
                 || !bounded_text(&entry.reference, 512)
                 || !bounded_text(&entry.source, 512)
+                || entry.architectures.len() > 8
+                || architectures.len() != entry.architectures.len()
+                || entry.architectures.iter().any(|architecture| {
+                    architecture.is_empty()
+                        || architecture.len() > 32
+                        || !architecture
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                })
             {
                 return Err(HostError::Failed("extension catalogue metadata is invalid".into()));
             }
@@ -1543,6 +1559,8 @@ mod tests {
             reference: "registry/storybook:latest".into(),
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
+            protocol: crate::PROTOCOL,
+            architectures: vec!["amd64".into()],
         };
         assert!(super::ExtensionCatalogue {
             entries: vec![entry.clone()],
@@ -1552,6 +1570,15 @@ mod tests {
         .is_ok());
         assert!(super::ExtensionCatalogue {
             entries: vec![entry.clone(), entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                architectures: vec!["amd64".into(), "amd64".into()],
+                ..entry.clone()
+            }],
             complete: true,
         }
         .validate()

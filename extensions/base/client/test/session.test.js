@@ -14,6 +14,45 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix catalogue carries bounded compatibility hints', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-catalogue-compat-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'extension_catalogue' });
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
+          reply: 'extension_catalogue', with: { complete: true, entries: [{
+            id: 'storybook', title: 'Component playground', description: 'Native components',
+            reference: 'registry/storybook:latest', publisher: 'Husklet', source: 'first-party',
+            protocol: 1, architectures: ['amd64', 'arm64'],
+          }] },
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'fixture', granted: ['extensions:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const catalogue = await workspace(session).extensions.catalogue();
+    assert.equal(catalogue.entries[0].protocol, 1);
+    assert.deepEqual(catalogue.entries[0].architectures, ['amd64', 'arm64']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix extension inventory preserves every effective permission dimension', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-grants-'));
   const socketPath = path.join(directory, 'host.sock');

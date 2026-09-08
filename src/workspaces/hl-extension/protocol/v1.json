@@ -1655,6 +1655,27 @@
           "schema": {
             "kind": "string"
           }
+        },
+        {
+          "name": "protocol",
+          "optional": true,
+          "schema": {
+            "bits": 32,
+            "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "architectures",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
         }
       ],
       "kind": "struct",
@@ -12008,7 +12029,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:bc58f9eddd77a611",
+  "source_fingerprint": "fnv1a64:9097cdcbacc5b799",
   "specification_version": 1,
   "topics": [
     {

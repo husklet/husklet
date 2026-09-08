@@ -1598,6 +1598,8 @@ mod tests {
                     reference: "registry/storybook:latest".into(),
                     publisher: "Husklet".into(),
                     source: "husklet:first-party/storybook".into(),
+                    protocol: hl_extension::PROTOCOL,
+                    architectures: vec!["amd64".into()],
                 }],
                 complete: true,
             })
@@ -2099,6 +2101,8 @@ mod tests {
                         reference: "registry/invalid:latest".into(),
                         publisher: "Husklet".into(),
                         source: "test:invalid".into(),
+                        protocol: hl_extension::PROTOCOL,
+                        architectures: vec!["amd64".into()],
                     }],
                     complete: true,
                 })

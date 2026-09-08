@@ -78,6 +78,8 @@ impl ExtensionStore for ExtensionManagement {
                 reference: "ghcr.io/husklet/husklet/extension-storybook:latest".into(),
                 publisher: "Husklet".into(),
                 source: "husklet:first-party/storybook".into(),
+                protocol: hl_extension::PROTOCOL,
+                architectures: vec![self.workspace.arch.as_str().into()],
             }],
             complete: true,
         })
@@ -309,6 +311,14 @@ mod tests {
         let mut workspace = WorkspaceConfig::new("test", "alpine", hl_ws::Arch::Amd64);
         workspace.storage = Some(root.to_owned());
         workspace
+    }
+
+    #[test]
+    fn catalogue_exposes_current_protocol_and_workspace_architecture() {
+        let root = tempfile::tempdir().unwrap();
+        let catalogue = ExtensionManagement::new(&workspace(root.path())).catalogue().unwrap();
+        assert_eq!(catalogue.entries[0].protocol, hl_extension::PROTOCOL);
+        assert_eq!(catalogue.entries[0].architectures, ["amd64"]);
     }
 
     #[test]

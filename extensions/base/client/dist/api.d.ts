@@ -97,6 +97,10 @@ export interface ExtensionCatalogueEntry {
     reference: string;
     publisher: string;
     source: string;
+    /** Discovery hint only; the acquired manifest remains authoritative. */
+    protocol?: number;
+    /** Bounded OCI architecture hints advertised by the catalogue source. */
+    architectures?: string[];
 }
 export interface ExtensionCatalogue {
     entries: ExtensionCatalogueEntry[];
