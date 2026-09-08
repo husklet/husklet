@@ -750,6 +750,7 @@ test('an installed catalogue extension exposes its update review without retypin
   );
   await settled();
   assert.ok(labelled(stage, 'Review update'));
+  assert.ok(labelled(stage, 'Update to Version 2.0.0 · Compatibility not declared'));
   assert.equal(
     labelled(stage, 'Review Component playground installation'),
     undefined,
@@ -856,6 +857,7 @@ test('catalogue does not advertise an update at the installed version', async ()
   await settled();
   assert.equal(labelled(stage, 'Review update'), undefined);
   assert.equal(labelled(stage, 'Update available'), undefined);
+  assert.equal(labelled(stage, 'Update available · Version 2.0.0'), undefined);
 });
 
 test('extension review calls out destructive image authority before consent', async () => {

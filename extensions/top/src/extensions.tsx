@@ -1284,8 +1284,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         {updateCompatibility ? (
                           <Text
                             label={
-                              updateCompatibility.compatible === true
-                                ? 'Update available'
+                              update
+                                ? updateCompatibility.compatible === true
+                                  ? `Update available · Version ${update.version}`
+                                  : `Update to Version ${update.version} · ${updateCompatibility.label}`
                                 : `Update · ${updateCompatibility.label}`
                             }
                             color={
