@@ -2260,19 +2260,28 @@ static void translit_emit_jcc_dispatcher(hl_x64_asm *a, uint64_t target) {
 
 enum {
     TL_JCC_IBTC_MISS = 1,
+    TL_DIRECT_JMP_IBTC_MISS = 2,
     TL_RET_IBTC_MISS = 3,
     TL_DIRECT_CALL_IBTC_MISS = 4,
     TL_INDIRECT_IBTC_MISS = 5,
+    TL_FALLTHROUGH_IBTC_MISS_BASE = 32,
 };
 
 static void translit_jcc_ibtc_fill(struct cpu *cpu, void *code, int interrupt_consumed);
 
-// A mapped-target redispatch jumps around the loop-top fill seam. Repair the typed direct-CALL miss
-// here, while the dispatcher still holds the exact mapped descriptor it is about to execute. Without
-// this, a target evicted by an IBTC collision remains a miss forever even though its block is live.
+// A mapped-target redispatch jumps around the loop-top fill seam. Repair every typed miss here, while
+// the dispatcher still holds the exact mapped descriptor and RIP it is about to execute. Otherwise a
+// later loop return (or signal-handler RIP) can consume the stale marker against a different block.
 static void translit_jcc_ibtc_fast_redispatch(struct cpu *cpu, void *code) {
-    if (cpu->jcc_ibtc_miss == TL_DIRECT_CALL_IBTC_MISS) {
+    uint32_t miss_kind = cpu->jcc_ibtc_miss;
+    int fallthrough = miss_kind >= TL_FALLTHROUGH_IBTC_MISS_BASE &&
+                      miss_kind < TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_COUNT;
+    if (miss_kind == TL_JCC_IBTC_MISS || miss_kind == TL_DIRECT_JMP_IBTC_MISS ||
+        miss_kind == TL_RET_IBTC_MISS || miss_kind == TL_DIRECT_CALL_IBTC_MISS ||
+        miss_kind == TL_INDIRECT_IBTC_MISS || fallthrough) {
         translit_jcc_ibtc_fill(cpu, code, 0);
+    }
+    if (miss_kind == TL_DIRECT_CALL_IBTC_MISS) {
         translit_direct_call_ibtc_count(TL_DIRECT_CALL_IBTC_COUNT_FAST_REDISPATCH, 1);
     }
 }
@@ -2682,8 +2691,6 @@ static int translit_jcc_ibtc_stub_init(void) {
     translit_perf_map_publish_helper("hl_tl_helper_jcc_ibtc", entry, a.cursor, &translit_profile_jcc_ibtc);
     return 1;
 }
-
-enum { TL_DIRECT_JMP_IBTC_MISS = 2, TL_FALLTHROUGH_IBTC_MISS_BASE = 32 };
 
 /* A second entry uses the proven generation-local constant-target probe without adding its spill/lookup
    sequence to every JMP descriptor. It deliberately has independent counters and a typed miss, while the
@@ -3348,7 +3355,10 @@ static void translit_jcc_ibtc_finalize_cpu(struct cpu *cpu) {
     } else if (cpu != NULL && (cpu->jcc_ibtc_miss == TL_JCC_IBTC_MISS ||
                                cpu->jcc_ibtc_miss == TL_DIRECT_JMP_IBTC_MISS ||
                                cpu->jcc_ibtc_miss == TL_DIRECT_CALL_IBTC_MISS ||
-                               cpu->jcc_ibtc_miss == TL_INDIRECT_IBTC_MISS)) {
+                               cpu->jcc_ibtc_miss == TL_INDIRECT_IBTC_MISS ||
+                               (cpu->jcc_ibtc_miss >= TL_FALLTHROUGH_IBTC_MISS_BASE &&
+                                cpu->jcc_ibtc_miss <
+                                    TL_FALLTHROUGH_IBTC_MISS_BASE + HL_BACKEND_FALL_COUNT))) {
         uint32_t miss_kind = cpu->jcc_ibtc_miss;
         cpu->jcc_ibtc_miss = 0;
         if (miss_kind == TL_DIRECT_JMP_IBTC_MISS)
