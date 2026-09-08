@@ -672,7 +672,7 @@ export interface ConnectOptions {
   pendingLimit?: number;
   timeout?: number;
   connectTimeout?: number;
-  onRows?: (request: RowRequest, channel: number) => void;
+  onRows?: (request: RowRequest, channel: number) => void | Promise<void>;
   onReply?: (reply: unknown) => void;
   onEvent?: (event: HostEvent, channel: number) => void | Promise<void>;
   onEventError?: (error: unknown) => void;

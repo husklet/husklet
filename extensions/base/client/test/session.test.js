@@ -2376,6 +2376,80 @@ test('a coalesced Unix close revokes later GUI and row frames in the same read',
   }
 });
 
+test('an asynchronous row listener failure closes its real Unix request generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-row-listener-error-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  let reportPeerClosed;
+  const peerClosed = new Promise((resolve) => {
+    reportPeerClosed = resolve;
+  });
+  const returned = [];
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.on('error', () => {});
+    socket.on('close', reportPeerClosed);
+    const reader = new Reader();
+    socket.on('data', (chunk) => returned.push(...reader.take(chunk)));
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'row_listener_error', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  let session;
+  try {
+    session = await connect({
+      path: socketPath,
+      timeout: 500,
+      onRows: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        throw new Error('row provider failed asynchronously');
+      },
+    });
+    peer.write(
+      encode({
+        channel: 41,
+        kind: KIND.event,
+        payload: {
+          id: 13,
+          source: 5,
+          version: 8,
+          range: { start: 20, count: 10 },
+        },
+      }),
+    );
+
+    const reason = await Promise.race([
+      session.closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('failed row generation stayed live')), 200),
+      ),
+    ]);
+    assert.match(reason.message, /row provider failed asynchronously/);
+    await Promise.race([
+      peerClosed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('failed row socket stayed open')), 200),
+      ),
+    ]);
+    assert.equal(
+      returned.some((frame) => frame.channel === 41),
+      false,
+      'failed row work emits neither a reply nor authority-restoring credit',
+    );
+    await assert.rejects(session.call('workspace_info'), /session is closed/);
+  } finally {
+    await session?.close();
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a matching pong outside the control channel cannot complete a heartbeat', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pong-channel-'));
   const socketPath = path.join(directory, 'host.sock');

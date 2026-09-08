@@ -695,7 +695,14 @@ export class Session {
     if (frame.channel === CONTROL) return this.#greet(frame);
     // A row request is the one thing the host pushes rather than answers.
     if (frame.kind === KIND.event && frame.payload && frame.payload.range !== undefined) {
-      return this.#onRows(validateRowRequest(frame.payload), frame.channel);
+      const delivered = this.#onRows(validateRowRequest(frame.payload), frame.channel);
+      if (delivered && typeof delivered.then === 'function') {
+        Promise.resolve(delivered).catch((error) => {
+          this.#finish(error);
+          this.#socket.destroy();
+        });
+      }
+      return;
     }
     if (frame.kind === KIND.response && frame.channel === CALLS) {
       const pending = this.#pending[0];

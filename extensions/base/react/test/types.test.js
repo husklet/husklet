@@ -115,7 +115,10 @@ test('host events type the pane chooser identity as well as subscribed snapshots
     clientDeclarations,
     /onEvent\?: \(event: HostEvent, channel: number\) => void \| Promise<void>;/,
   );
-  assert.match(clientDeclarations, /onRows\?: \(request: RowRequest, channel: number\) => void;/);
+  assert.match(
+    clientDeclarations,
+    /onRows\?: \(request: RowRequest, channel: number\) => void \| Promise<void>;/,
+  );
   assert.doesNotMatch(clientDeclarations, /onRows\?: \(request: unknown/);
   assert.doesNotMatch(
     clientDeclarations,
