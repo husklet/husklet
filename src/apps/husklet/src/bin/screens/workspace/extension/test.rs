@@ -79,13 +79,15 @@ fn panel(title: &str) -> Element {
         .child(Element::button("Restart", EventId::new("restart")).key("restart"))
 }
 
-fn provider_authority_waits_for_a_valid_frame() {
+fn sequence_fault_revokes_authority_until_a_fresh_generation() {
     let (post, deliveries) = channel();
     let ready = Rc::new(Cell::new(0));
     let observed = Rc::clone(&ready);
+    let recorded: Record = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&recorded);
     let (_widget, mut page) = Interface::with_lifecycle(
         deliveries,
-        Rc::new(|_| {}),
+        Rc::new(move |signal| sink.borrow_mut().push(signal)),
         Rc::new(|_| {}),
         Rc::new(move || observed.set(observed.get() + 1)),
     );
@@ -96,11 +98,55 @@ fn provider_authority_waits_for_a_valid_frame() {
     post.send(Delivery::Frame(rejected)).expect("page listening");
     page.tick();
     assert_eq!(ready.get(), 0, "a rejected frame cannot publish provider authority");
+    assert_eq!(recorded.borrow().as_slice(), [Signal::Retry]);
+    assert!(page.banner().text().contains("expected frame 1, received 2"));
 
     let accepted = Reconciliation::new().reconcile(&Element::heading("ready"));
+    post.send(Delivery::Frame(accepted.clone())).expect("page listening");
+    page.tick();
+    assert_eq!(ready.get(), 0, "the faulted socket cannot restore UI authority");
+
+    post.send(Delivery::Reset).expect("new generation announced");
     post.send(Delivery::Frame(accepted)).expect("page listening");
     page.tick();
     assert_eq!(ready.get(), 1, "the first valid frame publishes provider authority");
+}
+
+fn sequence_gap_freezes_stale_widgets_and_ignores_the_old_socket_generation() {
+    let mut fixture = Fixture::new();
+    fixture.describe(&panel("Last trusted frame"));
+    fixture.page.tick();
+    let button = fixture
+        .tagged(Tag::Button)
+        .expect("the trusted frame exposes one action")
+        .downcast::<gtk::Button>()
+        .expect("button");
+
+    let skipped = fixture.reconciliation.reconcile(&panel("Skipped update"));
+    let gap = fixture.reconciliation.reconcile(&panel("Untrusted update"));
+    fixture.post.send(Delivery::Frame(gap)).expect("gap queued");
+    fixture.page.tick();
+    assert!(fixture.page.banner().text().contains("expected frame 2, received 3"));
+    assert!(!button.is_sensitive(), "stale GTK authority is visibly frozen");
+    assert_eq!(fixture.recorded.borrow().as_slice(), [Signal::Retry]);
+
+    button.emit_clicked();
+    fixture.page.tick();
+    assert_eq!(
+        fixture.recorded.borrow().as_slice(),
+        [Signal::Retry],
+        "the frozen tree cannot emit an interaction after recovery begins"
+    );
+    fixture.post.send(Delivery::Frame(skipped)).expect("late predecessor queued");
+    fixture.page.tick();
+    assert!(fixture.page.banner().is_visible(), "old-generation frames cannot self-heal the gap");
+
+    fixture.post.send(Delivery::Reset).expect("replacement generation announced");
+    fixture.reconciliation = Reconciliation::new();
+    fixture.describe(&panel("Replacement generation"));
+    fixture.page.tick();
+    assert!(!fixture.page.banner().is_visible());
+    assert!(fixture.tagged(Tag::Button).is_some_and(|widget| widget.is_sensitive()));
 }
 
 /// Every scenario runs inside one test, on the binary's toolkit thread.
@@ -113,7 +159,8 @@ fn provider_authority_waits_for_a_valid_frame() {
 #[test]
 fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
     let ran = crate::test_support::on_the_toolkit_thread(|| {
-        provider_authority_waits_for_a_valid_frame();
+        sequence_fault_revokes_authority_until_a_fresh_generation();
+        sequence_gap_freezes_stale_widgets_and_ignores_the_old_socket_generation();
         startup_is_visible_until_the_first_valid_frame();
         a_queued_frame_puts_widgets_on_the_page();
         a_new_generation_restarts_at_frame_one_without_a_sequence_fault();
