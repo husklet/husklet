@@ -296,8 +296,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
+  assert.equal(
+    ancestorProperty(stage, 'Browse extensions', 'Row', 'Wrap')?.Flag,
+    true,
+    'extension sections stack instead of overflowing a narrow viewport',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Browse extensions', 'Row', 'Width'),
+    { Length: 'Fill' },
+    'extension sections share the full page width when displayed side by side',
+  );
   assert.ok(labelled(stage, 'Version 2.0.0'));
   assert.ok(labelled(stage, 'Technical details'));
   assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 3), [

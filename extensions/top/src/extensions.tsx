@@ -641,8 +641,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
-        <Column gap={3} align="start">
-          <Column gap={2} width={CONTENT_WIDTH} grow={false}>
+        <Row gap={3} align="start" width="fill" wrap>
+          <Column gap={2} width="fill" grow={false}>
             {!acquisition && <Heading label="Browse extensions" scale="caption" />}
             {!acquisition && (
               <Column gap={2}>
@@ -1171,7 +1171,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               />
             )}
           </Column>
-          <Column gap={2} width={CONTENT_WIDTH} grow={false}>
+          <Column gap={2} width="fill" grow={false}>
             <Row gap={2}>
               <Heading label="Installed" scale="caption" />
               <Button
@@ -1303,7 +1303,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               })}
             </ResourceState>
           </Column>
-        </Column>
+        </Row>
       </Column>
     </Scroll>
   );
