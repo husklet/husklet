@@ -2700,11 +2700,10 @@ fail:
 
 #else
 
-static inline void hl_backend_tree_a64_x86_reset_fork(void) {}
-static inline uint64_t hl_backend_tree_a64_x86_reset_fork_count(void) { return 0; }
-
 /* Hook-disabled translit_shape_exit calls compile to no-ops, but retaining the symbolic kinds keeps the
    hook and production control-flow source identical. */
+static inline void hl_backend_tree_a64_x86_reset_fork(void) {}
+static inline uint64_t hl_backend_tree_a64_x86_reset_fork_count(void) { return 0; }
 enum {
     HL_BACKEND_SHAPE_T_FALLTHROUGH,
     HL_BACKEND_SHAPE_T_COND_TAKEN,
