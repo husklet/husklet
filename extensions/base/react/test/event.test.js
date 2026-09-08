@@ -12,7 +12,7 @@ import { KIND, Reader, encode } from '../dist/wire.js';
 import { PROTOCOL } from '../dist/session.js';
 
 /** A host that greets, records calls, and can push an event back. */
-async function host() {
+async function host({ reuseSlots = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-'));
   const socket = path.join(directory, 'extension.sock');
   const calls = [];
@@ -30,7 +30,7 @@ async function host() {
         if (frame.kind === KIND.request && frame.channel !== 0) {
           calls.push(frame.payload);
           const payload = ['interface_open_tab', 'interface_split'].includes(frame.payload.call)
-            ? { reply: 'identity', with: `surface-${slot += 1}` }
+            ? { reply: 'identity', with: reuseSlots ? 'surface-1' : `surface-${slot += 1}` }
             : { reply: 'done' };
           stream.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
         }
@@ -126,6 +126,49 @@ test('two roots keep independent slots, sequences, sources, and events over one 
   await second.close();
   session.close();
   stage.close();
+});
+
+test('a withdrawn slot cannot be rebound to a new render generation on the same socket', async () => {
+  const stage = await host({ reuseSlots: true });
+  const session = await connect({ path: stage.socket });
+  let successor;
+  let oldInvoked = 0;
+  let newInvoked = 0;
+  const first = render(
+    h(Button, { label: 'Old', onInvoke: () => (oldInvoked += 1) }),
+    session,
+  );
+  try {
+    assert.equal(await first.ready, 'surface-1');
+    await first.flush();
+    await first.close();
+
+    const second = render(
+      h(Button, { label: 'New', onInvoke: () => (newInvoked += 1) }),
+      session,
+    );
+    await assert.rejects(second.ready, /reused surface slot surface-1 within one session/);
+    await stage.push({
+      interaction: 'invoke',
+      trigger: 'Invoke',
+      slot: 'surface-1',
+      id: '1:Invoke',
+      node: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(oldInvoked, 0, 'withdrawn handlers stay revoked');
+    assert.equal(newInvoked, 0, 'a delayed event cannot enter a rejected render generation');
+
+    await session.close();
+    successor = await connect({ path: stage.socket });
+    const third = render(h(Button, { label: 'Fresh connection' }), successor);
+    assert.equal(await third.ready, 'surface-1', 'slot retirement ends at the socket generation boundary');
+    await third.close();
+  } finally {
+    await session.close();
+    await successor?.close();
+    stage.close();
+  }
 });
 
 test('virtualized row requests route to their owning surface with the exact cursor', async () => {

@@ -67,6 +67,7 @@ interface RowTask {
 interface Registry {
   handles: Set<RenderHandle>;
   slots: Map<string, RenderHandle>;
+  retiredSlots: Set<string>;
   routesEvents: boolean;
 }
 const attached = new WeakMap<Session, Registry>();
@@ -105,7 +106,12 @@ export async function connect({
       if (!deliver(session, payload) && onReply) onReply(payload);
     },
   });
-  attached.set(session, { handles: new Set(), slots: new Map(), routesEvents: true });
+  attached.set(session, {
+    handles: new Set(),
+    slots: new Map(),
+    retiredSlots: new Set(),
+    routesEvents: true,
+  });
   return session;
 }
 
@@ -188,7 +194,12 @@ export function render(
 ): RenderHandle {
   let registry = attached.get(session);
   if (!registry && bootstrap !== null) {
-    registry = { handles: new Set(), slots: new Map(), routesEvents: false };
+    registry = {
+      handles: new Set(),
+      slots: new Map(),
+      retiredSlots: new Set(),
+      routesEvents: false,
+    };
     attached.set(session, registry);
   }
   if (!registry) throw new Error('render requires a session returned by connect');
@@ -281,8 +292,8 @@ export function render(
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected identity`);
       }
       if (closed) return reply.with;
-      if (registry.slots.has(reply.with))
-        throw new Error(`host reused live surface slot ${reply.with}`);
+      if (registry.slots.has(reply.with) || registry.retiredSlots.has(reply.with))
+        throw new Error(`host reused surface slot ${reply.with} within one session`);
       slot = reply.with;
       registry.slots.set(slot, handle);
       for (const frame of queued.splice(0)) transmit(frame);
@@ -292,7 +303,10 @@ export function render(
     .catch((error: unknown) => {
       failed = error;
       registry.handles.delete(handle);
-      if (slot !== null) registry.slots.delete(slot);
+      if (slot !== null) {
+        registry.slots.delete(slot);
+        registry.retiredSlots.add(slot);
+      }
       throw error;
     });
   // Existing fire-and-forget callers still get bounded cleanup on a refused
@@ -336,7 +350,10 @@ export function render(
       handle.rowActive.clear();
       reconciler.updateContainer(null, container, null, null);
       registry.handles.delete(handle);
-      if (slot !== null) registry.slots.delete(slot);
+      if (slot !== null) {
+        registry.slots.delete(slot);
+        registry.retiredSlots.add(slot);
+      }
       withdrawal = ready.then(async (owned) => {
         if (owned === '') return;
         const reply = await session.call('interface_withdraw', { slot: owned });
